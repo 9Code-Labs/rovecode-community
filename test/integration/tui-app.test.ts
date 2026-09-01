@@ -5,6 +5,8 @@ import { test, expect } from "bun:test";
 import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { SessionStore } from "../../src/core/session.ts";
 import { VirtualTerminal } from "../../vendor/pi-tui/test/virtual-terminal.ts";
 import { PiTuiRenderer } from "../../src/tui/pi-renderer.ts";
 import { runTui } from "../../src/tui/app.ts";
@@ -119,3 +121,74 @@ test("slash command /status renders without starting a run", async () => {
   await app;
   rmSync(cwd, { recursive: true, force: true });
 }, 20_000);
+
+// ---------- port #2: rewind + resume ----------
+
+test("rewind: pick an earlier turn, transcript truncates, editor prefills, resubmit forks the tree", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const sid = randomUUID();
+  const term = new VirtualTerminal(80, 24);
+  const renderer = new PiTuiRenderer({ terminal: term, cwd });
+  const stream = mockStream({
+    turns: [textTurn("first answer"), textTurn("second answer"), textTurn("branch answer")],
+  });
+  const app = runTui({ renderer, stream, cwd, sessionId: sid, yolo: true, exitOnClose: false, model: "scripted" });
+
+  term.sendInput("question one"); term.sendInput("\r");
+  await until(term, (s) => s.includes("first answer"));
+  term.sendInput("question two"); term.sendInput("\r");
+  await until(term, (s) => s.includes("second answer"));
+
+  term.sendInput("/rewind"); term.sendInput("\r");
+  await until(term, (s) => s.includes("#2"));   // overlay: recent turn first
+  term.sendInput("\r");                          // pick #2 "question two"
+
+  const afterRewind = await until(term, (s) => !s.includes("second answer") && s.includes("first answer"));
+  expect(afterRewind).toContain("first answer");        // history up to the rewind point
+  expect(afterRewind).not.toContain("second answer");   // truncated from view (kept on disk)
+  expect(afterRewind).toContain("question two");        // prefilled in the editor
+
+  term.sendInput(" edited"); term.sendInput("\r");       // edit-and-resubmit → new branch
+  await until(term, (s) => s.includes("branch answer"));
+
+  const reopened = new SessionStore(join(cwd, ".aion", "sessions"), sid);
+  const points = reopened.turnPoints();
+  const last = points[points.length - 1]!;
+  expect(last.text).toContain("question two edited");
+  expect(last.branches).toBe(1);                         // the abandoned "question two" sibling
+
+  term.sendInput("\x03");
+  await app;
+  rmSync(cwd, { recursive: true, force: true });
+}, 30_000);
+
+test("resume: /resume <id-prefix> swaps sessions and replays the old transcript", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const oldId = randomUUID();
+
+  // session 1: one exchange, then close
+  {
+    const term = new VirtualTerminal(80, 24);
+    const renderer = new PiTuiRenderer({ terminal: term, cwd });
+    const stream = mockStream({ turns: [textTurn("noted forever")] });
+    const app = runTui({ renderer, stream, cwd, sessionId: oldId, yolo: true, exitOnClose: false, model: "scripted" });
+    term.sendInput("remember me"); term.sendInput("\r");
+    await until(term, (s) => s.includes("noted forever"));
+    term.sendInput("\x03");
+    await app;
+  }
+
+  // session 2 (fresh): resume the old one headlessly by id prefix
+  const term = new VirtualTerminal(80, 24);
+  const renderer = new PiTuiRenderer({ terminal: term, cwd });
+  const app = runTui({ renderer, stream: mockStream({ turns: [textTurn("x")] }), cwd, yolo: true, exitOnClose: false, model: "scripted" });
+  await until(term, (s) => s.includes("aion"));
+  term.sendInput(`/resume ${oldId.slice(0, 8)}`); term.sendInput("\r");
+  const screen = await until(term, (s) => s.includes("noted forever"));
+  expect(screen).toContain("remember me");
+  expect(screen).toContain("noted forever");
+
+  term.sendInput("\x03");
+  await app;
+  rmSync(cwd, { recursive: true, force: true });
+}, 30_000);

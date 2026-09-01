@@ -1,17 +1,23 @@
 /** TUI chat app (port #1): wires the ONE agentLoop (ADR-003) into a Renderer.
  *  All vendor contact lives behind Renderer (renderer.ts) — swap-friendly. */
 
-import { agentLoop, SteeringQueue } from "../core/loop.ts";
-import { resetTurnFailureCount } from "../memory/tools.ts";
+import { agentLoop, SteeringQueue, partsText } from "../core/loop.ts";
+import { memoryEditTool, resetTurnFailureCount } from "../memory/tools.ts";
 import { createRuntime } from "../cli/runtime.ts";
+import { SessionStore, listSessions } from "../core/session.ts";
+import { BlockStore } from "../memory/blocks.ts";
 import type { Renderer, AssistantView, StatusInfo } from "./renderer.ts";
 import { PiTuiRenderer } from "./pi-renderer.ts";
 import type { RunEvent, StreamFn } from "../core/types.ts";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 
 export interface TuiAppOptions {
   yolo?: boolean;
   model?: string;
   cwd?: string;
+  /** resume an existing session id instead of starting a fresh one */
+  sessionId?: string;
   /** injected by tests/smoke (VirtualTerminal-backed renderer, mock stream) */
   renderer?: Renderer;
   stream?: StreamFn | null;
@@ -28,6 +34,10 @@ export const TUI_COMMANDS = [
   { name: "skills", description: "List installed skills" },
   { name: "memory", description: "Show memory blocks" },
   { name: "new", description: "Branch back to session start" },
+  { name: "rewind", description: "Jump to an earlier turn and edit it (alias: /tree)" },
+  { name: "tree", description: "Alias of /rewind" },
+  { name: "sessions", description: "Pick a previous session to resume" },
+  { name: "resume", description: "Resume a session by id: /resume <id>" },
 ];
 
 interface TuiState {
@@ -39,8 +49,12 @@ interface TuiState {
 export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   // opts.stream passes through verbatim: a StreamFn overrides, explicit null forces
   // "no provider", undefined defers to the runtime's env-resolved provider
-  const rt = createRuntime({ cwd: opts.cwd, stream: opts.stream });
+  const rt = createRuntime({ cwd: opts.cwd, stream: opts.stream, sessionId: opts.sessionId });
   const renderer: Renderer = opts.renderer ?? new PiTuiRenderer({ cwd: rt.cwd });
+  const sessionsDir = join(rt.cwd, ".aion", "sessions");
+  // session-scoped stores are swappable at runtime (/sessions, /rewind-to-root)
+  let store = rt.store;
+  let blocks = rt.blockStore;
   const steering = new SteeringQueue();
   const state: TuiState = {
     yolo: opts.yolo ?? process.env.AION_YOLO === "1",
@@ -68,6 +82,87 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     if (opts.exitOnClose !== false) process.exit(0);
   };
 
+  const refreshUsage = () => {
+    let inTok = 0, outTok = 0;
+    for (const m of store.messages()) { inTok += m.usage?.input ?? 0; outTok += m.usage?.output ?? 0; }
+    state.tokensIn = inTok; state.tokensOut = outTok;
+  };
+
+  /** Re-render the whole transcript from the active session path. */
+  const replayHistory = () => {
+    renderer.clearTranscript();
+    for (const m of store.messages()) {
+      const text = partsText(m.parts);
+      if (m.role === "user") { if (text) renderer.addUser(text); }
+      else if (m.role === "assistant") {
+        if (text) { const v = renderer.beginAssistant(); v.append(text); v.done(); }
+        for (const p of m.parts) {
+          if (p.kind === "tool_call") renderer.toolStart(p.id, p.tool, JSON.stringify(p.args).slice(0, 120));
+        }
+      } else if (m.role === "tool") {
+        for (const p of m.parts) {
+          if (p.kind === "tool_result") renderer.toolEnd(p.callId, p.ok, p.output.slice(0, 160).replace(/\n/g, " ⏎ "), 0);
+        }
+      } else if (m.role === "system" && text) renderer.addSystemNote(text);
+    }
+  };
+
+  const switchSession = (id: string, announce = true) => {
+    store = new SessionStore(sessionsDir, id);
+    blocks = new BlockStore(join(sessionsDir, id, "memory"));
+    rt.registry.register(memoryEditTool(blocks)); // rebind memory tool to this session
+    replayHistory();
+    refreshUsage();
+    pushStatus();
+    if (announce) renderer.addSystemNote(`session ${id.slice(0, 8)} (${store.messages().length} messages)`);
+  };
+
+  const cmdRewind = async () => {
+    if (state.busy) { renderer.addSystemNote("finish or interrupt the run first (Esc)", "warn"); return; }
+    const points = store.turnPoints();
+    if (points.length === 0) { renderer.addSystemNote("nothing to rewind — no turns yet"); return; }
+    const items = [...points].reverse().map((p) => ({
+      value: p.entryId,
+      label: `#${p.index} ${p.text}`,
+      description: p.branches > 0 ? `◆ ${p.branches} other branch${p.branches > 1 ? "es" : ""}` : undefined,
+    }));
+    const picked = await renderer.pickOne(items, "rewind to a turn (Enter = edit & resubmit, Esc = cancel)");
+    if (!picked) return;
+    const point = points.find((p) => p.entryId === picked);
+    if (!point) return;
+    if (point.parentId === null) {
+      // pi resets the leaf to an empty conversation (sessions.md:116); aion's root reset
+      // ships with core support — v1 approximates it with a fresh session, old one untouched
+      switchSession(randomUUID(), false);
+      renderer.addSystemNote("rewound to the start — fresh session, previous one kept");
+    } else {
+      if (!store.branch(point.parentId)) { renderer.addSystemNote("rewind failed: turn not found", "error"); return; }
+      replayHistory();
+      renderer.addSystemNote(`rewound to before turn #${point.index} — edit and resubmit (branch kept)`);
+    }
+    renderer.prefillEditor(point.text);
+    pushStatus();
+  };
+
+  const cmdSessions = async (directId?: string) => {
+    if (state.busy) { renderer.addSystemNote("finish or interrupt the run first (Esc)", "warn"); return; }
+    const all = listSessions(sessionsDir);
+    if (directId) {
+      const hit = all.find((s) => s.id === directId || s.id.startsWith(directId));
+      if (hit) switchSession(hit.id);
+      else renderer.addSystemNote(`no session matching "${directId}"`, "warn");
+      return;
+    }
+    const items = all.slice(0, 20).map((s) => ({
+      value: s.id,
+      label: s.preview || "(empty session)",
+      description: `${new Date(s.updatedAt).toLocaleString()} · ${s.entryCount} entries · ${s.id.slice(0, 8)}${s.id === store.id ? " · current" : ""}`,
+    }));
+    if (items.length === 0) { renderer.addSystemNote("no sessions found"); return; }
+    const picked = await renderer.pickOne(items, "resume a session (Esc = cancel)");
+    if (picked && picked !== store.id) switchSession(picked);
+  };
+
   const handleSlash = (text: string): boolean => {
     const [cmd, ...rest] = text.slice(1).split(/\s+/);
     const arg = rest.join(" ").trim();
@@ -93,11 +188,21 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
         return true;
       }
       case "memory":
-        renderer.addSystemNote(rt.blockStore.renderForPrompt() || "(empty)");
+        renderer.addSystemNote(blocks.renderForPrompt() || "(empty)");
         return true;
       case "new":
-        rt.store.branch(rt.store.messages()[0]?.id ?? "");
+        store.branch(store.messages()[0]?.id ?? "");
         renderer.addSystemNote("branched to session start");
+        return true;
+      case "rewind": case "tree":
+        void cmdRewind();
+        return true;
+      case "sessions":
+        void cmdSessions();
+        return true;
+      case "resume":
+        if (arg) void cmdSessions(arg);
+        else void cmdSessions();
         return true;
       default:
         renderer.addSystemNote(`unknown command: /${cmd} (try /help)`, "warn");
@@ -105,11 +210,6 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     }
   };
 
-  const refreshUsage = () => {
-    let inTok = 0, outTok = 0;
-    for (const m of rt.store.messages()) { inTok += m.usage?.input ?? 0; outTok += m.usage?.output ?? 0; }
-    state.tokensIn = inTok; state.tokensOut = outTok;
-  };
 
   const startRun = async (goal: string) => {
     const stream = rt.stream; // runtime already applied any opts.stream override
@@ -126,7 +226,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     const views = new Map<string, AssistantView>();
     let lastView: AssistantView | null = null;
     run = agentLoop(def, goal, {}, cfg, {
-      stream, registry: rt.registry, store: rt.store,
+      stream, registry: rt.registry, store,
       tools: rt.registry.list().map((t) => t.schema),
     }, steering);
     try {

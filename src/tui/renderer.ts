@@ -31,6 +31,8 @@ export interface AssistantView {
 
 export interface SlashCommand { name: string; description: string }
 
+export interface PickItem { value: string; label: string; description?: string }
+
 export interface Renderer {
   start(hooks: RendererHooks): void;
   stop(): void;
@@ -44,6 +46,12 @@ export interface Renderer {
   toolEnd(callId: string, ok: boolean, outputPreview: string, durationMs: number): void;
   /** modal approval; resolves deny on cancel/escape */
   askApproval(tool: string, argsPreview: string): Promise<ApprovalAnswer>;
+  /** modal picker (session/turn navigators); resolves null on cancel/escape/stop */
+  pickOne(items: PickItem[], title?: string): Promise<string | null>;
+  /** remove all transcript items (history replay after rewind/resume) */
+  clearTranscript(): void;
+  /** place text in the editor for edit-and-resubmit (pi sessions.md:106-116) */
+  prefillEditor(text: string): void;
   setBusy(busy: boolean, label?: string): void;
   setStatus(info: StatusInfo): void;
 }

@@ -30,6 +30,7 @@ import {
 import type {
 	ApprovalAnswer,
 	AssistantView,
+	PickItem,
 	Renderer,
 	RendererHooks,
 	SlashCommand,
@@ -69,7 +70,8 @@ export class PiTuiRenderer implements Renderer {
 	private hooks: RendererHooks | null = null;
 	private unsubscribeInput: (() => void) | null = null;
 	private readonly toolCards = new Map<string, ToolCard>();
-	private readonly pendingApprovals = new Set<(a: ApprovalAnswer) => void>();
+	/** cancel thunks for overlays awaiting an answer; drained on stop() */
+	private readonly pendingPickers = new Set<() => void>();
 
 	constructor(opts?: PiTuiRendererOptions) {
 		this.terminal = opts?.terminal ?? new ProcessTerminal();
@@ -155,9 +157,9 @@ export class PiTuiRenderer implements Renderer {
 			this.unsubscribeInput = null;
 		}
 		// an overlay that never gets an answer must not pin the process (or a caller
-		// awaiting approval) forever — a stopped UI cannot consent, so deny all
-		for (const resolvePending of this.pendingApprovals) resolvePending("deny");
-		this.pendingApprovals.clear();
+		// awaiting it) forever — a stopped UI cannot answer, so cancel them all
+		for (const cancel of this.pendingPickers) cancel();
+		this.pendingPickers.clear();
 		tui.stop();
 		this.tui = null;
 		this.editor = null;
@@ -224,34 +226,62 @@ export class PiTuiRenderer implements Renderer {
 		this.tui?.requestRender();
 	}
 
-	askApproval(tool: string, argsPreview: string): Promise<ApprovalAnswer> {
+	pickOne(items: PickItem[], title?: string): Promise<string | null> {
 		const tui = this.tui;
 		const editor = this.editor;
-		if (!tui || !editor) return Promise.resolve("deny"); // stopped UI cannot consent
-		this.addSystemNote(`approval needed: ${tool} ${argsPreview}`, "warn");
-		return new Promise<ApprovalAnswer>((resolve) => {
-			const items: SelectItem[] = [
-				{ value: "allow-once", label: "allow once", description: "run this call only" },
-				{ value: "always", label: "always", description: "allow this tool for the session" },
-				{ value: "deny", label: "deny", description: "reject this call" },
-			];
-			const list = new SelectList(items, 3, aionSelectListTheme);
-			const handle = tui.showOverlay(list, { width: 40, anchor: "center" });
+		if (!tui || !editor || items.length === 0) return Promise.resolve(null);
+		if (title) this.addSystemNote(title);
+		return new Promise<string | null>((resolve) => {
+			const list = new SelectList(
+				items.map((i) => ({ value: i.value, label: i.label, description: i.description })),
+				Math.min(items.length, 8),
+				aionSelectListTheme,
+			);
+			const handle = tui.showOverlay(list, { width: 64, anchor: "center" });
 			let settled = false;
-			const finish = (answer: ApprovalAnswer): void => {
+			const finish = (answer: string | null): void => {
 				if (settled) return;
 				settled = true;
-				this.pendingApprovals.delete(finish);
+				this.pendingPickers.delete(cancel);
 				handle.hide();
 				if (this.tui) { tui.setFocus(editor); tui.requestRender(); }
 				resolve(answer);
 			};
-			this.pendingApprovals.add(finish);
-			list.onSelect = (item: SelectItem) => {
-				finish(item.value === "always" ? "always" : item.value === "deny" ? "deny" : "once");
-			};
-			list.onCancel = () => finish("deny");
+			const cancel = () => finish(null);
+			this.pendingPickers.add(cancel);
+			list.onSelect = (item: SelectItem) => finish(item.value);
+			list.onCancel = () => finish(null);
 		});
+	}
+
+	async askApproval(tool: string, argsPreview: string): Promise<ApprovalAnswer> {
+		this.addSystemNote(`approval needed: ${tool} ${argsPreview}`, "warn");
+		const picked = await this.pickOne([
+			{ value: "once", label: "allow once", description: "run this call only" },
+			{ value: "always", label: "always", description: "allow this tool for the session" },
+			{ value: "deny", label: "deny", description: "reject this call" },
+		]);
+		return picked === "once" || picked === "always" ? picked : "deny"; // null/cancel/stop → deny
+	}
+
+	/** Remove every transcript item (keep header, loader, editor, status) — history replay. */
+	clearTranscript(): void {
+		const tui = this.tui;
+		const anchor = this.loader ?? this.editor;
+		if (!tui || !anchor) return;
+		const end = tui.children.indexOf(anchor);
+		if (end > 1) tui.children.splice(1, end - 1); // index 0 = header banner
+		this.toolCards.clear();
+		tui.requestRender();
+	}
+
+	prefillEditor(text: string): void {
+		const tui = this.tui;
+		const editor = this.editor;
+		if (!tui || !editor) return;
+		editor.setText(text);
+		tui.setFocus(editor);
+		tui.requestRender();
 	}
 
 	setBusy(busy: boolean, label?: string): void {

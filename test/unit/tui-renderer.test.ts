@@ -325,6 +325,57 @@ describe("PiTuiRenderer", () => {
 		expect(screen).not.toContain("show help"); // filtered out by "/mo"
 	});
 
+	it("pickOne resolves the chosen value, null on escape, null after stop", async () => {
+		const { renderer, term } = boot();
+		await term.waitForRender();
+		const p1 = renderer.pickOne([
+			{ value: "alpha", label: "first" },
+			{ value: "beta", label: "second" },
+		]);
+		await term.waitForRender();
+		term.sendInput("\x1b[B"); // down → second
+		term.sendInput("\r");
+		expect(await p1).toBe("beta");
+
+		const p2 = renderer.pickOne([{ value: "x", label: "only" }]);
+		await term.waitForRender();
+		term.sendInput("\x1b"); // escape → cancel
+		expect(await p2).toBeNull();
+
+		const p3 = renderer.pickOne([{ value: "y", label: "pending at stop" }]);
+		renderer.stop();
+		expect(await p3).toBeNull();
+		expect(await renderer.pickOne([{ value: "z", label: "after stop" }])).toBeNull();
+	});
+
+	it("clearTranscript removes history but keeps editor and status alive", async () => {
+		const { renderer, term } = boot();
+		renderer.addUser("old question");
+		renderer.addSystemNote("old note");
+		renderer.setStatus({ provider: "p", model: "m", yolo: false, turns: 3, tokensIn: 1, tokensOut: 2 });
+		let screen = await view(term);
+		expect(screen).toContain("old question");
+		renderer.clearTranscript();
+		screen = await view(term);
+		expect(screen).not.toContain("old question");
+		expect(screen).not.toContain("old note");
+		expect(screen).toContain("turns 3"); // status line survives
+		renderer.addUser("fresh question"); // transcript still functional after clear
+		screen = await view(term);
+		expect(screen).toContain("fresh question");
+	});
+
+	it("prefillEditor places text that submits on Enter (pi edit-and-resubmit)", async () => {
+		const submitted: string[] = [];
+		const { renderer, term } = boot(stubHooks({ onSubmit: (t) => submitted.push(t) }));
+		await term.waitForRender();
+		renderer.prefillEditor("question two");
+		let screen = await view(term);
+		expect(screen).toContain("question two");
+		term.sendInput("\r");
+		expect(submitted).toEqual(["question two"]);
+	});
+
 	it("renderer mutations after stop() are safe no-ops (run finally racing exit)", async () => {
 		const { renderer, term } = boot();
 		await term.waitForRender();
