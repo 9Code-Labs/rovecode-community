@@ -160,6 +160,26 @@ test("real wiring: single-model env chain surfaces the raw provider error — no
   }
 });
 
+// ---------- MED-3 seam gate: env UNSET → the synthesized default must NOT capture loose models ----------
+
+test("real wiring: with AION_MODEL_DEFAULT unset, a failing model gets NO loose fallback (env gate off)", async () => {
+  delete process.env.AION_MODEL_DEFAULT;
+  try {
+    const rt = createRuntime({ cwd: tmpCwd() });
+    const before = modelsSeen.length;
+    const events = await drive(rt, { provider: "custom", model: "alpha" }, "hello");
+    // gate off: alpha alone — the synthesized {custom,default} placeholder is never tried
+    expect(modelsSeen.slice(before)).toEqual(["alpha"]);
+    const end = runEnd(events);
+    expect(end.status).toBe("error");
+    expect(end.summary).toContain("HTTP 429: rate limited");
+    expect(end.summary).not.toContain("exhausted");
+    expect(rt.drainRouterNotes()).toHaveLength(0);
+  } finally {
+    process.env.AION_MODEL_DEFAULT = "custom/alpha, custom/beta";
+  }
+});
+
 // ---------- HIGH-2: /cost prices the SERVING model (buildCostNote composes from origin) ----------
 
 test("origin honesty: after a fallback /cost prices candidate 2, not the requested model", async () => {

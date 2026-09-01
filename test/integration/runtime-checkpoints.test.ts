@@ -72,12 +72,11 @@ test("wiring (b): AION_NO_CHECKPOINTS=1 kills snapshots while every tool keeps w
   rmSync(cwd, { recursive: true, force: true });
 }, 30_000);
 
-// HIGH-2 wiring pin — EXPECTED RED until the FW2-B runtime.ts hunk lands (anchor =
-// anchorEntryId(activeStore.messages()) instead of .at(-1)?.id; exact hunk in the
-// fixer notes / WAVE2_INTEGRATION.md). test.failing inverts the verdict: this stays
-// green while the bug exists and FAILS the suite the moment the hunk fixes it —
-// promote it to a plain test() then.
-test("wiring (c): snapshot entryId anchors the LAST USER message [red until runtime.ts FW2-B hunk]", async () => {
+// HIGH-2 wiring pin: runtime.ts anchors snapshots at anchorEntryId(activeStore.messages())
+// — the last USER message — so a conversation restore never strands the tool-issuing
+// assistant turn's tool_calls without replies (provider 400). Reverting the anchor to
+// .at(-1)?.id turns this red.
+test("wiring (c): snapshot entryId anchors the LAST USER message", async () => {
   const cwd = tmp();
   const sid = randomUUID();
   await drive(cwd, sid, [
@@ -87,7 +86,7 @@ test("wiring (c): snapshot entryId anchors the LAST USER message [red until runt
   const snap = firstSnapshot(cwd, sid);
   const store = new SessionStore(join(cwd, ".aion", "sessions"), sid);
   const lastUser = store.messages().findLast((m) => m.role === "user")!;
-  expect(snap.entryId).toBe(lastUser.id); // today it records the tool-ISSUING assistant id
+  expect(snap.entryId).toBe(lastUser.id); // anchorEntryId: branching here never strands tool_calls
   rmSync(cwd, { recursive: true, force: true });
 }, 30_000);
 
