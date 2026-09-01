@@ -12,7 +12,8 @@ import { memoryEditTool } from "../memory/tools.ts";
 import { resolveProvider, providerStream, type ProviderConfig } from "../providers/stream.ts";
 import { withToolCallParsing, toolPromptBlock } from "../providers/middleware.ts";
 import { ModelCatalog } from "../providers/catalog.ts";
-import { loadProjectContext } from "../core/config.ts";
+import { loadProjectContext, type ProjectContext } from "../core/config.ts";
+import { estimateTokens, type ContextChunk } from "../core/context.ts";
 import { ToolGuard } from "../core/guardrails.ts";
 import { loadMcpConfig, McpManager } from "../mcp/client.ts";
 import { createMcpTools } from "../mcp/tools.ts";
@@ -51,6 +52,11 @@ export interface Runtime {
   guard: ToolGuard;
   /** MCP server manager (port #3); null when no servers configured */
   mcp: McpManager | null;
+  /** port #8 config snapshot (AGENTS.md/CLAUDE.md/… harvested cwd-upward ONCE
+   *  at construction, for prompt-cache stability) incl. dropped/truncated
+   *  source stubs for /status. Mid-session config edits are intentionally not
+   *  picked up — restart aion (a new runtime) to refresh. */
+  projectContext: ProjectContext;
 }
 
 export function createRuntime(opts: RuntimeOptions = {}): Runtime {
@@ -92,19 +98,28 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   const defaultModel = provider?.defaultModel ?? process.env.AION_MODEL ?? "";
   const catalog = new ModelCatalog(); // offline models.dev snapshot (port #6)
 
+  // port #8: harvest AGENTS.md / CLAUDE.md / .cursor / copilot instructions
+  // cwd-UPWARD (OMP ancestor-walk pattern) ONCE per runtime — a snapshot, like
+  // BlockStore, so the system prompt stays byte-stable for prompt caching
+  // (MED-4). It reaches the model as an ADR-007 "config" chunk (priority 70)
+  // via buildDef → assembleContext, never a second prompt-assembly path.
+  const projectContext = loadProjectContext(cwd);
+  const configText = `# Project context${projectContext.text}`;
+  const configChunk: ContextChunk | null = projectContext.text
+    ? { name: "config", text: configText, priority: 70, tokens: estimateTokens(configText) }
+    : null;
+
   const systemPrompt = (): string => {
     const skillsIndex = buildSkillsIndex(skillStore);
     const memoryIndex = blocks.renderForPrompt();
-    // port #8: harvest AGENTS.md / CLAUDE.md / .cursor / copilot instructions (OMP pattern)
-    const project = loadProjectContext(cwd);
-    return `You are Aion, an interactive coding agent in ${cwd}. Use read/edit/write/bash tools. Edits require line hashes from read output. Be concise.${project.text ? "\n\n# Project context\n" + project.text : ""}${skillsIndex ? "\n\n# Skills\n" + skillsIndex : ""}${memoryIndex ? "\n\n# Memory\n" + memoryIndex : ""}`;
+    return `You are Aion, an interactive coding agent in ${cwd}. Use read/edit/write/bash tools. Edits require line hashes from read output. Be concise.${skillsIndex ? "\n\n# Skills\n" + skillsIndex : ""}${memoryIndex ? "\n\n# Memory\n" + memoryIndex : ""}`;
   };
 
   return {
     cwd, sessionId, store, registry, skillStore,
     get blockStore() { return blocks; },
     setBlockStore(b: BlockStore) { blocks = b; registry.register(memoryEditTool(b)); },
-    guard, mcp,
+    guard, mcp, projectContext,
     provider, stream, defaultModel, systemPrompt,
     buildDef: (model: ModelRef): AgentDefinition => {
       // models the catalog knows CANNOT do native tool calling get the senpi-format
@@ -117,6 +132,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
         systemPrompt: nonNative
           ? `${base}\n\n# Tool calling\n${toolPromptBlock(registry.list().map((t) => t.schema))}`
           : base,
+        ...(configChunk ? { contextChunks: [configChunk] } : {}),
       };
     },
     buildCfg: (yolo: boolean, approval?: ApprovalFn): RunConfig => ({

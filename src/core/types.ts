@@ -1,5 +1,7 @@
 /** Aion core type contracts. Single source of truth for the runtime. */
 
+import type { ContextChunk } from "./context.ts";
+
 // ---------- Messages (harness-level; converted to provider form only at the seam) ----------
 
 export type Role = "system" | "user" | "assistant" | "tool";
@@ -133,6 +135,10 @@ export interface AgentDefinition {
   maxTurns?: number;      // finite always (reject swarm's infinity)
   spawns?: "none" | "siblings" | "subtasks";
   memory?: { task?: boolean; episodic?: boolean; semantic?: boolean };
+  /** extra non-history ADR-007 chunks (port #8: harvested project config,
+   *  name "config", priority 70) folded into the system message via
+   *  assembleContext — droppable under budget pressure, unlike systemPrompt */
+  contextChunks?: ContextChunk[];
 }
 
 export interface AgentVars { [key: string]: unknown }

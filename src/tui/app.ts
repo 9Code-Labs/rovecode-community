@@ -235,9 +235,17 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
         if (arg) { state.model = arg; renderer.addSystemNote(`model → ${arg}`); pushStatus(); }
         else renderer.addSystemNote("usage: /model <id>", "warn");
         return true;
-      case "status":
-        renderer.addSystemNote(`provider=${state.provider} model=${state.model} turns=${state.turns} tokens=${state.tokensIn}in/${state.tokensOut}out`);
+      case "status": {
+        // port #8: config provenance — dropped/truncated sources must be visible (HIGH-2)
+        const pc = rt.projectContext;
+        const cfgBits = pc.sources.map((s) => s.chars === 0 ? `${s.path} (dropped)` : s.truncated ? `${s.path} (truncated)` : s.path);
+        if (pc.skippedFiles > 0) cfgBits.push(`+${pc.skippedFiles} skipped (file cap)`);
+        renderer.addSystemNote(
+          `provider=${state.provider} model=${state.model} turns=${state.turns} tokens=${state.tokensIn}in/${state.tokensOut}out` +
+          `\nconfig: ${cfgBits.length > 0 ? cfgBits.join(", ") : "(none)"}`,
+        );
         return true;
+      }
       case "cost": {
         // port #6 live half: /cost refresh re-fetches models.dev pricing (24h disk cache)
         if (arg === "refresh") {

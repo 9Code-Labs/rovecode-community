@@ -2,7 +2,7 @@
  *  Covers: streaming render, tool cards, gated approval via overlay, steering note, exit. */
 
 import { test, expect } from "bun:test";
-import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -183,6 +183,21 @@ test("buildCostNote prices per message at its ORIGIN model, with explicit caveat
   expect(note).toContain("1 without origin priced at the current model");
   expect(note).toContain("tokens: 3000005 in / 5 out");
 });
+
+test("/status surfaces harvested config sources incl. truncation state (port #8 HIGH-2)", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  writeFileSync(join(cwd, "AGENTS.md"), "y\n".repeat(5000), "utf8"); // 10,000 chars > 8,000 per-file cap
+  const term = new VirtualTerminal(80, 24);
+  const renderer = new PiTuiRenderer({ terminal: term, cwd });
+  const app = runTui({ renderer, stream: mockStream({ turns: [textTurn("x")] }), cwd, yolo: true, exitOnClose: false, model: "m1" });
+  term.sendInput("/status");
+  term.sendInput("\r");
+  const screen = await until(term, (s) => s.includes("config:"));
+  expect(screen).toContain("AGENTS.md (truncated)");
+  term.sendInput("\x03");
+  await app;
+  rmSync(cwd, { recursive: true, force: true });
+}, 20_000);
 
 // ---------- port #2: rewind + resume ----------
 

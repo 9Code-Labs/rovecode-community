@@ -100,6 +100,7 @@ export async function* agentLoop(
     const histNow = history.reduce((n, m) => n + estimateTokens(partsTokenText(m.parts)), 0);
     const chunks: ContextChunk[] = [
       { name: "system", text: systemText, priority: 100, tokens: estimateTokens(systemText) },
+      ...(def.contextChunks ?? []), // port #8: e.g. harvested config (priority 70) — evicted before system
       { name: "history", text: "", priority: 50, tokens: histNow }, // marker; history passed directly below
     ];
     const asm = assembleContext(chunks, cfg.contextBudgetTokens);
@@ -107,12 +108,16 @@ export async function* agentLoop(
       const droppedTokens = asm.dropped.reduce((n, c) => n + c.tokens, 0);
       yield { type: "compaction", strategy: "context-drop", tokensBefore: asm.totalTokens + droppedTokens, tokensAfter: asm.totalTokens };
     }
-    const systemKept = asm.chunks.some((c) => c.name === "system");
+    // the system message = kept non-history chunks in priority order (system first);
+    // ONE prompt-assembly path — dropped chunks (e.g. config) never reach the wire
+    const promptChunks = asm.chunks.filter((c) => c.name !== "history");
+    const systemKept = promptChunks.length > 0;
+    const promptText = promptChunks.map((c) => c.text).join("\n\n");
 
     // --- provider turn (never throws; errors are stopReasons) ---
     const msgId = randomUUID();
     let turnResult: TurnOutcome;
-    const sysMsg: Message = { id: "sys", role: "system", parts: [{ kind: "text", text: systemText }], parentId: null, createdAt: 0 };
+    const sysMsg: Message = { id: "sys", role: "system", parts: [{ kind: "text", text: promptText }], parentId: null, createdAt: 0 };
     try {
       turnResult = await collectTurn(
         deps.stream, model,

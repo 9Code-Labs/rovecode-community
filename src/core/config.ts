@@ -1,7 +1,7 @@
 /**
- * Project context inheritance: auto-import instruction files from other
- * coding-agent "harnesses" (Claude, Gemini, Cursor, Copilot, plain AGENTS.md)
- * so aion projects don't need to duplicate repo conventions per tool.
+ * Project context inheritance (port #8): auto-import instruction files from
+ * other coding-agent "harnesses" (Claude, Gemini, Cursor, Copilot, plain
+ * AGENTS.md) so aion projects don't need to duplicate repo conventions.
  *
  * Pattern + precedence order modeled on oh-my-pi's context-file discovery
  * (E:\9code\research\source_snapshots\can1357-oh-my-pi):
@@ -10,39 +10,57 @@
  *     (higher priority wins at a shared scope) and the per-tool path
  *     conventions: AGENTS.md, CLAUDE.md / .claude/CLAUDE.md, GEMINI.md,
  *     .cursor/rules/*.mdc + legacy .cursorrules, .github/copilot-instructions.md.
+ *   - packages/coding-agent/src/discovery/builtin.ts `getAncestorDirs` — the
+ *     cwd-upward ancestor walk with an optional inclusive stop directory.
  *   - packages/coding-agent/src/discovery/cursor.ts — `.cursor/rules/*.mdc`
- *     carries MDC frontmatter that must be separated from the rule body
- *     (`transformMDCRule` / `buildRuleFromMarkdown`).
- *   - packages/coding-agent/src/discovery/github.ts — copilot-instructions.md
- *     lives at a fixed `.github/` path with no ancestor walk-up.
+ *     carries MDC frontmatter that must be separated from the rule body.
  *
- * Deliberate deviations from OMP (this is a simplified, single-cwd port,
- * not a full port of OMP's discovery system):
- *   - No ancestor walk-up / monorepo "depth" concept — OMP walks from cwd
- *     toward the repo root and tracks a directory depth per file; aion only
- *     looks directly inside `cwd`.
- *   - No provider-priority shadowing ("one file per scope wins"). Instead,
- *     every existing candidate path is loaded, and the only collapsing rule
- *     is byte-identical content dedup (earlier in precedence order wins).
- *     Simpler than OMP's real depth+priority shadowing table.
- *   - OMP's cursor provider treats `.cursor/rules/*.mdc` as conditional
- *     *rules* (globs/alwaysApply/description parsed from frontmatter and
- *     acted on) and does not surface them as context files at all. Here
- *     they are harvested unconditionally as plain context text; frontmatter
- *     is stripped, never parsed/acted on.
- *   - OMP's cursor provider also accepts `.md` alongside `.mdc` under
- *     `.cursor/rules/`; this harvest is restricted to `*.mdc` only, per the
- *     family's own spec.
- *   - The hard character budget (`maxPerFileChars` / `maxTotalChars`) is
- *     aion-specific. OMP has no cap on context-file loading at all; its
- *     only budget concept lives in the unrelated memory subsystem
- *     (docs/memory.md `memories.summaryInjectionTokenLimit`).
+ * Discovery + precedence (aion's documented spec):
+ *   - Ancestor walk: cwd UPWARD via dirname until parent === current (the
+ *     filesystem root). The walk additionally stops — INCLUSIVELY — at the
+ *     first directory containing `.git` (file or directory; worktrees use a
+ *     file), so a repository never inherits context from outside itself.
+ *     `opts.stopAt` bounds the walk at an explicit dir (also inclusive).
+ *   - Precedence: NEARER directories first (nearest wins); within one
+ *     directory, family order aion > agents > claude > gemini > cursor >
+ *     copilot (the harvest list in `buildCandidates`). Earlier position wins
+ *     dedupe and total-cap priority.
+ *   - Shadowing (dedupe by depth): the same relative path (e.g. `AGENTS.md`)
+ *     found in a nearer directory completely shadows the farther one — the
+ *     farther file is never read and never listed.
+ *   - Blank files (empty or whitespace-only, after MDC frontmatter stripping)
+ *     are skipped entirely: no section, no dedupe registration, no shadowing.
+ *   - Byte-identical content across surviving candidates is included once;
+ *     the earlier (higher-precedence) occurrence wins and later duplicates
+ *     never reach `sources` — unlike total-cap drops, which keep a stub.
+ *
+ * Budgets (aion-specific; OMP has no cap on context-file loading):
+ *   - `maxPerFileChars` caps each file's content. Truncation is fence-safe:
+ *     cut at the last newline inside the window and close an odd ``` fence
+ *     count so the following sections aren't swallowed by an open code block.
+ *   - `maxTotalChars` budgets the FULL rendered section string — the
+ *     `## From <path>` header included, so `text.length` never exceeds it.
+ *   - `maxFiles` bounds how many files are included; further existing
+ *     candidate files are counted in `skippedFiles` but never read.
+ *
+ * Freshness: callers snapshot the result once per runtime (cli/runtime.ts)
+ * so the system prompt stays byte-stable for prompt caching (port #5).
+ * Mid-session edits to config files are intentionally not picked up —
+ * restart aion (a new runtime) to refresh.
+ *
+ * Remaining deliberate deviations from OMP: no provider-priority shadowing
+ * table (content dedupe + path shadowing instead); `.cursor/rules/*.mdc`
+ * harvested unconditionally as plain text (frontmatter stripped, never
+ * parsed/acted on) and restricted to `*.mdc`; the character/file budgets are
+ * aion's own.
  */
 
-import { readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { join, dirname, resolve } from "node:path";
 
 export interface ContextSource {
+  /** Display path relative to cwd, "/"-separated with one "../" segment per
+   *  ancestor level — used verbatim in the rendered "## From <path>" header. */
   path: string;
   family: "aion" | "agents" | "claude" | "gemini" | "cursor" | "copilot";
   chars: number;
@@ -52,37 +70,40 @@ export interface ContextSource {
 export interface ProjectContext {
   text: string;
   sources: ContextSource[];
+  /** Existing candidate files that were NOT read because the `maxFiles`
+   *  bound was already reached (surfaced in /status, never silent). */
+  skippedFiles: number;
 }
 
 export interface LoadOptions {
   /** Per-file cap in characters. Default 8000. */
   maxPerFileChars?: number;
-  /** Total cap across all included files, in characters. Default 24000. */
+  /** Total cap on the rendered text (headers included). Default 24000. */
   maxTotalChars?: number;
+  /** Max files included across the walk. Default 24. */
+  maxFiles?: number;
+  /** Inclusive upper bound for the ancestor walk (tests/embedders). */
+  stopAt?: string;
 }
 
 const DEFAULT_MAX_PER_FILE_CHARS = 8000;
 const DEFAULT_MAX_TOTAL_CHARS = 24000;
+const DEFAULT_MAX_FILES = 24;
 const TRUNCATION_MARKER = "…[truncated]";
 
 type Family = ContextSource["family"];
 
 interface Candidate {
-  /** Path relative to cwd, "/"-separated regardless of host OS — used
-   *  verbatim as ContextSource.path and in the rendered "## From <path>"
-   *  header, so output stays deterministic across platforms. */
+  /** Path relative to its directory, "/"-separated regardless of host OS. */
   relPath: string;
   family: Family;
   /** Strip a leading MDC frontmatter block before treating this as content. */
   mdc: boolean;
 }
 
-/**
- * Harvest list in precedence order (first = highest; wins dedupe and total-
- * cap priority): aion > agents > claude > gemini > cursor > copilot. This is
- * aion's own harvest spec, not OMP's real priority table (see module doc).
- */
-function buildCandidates(cwd: string): Candidate[] {
+/** Harvest list for ONE directory, in family precedence order (first =
+ *  highest): aion > agents > claude > gemini > cursor > copilot. */
+function buildCandidates(dir: string): Candidate[] {
   const candidates: Candidate[] = [
     { relPath: ".aion/AION.md", family: "aion", mdc: false },
     { relPath: "AION.md", family: "aion", mdc: false },
@@ -92,18 +113,45 @@ function buildCandidates(cwd: string): Candidate[] {
     { relPath: "GEMINI.md", family: "gemini", mdc: false },
     { relPath: ".cursorrules", family: "cursor", mdc: false },
   ];
-  for (const name of listCursorRuleFiles(cwd)) {
+  for (const name of listCursorRuleFiles(dir)) {
     candidates.push({ relPath: `.cursor/rules/${name}`, family: "cursor", mdc: true });
   }
   candidates.push({ relPath: ".github/copilot-instructions.md", family: "copilot", mdc: false });
   return candidates;
 }
 
+/** cwd upward: dirname until parent === current (filesystem root), stopping
+ *  inclusively at `stopAt` or at the first dir containing `.git` (file or
+ *  directory — git worktrees use a file). OMP `getAncestorDirs` pattern. */
+function ancestorDirs(cwd: string, stopAt?: string): string[] {
+  const dirs: string[] = [];
+  const stop = stopAt === undefined ? null : resolve(stopAt);
+  let current = resolve(cwd);
+  for (;;) {
+    dirs.push(current);
+    if (stop !== null && current === stop) break;
+    if (hasGitMarker(current)) break; // repo root — inclusive, never above
+    const parent = dirname(current);
+    if (parent === current) break;    // filesystem root
+    current = parent;
+  }
+  return dirs;
+}
+
+/** `.git` presence, or false on any fs error (permissions, bad path, …). */
+function hasGitMarker(dir: string): boolean {
+  try {
+    return existsSync(join(dir, ".git"));
+  } catch {
+    return false;
+  }
+}
+
 /** `.cursor/rules/*.mdc`, sorted by filename. A missing/unreadable directory
  *  yields no entries — silent skip, never a throw. */
-function listCursorRuleFiles(cwd: string): string[] {
+function listCursorRuleFiles(dir: string): string[] {
   try {
-    const entries = readdirSync(join(cwd, ".cursor", "rules"), { withFileTypes: true });
+    const entries = readdirSync(join(dir, ".cursor", "rules"), { withFileTypes: true });
     return entries
       .filter((e) => e.isFile() && e.name.endsWith(".mdc"))
       .map((e) => e.name)
@@ -123,9 +171,16 @@ function tryReadFile(absPath: string): string | null {
   }
 }
 
-/** Strip a leading `---\n...\n---` MDC frontmatter block, if present.
- *  Content that doesn't open with a `---` delimiter line, or never closes
- *  one, is returned unchanged. */
+/** existsSync that can never throw (used only for `skippedFiles` counting). */
+function fileExists(absPath: string): boolean {
+  try {
+    return existsSync(absPath);
+  } catch {
+    return false;
+  }
+}
+
+/** Strip a leading `---\n...\n---` MDC frontmatter block, if present. */
 function stripMdcFrontmatter(content: string): string {
   const lines = content.split("\n");
   if ((lines[0] ?? "").trim() !== "---") return content;
@@ -140,8 +195,21 @@ function stripMdcFrontmatter(content: string): string {
   return lines.slice(endIdx + 1).join("\n").replace(/^\n+/, "");
 }
 
+/** Fence-safe truncation: cut at the last newline inside the window (whole
+ *  lines only; hard cut when the window has no interior newline), close an
+ *  odd ``` fence count so following sections aren't swallowed by an open
+ *  code block, then append the marker. */
+function truncateSafely(full: string, maxChars: number): string {
+  const window = full.slice(0, maxChars);
+  const nl = window.lastIndexOf("\n");
+  const cut = nl > 0 ? window.slice(0, nl) : window;
+  const fences = cut.split("\n").filter((l) => l.trimStart().startsWith("```")).length;
+  return fences % 2 === 1 ? `${cut}${TRUNCATION_MARKER}\n\`\`\`` : cut + TRUNCATION_MARKER;
+}
+
 interface KeptFile {
-  relPath: string;
+  /** cwd-relative display path: "../" per ancestor level + relPath. */
+  displayPath: string;
   family: Family;
   /** Content after per-file truncation (includes the marker when truncated). */
   content: string;
@@ -150,55 +218,72 @@ interface KeptFile {
 
 /**
  * Load and merge instruction files from every supported harness convention
- * found directly under `cwd`. Deterministic: identical directory contents
- * always produce the same `text` and `sources`, in the same order.
+ * found in `cwd` and its ancestors (see module doc for the walk, precedence,
+ * shadowing, and budget rules). Deterministic: identical tree contents always
+ * produce the same `text` and `sources`, in the same order.
  */
 export function loadProjectContext(cwd: string, opts?: LoadOptions): ProjectContext {
   const maxPerFileChars = opts?.maxPerFileChars ?? DEFAULT_MAX_PER_FILE_CHARS;
   const maxTotalChars = opts?.maxTotalChars ?? DEFAULT_MAX_TOTAL_CHARS;
+  const maxFiles = opts?.maxFiles ?? DEFAULT_MAX_FILES;
 
-  const seen = new Set<string>();
+  const seenContent = new Set<string>();
+  const shadowed = new Set<string>();   // relPaths claimed by a nearer non-blank file
   const kept: KeptFile[] = [];
+  let skippedFiles = 0;
 
-  for (const candidate of buildCandidates(cwd)) {
-    const raw = tryReadFile(join(cwd, candidate.relPath));
-    if (raw === null) continue; // missing or unreadable — skip silently
+  const dirs = ancestorDirs(cwd, opts?.stopAt);
+  for (let depth = 0; depth < dirs.length; depth++) {
+    const dir = dirs[depth]!;
+    for (const candidate of buildCandidates(dir)) {
+      if (shadowed.has(candidate.relPath)) continue;   // nearest wins (dedupe by depth)
+      const absPath = join(dir, candidate.relPath);
+      if (kept.length >= maxFiles) {
+        // file-count bound (HIGH-3): count existing candidates, never read them
+        if (fileExists(absPath)) skippedFiles++;
+        continue;
+      }
+      const raw = tryReadFile(absPath);
+      if (raw === null) continue; // missing or unreadable — skip silently
 
-    const full = candidate.mdc ? stripMdcFrontmatter(raw) : raw;
+      const full = candidate.mdc ? stripMdcFrontmatter(raw) : raw;
+      if (full.trim() === "") continue; // blank: no section/dedupe/shadow (LOW-6)
+      shadowed.add(candidate.relPath);
 
-    // Byte-identical content across families/paths is included once; the
-    // earlier (higher-precedence) candidate wins and later duplicates are
-    // skipped entirely — they never reach `sources`, unlike total-cap drops
-    // below, which keep a stub entry.
-    if (seen.has(full)) continue;
-    seen.add(full);
+      if (seenContent.has(full)) continue; // byte-identical dupe: earlier one won
+      seenContent.add(full);
 
-    let content = full;
-    let truncated = false;
-    if (full.length > maxPerFileChars) {
-      content = full.slice(0, maxPerFileChars) + TRUNCATION_MARKER;
-      truncated = true;
+      let content = full;
+      let truncated = false;
+      if (full.length > maxPerFileChars) {
+        content = truncateSafely(full, maxPerFileChars);
+        truncated = true;
+      }
+      kept.push({
+        displayPath: "../".repeat(depth) + candidate.relPath,
+        family: candidate.family, content, truncated,
+      });
     }
-    kept.push({ relPath: candidate.relPath, family: candidate.family, content, truncated });
   }
 
-  // Total cap enforced in precedence order: each kept file is included in
-  // full if it still fits the remaining budget; otherwise it is dropped from
-  // `text` but stays listed in `sources` as a chars:0/truncated:true stub so
-  // callers can see what was cut, and why the surviving text is short.
+  // Total cap enforced in precedence order over the FULL section string —
+  // header included, so `text.length <= maxTotalChars` always holds. A file
+  // that would exceed the budget is dropped from `text` but stays listed in
+  // `sources` as a chars:0/truncated:true stub so callers can see what was
+  // cut, and why the surviving text is short.
   const sources: ContextSource[] = [];
   const sections: string[] = [];
   let total = 0;
   for (const file of kept) {
-    const chars = file.content.length;
-    if (total + chars <= maxTotalChars) {
-      sources.push({ path: file.relPath, family: file.family, chars, truncated: file.truncated });
-      sections.push(`\n\n## From ${file.relPath}\n${file.content}`);
-      total += chars;
+    const section = `\n\n## From ${file.displayPath}\n${file.content}`;
+    if (total + section.length <= maxTotalChars) {
+      sources.push({ path: file.displayPath, family: file.family, chars: file.content.length, truncated: file.truncated });
+      sections.push(section);
+      total += section.length;
     } else {
-      sources.push({ path: file.relPath, family: file.family, chars: 0, truncated: true });
+      sources.push({ path: file.displayPath, family: file.family, chars: 0, truncated: true });
     }
   }
 
-  return { text: sections.join(""), sources };
+  return { text: sections.join(""), sources, skippedFiles };
 }
