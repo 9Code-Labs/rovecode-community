@@ -1,0 +1,17 @@
+{
+  "name": "aion",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "module": "src/index.ts",
+  "bin": { "aion": "src/cli/main.ts" },
+  "scripts": {
+    "test": "bun test",
+    "gauntlet": "bun run src/eval/gauntlet.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5"
+  }
+}
