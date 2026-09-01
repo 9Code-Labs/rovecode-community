@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test";
 import { lineHash, fileTag, applyEdits, readAnchored, renderAnchored, readTool, editTool, bashTool, setEditLinter } from "../../src/coding/hashline.ts";
+import { configureExecutor, resetExecutor, type SpawnRunner } from "../../src/core/executor.ts";
 import type { PermissionDecision } from "../../src/core/types.ts";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -194,4 +195,32 @@ test("bashTool retries once on non-zero exit and reports final code", async () =
   expect(fail.ok).toBe(false);
   expect(fail.output).toContain("exit=7");
   rmSync(dir, { recursive: true, force: true });
+});
+
+// ---------- bashTool spawn failure through the executor seam (port #10 G8) ----------
+
+test("bashTool surfaces a missing bash as structured exit=-1 spawn failed, not a throw (G8)", async () => {
+  // Fake runner behind the seam: what bunRunner returns when the binary is
+  // missing (Bun.spawn throws before exec → code -1, message in stderr).
+  let spawns = 0;
+  const runner: SpawnRunner = () => {
+    spawns++;
+    return Promise.resolve({ code: -1, stdout: "", stderr: "spawn failed: ENOENT bash" });
+  };
+  const dir = mkdtempSync(join(tmpdir(), "aion-hl-"));
+  try {
+    await configureExecutor("direct", { runner });
+    const out = await bashTool.execute({ command: "echo hi" }, makeCtx(dir));
+    expect(out.ok).toBe(false);
+    expect(out.output).toBe("exit=-1\n\nstderr:\nspawn failed: ENOENT bash");
+    // Retry policy: bashTool retries ANY non-zero exit once, including -1. Kept
+    // (not special-cased) because a spawn failure never creates a process, so
+    // the doomed retry is ~free, and Windows spawn failures are not always
+    // deterministic (antivirus/EBUSY holds on bash.exe) — one retry can
+    // genuinely recover. Pinned so any future change is a conscious one:
+    expect(spawns).toBe(2);
+  } finally {
+    resetExecutor(); // the seam is module-global — never leak the fake runner
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

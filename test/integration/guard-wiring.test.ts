@@ -171,12 +171,14 @@ test("runChild: a looping subagent is stopped by its own guard", async () => {
   expect(res.ok).toBe(true);
   // The LOOP-BROKEN text can only appear after a tool_result carrying the
   // guard's blocked stub reached the child's history — an unguarded child
-  // burns maxTurns and summarizes "(no output)". (Note: deriveChildRules'
-  // deny-rest terminator denies every call here, so each attempt fails with
-  // an IDENTICAL denial — the guard escalates on those repeats all the same;
-  // upstream counts failed repeats even more aggressively.)
+  // burns maxTurns and summarizes "(no output)". The child's rules derive
+  // from the allow-all parent with the deny-rest default FIRST (FW2-P fix:
+  // last-match-wins, so parent allows override it; the old trailing catch-all
+  // denied every child call), so the identical calls now EXECUTE and the
+  // guard — not a permissions accident — is what breaks the loop: 5 run,
+  // the 6th is stubbed unexecuted.
   expect(res.summary).toContain("LOOP-BROKEN");
-  expect(probe.executed()).toBe(0); // child perms are deny-by-default in this setup
+  expect(probe.executed()).toBe(GUARDRAIL_DEFAULTS.stubAfterRepeats); // 5 executed, 6th blocked by the guard
   rmSync(root, { recursive: true, force: true });
   rmSync(sessions, { recursive: true, force: true });
 }, 30_000);

@@ -54,9 +54,9 @@ test("no prompt rules survive derivation", () => {
   expect(dotenv?.effect).toBe("deny");
 });
 
-test("deny-rest terminator present", () => {
+test("deny-rest default present, placed FIRST (last-match-wins: parent-derived rules must override it)", () => {
   const child = deriveChildRules(parentRules);
-  expect(child.at(-1)).toEqual({ action: "*", resource: "*", effect: "deny" });
+  expect(child.at(0)).toEqual({ action: "*", resource: "*", effect: "deny" });
 });
 
 test("allow rules keep parent breadth when not isolated", () => {

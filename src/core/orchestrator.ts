@@ -143,15 +143,20 @@ function applyPatch(patch: string, parentDir: string): boolean {
  *  - isolated children: path-glob allow resources are re-rooted under the isolation dir
  *  - non-isolated children keep allow breadth unchanged (resources are action-shaped globs like
  *    "src/**" or "rm *"; prefixing them with an absolute path would break shell-command matching)
- *  - deny-rest terminator: any unlisted action defaults to deny for children
+ *  - deny-rest DEFAULT, placed FIRST: evaluatePermissions is LAST-match-wins
+ *    (tools.ts), so the catch-all must sit at the lowest priority for the
+ *    parent-derived rules after it to override — an unlisted action falls
+ *    through to it and is denied. Appending it LAST was bug FW2-P: the
+ *    catch-all matched everything as the final word and overrode every
+ *    parent allow, denying ALL child tool calls even under an allow-all parent.
  */
 export function deriveChildRules(rules: PermissionRule[], isoDir?: string, isolated = false): PermissionRule[] {
-  const out = rules.map((r): PermissionRule => {
-    if (r.effect === "prompt") return { ...r, effect: "deny" };
-    if (isolated && isoDir && r.effect === "allow" && isPathResource(r)) return { ...r, resource: join(isoDir, r.resource) };
-    return { ...r };
-  });
-  out.push({ action: "*", resource: "*", effect: "deny" });
+  const out: PermissionRule[] = [{ action: "*", resource: "*", effect: "deny" }];
+  for (const r of rules) {
+    if (r.effect === "prompt") out.push({ ...r, effect: "deny" });
+    else if (isolated && isoDir && r.effect === "allow" && isPathResource(r)) out.push({ ...r, resource: join(isoDir, r.resource) });
+    else out.push({ ...r });
+  }
   return out;
 }
 

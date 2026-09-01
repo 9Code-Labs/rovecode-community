@@ -1,6 +1,15 @@
 /** PORT #10 executor ladder tests: rung selection, probe-failure paths,
  *  unavailable rung → loud error (never silent fallback DOWN), and direct
- *  rung byte-parity with today's bashTool. */
+ *  rung byte-parity with today's bashTool.
+ *
+ *  Round-2 pins: probes are trial spawns THROUGH the wrapper (G1/G2) and
+ *  time-bounded at 500ms (G3); signal/cwd forwarding is pinned by identity
+ *  (G4); direct-rung bytes are ABSOLUTE, not seam-vs-seam (G5); the Git-bash
+ *  preference is pinned via argv[0] (G6); a failed configure poisons the
+ *  seam instead of degrading (G7). The tool-level spawn-failure pin (G8)
+ *  lives with bashTool in hashline.test.ts. Probe/rung tests use fake
+ *  runners ONLY — a real wsl.exe/docker spawn is machine-state-dependent
+ *  and can hold pipes open long past a kill. */
 
 import { test, expect, afterEach } from "bun:test";
 import {
@@ -13,33 +22,43 @@ import {
   resetExecutor,
   RungUnavailableError,
   DEFAULT_DOCKER_IMAGE,
+  PROBE_TIMEOUT_MS,
   bunRunner,
   type SpawnRunner,
   type RawResult,
 } from "../../src/core/executor.ts";
 import { bashTool } from "../../src/coding/hashline.ts";
 import type { PermissionDecision } from "../../src/core/types.ts";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 afterEach(() => resetExecutor());
 
+/** Test-local copy of the canonical Git-bash path (deliberately NOT imported:
+ *  mutating the module's constant to a nonexistent path makes bashBin() fall
+ *  back to "bash" and must MISMATCH this). */
+const GIT_BASH = "C:/Program Files/Git/bin/bash.exe";
+const CANON_BASH = process.platform === "win32" && existsSync(GIT_BASH) ? GIT_BASH : "bash";
+
 // ---------- fakes ----------
 
-function fakeRunner(script: (argv: readonly string[]) => RawResult): { runner: SpawnRunner; calls: string[][] } {
-  const calls: string[][] = [];
-  const runner: SpawnRunner = (argv) => {
-    calls.push([...argv]);
+interface Call { argv: string[]; opts: { cwd?: string; signal?: AbortSignal } }
+function fakeRunner(script: (argv: readonly string[]) => RawResult): { runner: SpawnRunner; calls: Call[] } {
+  const calls: Call[] = [];
+  const runner: SpawnRunner = (argv, opts) => {
+    calls.push({ argv: [...argv], opts });
     return Promise.resolve(script(argv));
   };
   return { runner, calls };
 }
 const ok = (stdout = ""): RawResult => ({ code: 0, stdout, stderr: "" });
 const fail = (code: number, stderr: string): RawResult => ({ code, stdout: "", stderr });
+/** wsl/docker probes are trial spawns of `… bash -c true` through the wrapper. */
+const isProbe = (argv: readonly string[]) => argv.at(-3) === "bash" && argv.at(-2) === "-c" && argv.at(-1) === "true";
 /** probe calls succeed, executed commands run `exec` */
-const probeOkThen = (exec: (argv: readonly string[]) => RawResult) => fakeRunner((argv) =>
-  (argv[0] === "wsl.exe" && argv[1] === "--status") || (argv[0] === "docker" && argv[1] === "version") ? ok("25.0.0") : exec(argv));
+const probeOkThen = (exec: (argv: readonly string[]) => RawResult) =>
+  fakeRunner((argv) => (isProbe(argv) ? ok() : exec(argv)));
 
 // ---------- ladder + rung selection ----------
 
@@ -48,14 +67,14 @@ test("ladder is direct → wsl → docker", () => {
 });
 
 test("rung selection: the requested rung is the returned rung, never substituted", async () => {
-  const { runner } = fakeRunner(() => ok("25.0.0"));
+  const { runner } = fakeRunner(() => ok());
   for (const rung of RUNGS) {
     const ex = await createExecutor(rung, { runner, platform: "win32" });
     expect(ex.rung).toBe(rung);
   }
 });
 
-// ---------- probes ----------
+// ---------- probes (G1/G2: trial spawns THROUGH the wrapper; G3: bounded) ----------
 
 test("direct probe: always available, no process spawned", async () => {
   const { runner, calls } = fakeRunner(() => fail(1, "must not be called"));
@@ -73,13 +92,55 @@ test("wsl probe: off-Windows is unavailable with a platform explanation, no spaw
   expect(calls.length).toBe(0);
 });
 
-test("wsl probe: wsl.exe --status failure reported with exit code and output", async () => {
-  const { runner, calls } = fakeRunner(() => fail(1, "W\u0000S\u0000L\u0000 is not installed"));
+test("wsl probe is ONE trial spawn through the wrapper, with a deadline signal (G1/G3)", async () => {
+  const { runner, calls } = fakeRunner(() => ok());
+  const p = await probeRung("wsl", runner, "win32");
+  expect(p.available).toBe(true);
+  expect(calls.length).toBe(1);
+  expect(calls[0]!.argv).toEqual(["wsl.exe", "--exec", "bash", "-c", "true"]); // bwrap.rs:74 shape
+  expect(calls[0]!.opts.signal).toBeInstanceOf(AbortSignal);
+});
+
+test("wsl probe: subsystem installed but default distro has no bash → UNAVAILABLE (G1 regression)", async () => {
+  // The reference machine's real shape: `wsl.exe --status` exits 0 (docker-desktop
+  // distro installed) while every command THROUGH the wrapper exits 1. A --status
+  // probe says available and then bashTool fails forever; the trial spawn may not.
+  const { runner, calls } = fakeRunner((argv) =>
+    argv.includes("--status")
+      ? ok("Default Distribution: docker-desktop")
+      : fail(1, "<3>WSL (11 - Relay) ERROR: CreateProcessCommon:818: execvpe(bash) failed: No such file or directory"));
   const p = await probeRung("wsl", runner, "win32");
   expect(p.available).toBe(false);
   expect(p.detail).toContain("exited 1");
-  expect(p.detail).toContain("WSL is not installed"); // UTF-16LE NULs stripped
-  expect(calls[0]).toEqual(["wsl.exe", "--status"]);
+  expect(p.detail).toContain("execvpe(bash) failed");
+  expect(calls.some((c) => c.argv.includes("--status"))).toBe(false); // --status is never consulted
+});
+
+test("wsl probe failure detail strips UTF-16LE NULs", async () => {
+  const { runner } = fakeRunner(() => fail(1, "W\u0000S\u0000L\u0000 relay error"));
+  const p = await probeRung("wsl", runner, "win32");
+  expect(p.available).toBe(false);
+  expect(p.detail).toContain("WSL relay error");
+});
+
+test("docker probe is a trial container run proving daemon+image+bash, not `docker version` (G2)", async () => {
+  const { runner, calls } = fakeRunner(() => ok());
+  const p = await probeRung("docker", runner, "linux");
+  expect(p.available).toBe(true);
+  expect(calls[0]!.argv).toEqual(["docker", "run", "--rm", DEFAULT_DOCKER_IMAGE, "bash", "-c", "true"]);
+  expect(calls[0]!.opts.signal).toBeInstanceOf(AbortSignal);
+  // the trial proves THE image commands will later use
+  const custom = fakeRunner(() => ok());
+  await probeRung("docker", custom.runner, "linux", { dockerImage: "aion/dev:1" });
+  expect(custom.calls[0]!.argv).toEqual(["docker", "run", "--rm", "aion/dev:1", "bash", "-c", "true"]);
+});
+
+test("docker probe: daemon up but image lacks bash → UNAVAILABLE (G2 regression)", async () => {
+  const { runner } = fakeRunner((argv) =>
+    argv[1] === "version" ? ok("25.0.0") : fail(127, 'exec: "bash": executable file not found in $PATH'));
+  const p = await probeRung("docker", runner, "linux");
+  expect(p.available).toBe(false);
+  expect(p.detail).toContain("executable file not found");
 });
 
 test("docker probe: daemon-down and missing-CLI are both unavailable with detail", async () => {
@@ -87,7 +148,6 @@ test("docker probe: daemon-down and missing-CLI are both unavailable with detail
   const p1 = await probeRung("docker", daemonDown.runner, "linux");
   expect(p1.available).toBe(false);
   expect(p1.detail).toContain("Cannot connect to the Docker daemon");
-  expect(daemonDown.calls[0]?.slice(0, 2)).toEqual(["docker", "version"]); // daemon probe, not --version
 
   const noCli = fakeRunner(() => fail(-1, "spawn failed: ENOENT"));
   const p2 = await probeRung("docker", noCli.runner, "darwin");
@@ -95,10 +155,39 @@ test("docker probe: daemon-down and missing-CLI are both unavailable with detail
   expect(p2.detail).toContain("ENOENT");
 });
 
+test("probes are bounded: a hung wrapper times out → unavailable with a clear detail (G3)", async () => {
+  // The never-settling runner has NO OS handle, so nothing else refs the event
+  // loop — exactly the shape under which Bun's unref'd AbortSignal.timeout
+  // timer never fires. An implementation that races the signal's own 'abort'
+  // event instead of a ref'd setTimeout hangs HERE, forever (the original
+  // executor.test.ts hang).
+  const never: SpawnRunner = () => new Promise<RawResult>(() => {});
+  const t0 = Date.now();
+  const w = await probeRung("wsl", never, "win32", { timeoutMs: 30 });
+  const d = await probeRung("docker", never, "linux", { timeoutMs: 30 });
+  expect(Date.now() - t0).toBeLessThan(2_000); // returned at the deadline, not never
+  expect(w.available).toBe(false);
+  expect(w.detail).toContain("timed out after 30ms");
+  expect(d.available).toBe(false);
+  expect(d.detail).toContain("timed out after 30ms");
+});
+
+test("probe deadline pinned at 500ms — upstream's own bwrap cap (bwrap.rs:36,67); timeout ⇒ unavailable, never a hang", () => {
+  expect(PROBE_TIMEOUT_MS).toBe(500);
+});
+
 test("bunRunner: a missing binary becomes code -1 + stderr, not a crash", async () => {
   const r = await bunRunner(["definitely-not-a-real-binary-p10-xyz"], {});
   expect(r.code).toBe(-1);
   expect(r.stderr).toContain("spawn failed");
+});
+
+test("bunRunner forwards the AbortSignal to the OS process: pre-aborted → nothing runs (G4)", async () => {
+  const c = new AbortController();
+  c.abort();
+  const r = await bunRunner([CANON_BASH, "-c", "echo ran-anyway"], { signal: c.signal });
+  expect(r.code).not.toBe(0); // killed at spawn (measured exit 143 in 9ms); dropping `signal:` runs it → code 0
+  expect(r.stdout).not.toContain("ran-anyway");
 });
 
 test("probeLadder reports every rung in ladder order without choosing for you", async () => {
@@ -126,7 +215,7 @@ test("unavailable rung: createExecutor throws RungUnavailableError naming the ru
   expect(err.message).toContain("fall back"); // states the no-fallback contract
 });
 
-test("failed configure is loud and leaves the seam unchanged (no fallback DOWN)", async () => {
+test("failed configure poisons the seam: getExecutor() throws for the desired rung, no silent direct (G7)", async () => {
   expect(getExecutor().rung).toBe("direct"); // default before any configure
   const { runner } = fakeRunner(() => fail(1, "no wsl here"));
   let thrown: unknown;
@@ -136,7 +225,33 @@ test("failed configure is loud and leaves the seam unchanged (no fallback DOWN)"
     thrown = e;
   }
   expect(thrown).toBeInstanceOf(RungUnavailableError);
-  expect(getExecutor().rung).toBe("direct"); // unchanged, and the caller SAW the error
+  // the DESIRED rung is recorded: the seam refuses to hand out anything else
+  let got: unknown;
+  try {
+    getExecutor();
+  } catch (e) {
+    got = e;
+  }
+  expect(got).toBeInstanceOf(RungUnavailableError);
+  expect((got as RungUnavailableError).rung).toBe("wsl");
+  expect((got as RungUnavailableError).message).toContain("no wsl here"); // carries the configure failure
+  // a later successful configure clears the fault; reset restores the default
+  const good = fakeRunner(() => ok());
+  await configureExecutor("wsl", { runner: good.runner, platform: "win32" });
+  expect(getExecutor().rung).toBe("wsl");
+  resetExecutor();
+  expect(getExecutor().rung).toBe("direct");
+});
+
+test("a previously installed rung does not mask a failed configure (G7)", async () => {
+  const good = fakeRunner(() => ok());
+  await configureExecutor("wsl", { runner: good.runner, platform: "win32" });
+  expect(getExecutor().rung).toBe("wsl");
+  const bad = fakeRunner(() => fail(1, "daemon down"));
+  try {
+    await configureExecutor("docker", { runner: bad.runner, platform: "linux" });
+  } catch { /* expected */ }
+  expect(() => getExecutor()).toThrow(RungUnavailableError); // NOT the stale wsl executor
 });
 
 test("configureExecutor installs the probed rung behind the seam", async () => {
@@ -148,13 +263,13 @@ test("configureExecutor installs the probed rung behind the seam", async () => {
   expect(getExecutor().rung).toBe("direct");
 });
 
-// ---------- rung command construction ----------
+// ---------- rung command construction + forwarding ----------
 
 test("wsl rung wraps through wsl.exe: --cd <cwd> --exec bash -c <cmd>", async () => {
   const { runner, calls } = probeOkThen(() => ok("hi\n"));
   const ex = await createExecutor("wsl", { runner, platform: "win32" });
   const r = await ex.run('echo "a b"', "D:\\ws", new AbortController().signal);
-  expect(calls[1]).toEqual(["wsl.exe", "--cd", "D:\\ws", "--exec", "bash", "-c", 'echo "a b"']);
+  expect(calls[1]!.argv).toEqual(["wsl.exe", "--cd", "D:\\ws", "--exec", "bash", "-c", 'echo "a b"']);
   expect(r).toEqual({ code: 0, text: "hi\n" });
 });
 
@@ -162,7 +277,7 @@ test("docker rung runs the container against the mounted workspace", async () =>
   const { runner, calls } = probeOkThen(() => ok("out"));
   const ex = await createExecutor("docker", { runner, platform: "linux" });
   const r = await ex.run("ls -la", "/repo");
-  expect(calls[1]).toEqual([
+  expect(calls[1]!.argv).toEqual([
     "docker", "run", "--rm", "-v", "/repo:/workspace", "-w", "/workspace", DEFAULT_DOCKER_IMAGE, "bash", "-c", "ls -la",
   ]);
   expect(r).toEqual({ code: 0, text: "out" });
@@ -170,7 +285,39 @@ test("docker rung runs the container against the mounted workspace", async () =>
   const custom = probeOkThen(() => ok());
   const ex2 = await createExecutor("docker", { runner: custom.runner, dockerImage: "aion/dev:1", platform: "linux" });
   await ex2.run("pwd", "/repo");
-  expect(custom.calls[1]?.[7]).toBe("aion/dev:1");
+  expect(custom.calls[1]!.argv[7]).toBe("aion/dev:1");
+});
+
+test("every rung forwards the caller's signal and cwd to the runner BY IDENTITY (G4)", async () => {
+  const sig = new AbortController().signal;
+  const d = fakeRunner(() => ok());
+  const dex = await createExecutor("direct", { runner: d.runner });
+  await dex.run("echo x", "D:\\ws", sig);
+  expect(d.calls[0]!.opts.signal).toBe(sig); // deleting `signal:` in the rung fails this
+  expect(d.calls[0]!.opts.cwd).toBe("D:\\ws");
+
+  const w = probeOkThen(() => ok());
+  const wex = await createExecutor("wsl", { runner: w.runner, platform: "win32" });
+  await wex.run("echo x", "D:\\ws", sig);
+  expect(w.calls[0]!.opts.signal).not.toBe(sig); // probe uses its own deadline signal
+  expect(w.calls[1]!.opts.signal).toBe(sig);
+  expect(w.calls[1]!.opts.cwd).toBe("D:\\ws");
+
+  const k = probeOkThen(() => ok());
+  const kex = await createExecutor("docker", { runner: k.runner, platform: "linux" });
+  await kex.run("echo x", "/repo", sig);
+  expect(k.calls[1]!.opts.signal).toBe(sig);
+  expect(k.calls[1]!.opts.cwd).toBe("/repo");
+});
+
+test("direct rung prefers Git bash on Windows: argv[0] pinned to the canonical path (G6)", async () => {
+  const { runner, calls } = fakeRunner(() => ok());
+  const ex = await createExecutor("direct", { runner });
+  await ex.run("echo x", "D:\\ws");
+  // CANON_BASH is this file's OWN copy of the path: pointing the module's
+  // constant at a nonexistent path falls back to "bash" and mismatches here.
+  expect(calls[0]!.argv[0]).toBe(CANON_BASH);
+  expect(calls[0]!.argv.slice(1)).toEqual(["-c", "echo x"]);
 });
 
 test("non-direct rungs assemble stderr and truncate at 10k exactly like today's format", async () => {
@@ -183,34 +330,43 @@ test("non-direct rungs assemble stderr and truncate at 10k exactly like today's 
   const long = probeOkThen(() => ({ code: 0, stdout: "x".repeat(11_000), stderr: "" }));
   const ex2 = await createExecutor("wsl", { runner: long.runner, platform: "win32" });
   const r2 = await ex2.run("anything", "D:\\ws");
-  expect(r2.text.length).toBe(10_000);
+  expect(r2.text).toBe("x".repeat(10_000)); // constant pinned by content, not just length
 });
 
-// ---------- direct rung parity (real spawns, vs the real bashTool) ----------
+// ---------- direct rung parity (real spawns; ABSOLUTE bytes, then bashTool) ----------
 
 function makeCtx(cwd: string): { sessionId: string; cwd: string; signal: AbortSignal; permissions: PermissionDecision } {
   return { sessionId: "s", cwd, signal: new AbortController().signal, permissions: { effect: "allow" } };
 }
 
-test("direct rung parity: byte-identical to bashTool across success/stderr/failure/cwd/truncation", async () => {
+test("direct rung parity: ABSOLUTE bytes pinned per case, and bashTool emits exit=<code>\\n<text> (G5)", async () => {
   const dir = mkdtempSync(join(tmpdir(), "aion-exec-"));
   writeFileSync(join(dir, "marker.txt"), "from-cwd");
   const ctx = makeCtx(dir);
   const ex = getExecutor(); // unconfigured seam = direct = today's behavior
   expect(ex.rung).toBe("direct");
-  const cases = [
-    "echo hello",
-    "echo out; echo err 1>&2",
-    "printf 'no-trailing-newline'",
-    "cat marker.txt",                                   // cwd propagation
-    "exit 7",                                           // deterministic failure (bashTool retry yields same bytes)
-    "for i in $(seq 1 1500); do echo abcdefgh; done",   // >10k output → both truncate at 10k
+  // expected bytes are written out LITERALLY (not derived from another run of
+  // the same code): mutating the assembly or the 10_000 slice fails these
+  const cases: [cmd: string, code: number, text: string][] = [
+    ["echo hello", 0, "hello\n"],
+    ["echo out; echo err 1>&2", 0, "out\n\nstderr:\nerr\n"],
+    ["printf 'no-trailing-newline'", 0, "no-trailing-newline"],
+    ["cat marker.txt", 0, "from-cwd"],                                          // cwd propagation
+    ["exit 7", 7, ""],                                                          // deterministic failure (retry yields same bytes)
+    ["for i in $(seq 1 1500); do echo abcdefgh; done", 0, "abcdefgh\n".repeat(1500).slice(0, 10_000)],
   ];
-  for (const command of cases) {
-    const viaTool = await bashTool.execute({ command }, ctx);
+  expect("abcdefgh\n".repeat(1500).length).toBe(13_500); // the truncation case genuinely overflows 10k
+  expect(cases[5]![2].length).toBe(10_000);
+  for (const [command, code, text] of cases) {
     const viaSeam = await ex.run(command, ctx.cwd, ctx.signal);
-    expect(`exit=${viaSeam.code}\n${viaSeam.text}`).toBe(viaTool.output);
-    expect(viaSeam.code === 0).toBe(viaTool.ok);
+    expect(viaSeam.code).toBe(code);
+    expect(viaSeam.text).toBe(text);
+    const viaTool = await bashTool.execute({ command }, ctx);
+    expect(viaTool.output).toBe(`exit=${code}\n${text}`);
+    expect(viaTool.ok).toBe(code === 0);
   }
   rmSync(dir, { recursive: true, force: true });
 }, 30_000);
+
+// G8 (tool-level spawn failure through the seam) is pinned in
+// test/unit/hashline.test.ts, next to bashTool's other behavior tests.

@@ -6,9 +6,15 @@
  *  level, no code copied:
  *  - tiered execution selected per platform: SandboxType +
  *    get_platform_sandbox(), codex-rs/sandboxing/src/manager.rs:37,62;
- *  - availability PROBED at runtime by spawning a trial command, as codex
- *    probes bubblewrap with `bwrap … /bin/true`,
- *    codex-rs/sandboxing/src/bwrap.rs:74;
+ *  - availability PROBED at runtime by a trial spawn THROUGH the wrapper
+ *    itself — the probe argv is the rung's own run shape with `true` as the
+ *    command, exactly as codex probes bubblewrap by running `bwrap … /bin/true`
+ *    (codex-rs/sandboxing/src/bwrap.rs:74). Probing anything weaker lies:
+ *    `wsl.exe --status` exits 0 on a machine whose default distro has no bash
+ *    (e.g. docker-desktop), and `docker version` proves a daemon but not that
+ *    the image exists or contains bash;
+ *  - probes are TIME-BOUNDED at codex's own 500ms cap (bwrap.rs:36,67);
+ *    a probe that cannot answer in time IS unavailable right now;
  *  - an explicitly requested but unprovidable tier is a HARD ERROR
  *    (SandboxTransformError::{SeatbeltUnavailable,…}, manager.rs:203-222,410).
  *  Deliberately NOT ported: codex's silent `unwrap_or(SandboxType::None)`
@@ -86,16 +92,61 @@ function bashBin(): string {
 
 export interface RungProbe { rung: Rung; available: boolean; detail: string }
 
+/** Probe deadline: 500ms, upstream's own bwrap cap (bwrap.rs:36,67). Known
+ *  tradeoff, accepted deliberately: a COLD `wsl.exe --exec bash -c true`
+ *  (utility-VM boot) measured 2842ms on the reference machine vs 197ms warm —
+ *  a cold probe times out and the rung reports unavailable with a detail that
+ *  says to warm it and retry. That is the contract: timeout ⇒ unavailable NOW,
+ *  never a probe that hangs the session. */
+export const PROBE_TIMEOUT_MS = 500;
+
+export interface ProbeOptions {
+  /** docker rung: image the trial (and later every command) runs in */
+  dockerImage?: string;
+  /** probe deadline override (tests); defaults to PROBE_TIMEOUT_MS */
+  timeoutMs?: number;
+}
+
 /** wsl.exe emits UTF-16LE; drop NULs before quoting output in a detail. */
 function probeText(s: string): string {
   return s.replace(/\u0000/g, "").trim().slice(0, 200);
 }
 
+/** One bounded trial spawn. The AbortSignal kills the trial process at the
+ *  deadline; a separate REF'D setTimeout resolves the race. Two reasons the
+ *  race must NOT wait on the signal's own 'abort' event: (a) the killed
+ *  wrapper's children can keep the stdout pipe open past the kill — measured
+ *  on Windows: a 300ms abort delivered exit 143 but the runner promise only
+ *  settled ~5s later when the orphaned grandchild released the pipe; (b) Bun's
+ *  AbortSignal.timeout timer is UNREF'D — on an otherwise idle event loop it
+ *  never fires at all (this hung the whole test run before it was caught). */
+async function trialSpawn(
+  runner: SpawnRunner,
+  argv: string[],
+  timeoutMs: number,
+): Promise<{ r: RawResult; timedOut: boolean }> {
+  const deadline: RawResult = { code: -1, stdout: "", stderr: `probe timed out after ${timeoutMs}ms` };
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const onDeadline = new Promise<RawResult>((resolve) => { timer = setTimeout(() => resolve(deadline), timeoutMs); });
+  try {
+    const r = await Promise.race([runner(argv, { signal: AbortSignal.timeout(timeoutMs) }), onDeadline]);
+    return { r, timedOut: r === deadline };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Probe verdicts come from spawning `bash -c true` THROUGH the rung's own
+ *  wrapper (bwrap.rs:74 shape) — the exact failure a real command would hit
+ *  (missing wsl.exe, bash-less default distro, dead daemon, unpulled or
+ *  bash-less image) is the failure the probe reports. */
 export async function probeRung(
   rung: Rung,
   runner: SpawnRunner = bunRunner,
   platform: NodeJS.Platform = process.platform,
+  opts: ProbeOptions = {},
 ): Promise<RungProbe> {
+  const timeoutMs = opts.timeoutMs ?? PROBE_TIMEOUT_MS;
   switch (rung) {
     case "direct":
       return { rung, available: true, detail: "always available — today's in-process bash (blocklist only, NOT a sandbox)" };
@@ -103,18 +154,30 @@ export async function probeRung(
       if (platform !== "win32") {
         return { rung, available: false, detail: `wsl rung requires Windows wsl.exe (platform is ${platform})` };
       }
-      const r = await runner(["wsl.exe", "--status"], {});
+      // Trial spawn through the wrapper, NOT `wsl.exe --status`: --status exits
+      // 0 whenever the subsystem is installed, even when the default distro has
+      // no bash (docker-desktop) and every real command would exit 1.
+      const shape = "wsl.exe --exec bash -c true";
+      const { r, timedOut } = await trialSpawn(runner, ["wsl.exe", "--exec", "bash", "-c", "true"], timeoutMs);
+      if (timedOut) {
+        return { rung, available: false, detail: `wsl trial (${shape}) timed out after ${timeoutMs}ms — wrapper did not answer (a cold WSL utility-VM boot exceeds this cap); warm it with the same command and reconfigure` };
+      }
       return r.code === 0
-        ? { rung, available: true, detail: "wsl.exe --status ok" }
-        : { rung, available: false, detail: `wsl.exe --status exited ${r.code}: ${probeText(r.stderr || r.stdout) || "no output"}` };
+        ? { rung, available: true, detail: `wsl trial (${shape}) ok` }
+        : { rung, available: false, detail: `wsl trial (${shape}) exited ${r.code}: ${probeText(r.stderr || r.stdout) || "no output"}` };
     }
     case "docker": {
-      // `docker version` (not `--version`) needs a reachable daemon — probes
-      // that the rung will actually work, not merely that a CLI exists.
-      const r = await runner(["docker", "version", "--format", "{{.Server.Version}}"], {});
+      // Trial container run, NOT `docker version`: the version handshake proves
+      // a daemon but not that the image is present or contains bash.
+      const image = opts.dockerImage ?? DEFAULT_DOCKER_IMAGE;
+      const shape = `docker run --rm ${image} bash -c true`;
+      const { r, timedOut } = await trialSpawn(runner, ["docker", "run", "--rm", image, "bash", "-c", "true"], timeoutMs);
+      if (timedOut) {
+        return { rung, available: false, detail: `docker trial (${shape}) timed out after ${timeoutMs}ms — daemon wedged or pulling the image; pre-pull it and retry` };
+      }
       return r.code === 0
-        ? { rung, available: true, detail: `docker daemon ${probeText(r.stdout)}` }
-        : { rung, available: false, detail: `docker version exited ${r.code}: ${probeText(r.stderr || r.stdout) || "no output"}` };
+        ? { rung, available: true, detail: `docker trial (${shape}) ok` }
+        : { rung, available: false, detail: `docker trial (${shape}) exited ${r.code}: ${probeText(r.stderr || r.stdout) || "no output"}` };
     }
   }
 }
@@ -123,8 +186,9 @@ export async function probeRung(
 export function probeLadder(
   runner: SpawnRunner = bunRunner,
   platform: NodeJS.Platform = process.platform,
+  opts: ProbeOptions = {},
 ): Promise<RungProbe[]> {
-  return Promise.all(RUNGS.map((r) => probeRung(r, runner, platform)));
+  return Promise.all(RUNGS.map((r) => probeRung(r, runner, platform, opts)));
 }
 
 // ---------- Unavailable rung = loud error (never fall DOWN the ladder) ----------
@@ -198,7 +262,7 @@ function dockerExecutor(runner: SpawnRunner, image: string): Executor {
  *  no substitution, in either direction. */
 export async function createExecutor(rung: Rung, opts: ExecutorOptions = {}): Promise<Executor> {
   const runner = opts.runner ?? bunRunner;
-  const probe = await probeRung(rung, runner, opts.platform ?? process.platform);
+  const probe = await probeRung(rung, runner, opts.platform ?? process.platform, { dockerImage: opts.dockerImage });
   if (!probe.available) throw new RungUnavailableError(rung, probe.detail);
   switch (rung) {
     case "direct": return directExecutor(runner);
@@ -209,21 +273,43 @@ export async function createExecutor(rung: Rung, opts: ExecutorOptions = {}): Pr
 
 // ---------- Session seam (what bashTool calls through) ----------
 
+/** The seam tracks the DESIRED rung, not just the installed executor: a
+ *  failed configure must never silently degrade to whatever was installed
+ *  before (or to lazy `direct`). Until the desire is met, getExecutor()
+ *  throws — the same loud RungUnavailableError contract as createExecutor. */
 let current: Executor | null = null;
+let desired: Rung = "direct";
+let lastConfigureFailure: string | null = null;
 
-/** Probe + install the session executor. On an unavailable rung this throws
- *  and the previously installed executor stays in place — the failure is the
- *  caller's to see; the seam never downgrades behind its back. */
+/** Probe + install the session executor. The requested rung becomes the
+ *  seam's DESIRED rung before probing: if the probe fails, this throws AND
+ *  every later getExecutor() throws too, until a configure succeeds or
+ *  resetExecutor() restores the direct default. The seam never hands out a
+ *  rung other than the one last asked for. */
 export async function configureExecutor(rung: Rung, opts?: ExecutorOptions): Promise<Executor> {
-  current = await createExecutor(rung, opts);
-  return current;
+  desired = rung;
+  try {
+    current = await createExecutor(rung, opts);
+    lastConfigureFailure = null;
+    return current;
+  } catch (e) {
+    lastConfigureFailure = e instanceof RungUnavailableError ? e.detail
+      : e instanceof Error ? e.message : String(e);
+    throw e;
+  }
 }
 
-/** Current executor; until configured, the `direct` rung (today's behavior,
- *  the one rung that needs no probe). */
+/** Current executor. Until configured, the `direct` rung (today's behavior,
+ *  the one rung that needs no probe). After a FAILED configure this throws
+ *  RungUnavailableError for the desired rung — no silent fallback. */
 export function getExecutor(): Executor {
-  return (current ??= directExecutor(bunRunner));
+  if (current?.rung === desired) return current;
+  if (desired === "direct") return (current = directExecutor(bunRunner));
+  throw new RungUnavailableError(
+    desired,
+    lastConfigureFailure ?? `configureExecutor('${desired}') has not succeeded; the seam refuses to substitute another rung`,
+  );
 }
 
-/** Test seam: forget the configured executor. */
-export function resetExecutor(): void { current = null; }
+/** Test seam: forget the configured executor and the desired rung. */
+export function resetExecutor(): void { current = null; desired = "direct"; lastConfigureFailure = null; }
