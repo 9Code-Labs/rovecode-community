@@ -83,6 +83,16 @@ test("normalizeUsage: OpenAI Responses shape (input_tokens_details) subtracts it
   ).toEqual({ input: 400, output: 40, cacheRead: 600, cacheWrite: 0 });
 });
 
+test("normalizeUsage: Anthropic cache spelling + mirrored *_details block stays cache-EXCLUSIVE (no double subtraction)", () => {
+  // #5 re-verify (FW2-N): a gateway that keeps Anthropic spellings but mirrors the cached share
+  // into an OpenAI *_details block must NOT flip the base to "cache-inclusive" — input_tokens
+  // (400) already excludes the 600 cached; subtracting again clamps input to 0 and /cost
+  // under-reports the whole base share.
+  expect(
+    normalizeUsage({ input_tokens: 400, cache_read_input_tokens: 600, prompt_tokens_details: { cached_tokens: 600 } }),
+  ).toEqual({ input: 400, output: 0, cacheRead: 600, cacheWrite: 0 });
+});
+
 test("normalizeUsage: junk and malformed payloads normalize to zeros", () => {
   const zeros = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   expect(normalizeUsage(undefined)).toEqual(zeros);

@@ -8,10 +8,12 @@
  *  - OpenAI `/chat/completions` does NOT: `prompt_tokens` INCLUDES
  *    `prompt_tokens_details.cached_tokens`, so we subtract the cached share (clamped at 0) or the
  *    cached tokens would be double-billed (once at the input rate, once at the cache-read rate).
- *    The cached-inclusive convention is detected by the PRESENCE of an OpenAI-style field
- *    (`prompt_tokens`, `prompt_tokens_details`, or `input_tokens_details`), NOT by the absence of
- *    `input_tokens` — gateways like OpenRouter emit BOTH spellings in one payload, and keying on
- *    absence would skip the subtraction there and double-bill the cached share.
+ *    The cached-inclusive convention is detected by the PRESENCE of `prompt_tokens`, or of a
+ *    *_details cached count when no Anthropic `cache_read_input_tokens` coexists — NOT by the
+ *    absence of `input_tokens` (gateways like OpenRouter emit BOTH spellings in one payload, and
+ *    keying on absence would skip the subtraction there and double-bill the cached share), and
+ *    NOT by a bare *_details block (a payload that also carries `cache_read_input_tokens` has a
+ *    cache-EXCLUSIVE base; subtracting again would double-subtract and clamp input to 0).
  *
  *  tokenlens (v1.3.1) is used where it fits: `breakdownTokens` from tokenlens/helpers already
  *  recognizes both providers' field spellings (prompt_tokens/completion_tokens/
@@ -78,13 +80,16 @@ export function normalizeUsage(raw: unknown): NormalizedUsage {
   const cacheRead = nz(b.cacheReads) || detailsCachedTokens(raw);
   const cacheWrite = nz(b.cacheWrites);
   let input = nz(b.input);
-  // OpenAI-style shape (detected by PRESENCE of prompt_tokens or a *_details block — never by
-  // absence of input_tokens, which OpenRouter emits alongside prompt_tokens): the reported input
-  // INCLUDES the cached share; subtract it (clamped) so `input` means "billed at the base rate".
+  // OpenAI-style cache-INCLUSIVE base, i.e. the reported input still contains the cached share
+  // and it must be subtracted (clamped) so `input` means "billed at the base rate". Detected by
+  // PRESENCE of prompt_tokens — never by absence of input_tokens, which OpenRouter emits
+  // alongside prompt_tokens — or by a *_details cached count with NO cache_read_input_tokens
+  // beside it: that Anthropic spelling marks the base as already cache-EXCLUSIVE, so a payload
+  // carrying both (gateway mirroring the cached share into a details block) must not be
+  // subtracted a second time — that would clamp input to 0 and under-report /cost.
   const cachedInclusive = isRec(raw) && (
     typeof raw["prompt_tokens"] === "number"
-    || isRec(raw["prompt_tokens_details"])
-    || isRec(raw["input_tokens_details"])
+    || (detailsCachedTokens(raw) > 0 && raw["cache_read_input_tokens"] === undefined)
   );
   if (cachedInclusive) input = Math.max(0, input - cacheRead);
   return { input, output: nz(b.output), cacheRead, cacheWrite };

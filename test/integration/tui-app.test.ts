@@ -130,6 +130,20 @@ test("/cost reports normalized tokens, cache traffic, and origin-priced USD end-
   const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
   const term = new VirtualTerminal(80, 24);
   const renderer = new PiTuiRenderer({ terminal: term, cwd });
+  // hermetic provider resolution (#6 re-verify): a host provider key (e.g. TOGETHER_API_KEY)
+  // would win resolveProvider(), stamp Message.origin with THAT provider, and price the model
+  // at its catalog entry instead of the zai vendor row ($0.0490 ≠ $0.0245, or "pricing
+  // unknown"). Sweep every *_API_KEY out and pin AION_BASE_URL/AION_API_KEY — the override
+  // that beats all named keys — so origin.provider is "custom" (no PROVIDER_MAP entry) and
+  // pricing always resolves via the zai-org/ vendor prefix, whatever the host env holds.
+  const savedEnv = new Map<string, string | undefined>();
+  const setEnv = (k: string, v: string | undefined) => {
+    if (!savedEnv.has(k)) savedEnv.set(k, process.env[k]);
+    if (v === undefined) delete process.env[k]; else process.env[k] = v;
+  };
+  for (const k of Object.keys(process.env)) if (k.endsWith("_API_KEY")) setEnv(k, undefined);
+  setEnv("AION_BASE_URL", "http://stub.invalid/v1");
+  setEnv("AION_API_KEY", "test-key");
   // the REAL Anthropic adapter against a stubbed wire, so usage flows
   // fetch → parseAnthropicResponse → normalizeUsage → Message.usage → /cost
   // (a mock stream would bypass the parsers and leave their cache fields untested)
@@ -159,6 +173,7 @@ test("/cost reports normalized tokens, cache traffic, and origin-priced USD end-
     await app;
   } finally {
     globalThis.fetch = realFetch;
+    for (const [k, v] of savedEnv) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
     rmSync(cwd, { recursive: true, force: true });
   }
 }, 20_000);
