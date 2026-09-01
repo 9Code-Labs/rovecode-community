@@ -6,7 +6,9 @@ import { ToolRegistry } from "../core/tools.ts";
 import { SessionStore } from "../core/session.ts";
 import { readTool, editTool, writeTool, bashTool } from "../coding/hashline.ts";
 import { globTool, grepTool, lsTool } from "../coding/files.ts";
-import { mockStream, textTurn, providerStream, openaiCompatStreaming, resolveProvider } from "../providers/stream.ts";
+import { mockStream, textTurn, providerStream, openaiCompatStreaming, resolveProvider, listBuiltinProviders } from "../providers/stream.ts";
+import { saveCredential, removeCredential, listProviders, keyNameFor, credentialsPath } from "../providers/auth.ts";
+import { createInterface } from "node:readline";
 import { runGauntlet, reportResults, providerPreflight, basicTasks, codingTasks, failureTasks, adversarialTasks } from "../eval/gauntlet.ts";
 import { runTask } from "../eval/gauntlet-runner.ts";
 import { runBenchmarks } from "../eval/bench.ts";
@@ -119,6 +121,9 @@ commands:
   aion bench                run cross-harness micro-benchmarks (edits, sessions)
   aion gauntlet             run the adversarial evaluation suite
   aion tools                list registered tools
+  aion auth set <provider> [--key <name>]  store an API key (prompts on stdin; ~/.aion/credentials.json)
+  aion auth list            stored providers + key names (values redacted)
+  aion auth remove <provider>  delete a stored credential
   aion trace <session-id>   print session tree events (JSONL)
   aion eval                 alias for gauntlet
   aion acp                  Agent Client Protocol v1 endpoint over stdio (Zed/JetBrains)
@@ -135,7 +140,86 @@ env:
   AION_YOLO=1     allow all tool actions
 providers: kaesra openai anthropic deepseek groq openrouter ollama lmstudio
             together mistral cerebras fireworks perplexity xai moondream vllm
-            (set <NAME>_API_KEY; AION_BASE_URL/AION_API_KEY always wins)`);
+            (aion auth set <name>, or set <NAME>_API_KEY — stored creds beat env;
+            AION_BASE_URL/AION_API_KEY always wins)`);
+}
+
+/** Read one secret line from stdin, never echoing it back through our own output.
+ *  On a TTY the prompt goes to stderr and the terminal's echo of the typed line is
+ *  erased immediately after Enter (cursor-up + erase-line) — raw-mode no-echo is
+ *  unreliable across Windows terminals under Bun, so we accept one echoed line and
+ *  scrub it rather than pretend it was never displayed. Piped stdin (scripts, tests)
+ *  reads a single line with no prompt. */
+function readSecret(promptText: string): Promise<string> {
+  const tty = process.stdin.isTTY === true;
+  if (tty) process.stderr.write(promptText);
+  return new Promise((resolve) => {
+    const rl = createInterface({ input: process.stdin });
+    let settled = false; // rl.close() emits "close" SYNCHRONOUSLY — guard the race
+    rl.once("line", (line) => {
+      if (settled) return;
+      settled = true;
+      if (tty) process.stderr.write("\x1b[1A\x1b[2K"); // erase the echoed secret line
+      rl.close();
+      resolve(line.trim());
+    });
+    rl.once("close", () => { // EOF without a line (empty pipe)
+      if (settled) return;
+      settled = true;
+      resolve("");
+    });
+  });
+}
+
+/** port #37: provider credential onboarding (`aion auth set/list/remove`).
+ *  Secrets are NEVER printed: list shows key NAMES plus a redacted prefix, set/remove
+ *  messages and errors never embed the value. */
+async function cmdAuth(rest: string[]): Promise<void> {
+  const action = rest[0] ?? "";
+  // --key <name>: value flag, parsed positionally like --resume below (parseCli flags are
+  // boolean-only and its `rest` keeps flag VALUES — drop ours from the positionals)
+  const kIx = process.argv.indexOf("--key");
+  const kArg = kIx !== -1 ? process.argv[kIx + 1] : undefined;
+  const keyName = kArg !== undefined && !kArg.startsWith("-") ? kArg : undefined;
+  const args = rest.slice(1).filter((a) => a !== keyName);
+  const provider = args[0];
+  if (action === "list") {
+    const entries = listProviders();
+    if (entries.length === 0) {
+      console.log(`no stored credentials (${credentialsPath()}) — run: aion auth set <provider>`);
+      return;
+    }
+    for (const e of entries) console.log(`${e.provider.padEnd(12)} ${e.keyName.padEnd(24)} ${e.redacted}`);
+    return;
+  }
+  if (action === "set" && provider !== undefined) {
+    const ids = listBuiltinProviders().map((p) => p.id);
+    if (!ids.includes(provider)) {
+      // strict on purpose: a credential resolveProvider can never consume is a silent
+      // onboarding no-op; catch the typo here instead
+      console.error(`error: unknown provider "${provider}" — known: ${ids.join(" ")}`);
+      process.exit(1);
+    }
+    const name = keyName ?? keyNameFor(provider);
+    const secret = await readSecret(`${name} for ${provider}: `);
+    if (secret.length === 0) {
+      console.error("error: empty secret — nothing stored");
+      process.exit(1);
+    }
+    saveCredential(provider, secret, keyName);
+    console.log(`stored ${name} for ${provider} in ${credentialsPath()}`);
+    return;
+  }
+  if (action === "remove" && provider !== undefined) {
+    if (!removeCredential(provider)) {
+      console.error(`error: no stored credential for ${provider}`);
+      process.exit(1);
+    }
+    console.log(`removed credential for ${provider}`);
+    return;
+  }
+  console.error("usage: aion auth set <provider> [--key <name>] | aion auth list | aion auth remove <provider>");
+  process.exit(1);
 }
 
 async function cmdTrace(sessionId: string): Promise<void> {
@@ -149,7 +233,7 @@ async function cmdTrace(sessionId: string): Promise<void> {
   }
 }
 
-const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "trace", "help", "chat", "repl", "smoke-tui", "acp", "serve"]);
+const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "auth", "trace", "help", "chat", "repl", "smoke-tui", "acp", "serve"]);
 // --resume <id>: TUI-only value flag, parsed here (parseCli flags are boolean-only);
 // its value must not be mistaken for a one-shot prompt
 const rIx = process.argv.indexOf("--resume");
@@ -165,6 +249,7 @@ if (cmd === "" || cmd === "chat" || cmd === "repl" || (resumeId !== undefined &&
     case "gauntlet": case "eval": await cmdGauntlet(); break;
     case "bench": await cmdBench(); break;
     case "tools": cmdTools(); break;
+    case "auth": await cmdAuth(cli.rest); break;
     case "trace": await cmdTrace(cli.rest[0] ?? ""); break;
     // dynamic import: smoke pulls in @xterm/headless (devDependency) — must not
     // load on ordinary CLI startup

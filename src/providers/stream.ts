@@ -10,6 +10,7 @@ import type { StreamFn, Message, AssistantTurn, StreamEvent, ModelRef, StopReaso
 import { partsText } from "../core/loop.ts";
 import { applyAnthropicCacheBoundaries } from "./cache.ts";
 import { normalizeUsage } from "../core/usage.ts";
+import { loadCredentials } from "./auth.ts";
 
 export interface ProviderConfig {
   id: string;             // provider id, e.g. "kaesra"
@@ -359,13 +360,24 @@ const builtinProviders: Record<string, { baseUrl: string; protocol: "openai" | "
   vllm: { baseUrl: "http://127.0.0.1:8000/v1", protocol: "openai", envKey: "VLLM_API_KEY" },
 };
 
-/** Resolve a provider config: AION_BASE_URL/AION_API_KEY override, else named builtin, else custom id. */
+/** Resolve a provider config: AION_BASE_URL/AION_API_KEY override, else stored credential
+ *  (`aion auth set`, port #37), else named builtin env key, else null.
+ *
+ *  Precedence follows opencode provider.ts @ ebece6e: stored api keys are merged AFTER env
+ *  (provider.ts:1578-1602, later mergeProvider patch wins) so a stored credential beats a
+ *  named env key; the explicit pair keeps its documented "always wins" rank, like opencode's
+ *  config source re-applied last (provider.ts:1643-1651). */
 export function resolveProvider(overrides: { baseUrl?: string; apiKey?: string; id?: string; protocol?: "openai" | "anthropic"; defaultModel?: string } = {}): ProviderConfig | null {
   const base = overrides.baseUrl ?? process.env.AION_BASE_URL;
   const key = overrides.apiKey ?? process.env.AION_API_KEY ?? process.env.OPENAI_API_KEY;
   if (base && key) {
     const looksAnthropic = overrides.protocol === "anthropic" || base.includes("anthropic.com");
     return { id: overrides.id ?? "custom", baseUrl: base, apiKey: key, protocol: looksAnthropic ? "anthropic" : "openai", defaultModel: overrides.defaultModel ?? process.env.AION_MODEL };
+  }
+  const stored = loadCredentials();
+  for (const [id, p] of Object.entries(builtinProviders)) {
+    const sk = stored[id]?.key;
+    if (sk) return { id, baseUrl: p.baseUrl, apiKey: sk, protocol: p.protocol, defaultModel: p.defaultModel };
   }
   for (const [id, p] of Object.entries(builtinProviders)) {
     const k = process.env[p.envKey];
