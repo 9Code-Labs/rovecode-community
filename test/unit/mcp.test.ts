@@ -34,6 +34,9 @@ function ctx(signal?: AbortSignal): ToolContext {
 
 let serverSawAbort = false;
 
+/** > 60 chars on purpose so the DESC_MAX cap test actually exercises truncation. */
+const LONG_DESC = "This deliberately verbose description keeps going well past the sixty character index cap to prove truncation.";
+
 function makeToyServer(): McpServer {
   const server = new McpServer({ name: "toy", version: "1.0.0" });
   server.registerTool(
@@ -41,6 +44,17 @@ function makeToyServer(): McpServer {
     { description: "Echo text back to the caller", inputSchema: { text: z.string() } },
     async ({ text }) => ({ content: [{ type: "text", text: `echo: ${text}` }] }),
   );
+  server.registerTool("verbose", { description: LONG_DESC }, async () => ({ content: [{ type: "text", text: "v" }] }));
+  server.registerTool("progressy", { description: "Reports progress then finishes" }, async (extra) => {
+    const token = extra._meta?.progressToken;
+    if (token !== undefined) {
+      await extra.sendNotification({
+        method: "notifications/progress",
+        params: { progressToken: token, progress: 1, total: 2, message: "halfway" },
+      });
+    }
+    return { content: [{ type: "text", text: "done" }] };
+  });
   server.registerTool(
     "add",
     { description: "Add two numbers", inputSchema: { a: z.number(), b: z.number() } },
@@ -180,6 +194,22 @@ describe("loadMcpConfig", () => {
     expect(warnings).toEqual([]);
   });
 
+  test("http headers survive normalization (auth for remote servers); non-strings dropped like env", () => {
+    const dir = makeTmp();
+    writeFileSync(
+      join(dir, ".mcp.json"),
+      JSON.stringify({
+        mcpServers: {
+          remote: { type: "http", url: "http://localhost:9092/mcp", headers: { Authorization: "Bearer tok", "X-Bad": 7 } },
+        },
+      }),
+    );
+    const warnings: string[] = [];
+    const configs = loadMcpConfig(dir, warnings);
+    expect(warnings).toEqual([]);
+    expect(configs[0]?.headers).toEqual({ Authorization: "Bearer tok" });
+  });
+
   test("ours also accepts a servers[] array form with enabled flag", () => {
     const dir = makeTmp();
     mkdirSync(join(dir, ".aion"));
@@ -242,6 +272,12 @@ describe("mcp_list", () => {
     expect(res.ok).toBe(true);
     expect(res.output).toContain("toy/echo — Echo text back to the caller");
     expect(res.output).toContain("toy/add — Add two numbers");
+    // the fixture really exceeds the cap, and the cap really bites (59 chars + ellipsis)
+    expect(LONG_DESC.length).toBeGreaterThan(60);
+    const verbose = res.output.split("\n").find((l) => l.startsWith("toy/verbose — ")) ?? "";
+    const desc = verbose.slice(verbose.indexOf(" — ") + 3);
+    expect(desc).toBe(`${LONG_DESC.slice(0, 59)}…`);
+    expect(desc.length).toBe(60);
     for (const line of res.output.split("\n")) {
       const sep = line.indexOf(" — ");
       if (sep >= 0) expect(line.length - sep - 3).toBeLessThanOrEqual(60);
@@ -327,6 +363,15 @@ describe("mcp_call", () => {
     expect(elapsed).toBeLessThan(3_000); // way below the 8s sleep
     await Bun.sleep(100); // let the cancellation notification land server-side
     expect(serverSawAbort).toBe(true);
+  });
+
+  test("server progress notifications surface via ctx.onUpdate (arms resetTimeoutOnProgress)", async () => {
+    const notes: string[] = [];
+    const c: ToolContext = { ...ctx(), onUpdate: (n) => notes.push(n) };
+    const res = await mcpCall().execute({ server: "toy", tool: "progressy", args: {} }, c);
+    expect(res.ok).toBe(true);
+    expect(res.output).toBe("done");
+    expect(notes).toContain("halfway"); // onprogress wired → SDK sent a progress token
   });
 });
 

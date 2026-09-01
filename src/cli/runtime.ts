@@ -129,7 +129,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
             { action: "memory.write", resource: "*", effect: "allow" },
             { action: "tool.skill_view", resource: "*", effect: "allow" },
             { action: "tool.skills_list", resource: "*", effect: "allow" },
-            { action: "tool.mcp_list", resource: "*", effect: "allow" },
+            // mcp_list is kind:"read" → action "file.read"; the allow above already covers it
             { action: "file.write", resource: "*", effect: "prompt" },
             { action: "shell.exec", resource: "*", effect: "prompt" },
             { action: "spawn", resource: "*", effect: "prompt" },

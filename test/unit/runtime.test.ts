@@ -81,7 +81,7 @@ test("buildCfg gated: repl defaults with memory/skill allows and prompt gates", 
     { action: "memory.write", resource: "*", effect: "allow" },
     { action: "tool.skill_view", resource: "*", effect: "allow" },
     { action: "tool.skills_list", resource: "*", effect: "allow" },
-    { action: "tool.mcp_list", resource: "*", effect: "allow" },   // port #3
+    // no tool.mcp_list rule: mcp_list is kind:"read" → covered by the file.read allow
     { action: "file.write", resource: "*", effect: "prompt" },
     { action: "shell.exec", resource: "*", effect: "prompt" },
     { action: "spawn", resource: "*", effect: "prompt" },

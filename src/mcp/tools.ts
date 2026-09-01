@@ -53,7 +53,7 @@ export function createMcpTools(manager: McpManager): Tool[] {
     },
     kind: "read",
     sequential: false,
-    async execute(rawArgs: unknown, _ctx: ToolContext): Promise<ToolOutput> {
+    async execute(rawArgs: unknown, ctx: ToolContext): Promise<ToolOutput> {
       const a = (rawArgs ?? {}) as McpListArgs;
       const server = typeof a.server === "string" && a.server.length > 0 ? a.server : undefined;
       const tool = typeof a.tool === "string" && a.tool.length > 0 ? a.tool : undefined;
@@ -63,7 +63,7 @@ export function createMcpTools(manager: McpManager): Tool[] {
         if (server === undefined || tool === undefined) {
           return { ok: false, output: "schema lookup needs both server and tool, e.g. {server:\"x\", tool:\"y\", schema:true}" };
         }
-        const schema = await manager.toolSchema(server, tool);
+        const schema = await manager.toolSchema(server, tool, ctx.signal);
         if (schema === undefined) {
           return { ok: false, output: `no schema for "${tool}" on "${server}" (unknown tool or server not connected); run mcp_list first` };
         }
@@ -71,7 +71,7 @@ export function createMcpTools(manager: McpManager): Tool[] {
       }
 
       // index mode: compact one-liners only
-      const tools = await manager.listTools();
+      const tools = await manager.listTools(false, ctx.signal);
       const filtered = server === undefined ? tools : tools.filter((t) => t.server === server);
       if (filtered.length === 0) {
         const connected = manager.connectedNames();
@@ -113,14 +113,14 @@ export function createMcpTools(manager: McpManager): Tool[] {
         return { ok: false, output: 'mcp_call requires string "server" and "tool" (discover them with mcp_list)' };
       }
 
-      const res = await manager.callTool(server, tool, a.args, ctx.signal);
+      const res = await manager.callTool(server, tool, a.args, ctx.signal, ctx.onUpdate);
       if (res.ok) return { ok: true, output: res.output };
 
       // validation-error path: attach the input schema (cache-hot after the call
       // above) so the model can self-correct without a discovery round-trip.
       let output = res.output;
       if (!ctx.signal.aborted) {
-        const schema = await manager.toolSchema(server, tool);
+        const schema = await manager.toolSchema(server, tool, ctx.signal);
         if (schema !== undefined) output += `\n\ninput schema for ${server}/${tool}: ${renderSchema(schema)}`;
       }
       return { ok: false, output };

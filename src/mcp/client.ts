@@ -17,6 +17,13 @@ export { loadMcpConfig, type McpServerConfig } from "./config.ts";
 
 // ---------- manager ----------
 
+/** Pagination guard: no sane server needs 50 tool-list pages; beyond this we
+ *  assume a misbehaving server and stop instead of looping forever. */
+const MAX_LIST_PAGES = 50;
+/** Tool-result cap fed back into the conversation, mirroring the bash tool's
+ *  10k output cap (coding/hashline.ts runOnce). */
+const OUTPUT_MAX = 10_000;
+
 interface CachedTool {
   name: string;
   description: string;
@@ -108,7 +115,9 @@ export class McpManager {
     }
     if (config.transport === "http") {
       if (config.url === undefined) throw new Error(`http server "${config.name}" has no url`);
-      return new StreamableHTTPClientTransport(new URL(config.url));
+      // headers (auth tokens etc.) ride on every request via fetch's RequestInit
+      const opts = config.headers ? { requestInit: { headers: config.headers } } : undefined;
+      return new StreamableHTTPClientTransport(new URL(config.url), opts);
     }
     if (config.command === undefined) throw new Error(`stdio server "${config.name}" has no command`);
     return new StdioClientTransport({
@@ -119,8 +128,10 @@ export class McpManager {
     });
   }
 
-  /** Fetch (and cache) a server's tools, following list pagination. */
-  private async fetchTools(server: string, force = false): Promise<CachedTool[]> {
+  /** Fetch (and cache) a server's tools, following list pagination. Bounded: a
+   *  misbehaving server (repeated cursor, endless pages) throws instead of
+   *  hanging the agent; the abort signal cancels between and inside pages. */
+  private async fetchTools(server: string, force = false, signal?: AbortSignal): Promise<CachedTool[]> {
     const entry = this.servers.get(server);
     if (!entry) throw new Error(`unknown MCP server "${server}"`);
     const client = entry.client;
@@ -130,9 +141,13 @@ export class McpManager {
     if (!force && cached && now - cached.at < this.ttl) return cached.tools;
 
     const tools: CachedTool[] = [];
+    const seenCursors = new Set<string>();
     let cursor: string | undefined;
+    let pages = 0;
     do {
-      const res = await client.listTools(cursor === undefined ? undefined : { cursor }, { timeout: this.connectTimeout });
+      if (signal?.aborted) throw new Error(`tool listing on "${server}" aborted`);
+      const res = await client.listTools(cursor === undefined ? undefined : { cursor }, { timeout: this.connectTimeout, signal });
+      pages += 1;
       for (const t of res.tools) {
         tools.push({
           name: t.name,
@@ -141,6 +156,15 @@ export class McpManager {
         });
       }
       cursor = typeof res.nextCursor === "string" ? res.nextCursor : undefined;
+      if (cursor !== undefined) {
+        if (seenCursors.has(cursor)) {
+          throw new Error(`tool listing on "${server}" stopped: server repeated pagination cursor ${JSON.stringify(cursor)} (partial: ${tools.length} tools in ${pages} pages)`);
+        }
+        seenCursors.add(cursor);
+        if (pages >= MAX_LIST_PAGES) {
+          throw new Error(`tool listing on "${server}" stopped after ${MAX_LIST_PAGES} pages without a final page (partial: ${tools.length} tools)`);
+        }
+      }
     } while (cursor !== undefined);
     this.toolCache.set(server, { at: now, tools });
     return tools;
@@ -148,12 +172,12 @@ export class McpManager {
 
   /** Compact index across all connected servers. Cached per server with a TTL;
    *  pass refresh=true to bypass the cache. One broken server never hides the rest. */
-  async listTools(refresh = false): Promise<{ server: string; name: string; description: string }[]> {
+  async listTools(refresh = false, signal?: AbortSignal): Promise<{ server: string; name: string; description: string }[]> {
     const out: { server: string; name: string; description: string }[] = [];
     for (const [name, entry] of this.servers) {
       if (entry.client === null) continue;
       try {
-        for (const t of await this.fetchTools(name, refresh)) {
+        for (const t of await this.fetchTools(name, refresh, signal)) {
           out.push({ server: name, name: t.name, description: t.description });
         }
       } catch {
@@ -164,10 +188,10 @@ export class McpManager {
   }
 
   /** Full JSON input schema for one tool, on demand (the lazy-disclosure payoff). */
-  async toolSchema(server: string, tool: string): Promise<object | undefined> {
+  async toolSchema(server: string, tool: string, signal?: AbortSignal): Promise<object | undefined> {
     try {
-      let found = (await this.fetchTools(server)).find((t) => t.name === tool);
-      if (!found) found = (await this.fetchTools(server, true)).find((t) => t.name === tool);
+      let found = (await this.fetchTools(server, false, signal)).find((t) => t.name === tool);
+      if (!found) found = (await this.fetchTools(server, true, signal)).find((t) => t.name === tool);
       return found?.inputSchema;
     } catch {
       return undefined;
@@ -175,8 +199,9 @@ export class McpManager {
   }
 
   /** Execute a tool. Never throws: unknown server/tool, transport errors and
-   *  aborts all come back as { ok: false }. */
-  async callTool(server: string, tool: string, args: unknown, signal?: AbortSignal): Promise<{ ok: boolean; output: string }> {
+   *  aborts all come back as { ok: false }. `onProgress` surfaces server progress
+   *  notifications (and makes the call-timeout reset on each one). */
+  async callTool(server: string, tool: string, args: unknown, signal?: AbortSignal, onProgress?: (note: string) => void): Promise<{ ok: boolean; output: string }> {
     const entry = this.servers.get(server);
     if (!entry) {
       const known = this.serverNames();
@@ -190,13 +215,13 @@ export class McpManager {
 
     let known: CachedTool[];
     try {
-      known = await this.fetchTools(server);
+      known = await this.fetchTools(server, false, signal);
     } catch (err) {
       return { ok: false, output: `failed to list tools on "${server}": ${message(err)}` };
     }
     if (!known.some((t) => t.name === tool)) {
       try {
-        known = await this.fetchTools(server, true); // maybe stale cache — refresh once
+        known = await this.fetchTools(server, true, signal); // maybe stale cache — refresh once
       } catch {
         /* keep the stale list for the error message */
       }
@@ -207,10 +232,21 @@ export class McpManager {
     }
 
     try {
+      // an onprogress handler makes the SDK request a progress token, which is what
+      // arms resetTimeoutOnProgress — without it that option is a no-op.
       const result = await client.callTool(
         { name: tool, arguments: (args ?? undefined) as Record<string, unknown> | undefined },
         undefined,
-        { signal, timeout: this.callTimeout, resetTimeoutOnProgress: true },
+        {
+          signal,
+          timeout: this.callTimeout,
+          resetTimeoutOnProgress: true,
+          onprogress: (p) => onProgress?.(
+            typeof p.message === "string" && p.message.length > 0
+              ? p.message
+              : `progress ${p.progress}${typeof p.total === "number" ? `/${p.total}` : ""}`,
+          ),
+        },
       );
       const text = renderContent(result.content, result.structuredContent);
       if (result.isError === true) return { ok: false, output: text.length > 0 ? text : `tool "${tool}" reported an error` };
@@ -238,7 +274,8 @@ export class McpManager {
 // ---------- helpers ----------
 
 /** Flatten an MCP content array to text; non-text parts become markers. Falls
- *  back to structuredContent JSON when there is no text at all. */
+ *  back to structuredContent JSON when there is no text at all. Capped at
+ *  OUTPUT_MAX chars so a multi-MB result cannot flood the conversation. */
 function renderContent(content: unknown, structured: unknown): string {
   const parts: string[] = [];
   if (Array.isArray(content)) {
@@ -255,7 +292,9 @@ function renderContent(content: unknown, structured: unknown): string {
       /* unserializable structured content */
     }
   }
-  return parts.join("\n");
+  const text = parts.join("\n");
+  if (text.length <= OUTPUT_MAX) return text;
+  return `${text.slice(0, OUTPUT_MAX)}\n[mcp output truncated: showing ${OUTPUT_MAX} of ${text.length} chars]`;
 }
 
 async function withTimeout<T>(p: Promise<T>, ms: number, note: string): Promise<T> {

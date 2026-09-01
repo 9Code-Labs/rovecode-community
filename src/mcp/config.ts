@@ -14,6 +14,8 @@ export interface McpServerConfig {
   args?: string[];
   env?: Record<string, string>;
   url?: string;
+  /** extra HTTP headers (auth tokens etc.) for http transports */
+  headers?: Record<string, string>;
   enabled?: boolean;
 }
 
@@ -84,12 +86,18 @@ function normalizeEntry(name: string, raw: unknown, file: string, warnings: stri
     env = {};
     for (const [k, v] of Object.entries(raw.env)) if (typeof v === "string") env[k] = v;
   }
+  let headers: Record<string, string> | undefined;
+  if (isRecord(raw.headers)) {
+    headers = {};
+    for (const [k, v] of Object.entries(raw.headers)) if (typeof v === "string") headers[k] = v;
+  }
 
   const out: McpServerConfig = { name, transport };
   if (command !== undefined) out.command = command;
   if (args !== undefined) out.args = args;
   if (env !== undefined) out.env = env;
   if (url !== undefined) out.url = url;
+  if (headers !== undefined) out.headers = headers;
   if (typeof raw.enabled === "boolean") out.enabled = raw.enabled;
   return out;
 }

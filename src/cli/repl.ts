@@ -101,6 +101,7 @@ export async function runRepl( /* eslint-disable-line complexity */
   });
 
   rl.on("close", () => {
+    void rt.mcp?.close().catch(() => {}); // kill MCP child processes (TUI does the same in app.ts)
     console.log(`\nbye — session ${rt.sessionId.slice(0, 8)} saved (${state.turns} turns, ${state.tokensIn}in/${state.tokensOut}out tokens)`);
     process.exit(0);
   });
