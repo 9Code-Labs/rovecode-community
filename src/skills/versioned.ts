@@ -135,20 +135,27 @@ export class VersionLedger {
     return existsSync(this.targetPath) ? readFileSync(this.targetPath, "utf8") : "";
   }
 
-  /** Versions rollback can restore right now, or null before the first edit. */
+  /** Versions rollback can restore right now, or null before the first edit.
+   *  Derived from the CONTIGUOUS suffix of retained records: a corruption hole
+   *  (missing/garbled record) breaks before/after coverage, so a naive
+   *  first..last span would advertise versions rollback cannot restore. */
   range(): VersionRange | null {
     const edits = this.history();
-    const first = edits.at(0);
     const last = edits.at(-1);
-    return first && last ? { from: first.baseVersion, to: last.version } : null;
+    if (!last) return null;
+    let start = edits.length - 1;
+    while (start > 0 && edits[start - 1]!.version === edits[start]!.baseVersion) start--;
+    return { from: edits[start]!.baseVersion, to: last.version };
   }
 
-  /** Content at a recorded version, or undefined when evicted/unknown. */
+  /** Content at a recorded version, or undefined when evicted/unknown. Besides a
+   *  record's own `after`, any record with baseVersion === version restores it via
+   *  `before` — recoverable even when the record that PRODUCED it was corrupted. */
   contentAt(version: number): string | undefined {
     const edits = this.history();
-    const first = edits.at(0);
-    if (first && version === first.baseVersion) return first.before;
-    return edits.find((e) => e.version === version)?.after;
+    const direct = edits.find((e) => e.version === version);
+    if (direct) return direct.after;
+    return edits.find((e) => e.baseVersion === version)?.before;
   }
 
   /** True when the target was modified outside the ledger since the last edit. */
@@ -200,7 +207,15 @@ export class VersionLedger {
       ...(rollbackTo !== undefined ? { rollbackTo } : {}),
     };
     mkdirSync(dirname(this.ledgerPath), { recursive: true });
-    appendFileSync(this.ledgerPath, JSON.stringify(edit) + "\n", "utf8");
+    // Heal a torn trailing append: a crash mid-append can leave the last line
+    // without "\n" — appending straight on would concatenate this record into the
+    // torn line, making the NEW commit invisible to history()/version().
+    let record = JSON.stringify(edit) + "\n";
+    if (existsSync(this.ledgerPath)) {
+      const raw = readFileSync(this.ledgerPath);
+      if (raw.length > 0 && raw[raw.length - 1] !== 0x0a) record = "\n" + record;
+    }
+    appendFileSync(this.ledgerPath, record, "utf8");
     const edits = this.history();
     if (edits.length > this.maxEdits) {
       const kept = edits.slice(edits.length - this.maxEdits);

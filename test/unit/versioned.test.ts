@@ -224,6 +224,71 @@ test("external edits are detected as drift and the next record stays truthful", 
   expect(ledger.drifted()).toBe(false);
 });
 
+// ---------- torn trailing append (crash mid-write) ----------
+
+test("a torn trailing line without newline cannot swallow the next commit", () => {
+  const target = freshTarget("t0");
+  const ledger = new VersionLedger(target);
+  mustOk(ledger.commit("t1", "one", 0));
+
+  // crash shape 1: complete last record, trailing "\n" lost
+  const whole = readFileSync(ledger.ledgerPath, "utf8");
+  writeFileSync(ledger.ledgerPath, whole.slice(0, -1));
+  expect(ledger.version()).toBe(1);
+  mustOk(ledger.commit("t2", "two", 1));
+  expect(ledger.version()).toBe(2); // the new commit is visible to history()/version()
+  expect(ledger.history().map((e) => e.version)).toEqual([1, 2]);
+
+  // crash shape 2: partial garbage with no newline
+  appendFileSync(ledger.ledgerPath, '{"version":9,"basePart', "utf8");
+  expect(ledger.version()).toBe(2); // torn line skipped, not fatal
+  mustOk(ledger.commit("t3", "three", 2));
+  expect(ledger.version()).toBe(3);
+  expect(ledger.history().map((e) => e.version)).toEqual([1, 2, 3]);
+  const rb = ledger.rollback(2);
+  mustOk(rb);
+  expect(readFileSync(target, "utf8")).toBe("t2");
+});
+
+// ---------- corruption holes: contentAt via `before`, range() honesty ----------
+
+test("contentAt recovers a version from the successor's before when its own record is corrupted", () => {
+  const target = freshTarget("v0");
+  const ledger = new VersionLedger(target);
+  for (let i = 1; i <= 3; i++) mustOk(ledger.commit(`v${i}`, `e${i}`, i - 1));
+
+  // garble the record that PRODUCED version 2; v3.before still holds v2's content
+  const lines = readFileSync(ledger.ledgerPath, "utf8").trim().split("\n");
+  const damaged = lines.map((l) => (JSON.parse(l).version === 2 ? "{corrupt" : l));
+  writeFileSync(ledger.ledgerPath, damaged.join("\n") + "\n");
+
+  expect(ledger.contentAt(3)).toBe("v3"); // direct `after`
+  expect(ledger.contentAt(2)).toBe("v2"); // recovered via v3.before
+  expect(ledger.contentAt(0)).toBe("v0"); // recovered via v1.before
+  expect(ledger.rollback(2).ok).toBe(true);
+  expect(readFileSync(target, "utf8")).toBe("v2");
+});
+
+test("range() spans only the contiguous valid suffix, never a corruption hole", () => {
+  const target = freshTarget("v0");
+  const ledger = new VersionLedger(target);
+  for (let i = 1; i <= 4; i++) mustOk(ledger.commit(`v${i}`, `e${i}`, i - 1));
+
+  // hole: records v2 AND v3 lost → version 2 has neither an `after` nor a
+  // successor's `before` left; a naive first..last span (0..4) would advertise it
+  const lines = readFileSync(ledger.ledgerPath, "utf8").trim().split("\n");
+  const kept = lines.filter((l) => { const v = JSON.parse(l).version; return v !== 2 && v !== 3; });
+  writeFileSync(ledger.ledgerPath, kept.join("\n") + "\n");
+
+  expect(ledger.range()).toEqual({ from: 3, to: 4 }); // contiguous suffix only
+  const gone = ledger.rollback(2);
+  expect(gone.ok).toBe(false);
+  if (!gone.ok) expect(gone.available).toEqual({ from: 3, to: 4 });
+  const rb = ledger.rollback(3); // advertised versions really restore (via v4.before)
+  mustOk(rb);
+  expect(readFileSync(target, "utf8")).toBe("v3");
+});
+
 // ---------- ouroboros / surface check ----------
 
 test("module exposes no grader, eval, or auto-refine surface", async () => {

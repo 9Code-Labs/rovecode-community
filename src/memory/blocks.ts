@@ -19,7 +19,13 @@ export interface BlockEditResult {
   /** present on cap failures: current chars / cap */
   current?: number;
   limit?: number;
+  /** present on version conflicts: ledger numbers for logs/data surfaces only —
+   *  the model-facing `reason` stays generic (ouroboros: no ledger internals). */
+  conflict?: { baseVersion: number; currentVersion: number };
 }
+
+/** Model-facing conflict reason — deliberately free of ledger internals. */
+export const CONFLICT_REASON = "memory changed since it was read — re-read and retry";
 
 const THREAT = /(?:ignore previous|disregard above|system prompt)/i;
 
@@ -41,6 +47,10 @@ export class BlockStore {
   /** port #16: versioned edits — every commit lands through a sidecar ledger
    *  (<file>.versions.jsonl), enabling one-call rollback + drift detection. */
   private readonly ledgers: Record<BlockName, VersionLedger>;
+  /** Optimistic-concurrency baseline (prime baselineState, refinement.ts:735-749):
+   *  the version THIS store last saw. Passing ledger.version() to commit would
+   *  compare the guard to itself and silently drop a concurrent store's edit. */
+  private readonly baseVersions: Record<BlockName, number>;
 
   constructor(
     private readonly dir: string,
@@ -55,6 +65,7 @@ export class BlockStore {
       memory: new VersionLedger(this.file("memory")),
       user: new VersionLedger(this.file("user")),
     };
+    this.baseVersions = { memory: this.ledgers.memory.version(), user: this.ledgers.user.version() };
   }
 
   private read(name: string): string {
@@ -97,26 +108,49 @@ export class BlockStore {
     return { ok: true };
   }
 
-  private commit(block: BlockName, next: string): BlockEditResult {
+  /** Char-cap guard shared by commit() and rollback(); runs BEFORE any ledger write. */
+  private capCheck(block: BlockName, next: string): BlockEditResult | null {
     const limit = this.caps[block];
-    if (next.length > limit) {
-      return {
-        ok: false, reason: `block would exceed cap (${next.length} > ${limit} chars)`,
-        current: this.live[block].length, limit,
-      };
-    }
-    // ledger-first write (port #16): version record appended, then the target
-    // is written atomically by the ledger — never writeFileSync directly.
-    const r = this.ledgers[block].commit(next, "memory_edit", this.ledgers[block].version());
-    if (!r.ok) return { ok: false, reason: r.message };
-    this.live[block] = next;
-    return { ok: true, current: next.length, limit };
+    if (next.length <= limit) return null;
+    return {
+      ok: false, reason: `block would exceed cap (${next.length} > ${limit} chars)`,
+      current: this.live[block].length, limit,
+    };
   }
 
-  /** port #16: one-call rollback of a block to any retained version. */
+  private commit(block: BlockName, next: string): BlockEditResult {
+    const capped = this.capCheck(block, next);
+    if (capped) return capped;
+    // ledger-first write (port #16): version record appended, then the target
+    // is written atomically by the ledger — never writeFileSync directly. The
+    // baseline is what THIS store last saw, so a concurrent store's commit is
+    // caught here instead of being silently overwritten.
+    const r = this.ledgers[block].commit(next, "memory_edit", this.baseVersions[block]);
+    if (!r.ok) {
+      // conflict: another store/process advanced the block. Re-read reality so
+      // the next edit builds on the merged state; the reason stays generic —
+      // ledger numbers ride the structured field only.
+      this.live[block] = this.ledgers[block].read();
+      this.baseVersions[block] = r.currentVersion;
+      return {
+        ok: false, reason: CONFLICT_REASON,
+        conflict: { baseVersion: r.baseVersion, currentVersion: r.currentVersion },
+      };
+    }
+    this.baseVersions[block] = r.edit.version;
+    this.live[block] = next;
+    return { ok: true, current: next.length, limit: this.caps[block] };
+  }
+
+  /** port #16: one-call rollback of a block to any retained version.
+   *  Restored content re-enters through the same cap guard as commits. */
   rollback(block: BlockName, toVersion: number): BlockEditResult {
+    const restored = this.ledgers[block].contentAt(toVersion);
+    const capped = restored !== undefined ? this.capCheck(block, restored) : null;
+    if (capped) return capped;
     const r = this.ledgers[block].rollback(toVersion, "memory_rollback");
     if (!r.ok) return { ok: false, reason: r.message };
+    this.baseVersions[block] = r.edit.version;
     this.live[block] = this.ledgers[block].read();
     return { ok: true, current: this.live[block].length, limit: this.caps[block] };
   }
