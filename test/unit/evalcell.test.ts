@@ -8,7 +8,13 @@
  *   - kind "execute" ⇒ action shell.exec ⇒ deny-default / prompt-gated (ADR-005),
  *     proven by a cell-side counter that only advances when execution really happens;
  *   - lifecycle: timeout/reset destroy the worker and its state;
- *   - ouroboros: cell code cannot reach bootstrap internals or host/eval-harness state.
+ *   - background crash (round 2 MED-1): a worker "error" with no call in flight is
+ *     reported as a crash note on the NEXT call, never a silently-fresh cell;
+ *   - unref is load-bearing (round 2 MED-2): an idle cell timer must not pin the
+ *     HOST process open — proven by a subprocess that must exit on its own;
+ *   - exact byte-budget boundary (round 2 mutant M6): == budget passes untouched;
+ *   - ouroboros: bootstrap internals stay sealed and nothing host-side is
+ *     PRE-EXPOSED on the cell's globals (a non-exposure claim, NOT unreachability).
  */
 
 import { test, expect, afterAll } from "bun:test";
@@ -17,6 +23,10 @@ import {
 } from "../../src/tools/evalcell.ts";
 import { ToolRegistry } from "../../src/core/tools.ts";
 import type { PermissionRule, Tool, ToolContext, ToolCallPart } from "../../src/core/types.ts";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const ON = { [EVAL_CELL_FLAG]: "1" };
 
@@ -126,6 +136,14 @@ test("truncateToBudget is UTF-8 safe: never emits a torn multibyte sequence", ()
   expect(truncateToBudget("short", 256)).toBe("short"); // under budget: untouched, no marker
 });
 
+test("budget boundary is inclusive: exactly-at-budget passes untouched, one byte over truncates (mutant M6)", () => {
+  // pins `bytes.length <= budget` — a surviving `<` mutant would truncate the == case
+  const exact = "a".repeat(300);
+  expect(truncateToBudget(exact, 300)).toBe(exact); // == budget: byte-identical, NO marker
+  expect(truncateToBudget("a".repeat(301), 300))
+    .toBe("a".repeat(300) + "\n[output truncated: sent 300 of 301 bytes]"); // one byte over
+});
+
 // ---------- policy: kind execute ⇒ shell.exec ⇒ deny-default / prompt (ADR-005) ----------
 
 const promptTier: PermissionRule[] = [{ action: "shell.exec", resource: "*", effect: "prompt" }];
@@ -187,7 +205,64 @@ test("reset: true discards prior state before running", async () => {
   expect(r.output).toBe('=> "undefined"');
 });
 
-// ---------- ouroboros: nothing from the host/eval harness is visible inside ----------
+test("background crash with NO call in flight is reported as a note on the next call, not a silently fresh cell (round 2 MED-1)", async () => {
+  const tool = createEvalCellTool(ON)!;
+  // arm a delayed throw: the call itself succeeds, the worker dies later, idle
+  const armed = await tool.execute(
+    { code: "var pre = 1; setTimeout(() => { throw new Error('bg-boom') }, 10); 'armed'" }, ctx("p18-crash"),
+  );
+  expect(armed).toEqual({ ok: true, output: '=> "armed"' });
+  await new Promise((r) => setTimeout(r, 750)); // let the timer throw and the "error" event land
+  const next = await tool.execute({ code: "typeof pre" }, ctx("p18-crash"));
+  expect(next.ok).toBe(true); // the note rides on a normal, still-executed call
+  expect(next.output).toStartWith("note: previous cell worker crashed (");
+  expect(next.output).toContain("bg-boom"); // the parked reason survives to the report
+  expect(next.output).toContain('); state was reset\n=> "undefined"'); // fresh state, EXPLAINED
+  // consumed exactly once: the note does not haunt later calls
+  const clean = await tool.execute({ code: "1 + 1" }, ctx("p18-crash"));
+  expect(clean).toEqual({ ok: true, output: "=> 2" });
+});
+
+test("unref is load-bearing: an idle cell timer must not hold the HOST process open (round 2 MED-2)", async () => {
+  // Deleting the worker.unref() call leaves every in-process test green while the
+  // host hangs forever on exit — so the proof is a SUBPROCESS that must exit alone.
+  const dir = mkdtempSync(join(tmpdir(), "aion-evalcell-unref-"));
+  const script = join(dir, "unref-probe.ts");
+  const evalcellUrl = pathToFileURL(join(import.meta.dir, "..", "..", "src", "tools", "evalcell.ts")).href;
+  writeFileSync(script, [
+    `import { createEvalCellTool } from ${JSON.stringify(evalcellUrl)};`,
+    `const tool = createEvalCellTool({ AION_EVAL_CELL: "1" })!;`,
+    `const out = await tool.execute(`,
+    `  { code: "setInterval(() => {}, 1000); 'armed'" },`,
+    `  { sessionId: "unref-probe", cwd: process.cwd(), signal: new AbortController().signal, permissions: { effect: "allow" } },`,
+    `);`,
+    `console.log(JSON.stringify(out));`,
+    `// deliberately NO disposeEvalCells(): only worker.unref() lets this process exit`,
+  ].join("\n"));
+  try {
+    const t0 = Date.now();
+    const proc = Bun.spawn([process.execPath, "run", script], { cwd: dir, stdout: "pipe", stderr: "pipe" });
+    let guard: ReturnType<typeof setTimeout> | undefined;
+    const hang = new Promise<"hang">((res) => { guard = setTimeout(() => res("hang"), 8_000); });
+    const outcome = await Promise.race([proc.exited, hang]);
+    clearTimeout(guard);
+    if (outcome === "hang") { proc.kill(); await proc.exited; }
+    const elapsed = Date.now() - t0;
+    expect(outcome).toBe(0); // exited by itself, exit code 0 — "hang" means unref is gone
+    expect(elapsed).toBeLessThan(3000); // promptly, not after some interval-driven stall
+    // not vacuous: the cell really ran and armed the interval before the host ended
+    expect(await new Response(proc.stdout).text()).toContain('"output":"=> \\"armed\\""');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 15_000);
+
+// ---------- ouroboros: nothing host-side is PRE-EXPOSED inside the cell ----------
+// These tests certify the NARROW claim the header makes: no bootstrap internal leaks
+// and no host object is handed to the worker's global scope. They do NOT (and could
+// not) prove src/** unreachable — cell code can still `await import()` or Bun.file-
+// read any file on disk, exactly like the bash tool can run `bun -e`; the execute-
+// kind policy gate is the control for that, not the worker boundary.
 
 test("cell code cannot reach bootstrap internals or any aion/gauntlet host state", async () => {
   const tool = createEvalCellTool(ON)!;
@@ -198,7 +273,8 @@ test("cell code cannot reach bootstrap internals or any aion/gauntlet host state
   );
   expect(closure.output).toBe('=> "undefined,undefined,undefined,undefined"');
   // and no host handle was parked on the worker's globalThis under an aion/gauntlet
-  // name (NB: /registry/ would false-positive on the builtin FinalizationRegistry)
+  // name — the weaker "not pre-exposed" property, per the section note above
+  // (NB: /registry/ would false-positive on the builtin FinalizationRegistry)
   const globals = await tool.execute(
     { code: "JSON.stringify(Object.getOwnPropertyNames(globalThis).filter((k) => /aion|gauntlet|grader/i.test(k)))" },
     ctx("p18-ouro"),

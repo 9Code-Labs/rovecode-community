@@ -39,17 +39,25 @@
  *     with capture stubs, and `self.onmessage` holds the (secret-free) runner.
  *     Everything else lives in the bootstrap IIFE's closure, unreachable from cell
  *     code, which evaluates via indirect eval in the worker's global scope.
- *   What it can NOT see: the aion module graph (the worker loads only this inline
- *   bootstrap blob and never imports src/**), the tool registry (v1 deliberately has
- *   NO tool re-entry bridge — scope note), session stores, permission/approval
- *   machinery, and the graders under src/eval/* (they stay in the host process; the
+ *   What is NOT pre-exposed (a non-exposure claim, NOT unreachability): nothing from
+ *   the aion module graph is imported into or handed to the worker — it loads only
+ *   this inline bootstrap blob, so the tool registry (v1 deliberately has NO tool
+ *   re-entry bridge — scope note), session stores, permission/approval machinery,
+ *   and the graders under src/eval/* stay live only in the host process, and the
  *   only traffic across the seam is {id, code} in and {id, ok, stdout, value, error}
- *   out via postMessage).
+ *   out via postMessage. Cell code CAN still `await import()` or Bun.file-read any
+ *   file on disk (src/** included) exactly like the bash tool can run `bun -e` —
+ *   the execute-kind policy gate is the control there, not the worker boundary.
  *
  * Lifecycle: worker per ctx.sessionId, created lazily, unref'd so it never holds the
  * host process open. Cell errors keep the worker (state survives); timeout/abort/reset
- * terminate it and the session's cell state is lost (reported in the output). A cell
- * that kills its own worker (e.g. process.exit()) surfaces as a timeout on a later call.
+ * terminate it and the session's cell state is lost (reported in the output). An
+ * uncaught BACKGROUND error (timer throw / unhandled rejection firing the worker
+ * "error" event, possibly with no call in flight) also kills the worker; the reason is
+ * parked in `crashed` and the next call's output is prefixed with a crash note, so a
+ * fresh cell never silently contradicts "state survives". A cell that kills its own
+ * worker cleanly (e.g. process.exit()) fires no error event and surfaces as a timeout
+ * on a later call.
  */
 
 import type { Tool, ToolContext, ToolOutput } from "../core/types.ts";
@@ -134,8 +142,20 @@ interface CellRuntime {
 }
 
 const cells = new Map<string, CellRuntime>();
+/** Reasons from worker "error" events (background timer throws / unhandled
+ *  rejections), parked per session: with no call in flight destroyCell has nobody
+ *  to tell, so the NEXT call consumes the reason and explains its fresh cell. */
+const crashed = new Map<string, string>();
 let callSeq = 0;
 let bootstrapUrl: string | null = null;
+
+/** Bun's ErrorEvent.message is a multi-line source excerpt + stack; condense to the
+ *  `error: …` line (or a flattened whole) so crash notes stay one line. */
+function crashReason(raw: string): string {
+  const lines = raw.split("\n").map((l) => l.trim()).filter((l) => l !== "");
+  const flat = (lines.find((l) => /^\w*[Ee]rror:/.test(l)) ?? lines.join(" ")).replace(/\s+/g, " ");
+  return flat === "" ? "unknown worker error" : flat.length > 200 ? flat.slice(0, 200) + "…" : flat;
+}
 
 function urlForBootstrap(): string {
   if (bootstrapUrl === null) {
@@ -161,7 +181,12 @@ function spawnCell(sessionId: string): CellRuntime {
     }
   });
   worker.addEventListener("error", (ev) => {
-    const msg = (ev as ErrorEvent).message || "unknown worker error";
+    const msg = crashReason((ev as ErrorEvent).message || "unknown worker error");
+    // Park the reason BEFORE destroying: a background crash (no call in flight)
+    // otherwise leaves the next call a silently-fresh cell, contradicting the
+    // "state survives later calls" contract. (preventDefault() does NOT stop Bun
+    // from tearing the worker down — verified — so report-on-next-call it is.)
+    crashed.set(sessionId, msg);
     destroyCell(sessionId, runtime, `worker crashed: ${msg}`);
   });
   // Never hold the host process open on account of an idle cell.
@@ -183,6 +208,7 @@ function destroyCell(sessionId: string, runtime: CellRuntime, reason: string): v
 /** Kill every session's cell worker (test teardown / host shutdown). */
 export async function disposeEvalCells(): Promise<void> {
   for (const [sid, rt] of [...cells]) destroyCell(sid, rt, "eval cells disposed");
+  crashed.clear();
   if (bootstrapUrl !== null) { URL.revokeObjectURL(bootstrapUrl); bootstrapUrl = null; }
 }
 
@@ -209,6 +235,17 @@ async function runCell(
 ): Promise<ToolOutput> {
   let existing = cells.get(sessionId);
   if (reset && existing) { destroyCell(sessionId, existing, "cell reset"); existing = undefined; }
+  // A spawn that replaces a crashed worker must SAY so: consume the parked reason
+  // exactly once and prefix this call's output (outside the byte budget, like the
+  // truncation marker — host metadata is never silently truncated away).
+  let note = "";
+  if (!existing) {
+    const reason = crashed.get(sessionId);
+    if (reason !== undefined) {
+      crashed.delete(sessionId);
+      note = `note: previous cell worker crashed (${reason}); state was reset\n`;
+    }
+  }
   const cell = existing ?? spawnCell(sessionId);
   if (!existing) cells.set(sessionId, cell);
 
@@ -233,9 +270,9 @@ async function runCell(
       destroyCell(sessionId, cell, winner);
       return {
         ok: false,
-        output: winner === "timeout"
+        output: note + (winner === "timeout"
           ? `Error: eval cell timed out after ${timeoutMs}ms — worker killed; this session's cell state was reset`
-          : "Error: eval cell aborted — worker killed; this session's cell state was reset",
+          : "Error: eval cell aborted — worker killed; this session's cell state was reset"),
       };
     }
     const parts: string[] = [];
@@ -243,7 +280,7 @@ async function runCell(
     if (winner.ok && winner.value !== "") parts.push(`=> ${winner.value}`);
     if (!winner.ok) parts.push(`Error: ${winner.error}`);
     const text = parts.length > 0 ? parts.join("\n") : "(no output)";
-    return { ok: winner.ok, output: truncateToBudget(text, budgetBytes) };
+    return { ok: winner.ok, output: note + truncateToBudget(text, budgetBytes) };
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     if (onAbort !== undefined) signal.removeEventListener("abort", onAbort);
@@ -260,8 +297,9 @@ const evalCellTool: Tool = {
       "persist; top-level `let`/`const` are cell-local. Console output is captured and the final " +
       "expression's value is returned as `=> value`. Cells using top-level `await` or bare `return` " +
       "run wrapped in an async function — persist state via `globalThis` there. No aion tool access " +
-      "from inside the cell (v1 scope). Output is truncated to a byte budget. On timeout the worker " +
-      "is killed and cell state resets. NOT a sandbox: gated by the same execute policy as bash.",
+      "from inside the cell (v1 scope). Output is truncated to a byte budget. On timeout — or if a " +
+      "background error crashes the worker between calls — cell state resets, and the next call " +
+      "says so in a `note:` prefix. NOT a sandbox: gated by the same execute policy as bash.",
     args: {
       type: "object",
       properties: {
