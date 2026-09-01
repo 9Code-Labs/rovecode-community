@@ -80,7 +80,8 @@ export class ToolRegistry {
           emit({ type: "tool_call_failed", callId: call.id, reason: "permission_denied", detail: "user denied" });
           return { ok: false, output: "Permission denied by user" };
         }
-        this.approvalCache.set(cacheKey(call.tool, args), verdict);
+        // "once" means once: only "always" verdicts persist across calls
+        if (verdict === "always") this.approvalCache.set(cacheKey(call.tool, args), verdict);
       }
     }
 

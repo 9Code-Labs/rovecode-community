@@ -1,5 +1,6 @@
 {
   "compilerOptions": {
+    // ES2024: vendored pi-tui uses /v regex flags (vendor/pi-tui/src/utils.ts:40-48)
     "target": "ES2024",
     "module": "ESNext",
     "moduleResolution": "bundler",
@@ -9,6 +10,8 @@
     "skipLibCheck": true,
     "types": ["bun-types"],
     "allowImportingTsExtensions": true,
+    // matches upstream pi-tui build semantics (their tsconfig.base.json) — Bun's
+    // transpiler reads this flag, so it affects vendored class RUNTIME behavior
     "useDefineForClassFields": false,
     "noEmit": true
   },

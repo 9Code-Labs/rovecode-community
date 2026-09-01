@@ -15,12 +15,13 @@ import { memoryEditTool, resetTurnFailureCount } from "../memory/tools.ts";
 import type { RunConfig, ModelRef, StreamFn } from "../core/types.ts";
 import { runRepl } from "./repl.ts";
 import { runTui } from "../tui/app.ts";
-import { runTuiSmoke } from "../tui/smoke.ts";
+import { parseCli } from "./dispatch.ts";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
-const cmd = process.argv[2] ?? "";
+const cli = parseCli(process.argv);
+const cmd = cli.cmd;
 
 /** Permission tiers (omp approval modes): yolo = allow all; default = prompt for writes/exec. */
 function defaultConfig(yolo: boolean): RunConfig {
@@ -160,20 +161,21 @@ async function cmdTrace(sessionId: string): Promise<void> {
 const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "trace", "help", "chat", "repl", "smoke-tui"]);
 if (cmd === "" || cmd === "chat" || cmd === "repl") {
   // default surface is the pi-tui chat (port #1); --plain keeps the readline REPL
-  if (process.argv.includes("--plain")) await runRepl({ yolo: process.argv.includes("--yolo") });
-  else await runTui({ yolo: process.argv.includes("--yolo") });
+  if (cli.plain) await runRepl({ yolo: cli.yolo });
+  else await runTui({ yolo: cli.yolo });
 } else if (known.has(cmd)) {
   switch (cmd) {
-    case "run": await cmdRun(process.argv.filter((a, i) => i > 2 && !a.startsWith("--")).join(" ") || "hello"); break;
+    case "run": await cmdRun(cli.rest.join(" ") || "hello"); break;
     case "gauntlet": case "eval": await cmdGauntlet(); break;
     case "bench": await cmdBench(); break;
     case "tools": cmdTools(); break;
-    case "trace": await cmdTrace(process.argv[3] ?? ""); break;
-    case "smoke-tui": await runTuiSmoke(); break;
+    case "trace": await cmdTrace(cli.rest[0] ?? ""); break;
+    // dynamic import: smoke pulls in @xterm/headless (devDependency) — must not
+    // load on ordinary CLI startup
+    case "smoke-tui": await (await import("../tui/smoke.ts")).runTuiSmoke(); break;
     default: cmdHelp(); break;
   }
 } else {
   // bare prompt: one-shot task
-  process.argv.splice(2, 0, "run");
-  await cmdRun(process.argv.filter((a, i) => i > 2 && !a.startsWith("--")).join(" "));
+  await cmdRun([cmd, ...cli.rest].join(" "));
 }

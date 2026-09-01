@@ -37,7 +37,9 @@ interface TuiState {
 }
 
 export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
-  const rt = createRuntime({ cwd: opts.cwd, stream: opts.stream ?? undefined });
+  // opts.stream passes through verbatim: a StreamFn overrides, explicit null forces
+  // "no provider", undefined defers to the runtime's env-resolved provider
+  const rt = createRuntime({ cwd: opts.cwd, stream: opts.stream });
   const renderer: Renderer = opts.renderer ?? new PiTuiRenderer({ cwd: rt.cwd });
   const steering = new SteeringQueue();
   const state: TuiState = {
@@ -110,7 +112,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   };
 
   const startRun = async (goal: string) => {
-    const stream = opts.stream ?? rt.stream;
+    const stream = rt.stream; // runtime already applied any opts.stream override
     if (!stream) {
       renderer.addSystemNote("no provider — set AION_BASE_URL/AION_API_KEY or a <NAME>_API_KEY env and restart", "error");
       return;
@@ -178,7 +180,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   });
   renderer.addSystemNote(
     `aion — session in ${rt.cwd}\nmode: ${state.yolo ? "yolo" : "gated"} · /help for commands` +
-    (rt.stream || opts.stream ? "" : "\nno provider configured — set AION_BASE_URL/AION_API_KEY or a <NAME>_API_KEY"),
+    (rt.stream ? "" : "\nno provider configured — set AION_BASE_URL/AION_API_KEY or a <NAME>_API_KEY"),
   );
   pushStatus();
   await closedP;

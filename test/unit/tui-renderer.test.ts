@@ -4,6 +4,9 @@
  *  render settling via VirtualTerminal.waitForRender (test/virtual-terminal.ts). */
 
 import { afterEach, describe, expect, it } from "bun:test";
+import { cpSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { PiTuiRenderer } from "../../src/tui/pi-renderer.ts";
 import type { RendererHooks } from "../../src/tui/renderer.ts";
 import type { Terminal } from "../../vendor/pi-tui/src/index.ts";
@@ -231,7 +234,26 @@ describe("PiTuiRenderer", () => {
 		expect(screen).not.toContain("turns 1");
 	});
 
-	it("isNativeModifierPressed falls back to a boolean without throwing", () => {
+	it("isNativeModifierPressed degrades gracefully when the native addon is ABSENT", () => {
+		// The vendored tree ships win32 prebuilds, so calling in-process exercises the
+		// native branch. To force the missing-addon catch path (native-modifiers.ts:37-56),
+		// copy src/ WITHOUT the native/ sibling into a temp dir and probe in a subprocess.
+		const dir = mkdtempSync(join(tmpdir(), "aion-native-fallback-"));
+		try {
+			cpSync(join(import.meta.dir, "../../vendor/pi-tui/src"), join(dir, "src"), { recursive: true });
+			const probe = join(dir, "src", "native-modifiers.ts").replace(/\\/g, "/");
+			const res = Bun.spawnSync({
+				cmd: ["bun", "-e", `import { isNativeModifierPressed } from "${probe}"; console.log(String(isNativeModifierPressed("shift")));`],
+				stdout: "pipe", stderr: "pipe",
+			});
+			expect(res.exitCode).toBe(0);
+			expect(res.stdout.toString().trim()).toBe("false");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("isNativeModifierPressed returns a boolean in-process (addon present or not)", () => {
 		let result: boolean | undefined;
 		expect(() => {
 			result = isNativeModifierPressed("shift");
@@ -270,5 +292,34 @@ describe("PiTuiRenderer", () => {
 		renderer.setBusy(false);
 		screen = await view(term);
 		expect(screen).not.toContain("working on it");
+	});
+
+	it("typing / in the editor surfaces registered slash commands (autocomplete)", async () => {
+		const { term } = boot();
+		await term.waitForRender();
+		term.sendInput("/mo");
+		const screen = await view(term);
+		expect(screen).toContain("model");
+		expect(screen).toContain("switch model"); // description from setCommands
+		expect(screen).not.toContain("show help"); // filtered out by "/mo"
+	});
+
+	it("renderer mutations after stop() are safe no-ops (run finally racing exit)", async () => {
+		const { renderer, term } = boot();
+		await term.waitForRender();
+		const pending = renderer.askApproval("write", "{}"); // overlay open at stop time
+		renderer.stop();
+		expect(() => {
+			renderer.setBusy(false);
+			renderer.setBusy(true, "late");
+			renderer.addSystemNote("late note");
+			renderer.toolStart("t9", "bash", "{}");
+			renderer.toolEnd("t9", true, "out", 1);
+			const v = renderer.beginAssistant();
+			v.append("late delta");
+			v.done();
+		}).not.toThrow();
+		await expect(renderer.askApproval("write", "{}")).resolves.toBe("deny");
+		void pending; // pre-stop overlay promise may stay pending; must not reject
 	});
 });

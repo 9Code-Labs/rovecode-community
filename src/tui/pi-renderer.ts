@@ -89,8 +89,10 @@ export class PiTuiRenderer implements Renderer {
 	 *  New transcript items land after existing ones: before the loader when busy,
 	 *  otherwise directly before the editor (chat-simple.ts pattern). */
 	private insertTranscript(component: Component): void {
-		const tui = this.ui();
-		const anchor: Component = this.loader ?? this.requireEditor();
+		// after stop() (e.g. a run's finally block racing user exit) mutations are no-ops
+		const tui = this.tui;
+		const anchor = this.loader ?? this.editor;
+		if (!tui || !anchor) return;
 		const idx = tui.children.indexOf(anchor);
 		tui.children.splice(idx < 0 ? tui.children.length : idx, 0, component);
 		tui.requestRender();
@@ -176,7 +178,8 @@ export class PiTuiRenderer implements Renderer {
 	}
 
 	beginAssistant(): AssistantView {
-		const tui = this.ui();
+		const tui = this.tui;
+		if (!tui) return { append: () => {}, done: () => {} };
 		const md = new Markdown("", 1, 1, aionMarkdownTheme);
 		this.insertTranscript(md);
 		let buffer = "";
@@ -203,7 +206,7 @@ export class PiTuiRenderer implements Renderer {
 		const card = this.toolCards.get(callId);
 		if (!card) return;
 		card.line.setText(st.dim(oneLine(`${card.base} · ${note}`)));
-		this.ui().requestRender();
+		this.tui?.requestRender();
 	}
 
 	toolEnd(callId: string, ok: boolean, outputPreview: string, durationMs: number): void {
@@ -213,12 +216,13 @@ export class PiTuiRenderer implements Renderer {
 		const paint = ok ? pal.ok : pal.err;
 		const verdict = ok ? "ok" : "FAIL";
 		card.line.setText(paint(oneLine(`← ${verdict} ${card.tool} (${durationMs}ms) ${outputPreview}`)));
-		this.ui().requestRender();
+		this.tui?.requestRender();
 	}
 
 	askApproval(tool: string, argsPreview: string): Promise<ApprovalAnswer> {
-		const tui = this.ui();
-		const editor = this.requireEditor();
+		const tui = this.tui;
+		const editor = this.editor;
+		if (!tui || !editor) return Promise.resolve("deny"); // stopped UI cannot consent
 		this.addSystemNote(`approval needed: ${tool} ${argsPreview}`, "warn");
 		return new Promise<ApprovalAnswer>((resolve) => {
 			const items: SelectItem[] = [
@@ -245,7 +249,8 @@ export class PiTuiRenderer implements Renderer {
 	}
 
 	setBusy(busy: boolean, label?: string): void {
-		const tui = this.ui();
+		const tui = this.tui;
+		if (!tui) { this.loader = null; return; }
 		if (busy) {
 			const message = label ?? "thinking…";
 			if (this.loader) {
@@ -262,7 +267,8 @@ export class PiTuiRenderer implements Renderer {
 				this.hooks?.onInterrupt();
 			};
 			this.loader = loader;
-			const idx = tui.children.indexOf(this.requireEditor());
+			const anchor = this.editor;
+			const idx = anchor ? tui.children.indexOf(anchor) : -1;
 			tui.children.splice(idx < 0 ? tui.children.length : idx, 0, loader);
 			loader.start();
 			tui.requestRender();
