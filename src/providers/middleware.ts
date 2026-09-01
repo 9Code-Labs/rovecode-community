@@ -27,20 +27,32 @@
  *  - Malformed markup (unparseable JSON, unclosed tags, duplicate params) never throws and never
  *    loses text: the raw block stays verbatim in cleanText (json-mix.ts:658-666 "keeping original
  *    text"; parse.ts:57-62).
- *  - Unknown-tool filtering (json-mix.ts:146) is NOT ported: parseToolCalls has no tool catalog,
- *    so gating is structural only.
+ *  - Unknown-tool filtering (json-mix.ts:146): when a tool catalog is known (opts.tools, or
+ *    derived from StreamOptions.tools in the wrapper), markup naming any other tool is NOT
+ *    consumed — it stays as text. Without a catalog, gating is structural only.
+ *  - Context round-trip for non-native models: once the middleware has minted a call, follow-up
+ *    requests are lowered to text protocol (see middleware-context.ts / senpi transformContext).
  *
  *  STREAMING CAVEAT: parsing happens on the terminal "turn" event only. text_delta events pass
  *  through untouched, so live deltas may briefly show raw markup (this mirrors senpi's
  *  parseGeneratedText terminal path, not its incremental StreamParser). */
 
 import type { MessagePart, StreamFn, ToolSchema } from "../core/types.ts";
+import { lowerNonNativeContext, TEXTCALL_ID_PREFIX } from "./middleware-context.ts";
+import { randomUUID } from "node:crypto";
 
 export type TextToolCallFormat = "hermes-xml" | "json-fenced" | "xml-function";
 
 export interface MiddlewareOptions {
   /** Formats to parse. Default: all three. */
   formats?: TextToolCallFormat[];
+  /** Known tool names. When set, markup naming any OTHER tool is not consumed — it stays as
+   *  text (json-mix.ts:146; an empty catalog parses nothing, parse.ts:15-17). The wrapper
+   *  derives this from StreamOptions.tools when unset. Unset = structural gating only. */
+  tools?: readonly string[];
+  /** Lower native tool history to text protocol for non-native models (middleware-context.ts).
+   *  true forces, false disables; unset auto-detects middleware-minted call ids in history. */
+  lowerContext?: boolean;
 }
 
 export interface ParsedTextToolCall { tool: string; args: unknown }
@@ -113,12 +125,14 @@ function parseRelaxedJson(text: string): unknown | null {
 }
 
 /** Tool-call shape gate (json-mix.ts:135-161). `arguments` preferred; `parameters` accepted per
- *  spec. strict additionally rejects extraneous keys (json-fenced false-positive guard). */
+ *  spec. strict additionally rejects extraneous keys (json-fenced false-positive guard) —
+ *  INCLUDING "parameters": {"name", "parameters"} is the canonical JSON-Schema function
+ *  DEFINITION shape, so a model echoing a definition in a ```json fence must stay text. */
 function toolCallShape(value: unknown, strict: boolean): ParsedTextToolCall | null {
   if (!isRecord(value) || typeof value.name !== "string") return null;
   const args = isRecord(value.arguments) ? value.arguments : isRecord(value.parameters) ? value.parameters : null;
   if (!args) return null;
-  if (strict && Object.keys(value).some((k) => !["name", "arguments", "parameters", "id"].includes(k))) return null;
+  if (strict && Object.keys(value).some((k) => !["name", "arguments", "id"].includes(k))) return null;
   return { tool: value.name, args };
 }
 
@@ -236,8 +250,9 @@ function scanInvoke(text: string, from: number): { start: number; end: number; c
 }
 
 /** Scan one plain (non-code) segment for hermes + invoke markup; returns leftover text and
- *  appends consumed calls in document order. */
-function scanPlainSegment(text: string, formats: ReadonlySet<TextToolCallFormat>, calls: ParsedTextToolCall[]): string {
+ *  appends consumed calls in document order. `allowed` is the tool-catalog gate: an unknown
+ *  tool name is treated like malformed markup — never consumed (json-mix.ts:146). */
+function scanPlainSegment(text: string, formats: ReadonlySet<TextToolCallFormat>, calls: ParsedTextToolCall[], allowed: (tool: string) => boolean): string {
   const inline = inlineCodeRanges(text);
   const masked = (at: number) => inline.some((r) => at >= r.start && at < r.end);
   const found: Consumed[] = [];
@@ -245,8 +260,8 @@ function scanPlainSegment(text: string, formats: ReadonlySet<TextToolCallFormat>
     for (const m of text.matchAll(HERMES_RE)) {
       if (masked(m.index)) continue;
       const call = toolCallShape(parseRelaxedJson(m[1] ?? ""), false);
-      if (call) found.push({ start: m.index, end: m.index + m[0].length, call });
-      // else: malformed JSON inside markup → block stays in cleanText (json-mix.ts:658-666)
+      if (call && allowed(call.tool)) found.push({ start: m.index, end: m.index + m[0].length, call });
+      // else: malformed JSON / unknown tool → block stays in cleanText (json-mix.ts:658-666)
     }
   }
   let sawInvoke = false;
@@ -254,7 +269,7 @@ function scanPlainSegment(text: string, formats: ReadonlySet<TextToolCallFormat>
     let from = 0;
     for (let inv = scanInvoke(text, from); inv !== null; inv = scanInvoke(text, from)) {
       from = inv.nextFrom;
-      if (inv.call && !masked(inv.start)) { found.push({ start: inv.start, end: inv.end, call: inv.call }); sawInvoke = true; }
+      if (inv.call && allowed(inv.call.tool) && !masked(inv.start)) { found.push({ start: inv.start, end: inv.end, call: inv.call }); sawInvoke = true; }
     }
   }
   found.sort((a, b) => a.start - b.start);
@@ -278,31 +293,46 @@ function scanPlainSegment(text: string, formats: ReadonlySet<TextToolCallFormat>
  *  markup stays verbatim in cleanText. Calls are returned in document order. */
 export function parseToolCalls(text: string, opts?: MiddlewareOptions): { cleanText: string; calls: ParsedTextToolCall[] } {
   const formats = new Set<TextToolCallFormat>(opts?.formats ?? ALL_FORMATS);
+  const known = opts?.tools === undefined ? null : new Set(opts.tools);
+  const allowed = (tool: string): boolean => known === null || known.has(tool);
   const calls: ParsedTextToolCall[] = [];
   const chunks: string[] = [];
   for (const block of splitFences(text)) {
     if (block.kind === "fence") {
       if (block.closed && formats.has("json-fenced") && /^json$/i.test(block.info)) {
         const call = toolCallShape(parseRelaxedJson(block.body.trim()), true);
-        if (call) { calls.push(call); continue; } // fence consumed
+        if (call && allowed(call.tool)) { calls.push(call); continue; } // fence consumed
       }
       chunks.push(block.raw); // any other fence: kept verbatim, contents never scanned
     } else {
-      chunks.push(scanPlainSegment(block.raw, formats, calls));
+      chunks.push(scanPlainSegment(block.raw, formats, calls, allowed));
     }
   }
   return { cleanText: chunks.join("\n").trim(), calls };
 }
 
+/** Minted ids are `textcall_<nonce>_<n>`: the per-process nonce keeps replayed history (session
+ *  resume after restart) from colliding with freshly minted ids — Anthropic 400s on duplicate
+ *  tool_use ids. The counter is module-global, so ids stay unique across wrapper instances. */
+const runNonce = randomUUID().slice(0, 8);
 let nextTextCallId = 0;
 
 /** Wrap a StreamFn: when a terminal turn has NO tool_call parts but its text contains parseable
  *  tool-call markup, rewrite it — text part(s) minus the markup, plus tool_call parts with
  *  generated ids, stopReason → "tool_use". Turns with native tool calls (and all non-turn
- *  events, including text_delta) pass through untouched — see streaming caveat in header. */
+ *  events, including text_delta) pass through untouched — see streaming caveat in header.
+ *
+ *  Request side (senpi transformContext): once middleware mode is active (see
+ *  middleware-context.ts) the outgoing request is lowered — prior tool calls/results become
+ *  protocol text and options.tools is stripped, so a non-native model never sees native tool
+ *  artifacts. Parsed calls are gated against the tool catalog (opts.tools, else the names in
+ *  the ORIGINAL StreamOptions.tools): unknown-tool markup stays as text. */
 export function withToolCallParsing(stream: StreamFn, opts?: MiddlewareOptions): StreamFn {
   return async function* (model, messages, options) {
-    for await (const event of stream(model, messages, options)) {
+    const known = opts?.tools ?? options?.tools?.map((t) => t.name);
+    const parseOpts = known === undefined ? opts : { ...opts, tools: known };
+    const lowered = lowerNonNativeContext(messages, options, opts?.lowerContext);
+    for await (const event of stream(model, lowered.messages, lowered.options)) {
       if (event.type !== "turn" || event.turn.parts.some((p) => p.kind === "tool_call")) {
         yield event; // native tool calls / deltas: byte-identical passthrough
         continue;
@@ -311,12 +341,12 @@ export function withToolCallParsing(stream: StreamFn, opts?: MiddlewareOptions):
       let total = 0;
       for (const part of event.turn.parts) {
         if (part.kind !== "text") { parts.push(part); continue; }
-        const { cleanText, calls } = parseToolCalls(part.text, opts);
+        const { cleanText, calls } = parseToolCalls(part.text, parseOpts);
         if (calls.length === 0) { parts.push(part); continue; }
         total += calls.length;
         if (cleanText.length > 0) parts.push({ kind: "text", text: cleanText });
         for (const call of calls) {
-          parts.push({ kind: "tool_call", id: `textcall_${nextTextCallId++}`, tool: call.tool, args: call.args });
+          parts.push({ kind: "tool_call", id: `${TEXTCALL_ID_PREFIX}${runNonce}_${nextTextCallId++}`, tool: call.tool, args: call.args });
         }
       }
       if (total === 0) { yield event; continue; }

@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import { parseToolCalls, toolPromptBlock, withToolCallParsing } from "../../src/providers/middleware.ts";
-import type { AssistantTurn, Message, MessagePart, ModelRef, StreamEvent, StreamFn, ToolSchema } from "../../src/core/types.ts";
+import type { AssistantTurn, Message, MessagePart, ModelRef, Role, StreamEvent, StreamFn, StreamOptions, ToolSchema } from "../../src/core/types.ts";
 
 const model: ModelRef = { provider: "test", model: "m" };
 const messages: Message[] = [];
@@ -17,9 +17,9 @@ function fakeStream(events: StreamEvent[]): StreamFn {
   };
 }
 
-async function collect(stream: StreamFn, opts?: Parameters<typeof withToolCallParsing>[1]): Promise<StreamEvent[]> {
+async function collect(stream: StreamFn, opts?: Parameters<typeof withToolCallParsing>[1], streamOptions?: StreamOptions): Promise<StreamEvent[]> {
   const out: StreamEvent[] = [];
-  for await (const e of withToolCallParsing(stream, opts)(model, messages)) out.push(e);
+  for await (const e of withToolCallParsing(stream, opts)(model, messages, streamOptions)) out.push(e);
   return out;
 }
 
@@ -331,4 +331,220 @@ test("toolPromptBlock: prompt output parses back to a call (prompt/parser agreem
 
 test("toolPromptBlock: empty tool list yields empty block (hermes.ts:28-30)", () => {
   expect(toolPromptBlock([])).toBe("");
+});
+
+// ---------- strict fence gate: function DEFINITIONS are not calls (MED-1) ----------
+
+test("json-fenced: echoed function DEFINITION ({name, parameters} JSON-Schema shape) stays text", () => {
+  // "parameters" is the canonical JSON-Schema function-definition key. A model ECHOING a
+  // definition in a ```json fence must keep its text — no phantom call minted from the schema.
+  const def = '{"name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]}}';
+  const text = "The tool is declared like this:\n```json\n" + def + "\n```";
+  const r = parseToolCalls(text);
+  expect(r.calls).toEqual([]);
+  expect(r.cleanText).toBe(text);
+  // hermes markup (non-strict) still accepts "parameters" as the args key — only the fence gate changed
+  expect(parseToolCalls('<tool_call>{"name":"ls","parameters":{"dir":"/"}}</tool_call>').calls)
+    .toEqual([{ tool: "ls", args: { dir: "/" } }]);
+});
+
+// ---------- repair ladder: one discriminating case per rung (json-mix.ts:73-112) ----------
+
+test("repair ladder: quote-mismatched key is the ONLY repair needed (normalizeMalformedObjectKeys)", () => {
+  // `"path':` — raw parse fails, no trailing commas, already braced, closers balanced:
+  // only the quote-normalization rung can save this input.
+  const r = parseToolCalls(`<tool_call>{"name":"read","arguments":{"path':"x"}}</tool_call>`);
+  expect(r.calls).toEqual([{ tool: "read", args: { path: "x" } }]);
+});
+
+test("repair ladder: bare key:value body is the ONLY repair needed (ensureObjectDelimiters)", () => {
+  // No outer braces — raw parse fails, no trailing commas, no quote mismatch, no excess
+  // closers: only the brace-wrapping rung can save this input.
+  const r = parseToolCalls('<tool_call>"name": "read", "arguments": {"path": "x"}</tool_call>');
+  expect(r.calls).toEqual([{ tool: "read", args: { path: "x" } }]);
+});
+
+test("repair ladder: excess trailing closer is the ONLY repair needed (trimExcessTrailingClosers)", () => {
+  // One `}` too many — every earlier rung leaves the string unparseable; only the
+  // excess-closer trim rung can save this input.
+  const r = parseToolCalls('<tool_call>{"name":"read","arguments":{"path":"x"}}}</tool_call>');
+  expect(r.calls).toEqual([{ tool: "read", args: { path: "x" } }]);
+});
+
+// ---------- masking + fence info edge cases ----------
+
+test("invoke markup inside inline code is not parsed (antml/xml path of the masked() guard)", () => {
+  const text = 'Call it like `<invoke name="read"><parameter name="path">x</parameter></invoke>` in one line.';
+  const r = parseToolCalls(text);
+  expect(r.calls).toEqual([]);
+  expect(r.cleanText).toBe(text); // markup intact, function_calls scrub NOT applied
+});
+
+test("fence info matching is case-insensitive: ```JSON parses like ```json", () => {
+  const r = parseToolCalls('```JSON\n{"name":"read","arguments":{"path":"x"}}\n```');
+  expect(r.calls).toEqual([{ tool: "read", args: { path: "x" } }]);
+  expect(r.cleanText).toBe("");
+});
+
+// ---------- tool-catalog gating (MED-3; senpi json-mix.ts:146, parse.ts:15-17) ----------
+
+test("catalog gating: hermes markup naming an unknown tool stays as text", () => {
+  // Prose EXPLAINING the format must not mint a call for a nonexistent tool.
+  const text = 'To call a tool, emit\n<tool_call>{"name":"launch_missiles","arguments":{}}</tool_call>\nand wait.';
+  const r = parseToolCalls(text, { tools: ["read", "grep"] });
+  expect(r.calls).toEqual([]);
+  expect(r.cleanText).toBe(text);
+  // the same markup with a known tool still parses
+  const ok = parseToolCalls('<tool_call>{"name":"read","arguments":{"path":"x"}}</tool_call>', { tools: ["read", "grep"] });
+  expect(ok.calls).toEqual([{ tool: "read", args: { path: "x" } }]);
+});
+
+test("catalog gating applies to invoke and json-fenced formats too", () => {
+  const inv = '<invoke name="ghost"><parameter name="x">1</parameter></invoke>';
+  const rInv = parseToolCalls(inv, { tools: ["read"] });
+  expect(rInv.calls).toEqual([]);
+  expect(rInv.cleanText).toBe(inv);
+  const fence = '```json\n{"name":"ghost","arguments":{}}\n```';
+  const rFence = parseToolCalls(fence, { tools: ["read"] });
+  expect(rFence.calls).toEqual([]);
+  expect(rFence.cleanText).toBe(fence);
+  expect(parseToolCalls('<invoke name="read"><parameter name="path">x</parameter></invoke>', { tools: ["read"] }).calls)
+    .toEqual([{ tool: "read", args: { path: "x" } }]);
+});
+
+test("catalog gating: empty catalog parses nothing; absent catalog keeps structural gating", () => {
+  const markup = '<tool_call>{"name":"read","arguments":{}}</tool_call>';
+  const gated = parseToolCalls(markup, { tools: [] });
+  expect(gated.calls).toEqual([]);
+  expect(gated.cleanText).toBe(markup);
+  expect(parseToolCalls(markup).calls).toHaveLength(1); // no catalog → structural only
+});
+
+test("wrapper: parsed calls are gated by the names in StreamOptions.tools", async () => {
+  const text =
+    'unknown: <tool_call>{"name":"ghost","arguments":{}}</tool_call>\n' +
+    'known: <tool_call>{"name":"read","arguments":{"path":"x"}}</tool_call>';
+  const ev: StreamEvent = { type: "turn", turn: mkTurn([{ kind: "text", text }]) };
+  const out = await collect(fakeStream([ev]), undefined, { tools });
+  const turn = asTurn(out[0]);
+  const calls = turn.parts.filter((p) => p.kind === "tool_call");
+  expect(calls).toEqual([expect.objectContaining({ kind: "tool_call", tool: "read", args: { path: "x" } })]);
+  const rest = turn.parts.filter((p) => p.kind === "text").map((p) => p.text).join("\n");
+  expect(rest).toContain('<tool_call>{"name":"ghost","arguments":{}}</tool_call>'); // unknown markup kept as text
+});
+
+// ---------- minted ids (LOW-4: resume-collision guard) ----------
+
+test("minted ids carry a per-process nonce and stay unique across wrapper instances", async () => {
+  const mkEvents = (): StreamEvent[] => [
+    { type: "turn", turn: mkTurn([{ kind: "text", text: '<tool_call>{"name":"read","arguments":{}}</tool_call>' }]) },
+  ];
+  const a = asTurn((await collect(fakeStream(mkEvents())))[0]); // collect() builds a fresh wrapper
+  const b = asTurn((await collect(fakeStream(mkEvents())))[0]); // second, independent wrapper
+  const ids = [...a.parts, ...b.parts].flatMap((p) => (p.kind === "tool_call" ? [p.id] : []));
+  expect(ids).toHaveLength(2);
+  expect(new Set(ids).size).toBe(2); // no collision between instances
+  for (const id of ids) expect(id).toMatch(/^textcall_[0-9a-f]{8}_\d+$/);
+  // same process → same nonce ("textcall_" + 8 hex chars); a restart re-seeds it, so
+  // replayed textcall ids from a resumed session can never collide with fresh ones.
+  expect(ids[0]?.slice(0, 17)).toBe(ids[1]?.slice(0, 17));
+});
+
+// ---------- context lowering (MED-2; senpi context-transformer.ts:165-181, 209-261) ----------
+
+function mkMsg(role: Role, parts: MessagePart[]): Message {
+  return { id: crypto.randomUUID(), role, parts, parentId: null, createdAt: Date.now() };
+}
+
+function capturingStream(events: StreamEvent[]): { stream: StreamFn; seen: { messages: Message[]; options: StreamOptions | undefined }[] } {
+  const seen: { messages: Message[]; options: StreamOptions | undefined }[] = [];
+  const stream: StreamFn = async function* (_model, msgs, options) {
+    seen.push({ messages: msgs, options });
+    for (const e of events) yield e;
+  };
+  return { stream, seen };
+}
+
+async function drain(stream: AsyncIterable<StreamEvent>): Promise<void> {
+  for await (const _ of stream) { /* drain */ }
+}
+
+test("two-hop round-trip: follow-up request is lowered to text protocol", async () => {
+  // hop 1: non-native model emits markup; the wrapper mints textcall_* tool_call parts
+  const markup = 'Reading now.\n<tool_call>\n{"name":"read","arguments":{"path":"a.ts"}}\n</tool_call>';
+  const hop1 = await collect(fakeStream([{ type: "turn", turn: mkTurn([{ kind: "text", text: markup }]) }]), undefined, { tools });
+  const turn1 = asTurn(hop1[0]);
+  const minted = turn1.parts.find((p) => p.kind === "tool_call");
+  if (minted?.kind !== "tool_call") throw new Error("expected minted tool_call");
+  expect(minted.id.startsWith("textcall_")).toBe(true);
+
+  // hop 2: history exactly as core/loop.ts appends it (assistant turn parts + role:"tool" result)
+  const history: Message[] = [
+    mkMsg("user", [{ kind: "text", text: "read a.ts please" }]),
+    mkMsg("assistant", turn1.parts),
+    mkMsg("tool", [{ kind: "tool_result", callId: minted.id, ok: true, output: "file contents" }]),
+  ];
+  const { stream, seen } = capturingStream([{ type: "turn", turn: mkTurn([{ kind: "text", text: "done" }]) }]);
+  const options: StreamOptions = { tools };
+  await drain(withToolCallParsing(stream)(model, history, options));
+
+  const req = seen[0];
+  if (!req) throw new Error("underlying stream never called");
+  // the second request contains NO native tool artifacts a non-native model can't consume
+  expect("tools" in (req.options ?? {})).toBe(false);
+  for (const m of req.messages) {
+    expect(m.role).not.toBe("tool");
+    for (const p of m.parts) expect(p.kind).toBe("text");
+  }
+  // assistant tool_call lowered to the EXACT hermes markup the parser accepts; prose kept
+  const assistant = req.messages[1];
+  expect(assistant?.role).toBe("assistant");
+  const loweredText = (assistant?.parts ?? []).flatMap((p) => (p.kind === "text" ? [p.text] : [])).join("\n");
+  expect(loweredText).toContain("Reading now.");
+  expect(loweredText).toContain('<tool_call>\n{"name":"read","arguments":{"path":"a.ts"}}\n</tool_call>');
+  expect(parseToolCalls(loweredText).calls).toEqual([{ tool: "read", args: { path: "a.ts" } }]); // round-trips
+  // tool result became a user-role text message rendered under the tool NAME (hermes.ts:46-60)
+  expect(req.messages[2]?.role).toBe("user");
+  expect(req.messages[2]?.parts).toEqual([
+    { kind: "text", text: '<tool_response>{"name":"read","content":"file contents"}</tool_response>' },
+  ]);
+  // originals were not mutated (upstream: "original is not mutated")
+  expect(history[1]?.parts.some((p) => p.kind === "tool_call")).toBe(true);
+  expect(history[2]?.role).toBe("tool");
+  expect(options.tools).toBe(tools);
+});
+
+test("native tool history passes through unlowered (same references, tools intact)", async () => {
+  const history: Message[] = [
+    mkMsg("user", [{ kind: "text", text: "go" }]),
+    mkMsg("assistant", [{ kind: "tool_call", id: "toolu_abc", tool: "read", args: { path: "x" } }]),
+    mkMsg("tool", [{ kind: "tool_result", callId: "toolu_abc", ok: true, output: "x" }]),
+  ];
+  const { stream, seen } = capturingStream([{ type: "turn", turn: mkTurn([{ kind: "text", text: "ok" }]) }]);
+  const options: StreamOptions = { tools };
+  await drain(withToolCallParsing(stream)(model, history, options));
+  expect(seen[0]?.messages).toBe(history); // byte-identical passthrough: same array reference
+  expect(seen[0]?.options).toBe(options);  // tools NOT stripped for native conversations
+});
+
+test("lowerContext option: false disables auto-detection, true forces lowering", async () => {
+  const textcallHistory: Message[] = [
+    mkMsg("assistant", [{ kind: "tool_call", id: "textcall_deadbeef_9", tool: "read", args: {} }]),
+    mkMsg("tool", [{ kind: "tool_result", callId: "textcall_deadbeef_9", ok: true, output: "y" }]),
+  ];
+  const off = capturingStream([{ type: "turn", turn: mkTurn([{ kind: "text", text: "ok" }]) }]);
+  await drain(withToolCallParsing(off.stream, { lowerContext: false })(model, textcallHistory, { tools }));
+  expect(off.seen[0]?.messages).toBe(textcallHistory);
+  expect(off.seen[0]?.options?.tools).toBe(tools);
+
+  const nativeHistory: Message[] = [
+    mkMsg("assistant", [{ kind: "tool_call", id: "toolu_1", tool: "grep", args: { pattern: "p" } }]),
+    mkMsg("tool", [{ kind: "tool_result", callId: "toolu_1", ok: false, output: "boom" }]),
+  ];
+  const on = capturingStream([{ type: "turn", turn: mkTurn([{ kind: "text", text: "ok" }]) }]);
+  await drain(withToolCallParsing(on.stream, { lowerContext: true })(model, nativeHistory, { tools }));
+  const req = on.seen[0];
+  expect(req?.messages.every((m) => m.role !== "tool")).toBe(true);
+  expect(req?.messages.every((m) => m.parts.every((p) => p.kind === "text"))).toBe(true);
+  expect("tools" in (req?.options ?? {})).toBe(false);
 });
