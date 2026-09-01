@@ -11,6 +11,7 @@ import { ModeManager, loadModesConfig, modeFromEntries, type AgentMode } from ".
 import { togglePlanAct, applyModeToRun, flushModeSwitch, replayLabel } from "./modes-cmd.ts";
 import { cmdCheckpoints, cmdRestore, type CheckpointCmdCtx } from "./checkpoints-cmd.ts";
 import { buildCostNote } from "./cost.ts";
+import { exportSession } from "../cli/export.ts";
 import type { Renderer, AssistantView, StatusInfo } from "./renderer.ts";
 import { PiTuiRenderer } from "./pi-renderer.ts";
 import type { RunEvent, StreamFn } from "../core/types.ts";
@@ -50,6 +51,7 @@ export const TUI_COMMANDS = [
   { name: "act", description: "Switch to act mode (full tools)" },
   { name: "checkpoints", description: "List shadow-git snapshots of this session" },
   { name: "restore", description: "Restore a checkpoint: /restore <ref> [files|conversation|both]" },
+  { name: "export", description: "Export this session: /export [--json] [path] [--force]" },
 ];
 
 interface TuiState {
@@ -309,6 +311,21 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
         if (arg) void cmdSessions(arg);
         else void cmdSessions();
         return true;
+      case "export": {
+        // port #38: write THIS session as markdown (raw JSONL with --json), local only.
+        // Read-only over the store (exportSession re-reads from disk) — no busy gate needed.
+        try {
+          const words = arg.split(/\s+/).filter(Boolean);
+          const res = exportSession(sessionsDir, store.id, {
+            json: words.includes("--json"), force: words.includes("--force"),
+            out: words.find((w) => !w.startsWith("-")), cwd: rt.cwd,
+          });
+          renderer.addSystemNote(`exported ${res.format} → ${res.path}`);
+        } catch (e) {
+          renderer.addSystemNote(e instanceof Error ? e.message : String(e), "error");
+        }
+        return true;
+      }
       default:
         renderer.addSystemNote(`unknown command: /${cmd} (try /help)`, "warn");
         return true;

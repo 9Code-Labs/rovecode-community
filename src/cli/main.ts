@@ -125,6 +125,7 @@ commands:
   aion auth list            stored providers + key names (values redacted)
   aion auth remove <provider>  delete a stored credential
   aion trace <session-id>   print session tree events (JSONL)
+  aion export <session>     write a session as markdown (--json: raw JSONL copy; --out <path>; --force)
   aion eval                 alias for gauntlet
   aion acp                  Agent Client Protocol v1 endpoint over stdio (Zed/JetBrains)
   aion serve                headless HTTP server (AION_PORT, default 4100; loopback-only)
@@ -233,7 +234,7 @@ async function cmdTrace(sessionId: string): Promise<void> {
   }
 }
 
-const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "auth", "trace", "help", "chat", "repl", "smoke-tui", "acp", "serve"]);
+const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "auth", "trace", "help", "chat", "repl", "smoke-tui", "acp", "serve", "export"]);
 // --resume <id>: TUI-only value flag, parsed here (parseCli flags are boolean-only);
 // its value must not be mistaken for a one-shot prompt
 const rIx = process.argv.indexOf("--resume");
@@ -251,6 +252,9 @@ if (cmd === "" || cmd === "chat" || cmd === "repl" || (resumeId !== undefined &&
     case "tools": cmdTools(); break;
     case "auth": await cmdAuth(cli.rest); break;
     case "trace": await cmdTrace(cli.rest[0] ?? ""); break;
+    // port #38: session export (markdown transcript or raw JSONL copy) — local only.
+    // Hand-parses its own argv: --out takes a value, and parseCli flags are boolean-only.
+    case "export": (await import("./export.ts")).cmdExport(process.argv); break;
     // dynamic import: smoke pulls in @xterm/headless (devDependency) — must not
     // load on ordinary CLI startup
     case "smoke-tui": await (await import("../tui/smoke.ts")).runTuiSmoke(); break;
