@@ -12,11 +12,13 @@ export interface CliInvocation {
 
 export function parseCli(argv: string[]): CliInvocation {
   const args = argv.slice(2);
-  const cmdIdx = args.findIndex((a) => !a.startsWith("--"));
+  const isFlag = (a: string) => a.startsWith("-");
+  const cmdIdx = args.findIndex((a) => !isFlag(a));
+  const wantsHelp = args.includes("--help") || args.includes("-h");
   return {
-    cmd: cmdIdx === -1 ? "" : args[cmdIdx]!,
+    cmd: wantsHelp && cmdIdx === -1 ? "help" : cmdIdx === -1 ? "" : args[cmdIdx]!,
     plain: args.includes("--plain"),
     yolo: args.includes("--yolo"),
-    rest: cmdIdx === -1 ? [] : args.slice(cmdIdx + 1).filter((a) => !a.startsWith("--")),
+    rest: cmdIdx === -1 ? [] : args.slice(cmdIdx + 1).filter((a) => !isFlag(a)),
   };
 }

@@ -69,6 +69,7 @@ export class PiTuiRenderer implements Renderer {
 	private hooks: RendererHooks | null = null;
 	private unsubscribeInput: (() => void) | null = null;
 	private readonly toolCards = new Map<string, ToolCard>();
+	private readonly pendingApprovals = new Set<(a: ApprovalAnswer) => void>();
 
 	constructor(opts?: PiTuiRendererOptions) {
 		this.terminal = opts?.terminal ?? new ProcessTerminal();
@@ -153,6 +154,10 @@ export class PiTuiRenderer implements Renderer {
 			this.unsubscribeInput();
 			this.unsubscribeInput = null;
 		}
+		// an overlay that never gets an answer must not pin the process (or a caller
+		// awaiting approval) forever — a stopped UI cannot consent, so deny all
+		for (const resolvePending of this.pendingApprovals) resolvePending("deny");
+		this.pendingApprovals.clear();
 		tui.stop();
 		this.tui = null;
 		this.editor = null;
@@ -236,11 +241,12 @@ export class PiTuiRenderer implements Renderer {
 			const finish = (answer: ApprovalAnswer): void => {
 				if (settled) return;
 				settled = true;
+				this.pendingApprovals.delete(finish);
 				handle.hide();
-				tui.setFocus(editor);
-				tui.requestRender();
+				if (this.tui) { tui.setFocus(editor); tui.requestRender(); }
 				resolve(answer);
 			};
+			this.pendingApprovals.add(finish);
 			list.onSelect = (item: SelectItem) => {
 				finish(item.value === "always" ? "always" : item.value === "deny" ? "deny" : "once");
 			};

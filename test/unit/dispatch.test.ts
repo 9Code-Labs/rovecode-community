@@ -27,3 +27,8 @@ test("one-shot prompt: first non-flag becomes cmd, rest joins the prompt", () =>
 test("trace takes its id from rest", () => {
   expect(parseCli(argv("trace", "abc-123")).rest).toEqual(["abc-123"]);
 });
+
+test("--help and -h route to the help command, not the TUI", () => {
+  expect(parseCli(argv("--help")).cmd).toBe("help");
+  expect(parseCli(argv("-h")).cmd).toBe("help");
+});

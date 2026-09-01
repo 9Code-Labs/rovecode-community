@@ -235,19 +235,40 @@ describe("PiTuiRenderer", () => {
 	});
 
 	it("isNativeModifierPressed degrades gracefully when the native addon is ABSENT", () => {
-		// The vendored tree ships win32 prebuilds, so calling in-process exercises the
-		// native branch. To force the missing-addon catch path (native-modifiers.ts:37-56),
-		// copy src/ WITHOUT the native/ sibling into a temp dir and probe in a subprocess.
+		// Force the missing-addon catch path (native-modifiers.ts:37-56): copy src/ WITHOUT
+		// the native/ sibling to a temp dir and probe in a subprocess. `--no-install` is
+		// load-bearing — without it Bun resolves "@earendil-works/pi-tui" from its global
+		// install cache (or auto-installs from the network) and the native branch runs.
+		// The probe asserts the BRANCH (LOADED=NONE), not just the boolean, by mirroring
+		// the loader's exact candidate walk (native-module-path.ts defaults).
 		const dir = mkdtempSync(join(tmpdir(), "aion-native-fallback-"));
 		try {
 			cpSync(join(import.meta.dir, "../../vendor/pi-tui/src"), join(dir, "src"), { recursive: true });
 			const probe = join(dir, "src", "native-modifiers.ts").replace(/\\/g, "/");
+			const candidatesMod = join(dir, "src", "native-module-path.ts").replace(/\\/g, "/");
+			const script = [
+				`import { isNativeModifierPressed } from "${probe}";`,
+				`import { getNativeModuleCandidates } from "${candidatesMod}";`,
+				`import { createRequire } from "node:module";`,
+				`import { join } from "node:path";`,
+				`import { pathToFileURL } from "node:url";`,
+				`const req = createRequire(pathToFileURL("${probe}").href);`,
+				`const nativePath = process.platform === "darwin"`,
+				`  ? join("native", "darwin", "prebuilds", \`darwin-\${process.arch}\`, "darwin-modifiers.node")`,
+				`  : join("native", "win32", "prebuilds", \`win32-\${process.arch}\`, "win32-console-mode.node");`,
+				`let loaded = "NONE";`,
+				`for (const c of getNativeModuleCandidates(nativePath)) { try { req(c); loaded = c; break; } catch {} }`,
+				`console.log("LOADED=" + loaded);`,
+				`console.log("RESULT=" + isNativeModifierPressed("shift"));`,
+			].join("\n");
 			const res = Bun.spawnSync({
-				cmd: ["bun", "-e", `import { isNativeModifierPressed } from "${probe}"; console.log(String(isNativeModifierPressed("shift")));`],
+				cmd: ["bun", "--no-install", "-e", script],
 				stdout: "pipe", stderr: "pipe",
 			});
+			const out = res.stdout.toString();
 			expect(res.exitCode).toBe(0);
-			expect(res.stdout.toString().trim()).toBe("false");
+			expect(out).toContain("LOADED=NONE");   // no addon reachable → catch path is what ran
+			expect(out).toContain("RESULT=false");  // and it degraded to false, no throw
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -320,6 +341,8 @@ describe("PiTuiRenderer", () => {
 			v.done();
 		}).not.toThrow();
 		await expect(renderer.askApproval("write", "{}")).resolves.toBe("deny");
-		void pending; // pre-stop overlay promise may stay pending; must not reject
+		// an approval already on screen at stop() time settles to deny — nothing may
+		// stay pending (a stuck resolver pins embedded hosts that await it)
+		await expect(pending).resolves.toBe("deny");
 	});
 });

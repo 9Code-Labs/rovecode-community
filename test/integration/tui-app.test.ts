@@ -78,22 +78,32 @@ test("gated run: write tool requires approval; Enter approves once and the write
   rmSync(cwd, { recursive: true, force: true });
 }, 20_000);
 
-test("closing mid-run is clean: no throw from the run's finally after renderer.stop()", async () => {
+test("closing mid-run is clean: the run's finally after renderer.stop() must not reject", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
   const term = new VirtualTerminal(80, 24);
   const renderer = new PiTuiRenderer({ terminal: term, cwd });
-  // a stream that stays busy long enough for Ctrl+C to land mid-run
-  const slow = async function* () {
-    await new Promise((r) => setTimeout(r, 5_000));
-    yield { type: "turn" as const, turn: textTurn("too late") };
-  };
-  const app = runTui({ renderer, stream: slow, cwd, yolo: true, exitOnClose: false, model: "scripted" });
-  term.sendInput("go");
-  term.sendInput("\r");
-  await until(term, (s) => s.includes("> go"));
-  term.sendInput("\x03"); // exit while the run is in flight
-  await app;              // must resolve, not reject with "start() must be called first"
-  rmSync(cwd, { recursive: true, force: true });
+  const rejections: unknown[] = [];
+  const collect = (e: unknown) => rejections.push(e);
+  process.on("unhandledRejection", collect);
+  try {
+    // busy long enough for Ctrl+C to land mid-run, but SHORT enough that the run's
+    // finally executes inside this test — that finally is the crash under test
+    const slow = async function* () {
+      await new Promise((r) => setTimeout(r, 400));
+      yield { type: "turn" as const, turn: textTurn("late") };
+    };
+    const app = runTui({ renderer, stream: slow, cwd, yolo: true, exitOnClose: false, model: "scripted" });
+    term.sendInput("go");
+    term.sendInput("\r");
+    await until(term, (s) => s.includes("> go"));
+    term.sendInput("\x03"); // exit while the run is in flight
+    await app;              // must resolve
+    await new Promise((r) => setTimeout(r, 700)); // let the run's finally fire post-stop
+    expect(rejections).toEqual([]);
+  } finally {
+    process.off("unhandledRejection", collect);
+    rmSync(cwd, { recursive: true, force: true });
+  }
 }, 20_000);
 
 test("slash command /status renders without starting a run", async () => {
