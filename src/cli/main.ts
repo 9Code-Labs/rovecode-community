@@ -117,6 +117,9 @@ env:
   AION_BASE_URL   any OpenAI-compatible or Anthropic endpoint
   AION_API_KEY    API key (falls back to OPENAI_API_KEY)
   AION_MODEL      model id (e.g. zai-org/glm-5.3)
+  AION_MODEL_<ROLE>  role fallback chain, comma-separated provider/model list; on 429/5xx
+                  the next candidate serves. Roles: DEFAULT SMOL PLAN COMMIT TASK
+                  (e.g. AION_MODEL_DEFAULT=kaesra/zai-org/glm-5.3-flash,openai/gpt-4o-mini)
   AION_STREAM=sse use SSE streaming
   AION_YOLO=1     allow all tool actions
 providers: kaesra openai anthropic deepseek groq openrouter ollama lmstudio

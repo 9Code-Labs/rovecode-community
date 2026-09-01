@@ -176,8 +176,9 @@ export function startServer(opts: ServerOptions = {}): AionServer {
     if (!stream) return json({ error: "no provider configured (set AION_BASE_URL/AION_API_KEY or a named provider key)" }, 503);
     const model: ModelRef = bodyModel(body) ?? { provider: rt.provider?.id ?? "mock", model: rt.defaultModel || "default" };
     const def = rt.buildDef(model);
-    // policy-only approvals (bar): NO ApprovalFn — prompt-effect rules fail the
-    // tool call as tool_call_failed/permission_denied (core/tools.ts:87-93)
+    // no interactive ApprovalFn — buildCfg installs the port-#9 exec-policy wrapper:
+    // allow-listed argv auto-runs, forbidden is denied, prompt-classified fails closed
+    // as tool_call_failed/permission_denied (core/tools.ts:87-93)
     const cfg = rt.buildCfg(yolo, undefined);
     const run = agentLoop(def, text, {}, cfg, {
       stream, registry: rt.registry, store: rt.store,
