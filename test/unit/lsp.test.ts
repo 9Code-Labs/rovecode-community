@@ -1,6 +1,7 @@
 import { test, expect } from "bun:test";
 import {
   encodeFrame, FrameParser, LspClient, createLspGate, formatGateNote, withLspGate,
+  lspGateNote, disposeDefaultGates,
 } from "../../src/coding/lsp.ts";
 import type { Diagnostic } from "../../src/coding/lsp.ts";
 import type { LspGate } from "../../src/coding/lsp.ts";
@@ -8,6 +9,7 @@ import type { Tool, ToolContext, ToolOutput } from "../../src/core/types.ts";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const FIXTURE = join(import.meta.dir, "..", "fixtures", "fake-lsp.ts");
 const fixtureCmd = (mode: string): string[] => [process.execPath, FIXTURE, mode];
@@ -112,6 +114,39 @@ test("clean server: empty diagnostics produce no gate note", async () => {
   const gate = createLspGate({ cmd: fixtureCmd("clean"), root: dir, debounceMs: 40 });
   try {
     expect(await gate.note(file)).toBe("");
+  } finally {
+    await disposeAndRm(gate, dir);
+  }
+});
+
+// ---------- garbage frames: the reader loop must survive malformed messages ----------
+
+test("garbage frames (null body, scalar body, null params) are skipped; diagnostics after them still arrive", async () => {
+  const { dir, file } = tempProject();
+  const gate = createLspGate({ cmd: fixtureCmd("garbage"), root: dir, debounceMs: 40 });
+  try {
+    // fixture front-loads garbage at startup AND before the initialize answer AND before
+    // every publish — one poisoned frame must not abort the pump and eat later output
+    const note = await gate.note(file);
+    expect(note).toContain("lsp-gate");
+    expect(note).toContain("ERROR [3:5] Type 'string' is not assignable to type 'number'. (v0)");
+    expect(gate.client!.state).toBe("ready"); // reader survived; state is not lying
+    expect(await gate.note(file)).toContain("(v1)"); // and it keeps decoding on later touches
+  } finally {
+    await disposeAndRm(gate, dir);
+  }
+});
+
+// ---------- stale publishes: a lagging server's old-version publish is another edit's ----------
+
+test("laggy server: publish carrying the previous version is rejected, the matching one is awaited", async () => {
+  const { dir, file } = tempProject();
+  const gate = createLspGate({ cmd: fixtureCmd("laggy"), root: dir, settleMs: 1200, debounceMs: 40 });
+  try {
+    expect(await gate.note(file)).toContain("(v0)"); // didOpen: publish lags 150ms but matches v0
+    const second = await gate.note(file); // didChange v1: v0's stale publish lands first
+    expect(second).toContain("(v1)"); // waited past the stale publish for the version just sent
+    expect(second).not.toContain("(v0)"); // the previous edit's diagnostics were NOT attributed
   } finally {
     await disposeAndRm(gate, dir);
   }
@@ -256,6 +291,40 @@ test("withLspGate appends the note to successful write-tool output only", async 
 test("withLspGate leaves non-write tools untouched", async () => {
   const reader = stubTool("read", { ok: true, output: "data" });
   expect(withLspGate(reader, () => Promise.resolve("\n\nnote"))).toBe(reader); // same reference
+});
+
+// ---------- default gates are per resolved root, not first-caller-wins ----------
+
+test("lspGateNote: two roots get two servers, each diagnosing against its own rootUri", async () => {
+  disposeDefaultGates();
+  const a = tempProject();
+  const b = tempProject();
+  try {
+    const noteA = await lspGateNote(a.file, a.dir, { cmd: fixtureCmd("echo-root"), debounceMs: 40 });
+    const noteB = await lspGateNote(b.file, b.dir, { cmd: fixtureCmd("echo-root"), debounceMs: 40 });
+    expect(noteA).toContain(`root=${pathToFileURL(a.dir).href}`);
+    expect(noteB).toContain(`root=${pathToFileURL(b.dir).href}`); // NOT the first caller's root
+    expect(noteB).not.toContain(pathToFileURL(a.dir).href);
+    // same resolved root reuses the live gate: no opts, no re-probe, no second server
+    expect(await lspGateNote(a.file, a.dir)).toContain(`root=${pathToFileURL(a.dir).href}`);
+  } finally {
+    for (const g of disposeDefaultGates()) await awaitExit(g.client?.exited ?? null);
+    await rmrf(a.dir);
+    await rmrf(b.dir);
+  }
+});
+
+test("default-gate map is bounded: oldest root evicted and disposed past the cap", async () => {
+  disposeDefaultGates();
+  try {
+    for (let i = 0; i < 6; i++) {
+      const root = join(tmpdir(), `aion-fake-root-${i}`); // never spawns: probe misses
+      expect(await lspGateNote(join(root, "x.ts"), root, { serverName: "aion-no-such-lsp-server-p13" })).toBe("");
+    }
+    expect(disposeDefaultGates().length).toBe(4); // 6 roots in, only the 4 newest kept
+  } finally {
+    disposeDefaultGates();
+  }
 });
 
 // ---------- LspClient direct: raw diagnostics include the warning (gate filters, client doesn't) ----------

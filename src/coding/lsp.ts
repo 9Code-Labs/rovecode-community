@@ -11,7 +11,7 @@
  *  hand-rolled (aion adds no deps here; oh-my-pi client.ts hand-rolls the same reader). */
 
 import { existsSync, readFileSync } from "node:fs";
-import { extname, isAbsolute, join } from "node:path";
+import { extname, isAbsolute, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Tool, ToolOutput } from "../core/types.ts";
 
@@ -89,6 +89,7 @@ export class LspClient {
   private versions = new Map<string, number>();    // uri → document version
   private diags = new Map<string, Diagnostic[]>(); // uri → last published diagnostics
   private gen = new Map<string, number>();         // uri → publish generation counter
+  private pubVer = new Map<string, number>();      // uri → version carried by the last publish (absent: none)
   private waiters = new Map<string, Set<() => void>>();
   private stateVal: LspState = "idle";
   private initPromise: Promise<void> | null = null;
@@ -118,23 +119,23 @@ export class LspClient {
     const text = readFileSync(absPath, "utf8");
     const genBefore = this.gen.get(uri) ?? 0;
     const prev = this.versions.get(uri);
+    const sentVer = prev === undefined ? 0 : prev + 1; // the version THIS edit is published under
+    this.versions.set(uri, sentVer);
     if (prev === undefined) {
       // opencode client.ts:611-619 — didOpen {uri, languageId, version: 0, text}
-      this.versions.set(uri, 0);
       const languageId = TS_EXTENSIONS[extname(absPath).toLowerCase()] ?? "plaintext";
-      this.notify("textDocument/didOpen", { textDocument: { uri, languageId, version: 0, text } });
+      this.notify("textDocument/didOpen", { textDocument: { uri, languageId, version: sentVer, text } });
     } else {
       // opencode client.ts:577-597 — didChange version+1, full-text contentChanges
-      this.versions.set(uri, prev + 1);
-      this.notify("textDocument/didChange", { textDocument: { uri, version: prev + 1 }, contentChanges: [{ text }] });
+      this.notify("textDocument/didChange", { textDocument: { uri, version: sentVer }, contentChanges: [{ text }] });
     }
     const deadline = Date.now() + this.opts.settleMs;
-    if (!(await this.waitPublish(uri, genBefore, deadline))) return [];
+    if (!(await this.waitPublish(uri, genBefore, deadline, sentVer))) return [];
     // rearming debounce: absorb follow-up publishes, capped by the settle deadline
     // (opencode waitForFreshPush, client.ts:464-497)
     let g = this.gen.get(uri) ?? 0;
     while (Date.now() + this.opts.debounceMs <= deadline) {
-      if (!(await this.waitPublish(uri, g, Math.min(deadline, Date.now() + this.opts.debounceMs)))) break;
+      if (!(await this.waitPublish(uri, g, Math.min(deadline, Date.now() + this.opts.debounceMs), sentVer))) break;
       g = this.gen.get(uri) ?? 0;
     }
     return this.diags.get(uri) ?? [];
@@ -169,21 +170,30 @@ export class LspClient {
     if (!proc) return;
     try {
       for await (const chunk of proc.stdout) {
-        for (const msg of this.parser.push(chunk)) this.dispatch(msg as RpcMessage);
+        // per-message guard: one malformed frame must never abort the reader loop — an
+        // unguarded throw here silently discarded ALL later server output while "ready"
+        for (const msg of this.parser.push(chunk)) {
+          try { this.dispatch(msg); } catch { /* skip poisoned frame, keep reading */ }
+        }
       }
     } catch { /* stream torn down with the process */ }
   }
 
-  private dispatch(msg: RpcMessage): void {
+  private dispatch(raw: unknown): void {
+    if (!raw || typeof raw !== "object") return; // `null`/scalar bodies are valid JSON but not messages
+    const msg = raw as RpcMessage;
     if (typeof msg.id === "number" && msg.method === undefined) {
       const cb = this.pending.get(msg.id);
       if (cb) { this.pending.delete(msg.id); cb(msg); }
       return;
     }
     if (msg.method === "textDocument/publishDiagnostics") {
-      // opencode client.ts:160-172 — cache per uri, signal listeners
-      const p = msg.params as { uri: string; diagnostics?: Diagnostic[] };
-      this.diags.set(p.uri, p.diagnostics ?? []);
+      // opencode client.ts:160-172 — cache per uri (+ published version, :165), signal listeners
+      const p = msg.params as { uri?: unknown; version?: unknown; diagnostics?: unknown } | null;
+      if (!p || typeof p !== "object" || typeof p.uri !== "string") return; // shape guard
+      this.diags.set(p.uri, Array.isArray(p.diagnostics) ? (p.diagnostics as Diagnostic[]) : []);
+      if (typeof p.version === "number") this.pubVer.set(p.uri, p.version);
+      else this.pubVer.delete(p.uri);
       this.gen.set(p.uri, (this.gen.get(p.uri) ?? 0) + 1);
       for (const w of [...(this.waiters.get(p.uri) ?? [])]) w();
       return;
@@ -214,9 +224,16 @@ export class LspClient {
     try { stdin.write(encodeFrame(msg)); void stdin.flush(); } catch { this.becomeDead(); }
   }
 
-  /** resolves true once a publish newer than genAfter lands for uri, false at deadline/death */
-  private waitPublish(uri: string, genAfter: number, deadlineTs: number): Promise<boolean> {
-    const fresh = (): boolean => (this.gen.get(uri) ?? 0) > genAfter;
+  /** resolves true once a publish newer than genAfter AND belonging to sentVer lands for uri;
+   *  a publish carrying another version is a different edit's (laggy servers re-publish the
+   *  previous version — opencode client.ts:483-485 rejects those; versionless always matches).
+   *  Resolves false at deadline/death. */
+  private waitPublish(uri: string, genAfter: number, deadlineTs: number, sentVer: number): Promise<boolean> {
+    const fresh = (): boolean => {
+      if ((this.gen.get(uri) ?? 0) <= genAfter) return false;
+      const pv = this.pubVer.get(uri);
+      return pv === undefined || pv === sentVer;
+    };
     if (fresh()) return Promise.resolve(true);
     if (this.stateVal === "dead" || deadlineTs <= Date.now()) return Promise.resolve(false);
     return new Promise((resolve) => {
@@ -322,14 +339,38 @@ export function createLspGate(opts: GateOptions = {}): LspGate {
   };
 }
 
-// ---------- default gate + tool wiring ----------
+// ---------- default gates (one per root) + tool wiring ----------
 
-let defaultGate: LspGate | null = null;
+/** acp/http build per-session runtimes with per-caller cwds, so a single module-level gate
+ *  bound the FIRST caller's root for the process lifetime and later sessions diagnosed
+ *  against the wrong project (wrong tsconfig/paths). Keyed by resolved root; bounded LRU,
+ *  since every live entry owns a server process. */
+const MAX_DEFAULT_GATES = 4;
+const defaultGates = new Map<string, LspGate>(); // insertion order doubles as LRU order
 
-/** Post-edit hook for hashline's lint-gate point: await and append to successful tool output. */
-export function lspGateNote(absPath: string, root?: string): Promise<string> {
-  defaultGate ??= createLspGate(root === undefined ? {} : { root });
-  return defaultGate.note(absPath);
+/** Post-edit hook for hashline's lint-gate point: await and append to successful tool output.
+ *  `opts` (test hook) applies only when the root's gate is first constructed. */
+export function lspGateNote(absPath: string, root?: string, opts?: Omit<GateOptions, "root">): Promise<string> {
+  const key = resolve(root ?? process.cwd());
+  let gate = defaultGates.get(key);
+  if (gate !== undefined) {
+    defaultGates.delete(key); // refresh LRU position
+  } else {
+    gate = createLspGate({ ...opts, root: key });
+    if (defaultGates.size >= MAX_DEFAULT_GATES) {
+      for (const [k, g] of defaultGates) { defaultGates.delete(k); g.dispose(); break; } // evict oldest
+    }
+  }
+  defaultGates.set(key, gate);
+  return gate.note(absPath);
+}
+
+/** dispose every default gate and forget it (test hook); returns them so exits can be awaited */
+export function disposeDefaultGates(): LspGate[] {
+  const gates = [...defaultGates.values()];
+  defaultGates.clear();
+  for (const g of gates) g.dispose();
+  return gates;
 }
 
 /** Zero-touch alternative: wrap a write-kind tool (hashline editTool/writeTool) so every

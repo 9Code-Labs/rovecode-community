@@ -9,11 +9,22 @@
  *    clean       — answer initialize; publish empty diagnostics per didOpen/didChange
  *    mute        — answer initialize; never publish anything (settle-window expiry path)
  *    wedged      — consume stdin, never respond to anything (init-timeout / kill path)
+ *    garbage     — like diagnostics, but emit malformed frames (JSON `null` body, scalar
+ *                  body, publishDiagnostics with params:null) at startup, before the
+ *                  initialize answer, and before every publish; the good publishes omit
+ *                  params.version (versionless publishes must stay accepted)
+ *    laggy       — publishes lag one edit behind: didOpen/didChange for version N first
+ *                  re-publishes version N-1's stale diagnostics (params.version = N-1),
+ *                  then N's own after 150ms (stale-version rejection path)
+ *    echo-root   — like diagnostics, but the error message embeds initialize's rootUri
+ *                  (per-root default-gate path: each root must get its own server)
  */
 
 type Json = Record<string, unknown>;
 
 const mode = process.argv[2] ?? "diagnostics";
+const LAG_MS = 150;
+let rootUri = "";
 
 function send(msg: Json): void {
   const body = Buffer.from(JSON.stringify(msg), "utf8");
@@ -21,28 +32,63 @@ function send(msg: Json): void {
   process.stdout.write(body);
 }
 
+/** raw Content-Length frame around an arbitrary (possibly non-object) JSON body */
+function sendRaw(body: string): void {
+  process.stdout.write(`Content-Length: ${Buffer.byteLength(body, "utf8")}\r\n\r\n`);
+  process.stdout.write(body);
+}
+
+/** the malformed-frame kinds that once killed the client's reader loop for good */
+function sendGarbage(): void {
+  sendRaw("null"); // valid JSON, not an object
+  sendRaw("42");   // scalar body
+  send({ jsonrpc: "2.0", method: "textDocument/publishDiagnostics", params: null }); // null params
+}
+
+function diagnosticsFor(version: number): Json[] {
+  if (mode === "clean") return [];
+  const message =
+    mode === "echo-root"
+      ? `root=${rootUri} (v${version})`
+      : `Type 'string' is not assignable to type 'number'. (v${version})`;
+  return [
+    {
+      range: { start: { line: 2, character: 4 }, end: { line: 2, character: 9 } },
+      severity: 1,
+      code: 2322,
+      source: "fake-ts",
+      message,
+    },
+    {
+      range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } },
+      severity: 2,
+      code: 6133,
+      source: "fake-ts",
+      message: `'unused' is declared but its value is never read. (v${version})`,
+    },
+  ];
+}
+
+function sendPublish(uri: string, version: number, withVersion: boolean): void {
+  const params: Json = { uri, diagnostics: diagnosticsFor(version) };
+  if (withVersion) params["version"] = version;
+  send({ jsonrpc: "2.0", method: "textDocument/publishDiagnostics", params });
+}
+
 function publish(uri: string, version: number): void {
   if (mode === "mute") return;
-  const diagnostics =
-    mode === "clean"
-      ? []
-      : [
-          {
-            range: { start: { line: 2, character: 4 }, end: { line: 2, character: 9 } },
-            severity: 1,
-            code: 2322,
-            source: "fake-ts",
-            message: `Type 'string' is not assignable to type 'number'. (v${version})`,
-          },
-          {
-            range: { start: { line: 0, character: 0 }, end: { line: 0, character: 5 } },
-            severity: 2,
-            code: 6133,
-            source: "fake-ts",
-            message: `'unused' is declared but its value is never read. (v${version})`,
-          },
-        ];
-  send({ jsonrpc: "2.0", method: "textDocument/publishDiagnostics", params: { uri, version, diagnostics } });
+  if (mode === "laggy") {
+    // slow analyzer: the previous edit's publish lands now, this edit's only after a lag
+    if (version > 0) sendPublish(uri, version - 1, true);
+    setTimeout(() => sendPublish(uri, version, true), LAG_MS);
+    return;
+  }
+  if (mode === "garbage") {
+    sendGarbage(); // the client must survive these and still decode the very next frame
+    sendPublish(uri, version, false); // no params.version: versionless publishes stay accepted
+    return;
+  }
+  sendPublish(uri, version, true);
 }
 
 function handle(msg: Json): void {
@@ -50,6 +96,8 @@ function handle(msg: Json): void {
   const method = msg["method"] as string | undefined;
   const id = msg["id"];
   if (method === "initialize") {
+    rootUri = String(((msg["params"] as Json | null)?.["rootUri"] as string | undefined) ?? "");
+    if (mode === "garbage") sendGarbage(); // garbage BEFORE the initialize answer
     send({ jsonrpc: "2.0", id: id as number, result: { capabilities: { textDocumentSync: 1 } } });
     return;
   }
@@ -96,6 +144,8 @@ function drain(): void {
     }
   }
 }
+
+if (mode === "garbage") sendGarbage(); // greet the client with poison before it even asks
 
 process.stdin.on("data", (chunk: Buffer) => {
   buf = Buffer.concat([buf, chunk]);
