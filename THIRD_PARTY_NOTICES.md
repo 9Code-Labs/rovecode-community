@@ -79,6 +79,18 @@ Source: https://github.com/google-gemini/gemini-cli. Snapshot
   failure handling adapted from `core/geminiChat.ts:655-679`). The role table half of the
   router follows oh-my-pi (MIT), credited in the module header.
 
+### Port #22 — glob/grep/ls tools
+`src/coding/files.ts` contains code translated from gemini-cli: the glob
+recency-then-alphabetical sort comparator is a direct TypeScript translation of
+`packages/core/src/tools/glob.ts:47-70` (sortFileEntries), and the ls output contract —
+directories-first alphabetical sort, `[DIR] name` / `name (N bytes)` rows, the
+`(N ignored)` gitignore note, and the empty-directory / not-a-directory messages — is
+translated from `packages/core/src/tools/ls.ts:191-271`. Snapshot
+`research/source_snapshots/google-gemini-gemini-cli` @ 0bd1d43. Tool limits,
+truncation-marker strings, and the per-line cap follow opencode (MIT, credited in the
+module header); the ripgrep dependency both upstreams share is replaced by a
+pure-TypeScript matcher over a `git ls-files` enumeration.
+
 ## Zed Industries — agent-client-protocol (Apache-2.0)
 
 - **ACP endpoint (port #15)** — `src/acp/server.ts` speaks ACP v1 via the official SDK

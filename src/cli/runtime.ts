@@ -18,6 +18,7 @@ import { ToolGuard } from "../core/guardrails.ts";
 import { loadMcpConfig, McpManager } from "../mcp/client.ts";
 import { createMcpTools } from "../mcp/tools.ts";
 import { readTool, editTool, writeTool, bashTool } from "../coding/hashline.ts";
+import { globTool, grepTool, lsTool } from "../coding/files.ts";
 import { withLspGate, lspGateNote } from "../coding/lsp.ts";
 import { buildRepoMapChunk } from "../coding/repomap.ts";
 import { anchorEntryId, Checkpoints, MUTATING_KINDS } from "../coding/checkpoints.ts";
@@ -115,6 +116,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   // settle window (typescript-language-server on PATH; absent → silently off).
   const lspNote = (p: string): Promise<string> => lspGateNote(p, cwd);
   registry.register(readTool, withCheckpoint(withLspGate(editTool, lspNote)), withCheckpoint(withLspGate(writeTool, lspNote)), withCheckpoint(bashTool));
+  registry.register(globTool, grepTool, lsTool); // port #22: bounded, gitignore-aware search/list (kind read → file.read auto-allow; non-mutating, no checkpoint)
   const skillStore = new SkillStore(cwd);
   skillStore.scan();
   registry.register(...createSkillTools(skillStore));

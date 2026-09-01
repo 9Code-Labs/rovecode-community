@@ -5,6 +5,7 @@ import { agentLoop, SteeringQueue } from "../core/loop.ts";
 import { ToolRegistry } from "../core/tools.ts";
 import { SessionStore } from "../core/session.ts";
 import { readTool, editTool, writeTool, bashTool } from "../coding/hashline.ts";
+import { globTool, grepTool, lsTool } from "../coding/files.ts";
 import { mockStream, textTurn, providerStream, openaiCompatStreaming, resolveProvider } from "../providers/stream.ts";
 import { runGauntlet, reportResults, providerPreflight, basicTasks, codingTasks, failureTasks, adversarialTasks } from "../eval/gauntlet.ts";
 import { runTask } from "../eval/gauntlet-runner.ts";
@@ -99,7 +100,7 @@ async function cmdBench(): Promise<void> {
 
 function cmdTools(): void {
   const registry = new ToolRegistry();
-  registry.register(readTool, editTool, writeTool, bashTool);
+  registry.register(readTool, editTool, writeTool, bashTool, globTool, grepTool, lsTool);
   for (const t of registry.list()) {
     console.log(`${t.schema.name.padEnd(8)} ${t.kind.padEnd(8)} sequential=${t.sequential !== false}`);
     console.log(`         ${t.schema.description}`);

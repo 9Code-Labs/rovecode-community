@@ -33,8 +33,9 @@ export interface SrcScanStats {
 /** `git ls-files -z --cached --others --exclude-standard` under rootDir:
  *  tracked + untracked-but-not-ignored, NUL-separated, forward slashes.
  *  Bounded timeout; ANY failure (no git binary, not a repo, timeout, output
- *  overflow) returns null and the caller walks instead. */
-function gitListFiles(rootDir: string): string[] | null {
+ *  overflow) returns null and the caller walks instead.
+ *  Exported for the port #22 glob/grep tools (files.ts) — same gitignore seam. */
+export function gitListFiles(rootDir: string): string[] | null {
   try {
     const res = spawnSync("git", ["-C", rootDir, "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
       { timeout: 5000, maxBuffer: 64 * 1024 * 1024, encoding: "utf8", windowsHide: true });

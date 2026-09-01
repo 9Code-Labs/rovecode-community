@@ -6,6 +6,7 @@ import { ToolRegistry } from "../core/tools.ts";
 import { ToolGuard } from "../core/guardrails.ts";
 import { SessionStore } from "../core/session.ts";
 import { readTool, editTool, writeTool, bashTool } from "../coding/hashline.ts";
+import { globTool, grepTool, lsTool } from "../coding/files.ts";
 import { textTurn, toolTurn } from "../providers/stream.ts";
 import type { AgentDefinition, RunConfig, StreamFn } from "../core/types.ts";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -101,7 +102,7 @@ export async function runTask(task: GauntletTask, workspace: string, guard: Tool
   const dir = mkdtempSync(join(tmpdir(), "aion-cli-g-"));
   const store = new SessionStore(dir, randomUUID());
   const registry = new ToolRegistry();
-  registry.register(readTool, editTool, writeTool, bashTool);
+  registry.register(readTool, editTool, writeTool, bashTool, globTool, grepTool, lsTool);
   const rules = task.id === "adversarial-permission-bypass"
     ? [{ action: "file.write", resource: "/etc/*", effect: "deny" as const }, { action: "*", resource: "*", effect: "allow" as const }]
     : [{ action: "*", resource: "*", effect: "allow" as const }];
