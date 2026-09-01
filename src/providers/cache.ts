@@ -30,8 +30,15 @@
  *  (2) CONVERSATION-PREFIX boundary — the marker goes on the LAST content block of the most
  *      recent message that has ≥ 2 messages after it (index length-3): an agent turn appends
  *      the trailing exchange (assistant tool_use + tool_result, or user + assistant), so the
- *      tail churns every turn while the prefix up to there was the previous request verbatim.
- *      If that message cannot carry a marker (empty content — cf. Hermes _can_carry_marker,
+ *      tail churns every turn while the prefix up to there is CANONICALLY stable — not
+ *      byte-identical. Two rewrites make consecutive requests differ in raw bytes: the marker
+ *      moves forward each turn (dropped from the old anchor, added at the new one), and the
+ *      marked message's string content is rewritten to [{type:"text",...}] by
+ *      withMarkerOnLastBlock below. Anthropic's cache key normalizes exactly those two
+ *      (cache_control is placement metadata, and string content is equivalent to a single
+ *      text block), so the previous request's prefix still cache-hits. Pinned by the
+ *      consecutive-turn stability test in test/unit/cache.test.ts.
+ *      If the anchor message cannot carry a marker (empty content — cf. Hermes _can_carry_marker,
  *      prompt_caching.py:127-140, "so the breakpoints land on messages that count"), the
  *      boundary reallocates to the nearest earlier eligible message. String content is
  *      converted to a one-block array, preserving the text byte-for-byte.

@@ -126,6 +126,35 @@ test("write tool actually writes through the pipeline", async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+// regression (port #6 (b)): the compaction trigger counts ALL parts — a tool-result-heavy
+// history whose PROSE is tiny must still trip it (text-only counting reads ~0 forever)
+test("compaction triggers on tool-result-heavy history, not just prose", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-loop-"));
+  const store = new SessionStore(dir, randomUUID());
+  const reg = new ToolRegistry();
+  const bigTool: Tool = {
+    schema: { name: "big", description: "big output", args: { type: "object" } },
+    kind: "custom", async execute() { return { ok: true, output: "R".repeat(400) }; },
+  };
+  reg.register(bigTool);
+  // turn 1: bare tool call (zero prose) → 400-char tool_result lands in history;
+  // turn 2 start: text-only tokens ≈ 3 (goal only), all-parts tokens ≈ 105 — only the
+  // all-parts counter crosses budget(100) × threshold(0.5)
+  const summarizeInputs: string[][] = [];
+  let compactions = 0;
+  for await (const ev of agentLoop(baseDef, "go", {}, cfg({ contextBudgetTokens: 100, compactionThreshold: 0.5 }), {
+    stream: mockStream({ turns: [toolTurn([{ id: "c1", tool: "big", args: {} }]), textTurn("done")] }),
+    registry: reg, store,
+    summarize: async (texts) => { summarizeInputs.push(texts); return "SUMMARY"; },
+  }, new SteeringQueue())) {
+    if (ev.type === "compaction" && ev.strategy === "head-summarize") compactions++;
+  }
+  expect(compactions).toBeGreaterThanOrEqual(1);
+  // the summarizer saw the tool traffic, not empty prose
+  expect(summarizeInputs.flat().join("\n")).toContain("R".repeat(400));
+  rmSync(dir, { recursive: true, force: true });
+});
+
 // regression: plan.keep projections must be mapped back to real messages (loop.ts compaction)
 test("compaction rebuilds history from real messages, not projections", async () => {
   const dir = mkdtempSync(join(tmpdir(), "aion-loop-"));

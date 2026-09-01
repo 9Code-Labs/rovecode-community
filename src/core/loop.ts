@@ -78,9 +78,11 @@ export async function* agentLoop(
     deps.guard?.onTurn();
 
     // --- context assembly + compaction (ADR-007) ---
-    const histTokens = history.reduce((n, m) => n + estimateTokens(partsText(m.parts)), 0);
+    // counted over ALL parts (partsTokenText): tool calls/results dominate agentic histories,
+    // and a text-only count would keep this trigger permanently below threshold
+    const histTokens = history.reduce((n, m) => n + estimateTokens(partsTokenText(m.parts)), 0);
     if (histTokens > cfg.contextBudgetTokens * cfg.compactionThreshold && deps.summarize) {
-      const plan = planCompaction(history.map((m) => ({ id: m.id, tokens: estimateTokens(partsText(m.parts)), text: partsText(m.parts) })), cfg.contextBudgetTokens);
+      const plan = planCompaction(history.map((m) => ({ id: m.id, tokens: estimateTokens(partsTokenText(m.parts)), text: partsTokenText(m.parts) })), cfg.contextBudgetTokens);
       const summary = await deps.summarize(plan.summarize.map((m) => m.text));
       const compactMsg: Message = {
         id: randomUUID(), role: "system",
@@ -91,11 +93,11 @@ export async function* agentLoop(
       const keepIds = new Set(plan.keep.map((k) => k.id));
       const kept = history.filter((m) => keepIds.has(m.id));
       history.length = 0; history.push(compactMsg, ...kept);
-      yield { type: "compaction", strategy: "head-summarize", tokensBefore: histTokens, tokensAfter: history.reduce((n, m) => n + estimateTokens(partsText(m.parts)), 0) };
+      yield { type: "compaction", strategy: "head-summarize", tokensBefore: histTokens, tokensAfter: history.reduce((n, m) => n + estimateTokens(partsTokenText(m.parts)), 0) };
     }
 
     const systemText = typeof def.systemPrompt === "function" ? def.systemPrompt(vars) : def.systemPrompt;
-    const histNow = history.reduce((n, m) => n + estimateTokens(partsText(m.parts)), 0);
+    const histNow = history.reduce((n, m) => n + estimateTokens(partsTokenText(m.parts)), 0);
     const chunks: ContextChunk[] = [
       { name: "system", text: systemText, priority: 100, tokens: estimateTokens(systemText) },
       { name: "history", text: "", priority: 50, tokens: histNow }, // marker; history passed directly below
@@ -214,7 +216,7 @@ export async function* agentLoop(
   yield { type: "run_end", status: "budget", summary: `max turns (${cfg.maxTurns}) reached` };
 }
 
-export interface TurnOutcome { parts: MessagePart[]; stopReason: StopReason; usage: { input: number; output: number }; error?: string }
+export interface TurnOutcome { parts: MessagePart[]; stopReason: StopReason; usage: TokenUsage; error?: string }
 
 async function collectTurn(stream: StreamFn, model: ModelRef, messages: Message[], onText?: (delta: string) => void, tools?: ToolSchema[]): Promise<TurnOutcome> {
   let outcome: TurnOutcome = { parts: [], stopReason: "end_turn", usage: { input: 0, output: 0 } };
@@ -227,4 +229,15 @@ async function collectTurn(stream: StreamFn, model: ModelRef, messages: Message[
 
 export function partsText(parts: MessagePart[]): string {
   return parts.filter((p) => p.kind === "text").map((p) => (p as { text: string }).text).join("");
+}
+
+/** Token-bearing text of ALL parts — text, tool_call args, tool_result outputs. Context-size
+ *  accounting must see what the provider sees: a tool-heavy history counted text-only reads
+ *  near zero and never trips compaction / context-health. */
+export function partsTokenText(parts: MessagePart[]): string {
+  return parts.map((p) =>
+    p.kind === "text" ? p.text
+    : p.kind === "tool_call" ? `${p.tool} ${JSON.stringify(p.args)}`
+    : p.output,
+  ).join("\n");
 }

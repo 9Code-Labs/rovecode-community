@@ -62,6 +62,27 @@ test("normalizeUsage: OpenAI cached > prompt clamps input at 0 (never negative)"
   ).toEqual({ input: 0, output: 1, cacheRead: 150, cacheWrite: 0 });
 });
 
+test("normalizeUsage: OpenRouter dual-spelling payload bills the cached share exactly once", () => {
+  // gateways like OpenRouter emit BOTH field spellings in one payload; detection keyed on the
+  // ABSENCE of input_tokens would skip the subtraction and bill 1600 for a 1000-token prompt.
+  // 1000 prompt tokens with 600 cached must normalize to 400 base + 600 cacheRead = 1000 total.
+  const u = normalizeUsage({
+    prompt_tokens: 1000,
+    completion_tokens: 40,
+    input_tokens: 1000,
+    output_tokens: 40,
+    prompt_tokens_details: { cached_tokens: 600 },
+  });
+  expect(u).toEqual({ input: 400, output: 40, cacheRead: 600, cacheWrite: 0 });
+  expect(u.input + u.cacheRead).toBe(1000); // never 1600
+});
+
+test("normalizeUsage: OpenAI Responses shape (input_tokens_details) subtracts its cached share too", () => {
+  expect(
+    normalizeUsage({ input_tokens: 1000, output_tokens: 40, input_tokens_details: { cached_tokens: 600 } }),
+  ).toEqual({ input: 400, output: 40, cacheRead: 600, cacheWrite: 0 });
+});
+
 test("normalizeUsage: junk and malformed payloads normalize to zeros", () => {
   const zeros = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
   expect(normalizeUsage(undefined)).toEqual(zeros);

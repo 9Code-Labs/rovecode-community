@@ -1,6 +1,7 @@
 import { test, expect } from "bun:test";
 import {
   applyAnthropicCacheBoundaries,
+  DEFAULT_MAX_BREAKPOINTS,
   DEFAULT_MIN_CHUNK_CHARS,
   type AnthropicishBody,
 } from "../../src/providers/cache.ts";
@@ -214,6 +215,75 @@ test("message-boundary gate uses the CUMULATIVE prefix (system + messages up to 
     ],
   };
   expect(applyAnthropicCacheBoundaries(tiny)).toBe(tiny);
+});
+
+test("DEFAULT_MAX_BREAKPOINTS is 4 (Anthropic's per-request limit) and is the operative default", () => {
+  expect(DEFAULT_MAX_BREAKPOINTS).toBe(4);
+  // 4 pre-existing markers exhaust the default budget: even a ≥minChunkChars system string
+  // stays unconverted and the body passes through by reference. A default of 5+ would convert.
+  const body: AnthropicishBody = {
+    system: "S".repeat(DEFAULT_MIN_CHUNK_CHARS),
+    messages: [
+      { role: "user", content: [{ type: "text", text: "u0", cache_control: CC }] },
+      { role: "assistant", content: [{ type: "text", text: "a1", cache_control: CC }] },
+      { role: "user", content: [{ type: "text", text: "u2", cache_control: CC }] },
+      { role: "assistant", content: [{ type: "text", text: "a3", cache_control: CC }] },
+      { role: "user", content: "u4" },
+      { role: "user", content: "u5" },
+    ],
+  };
+  expect(applyAnthropicCacheBoundaries(body)).toBe(body);
+  expect(markerCount(body)).toBe(4);
+});
+
+// ---------- consecutive-turn stability (the property the boundary placement exists FOR) ----------
+
+const isObj = (v: unknown): v is Rec => typeof v === "object" && v !== null && !Array.isArray(v);
+
+/** Anthropic's cache key normalizes exactly two rewrites this transform performs between
+ *  consecutive requests: cache_control markers (placement metadata) and string content vs a
+ *  single [{type:"text",...}] block. Canonicalize both sides before comparing — the raw bytes
+ *  of consecutive requests are NOT equal and must not be required to be. */
+function canonicalMsg(m: unknown): unknown {
+  if (!isObj(m)) return m;
+  const { content, ...rest } = m;
+  const blocks = typeof content === "string" ? [{ type: "text", text: content }] : content;
+  const scrubbed = Array.isArray(blocks)
+    ? blocks.map((b) => {
+        if (!isObj(b)) return b;
+        const { cache_control: _drop, ...keep } = b;
+        return keep;
+      })
+    : blocks;
+  return { ...rest, content: scrubbed };
+}
+
+function canonicalSystem(system: unknown): unknown {
+  return canonicalMsg({ content: system });
+}
+
+test("5-turn simulation: the prefix above the previous boundary stays cache-canonically equal", () => {
+  const system = "S".repeat(5000);
+  const conv: unknown[] = [{ role: "user", content: "u0 " + "x".repeat(4200) }];
+  const request = () => applyAnthropicCacheBoundaries({ system, messages: conv.slice() });
+  let prev = request();
+  for (let turn = 1; turn <= 5; turn += 1) {
+    // an agent turn appends assistant tool_use + user tool_result
+    conv.push({ role: "assistant", content: [{ type: "text", text: `a${turn}` }, { type: "tool_use", id: `t${turn}`, name: "grep", input: { turn } }] });
+    conv.push({ role: "user", content: [{ type: "tool_result", tool_use_id: `t${turn}`, content: `r${turn}` }] });
+    const next = request();
+    const prevMsgs = arr(prev.messages);
+    const overlap = arr(next.messages).slice(0, prevMsgs.length);
+    // raw bytes of the shared prefix are NOT equal (the marker moved forward; marked string
+    // content was rewritten to a block array) — byte-stability is the wrong bar…
+    expect(JSON.stringify(overlap)).not.toBe(JSON.stringify(prevMsgs));
+    // …but the CACHE-CANONICAL forms are identical, so the previous prefix still cache-hits
+    expect(overlap.map(canonicalMsg)).toEqual(prevMsgs.map(canonicalMsg));
+    expect(canonicalSystem(next.system)).toEqual(canonicalSystem(prev.system));
+    // and every request carries both boundaries on the wire
+    expect(markerCount(next)).toBe(2);
+    prev = next;
+  }
 });
 
 test("system given as a block array: marker on the LAST block; already-marked arrays untouched", () => {

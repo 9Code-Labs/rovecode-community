@@ -1,7 +1,7 @@
 /** TUI chat app (port #1): wires the ONE agentLoop (ADR-003) into a Renderer.
  *  All vendor contact lives behind Renderer (renderer.ts) — swap-friendly. */
 
-import { agentLoop, SteeringQueue, partsText } from "../core/loop.ts";
+import { agentLoop, SteeringQueue, partsText, partsTokenText } from "../core/loop.ts";
 import { resetTurnFailureCount } from "../memory/tools.ts";
 import { createRuntime } from "../cli/runtime.ts";
 import { SessionStore, listSessions } from "../core/session.ts";
@@ -10,7 +10,7 @@ import { ModelCatalog } from "../providers/catalog.ts";
 import { costUsd, contextHealth, countTokens } from "../core/usage.ts";
 import type { Renderer, AssistantView, StatusInfo } from "./renderer.ts";
 import { PiTuiRenderer } from "./pi-renderer.ts";
-import type { RunEvent, StreamFn } from "../core/types.ts";
+import type { Message, RunEvent, StreamFn } from "../core/types.ts";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
@@ -36,7 +36,7 @@ export const TUI_COMMANDS = [
   { name: "skills", description: "List installed skills" },
   { name: "memory", description: "Show memory blocks" },
   { name: "new", description: "Branch back to session start" },
-  { name: "cost", description: "Session tokens, cache hits, and USD estimate" },
+  { name: "cost", description: "Session tokens, cache hits, USD estimate (/cost refresh: update pricing)" },
   { name: "rewind", description: "Jump to an earlier turn and edit it (alias: /tree)" },
   { name: "tree", description: "Alias of /rewind" },
   { name: "sessions", description: "Pick a previous session to resume" },
@@ -49,13 +49,60 @@ interface TuiState {
   busy: boolean;
 }
 
+/** /cost note body. Usage is priced PER MESSAGE at the model recorded in Message.origin —
+ *  a session that switched models mid-way is not silently re-priced at the current model.
+ *  Messages without an origin fall back to the current model WITH an explicit caveat; messages
+ *  whose model has no catalog pricing are excluded and flagged (cost becomes a lower bound).
+ *  Context health counts ALL parts (partsTokenText): tool calls/results dominate agentic
+ *  sessions, and a text-only count reads ~0% forever. */
+export function buildCostNote(messages: Message[], catalog: ModelCatalog, current: { provider: string; model: string }): string {
+  let inTok = 0, outTok = 0, cacheRead = 0, cacheWrite = 0;
+  let cost = 0, priced = 0, unpriced = 0, noOrigin = 0;
+  for (const m of messages) {
+    const u = m.usage;
+    if (!u) continue;
+    inTok += u.input; outTok += u.output;
+    cacheRead += u.cacheRead ?? 0; cacheWrite += u.cacheWrite ?? 0;
+    if (u.input === 0 && u.output === 0 && !u.cacheRead && !u.cacheWrite) continue; // nothing to price
+    if (!m.origin) noOrigin += 1;
+    const origin = m.origin ?? current;
+    const info = catalog.lookup(origin.provider, origin.model);
+    const c = info?.pricing
+      ? costUsd({ input: u.input, output: u.output, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0 }, info.pricing)
+      : undefined;
+    if (c === undefined) unpriced += 1;
+    else { cost += c; priced += 1; }
+  }
+  const info = catalog.lookup(current.provider, current.model);
+  const est = countTokens(messages.map((m) => partsTokenText(m.parts)).join("\n"));
+  const health = info?.contextWindow ? contextHealth(est, info.contextWindow) : undefined;
+  let costLine: string;
+  if (priced === 0 && unpriced > 0) {
+    costLine = `pricing unknown for ${current.provider}/${current.model}`;
+  } else {
+    costLine = `estimated cost: $${cost.toFixed(4)}`;
+    if (unpriced > 0) costLine += ` — ${unpriced} message${unpriced > 1 ? "s" : ""} unpriced (lower bound)`;
+    if (noOrigin > 0) costLine += ` — ${noOrigin} without origin priced at the current model`;
+  }
+  return [
+    `tokens: ${inTok} in / ${outTok} out · cache: ${cacheRead} read / ${cacheWrite} written`,
+    health
+      ? `context: ~${est} of ${info?.contextWindow} (${Math.round(health.fraction * 100)}%${health.nearLimit ? " — near limit" : ""})`
+      : `context: ~${est} tokens (window unknown)`,
+    costLine,
+  ].join("\n");
+}
+
 export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   // opts.stream passes through verbatim: a StreamFn overrides, explicit null forces
   // "no provider", undefined defers to the runtime's env-resolved provider
   const rt = createRuntime({ cwd: opts.cwd, stream: opts.stream, sessionId: opts.sessionId });
   const renderer: Renderer = opts.renderer ?? new PiTuiRenderer({ cwd: rt.cwd });
   const sessionsDir = join(rt.cwd, ".aion", "sessions");
-  const catalog = new ModelCatalog(); // offline snapshot; /cost pricing + context window
+  // /cost pricing + context window. Boots from the offline snapshot; the live models.dev
+  // half is user-invoked only (/cost refresh), cached to .aion/cache with a 24h TTL —
+  // lookup() itself never fetches, so the TUI stays network-free unless asked.
+  const catalog = new ModelCatalog({ fetchFn: fetch, cacheDir: join(rt.cwd, ".aion", "cache") });
   // session-scoped stores are swappable at runtime (/sessions, /rewind-to-root)
   let store = rt.store;
   let blocks = rt.blockStore;
@@ -192,21 +239,16 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
         renderer.addSystemNote(`provider=${state.provider} model=${state.model} turns=${state.turns} tokens=${state.tokensIn}in/${state.tokensOut}out`);
         return true;
       case "cost": {
-        // ports #5+#6: normalized usage (incl. cache hits) priced via the models.dev catalog
-        let inTok = 0, outTok = 0, cacheRead = 0, cacheWrite = 0;
-        for (const m of store.messages()) {
-          inTok += m.usage?.input ?? 0; outTok += m.usage?.output ?? 0;
-          cacheRead += m.usage?.cacheRead ?? 0; cacheWrite += m.usage?.cacheWrite ?? 0;
+        // port #6 live half: /cost refresh re-fetches models.dev pricing (24h disk cache)
+        if (arg === "refresh") {
+          void catalog.refresh().then((ok) => renderer.addSystemNote(
+            ok ? "model catalog refreshed from models.dev" : "catalog refresh failed — using the offline snapshot",
+            ok ? "info" : "warn",
+          ));
+          return true;
         }
-        const info = catalog.lookup(state.provider, state.model);
-        const cost = info?.pricing ? costUsd({ input: inTok, output: outTok, cacheRead, cacheWrite }, info.pricing) : undefined;
-        const est = countTokens(store.messages().map((m) => partsText(m.parts)).join("\n"));
-        const health = info?.contextWindow ? contextHealth(est, info.contextWindow) : undefined;
-        renderer.addSystemNote([
-          `tokens: ${inTok} in / ${outTok} out · cache: ${cacheRead} read / ${cacheWrite} written`,
-          health ? `context: ~${est} of ${info?.contextWindow} (${Math.round(health.fraction * 100)}%${health.nearLimit ? " — near limit" : ""})` : `context: ~${est} tokens (window unknown)`,
-          cost !== undefined ? `estimated cost: $${cost.toFixed(4)}` : `pricing unknown for ${state.provider}/${state.model}`,
-        ].join("\n"));
+        // ports #5+#6: normalized usage (incl. cache traffic) priced per message at its origin model
+        renderer.addSystemNote(buildCostNote(store.messages(), catalog, { provider: state.provider, model: state.model }));
         return true;
       }
       case "skills": {

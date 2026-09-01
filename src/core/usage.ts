@@ -8,6 +8,10 @@
  *  - OpenAI `/chat/completions` does NOT: `prompt_tokens` INCLUDES
  *    `prompt_tokens_details.cached_tokens`, so we subtract the cached share (clamped at 0) or the
  *    cached tokens would be double-billed (once at the input rate, once at the cache-read rate).
+ *    The cached-inclusive convention is detected by the PRESENCE of an OpenAI-style field
+ *    (`prompt_tokens`, `prompt_tokens_details`, or `input_tokens_details`), NOT by the absence of
+ *    `input_tokens` — gateways like OpenRouter emit BOTH spellings in one payload, and keying on
+ *    absence would skip the subtraction there and double-bill the cached share.
  *
  *  tokenlens (v1.3.1) is used where it fits: `breakdownTokens` from tokenlens/helpers already
  *  recognizes both providers' field spellings (prompt_tokens/completion_tokens/
@@ -56,19 +60,33 @@ function isRec(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);
 }
 
+/** cached_tokens read straight from prompt_tokens_details/input_tokens_details — tokenlens
+ *  recognizes the former but not the Responses-API latter, so this is the fallback source. */
+function detailsCachedTokens(raw: unknown): number {
+  if (!isRec(raw)) return 0;
+  for (const k of ["prompt_tokens_details", "input_tokens_details"]) {
+    const d = raw[k];
+    if (isRec(d)) return nz(d["cached_tokens"]);
+  }
+  return 0;
+}
+
 /** Normalize a raw provider usage payload (OpenAI or Anthropic wire shape) to a single
  *  cost-coherent structure. Unrecognized/malformed input normalizes to all zeros. */
 export function normalizeUsage(raw: unknown): NormalizedUsage {
   const b = breakdownTokens(raw as Parameters<typeof breakdownTokens>[0]);
-  const cacheRead = nz(b.cacheReads);
+  const cacheRead = nz(b.cacheReads) || detailsCachedTokens(raw);
   const cacheWrite = nz(b.cacheWrites);
   let input = nz(b.input);
-  // OpenAI-style shape: prompt_tokens present, input_tokens absent → prompt_tokens includes the
-  // cached share; subtract it (clamped) so `input` means "billed at the base rate" everywhere.
-  const openAiStyle = isRec(raw)
-    && typeof raw["prompt_tokens"] === "number"
-    && typeof raw["input_tokens"] !== "number";
-  if (openAiStyle) input = Math.max(0, input - cacheRead);
+  // OpenAI-style shape (detected by PRESENCE of prompt_tokens or a *_details block — never by
+  // absence of input_tokens, which OpenRouter emits alongside prompt_tokens): the reported input
+  // INCLUDES the cached share; subtract it (clamped) so `input` means "billed at the base rate".
+  const cachedInclusive = isRec(raw) && (
+    typeof raw["prompt_tokens"] === "number"
+    || isRec(raw["prompt_tokens_details"])
+    || isRec(raw["input_tokens_details"])
+  );
+  if (cachedInclusive) input = Math.max(0, input - cacheRead);
   return { input, output: nz(b.output), cacheRead, cacheWrite };
 }
 

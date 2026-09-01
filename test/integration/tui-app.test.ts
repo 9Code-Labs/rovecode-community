@@ -9,8 +9,10 @@ import { randomUUID } from "node:crypto";
 import { SessionStore } from "../../src/core/session.ts";
 import { VirtualTerminal } from "../../vendor/pi-tui/test/virtual-terminal.ts";
 import { PiTuiRenderer } from "../../src/tui/pi-renderer.ts";
-import { runTui } from "../../src/tui/app.ts";
-import { mockStream, textTurn, toolTurn } from "../../src/providers/stream.ts";
+import { runTui, buildCostNote } from "../../src/tui/app.ts";
+import { anthropicStream, mockStream, textTurn, toolTurn } from "../../src/providers/stream.ts";
+import { ModelCatalog } from "../../src/providers/catalog.ts";
+import type { Message, TokenUsage } from "../../src/core/types.ts";
 
 async function until(term: VirtualTerminal, pred: (screen: string) => boolean, ms = 8000): Promise<string> {
   const deadline = Date.now() + ms;
@@ -121,6 +123,66 @@ test("slash command /status renders without starting a run", async () => {
   await app;
   rmSync(cwd, { recursive: true, force: true });
 }, 20_000);
+
+// ---------- ports #5+#6: /cost ----------
+
+test("/cost reports normalized tokens, cache traffic, and origin-priced USD end-to-end", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const term = new VirtualTerminal(80, 24);
+  const renderer = new PiTuiRenderer({ terminal: term, cwd });
+  // the REAL Anthropic adapter against a stubbed wire, so usage flows
+  // fetch → parseAnthropicResponse → normalizeUsage → Message.usage → /cost
+  // (a mock stream would bypass the parsers and leave their cache fields untested)
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = (async () => new Response(JSON.stringify({
+    content: [{ type: "text", text: "answered." }],
+    stop_reason: "end_turn",
+    usage: { input_tokens: 100000, output_tokens: 50000, cache_read_input_tokens: 300000, cache_creation_input_tokens: 20000 },
+  }), { status: 200 })) as unknown as typeof fetch;
+  try {
+    const stream = anthropicStream({ baseUrl: "http://stub.invalid/v1", apiKey: "k" });
+    const app = runTui({ renderer, stream, cwd, yolo: true, exitOnClose: false, model: "zai-org/glm-5.3-flash" });
+    term.sendInput("how much did that cost"); term.sendInput("\r");
+    await until(term, (s) => s.includes("answered."));
+
+    term.sendInput("/cost"); term.sendInput("\r");
+    const screen = await until(term, (s) => s.includes("estimated cost"));
+    // normalized usage summed off the assistant message the loop stored
+    expect(screen).toContain("100000 in / 50000 out");
+    expect(screen).toContain("300000 read / 20000 written");
+    // priced at the message's ORIGIN model, resolved via the zai-org/ vendor prefix
+    // (independent of whatever provider the host env resolves):
+    // 0.1M×$0.075 + 0.05M×$0.25 + 0.3M×$0.015 + 0.02M×$0.00 = $0.0245
+    expect(screen).toContain("$0.0245");
+
+    term.sendInput("\x03");
+    await app;
+  } finally {
+    globalThis.fetch = realFetch;
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}, 20_000);
+
+test("buildCostNote prices per message at its ORIGIN model, with explicit caveats", () => {
+  const catalog = new ModelCatalog();
+  const mk = (usage: TokenUsage, origin?: { provider: string; model: string }): Message => ({
+    id: randomUUID(), role: "assistant", parts: [{ kind: "text", text: "x" }],
+    parentId: null, createdAt: 0, usage, ...(origin ? { origin } : {}),
+  });
+  const messages: Message[] = [
+    mk({ input: 1_000_000, output: 0 }, { provider: "anthropic", model: "claude-haiku-4-5" }),   // $1.000
+    mk({ input: 1_000_000, output: 0 }, { provider: "kaesra", model: "zai-org/glm-5.3-flash" }), // $0.075
+    mk({ input: 1_000_000, output: 0 }),                                       // no origin → current model
+    mk({ input: 5, output: 5 }, { provider: "kaesra", model: "no-such-model" }), // unpriceable
+  ];
+  const note = buildCostNote(messages, catalog, { provider: "anthropic", model: "claude-haiku-4-5" });
+  // $1.00 (haiku) + $0.075 (glm via its origin — whole-session pricing at haiku would say $1.00)
+  // + $1.00 (origin-less fallback to the current model) = $2.0750
+  expect(note).toContain("estimated cost: $2.0750");
+  expect(note).toContain("1 message unpriced (lower bound)");
+  expect(note).toContain("1 without origin priced at the current model");
+  expect(note).toContain("tokens: 3000005 in / 5 out");
+});
 
 // ---------- port #2: rewind + resume ----------
 

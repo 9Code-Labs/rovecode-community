@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync, utimesSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ModelCatalog } from "../../src/providers/catalog.ts";
+import { costUsd } from "../../src/core/usage.ts";
 
 // A fetchFn that must never actually be invoked — used to prove that lookup() (unlike
 // refresh()) never touches the network, only ever the offline snapshot / disk cache.
@@ -72,6 +73,52 @@ test("vendor/ prefix is stripped when the bare id isn't a direct or case-insensi
   expect(catalog.lookup("openai", "openai/gpt-4o")?.model).toBe("gpt-4o");
   // mirrors the spec's own "zai-org/glm-5.3" -> "glm-5.3" example shape
   expect(catalog.lookup("deepseek", "deepseek-ai/deepseek-v4-pro")?.model).toBe("deepseek-v4-pro");
+});
+
+// ---------- vendor-prefix resolution (makes /cost live on the default provider) ----------
+
+test("kaesra's default model resolves via the vendor-prefix map: zai-org/glm-5.3-flash → zai", () => {
+  const catalog = new ModelCatalog();
+  const info = catalog.lookup("kaesra", "zai-org/glm-5.3-flash");
+  expect(info).toEqual({
+    provider: "zai", // the pricing source, named honestly
+    model: "glm-5.3-flash",
+    contextWindow: 1000000,
+    maxOutput: 131072,
+    pricing: { inputPerMTok: 0.075, outputPerMTok: 0.25, cacheReadPerMTok: 0.015, cacheWritePerMTok: 0 },
+    supportsTools: true,
+    supportsReasoning: true,
+  });
+});
+
+test("deepseek-ai/ and moonshotai/ vendor prefixes resolve for aggregator providers", () => {
+  const catalog = new ModelCatalog();
+  const ds = catalog.lookup("kaesra", "deepseek-ai/deepseek-v4-pro");
+  expect(ds?.provider).toBe("deepseek");
+  expect(ds?.pricing?.inputPerMTok).toBe(0.435);
+  // the snapshot's key is "moonshotai" — there is NO bare "moonshot" provider key
+  const kimi = catalog.lookup("kaesra", "moonshotai/kimi-k2-0711-preview");
+  expect(kimi?.provider).toBe("moonshotai");
+  expect(kimi?.pricing?.inputPerMTok).toBe(0.6);
+});
+
+test("vendor-prefix resolution also covers providers with no PROVIDER_MAP entry at all", () => {
+  const catalog = new ModelCatalog();
+  // e.g. a custom AION_BASE_URL provider serving HuggingFace-style ids
+  expect(catalog.lookup("custom", "zai-org/glm-5.3-flash")?.provider).toBe("zai");
+  // …while a prefix-less id under the same unmapped provider stays undefined
+  expect(catalog.lookup("custom", "glm-5.3-flash")).toBeUndefined();
+});
+
+// ---------- lookup → costUsd composition (pins real dollars end-to-end) ----------
+
+test("composition: haiku pricing × 1M tokens of each component = $7.35", () => {
+  const catalog = new ModelCatalog();
+  const pricing = catalog.lookup("anthropic", "claude-haiku-4-5")?.pricing;
+  expect(pricing).toBeDefined();
+  const usd = costUsd({ input: 1_000_000, output: 1_000_000, cacheRead: 1_000_000, cacheWrite: 1_000_000 }, pricing!);
+  // $1.00 input + $5.00 output + $0.10 cache-read + $1.25 cache-write
+  expect(usd).toBeCloseTo(7.35, 10);
 });
 
 // ---------- provider-id mapping ----------

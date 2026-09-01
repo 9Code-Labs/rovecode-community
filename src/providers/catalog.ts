@@ -38,8 +38,9 @@ const LIVE_URL = "https://models.dev/api.json";
  *   - everything else here is an exact 1:1 id match confirmed present in the snapshot
  *
  * Deliberately absent (verified NOT a key in the snapshot -> lookup() returns undefined):
- * kaesra (aion's own proxy brand, not a models.dev provider), ollama (only "ollama-cloud"
- * exists, not bare "ollama"), moondream, vllm.
+ * kaesra (aion's own proxy brand, not a models.dev provider — its vendor-prefixed model ids
+ * resolve through VENDOR_PREFIX_MAP below instead), ollama (only "ollama-cloud" exists, not
+ * bare "ollama"), moondream, vllm.
  */
 const PROVIDER_MAP: Record<string, string> = {
   openai: "openai",
@@ -54,6 +55,20 @@ const PROVIDER_MAP: Record<string, string> = {
   fireworks: "fireworks-ai",
   perplexity: "perplexity",
   xai: "xai",
+};
+
+/**
+ * HuggingFace-style vendor prefix -> models.dev provider key, for aggregator providers
+ * (kaesra, or any custom base URL) that serve models under "vendor/model" ids. Lets
+ * lookup("kaesra", "zai-org/glm-5.3-flash") price against the zai snapshot entry.
+ * Verified against Object.keys(snapshotProviders): "zai", "deepseek", "moonshotai" all
+ * exist; there is NO bare "moonshot" key (only moonshotai/moonshotai-cn), hence the
+ * identity mapping for moonshotai.
+ */
+const VENDOR_PREFIX_MAP: Record<string, string> = {
+  "zai-org": "zai",
+  "deepseek-ai": "deepseek",
+  "moonshotai": "moonshotai",
 };
 
 function isProviderMap(value: unknown): value is ProviderMap {
@@ -113,13 +128,32 @@ export class ModelCatalog {
     this.cacheDir = opts.cacheDir;
   }
 
-  /** offline snapshot first; live cache layered on top when enabled. */
+  /** offline snapshot first; live cache layered on top when enabled.
+   *  Resolution order: (1) the aion provider's own models.dev entry (PROVIDER_MAP), then
+   *  (2) the model id's vendor prefix (VENDOR_PREFIX_MAP) with the prefix stripped — the
+   *  path that makes aggregator providers like kaesra (default model zai-org/glm-5.3-flash)
+   *  priceable. The vendor hit reports the vendor as `provider`, naming the pricing source. */
   lookup(providerId: string, modelId: string): ModelInfo | undefined {
-    const key = PROVIDER_MAP[providerId];
-    if (!key) return undefined;
-
     this.loadDiskCacheOnce();
 
+    const candidates: { key: string; as: string; model: string }[] = [];
+    const direct = PROVIDER_MAP[providerId];
+    if (direct) candidates.push({ key: direct, as: providerId, model: modelId });
+    const slash = modelId.indexOf("/");
+    if (slash > 0) {
+      const vendorKey = VENDOR_PREFIX_MAP[modelId.slice(0, slash).toLowerCase()];
+      if (vendorKey && vendorKey !== direct) candidates.push({ key: vendorKey, as: vendorKey, model: modelId.slice(slash + 1) });
+    }
+
+    for (const c of candidates) {
+      const hit = this.lookupIn(c.key, c.as, c.model);
+      if (hit) return hit;
+    }
+    return undefined;
+  }
+
+  /** one provider key, live layer over snapshot. */
+  private lookupIn(key: string, providerId: string, modelId: string): ModelInfo | undefined {
     const live = this.liveProviders?.[key];
     if (live) {
       const found = findModelKey(live.models, modelId);

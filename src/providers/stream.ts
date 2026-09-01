@@ -101,6 +101,8 @@ export function openaiCompatStreaming(opts: { baseUrl: string; apiKey: string })
           messages: toOpenAiMessages(messages),
           ...(options?.tools?.length ? { tools: toOpenAiToolSchemas(options.tools) } : {}),
           stream: true,
+          // ask for the final usage chunk — without it most OpenAI-compat SSE streams omit usage
+          stream_options: { include_usage: true },
           ...(model.maxTokens ? { max_tokens: model.maxTokens } : {}),
         }),
         signal: options?.signal,
@@ -111,11 +113,11 @@ export function openaiCompatStreaming(opts: { baseUrl: string; apiKey: string })
         return;
       }
       let finish: StopReason = "end_turn";
-      const usage = { input: 0, output: 0 };
+      let usage: AssistantTurn["usage"] = { input: 0, output: 0 };
       for await (const line of sseLines(res.body)) {
         const ev = JSON.parse(line) as {
           choices?: { delta?: { content?: string | null; tool_calls?: { index?: number; id?: string; function?: { name?: string; arguments?: string } }[] }; finish_reason?: string | null }[];
-          usage?: { prompt_tokens?: number; completion_tokens?: number };
+          usage?: unknown;
         };
         const c = ev.choices?.[0];
         if (c?.delta?.content) { buffer += c.delta.content; yield { type: "text_delta", text: c.delta.content }; }
@@ -128,7 +130,12 @@ export function openaiCompatStreaming(opts: { baseUrl: string; apiKey: string })
           toolArgs.set(idx, cur);
         }
         if (c?.finish_reason) finish = c.finish_reason === "tool_calls" ? "tool_use" : c.finish_reason === "length" ? "length" : "end_turn";
-        if (ev.usage) { usage.input = ev.usage.prompt_tokens ?? usage.input; usage.output = ev.usage.completion_tokens ?? usage.output; }
+        if (ev.usage) {
+          // same normalization as the JSON adapters (parseOpenAiResponse/parseAnthropicResponse):
+          // cached_tokens subtracted from the inclusive prompt count, cacheRead/Write carried
+          const u = normalizeUsage(ev.usage);
+          usage = { input: u.input, output: u.output, cacheRead: u.cacheRead || undefined, cacheWrite: u.cacheWrite || undefined };
+        }
       }
       const parts: AssistantTurn["parts"] = [];
       if (buffer) parts.push({ kind: "text", text: buffer });
@@ -157,7 +164,7 @@ export function anthropicStream(opts: { baseUrl: string; apiKey: string }): Stre
         messages: toAnthropicMessages(messages),
       };
       if (options?.tools?.length) {
-        body.tools = (options.tools as { schema: { name: string; description: string; args: Record<string, unknown> } }[]).map((t) => ({ name: t.schema.name, description: t.schema.description, input_schema: t.schema.args }));
+        body.tools = options.tools.map((t) => { const s = asToolSchema(t); return { name: s.name, description: s.description, input_schema: s.args }; });
       }
       if (system) body.system = system;
       // port #5: place prompt-cache breakpoints on the stable prefix (hermes pattern)
@@ -246,10 +253,18 @@ export function toOpenAiMessages(messages: Message[]): Record<string, unknown>[]
   return out;
 }
 
+/** StreamOptions.tools carries bare ToolSchema entries (name/description/args) — that is what
+ *  every call site (loop → adapters) passes. Tolerate a {schema} wrapper (a full Tool object)
+ *  too, so a mis-passed registry entry degrades gracefully instead of throwing mid-request. */
+function asToolSchema(t: unknown): { name: string; description: string; args: Record<string, unknown> } {
+  const o = t as { name?: string; description?: string; args?: Record<string, unknown>; schema?: { name: string; description: string; args: Record<string, unknown> } };
+  return o.schema ?? { name: o.name ?? "unknown", description: o.description ?? "", args: o.args ?? {} };
+}
+
 export function toOpenAiToolSchemas(tools: unknown[]): Record<string, unknown>[] {
   return tools.map((t) => {
-    const tool = t as { schema: { name: string; description: string; args: Record<string, unknown> } };
-    return { type: "function", function: { name: tool.schema.name, description: tool.schema.description, parameters: tool.schema.args } };
+    const s = asToolSchema(t);
+    return { type: "function", function: { name: s.name, description: s.description, parameters: s.args } };
   });
 }
 
