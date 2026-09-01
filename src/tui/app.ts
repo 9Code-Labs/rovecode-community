@@ -2,10 +2,12 @@
  *  All vendor contact lives behind Renderer (renderer.ts) — swap-friendly. */
 
 import { agentLoop, SteeringQueue, partsText } from "../core/loop.ts";
-import { memoryEditTool, resetTurnFailureCount } from "../memory/tools.ts";
+import { resetTurnFailureCount } from "../memory/tools.ts";
 import { createRuntime } from "../cli/runtime.ts";
 import { SessionStore, listSessions } from "../core/session.ts";
 import { BlockStore } from "../memory/blocks.ts";
+import { ModelCatalog } from "../providers/catalog.ts";
+import { costUsd, contextHealth, countTokens } from "../core/usage.ts";
 import type { Renderer, AssistantView, StatusInfo } from "./renderer.ts";
 import { PiTuiRenderer } from "./pi-renderer.ts";
 import type { RunEvent, StreamFn } from "../core/types.ts";
@@ -34,6 +36,7 @@ export const TUI_COMMANDS = [
   { name: "skills", description: "List installed skills" },
   { name: "memory", description: "Show memory blocks" },
   { name: "new", description: "Branch back to session start" },
+  { name: "cost", description: "Session tokens, cache hits, and USD estimate" },
   { name: "rewind", description: "Jump to an earlier turn and edit it (alias: /tree)" },
   { name: "tree", description: "Alias of /rewind" },
   { name: "sessions", description: "Pick a previous session to resume" },
@@ -52,6 +55,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   const rt = createRuntime({ cwd: opts.cwd, stream: opts.stream, sessionId: opts.sessionId });
   const renderer: Renderer = opts.renderer ?? new PiTuiRenderer({ cwd: rt.cwd });
   const sessionsDir = join(rt.cwd, ".aion", "sessions");
+  const catalog = new ModelCatalog(); // offline snapshot; /cost pricing + context window
   // session-scoped stores are swappable at runtime (/sessions, /rewind-to-root)
   let store = rt.store;
   let blocks = rt.blockStore;
@@ -77,6 +81,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     if (closed) return;
     closed = true;
     void run?.return(undefined as never);
+    void rt.mcp?.close().catch(() => {}); // stop MCP child processes/connections
     renderer.stop();
     resolveClosed();
     if (opts.exitOnClose !== false) process.exit(0);
@@ -110,7 +115,10 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   const switchSession = (id: string, announce = true) => {
     store = new SessionStore(sessionsDir, id);
     blocks = new BlockStore(join(sessionsDir, id, "memory"));
-    rt.registry.register(memoryEditTool(blocks)); // rebind memory tool to this session
+    // rebind BOTH consumers: the memory tool AND the system prompt's memory block
+    // (critic finding: prompt kept reading the boot session's memory after /resume)
+    rt.setBlockStore(blocks);
+    state.turns = 0;
     replayHistory();
     refreshUsage();
     pushStatus();
@@ -127,12 +135,12 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
       description: p.branches > 0 ? `◆ ${p.branches} other branch${p.branches > 1 ? "es" : ""}` : undefined,
     }));
     const picked = await renderer.pickOne(items, "rewind to a turn (Enter = edit & resubmit, Esc = cancel)");
-    if (!picked) return;
+    if (!picked) { replayHistory(); return; } // cancel: clear the overlay title note
     const point = points.find((p) => p.entryId === picked);
     if (!point) return;
     if (point.parentId === null) {
-      // pi resets the leaf to an empty conversation (sessions.md:116); aion's root reset
-      // ships with core support — v1 approximates it with a fresh session, old one untouched
+      // pi resets the leaf to an empty conversation (sessions.md:116); root reset would need
+      // core support — v1 approximates it with a fresh session, old one untouched
       switchSession(randomUUID(), false);
       renderer.addSystemNote("rewound to the start — fresh session, previous one kept");
     } else {
@@ -140,7 +148,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
       replayHistory();
       renderer.addSystemNote(`rewound to before turn #${point.index} — edit and resubmit (branch kept)`);
     }
-    renderer.prefillEditor(point.text);
+    renderer.prefillEditor(point.fullText); // FULL text, never the ≤80-char overlay label
     pushStatus();
   };
 
@@ -161,6 +169,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     if (items.length === 0) { renderer.addSystemNote("no sessions found"); return; }
     const picked = await renderer.pickOne(items, "resume a session (Esc = cancel)");
     if (picked && picked !== store.id) switchSession(picked);
+    else if (!picked) replayHistory(); // cancel: clear the overlay title note
   };
 
   const handleSlash = (text: string): boolean => {
@@ -182,6 +191,24 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
       case "status":
         renderer.addSystemNote(`provider=${state.provider} model=${state.model} turns=${state.turns} tokens=${state.tokensIn}in/${state.tokensOut}out`);
         return true;
+      case "cost": {
+        // ports #5+#6: normalized usage (incl. cache hits) priced via the models.dev catalog
+        let inTok = 0, outTok = 0, cacheRead = 0, cacheWrite = 0;
+        for (const m of store.messages()) {
+          inTok += m.usage?.input ?? 0; outTok += m.usage?.output ?? 0;
+          cacheRead += m.usage?.cacheRead ?? 0; cacheWrite += m.usage?.cacheWrite ?? 0;
+        }
+        const info = catalog.lookup(state.provider, state.model);
+        const cost = info?.pricing ? costUsd({ input: inTok, output: outTok, cacheRead, cacheWrite }, info.pricing) : undefined;
+        const est = countTokens(store.messages().map((m) => partsText(m.parts)).join("\n"));
+        const health = info?.contextWindow ? contextHealth(est, info.contextWindow) : undefined;
+        renderer.addSystemNote([
+          `tokens: ${inTok} in / ${outTok} out · cache: ${cacheRead} read / ${cacheWrite} written`,
+          health ? `context: ~${est} of ${info?.contextWindow} (${Math.round(health.fraction * 100)}%${health.nearLimit ? " — near limit" : ""})` : `context: ~${est} tokens (window unknown)`,
+          cost !== undefined ? `estimated cost: $${cost.toFixed(4)}` : `pricing unknown for ${state.provider}/${state.model}`,
+        ].join("\n"));
+        return true;
+      }
       case "skills": {
         const rows = rt.skillStore.list().map((s) => `${s.name} — ${s.description}`);
         renderer.addSystemNote(rows.length ? rows.join("\n") : "(no skills installed)");
@@ -228,6 +255,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     run = agentLoop(def, goal, {}, cfg, {
       stream, registry: rt.registry, store,
       tools: rt.registry.list().map((t) => t.schema),
+      guard: rt.guard,
     }, steering);
     try {
       for await (const ev of run) {

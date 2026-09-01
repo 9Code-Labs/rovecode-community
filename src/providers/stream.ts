@@ -8,6 +8,8 @@
 
 import type { StreamFn, Message, AssistantTurn, StreamEvent, ModelRef, StopReason } from "../core/types.ts";
 import { partsText } from "../core/loop.ts";
+import { applyAnthropicCacheBoundaries } from "./cache.ts";
+import { normalizeUsage } from "../core/usage.ts";
 
 export interface ProviderConfig {
   id: string;             // provider id, e.g. "kaesra"
@@ -158,10 +160,11 @@ export function anthropicStream(opts: { baseUrl: string; apiKey: string }): Stre
         body.tools = (options.tools as { schema: { name: string; description: string; args: Record<string, unknown> } }[]).map((t) => ({ name: t.schema.name, description: t.schema.description, input_schema: t.schema.args }));
       }
       if (system) body.system = system;
+      // port #5: place prompt-cache breakpoints on the stable prefix (hermes pattern)
       const res = await fetch(opts.baseUrl.replace(/\/$/, "") + "/messages", {
         method: "POST",
         headers: { "content-type": "application/json", "x-api-key": opts.apiKey, "anthropic-version": "2023-06-01" },
-        body: JSON.stringify(body),
+        body: JSON.stringify(applyAnthropicCacheBoundaries(body)),
         signal: options?.signal,
       });
       if (!res.ok) {
@@ -194,7 +197,8 @@ function parseOpenAiResponse(json: unknown): AssistantTurn {
   const stop = (c?.message.tool_calls?.length ?? 0) > 0
     ? "tool_use"
     : c?.finish_reason === "length" ? "length" : "end_turn";
-  return { parts, stopReason: stop, usage: { input: j.usage?.prompt_tokens ?? 0, output: j.usage?.completion_tokens ?? 0 } };
+  const u = normalizeUsage(j.usage);
+  return { parts, stopReason: stop, usage: { input: u.input, output: u.output, cacheRead: u.cacheRead || undefined, cacheWrite: u.cacheWrite || undefined } };
 }
 
 function parseAnthropicResponse(json: unknown): AssistantTurn {
@@ -209,7 +213,8 @@ function parseAnthropicResponse(json: unknown): AssistantTurn {
     if (b.type === "tool_use" && b.id) parts.push({ kind: "tool_call", id: b.id, tool: b.name ?? "unknown", args: b.input ?? {} });
   }
   const stop = (j.content ?? []).some((b) => b.type === "tool_use") ? "tool_use" : j.stop_reason === "max_tokens" ? "length" : "end_turn";
-  return { parts, stopReason: stop, usage: { input: j.usage?.input_tokens ?? 0, output: j.usage?.output_tokens ?? 0 } };
+  const u = normalizeUsage(j.usage);
+  return { parts, stopReason: stop, usage: { input: u.input, output: u.output, cacheRead: u.cacheRead || undefined, cacheWrite: u.cacheWrite || undefined } };
 }
 
 // ---------- message lowering ----------

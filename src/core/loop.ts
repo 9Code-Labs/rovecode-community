@@ -9,6 +9,7 @@ import type {
   StopReason, TokenUsage,
 } from "./types.ts";
 import { ToolRegistry, type ExtensionHooks } from "./tools.ts";
+import type { ToolGuard } from "./guardrails.ts";
 import { SessionStore } from "./session.ts";
 import { assembleContext, planCompaction, estimateTokens, type ContextChunk } from "./context.ts";
 
@@ -21,6 +22,8 @@ export interface LoopDeps {
   tools?: ToolSchema[];
   /** orchestrator seam: run a child agent; receives parent depth + 1 */
   childRunner?: (agent: string, goal: string, vars: AgentVars | undefined, depth: number) => Promise<{ ok: boolean; summary: string; usage: TokenUsage }>;
+  /** tool-loop guardrails (port #4): loop signatures + duplicate-result stubs */
+  guard?: ToolGuard;
 }
 
 export class SteeringQueue {
@@ -72,6 +75,7 @@ export async function* agentLoop(
     }
 
     yield { type: "turn_start", turn };
+    deps.guard?.onTurn();
 
     // --- context assembly + compaction (ADR-007) ---
     const histTokens = history.reduce((n, m) => n + estimateTokens(partsText(m.parts)), 0);
@@ -181,7 +185,7 @@ export async function* agentLoop(
     }
     let results = new Map<string, ToolOutput>();
     try {
-      const batch = deps.registry.dispatchBatch(calls, ctx, deps.hooks, cfg.permissionRules, cfg.approval, emit, cfg.parallelTools);
+      const batch = deps.registry.dispatchBatch(calls, ctx, deps.hooks, cfg.permissionRules, cfg.approval, emit, cfg.parallelTools, deps.guard);
       // stream batch events while tools run; each yield is also a suspension
       // point where a consumer .return()/.throw() lands and triggers the abort
       let settled = false;

@@ -83,7 +83,9 @@ export function listSessions(rootDir: string): SessionSummary[] {
           }
         }
       }
-      out.push({ id: meta.id, createdAt: meta.createdAt, updatedAt, entryCount, preview });
+      // identity = the DIRECTORY name, never meta.id — a copied/tampered meta.json must not
+      // redirect resume to another path (critic finding: "../../escaped" traversal)
+      out.push({ id: name, createdAt: meta.createdAt, updatedAt, entryCount, preview });
     } catch { /* foreign or corrupt dir: skip, never throw */ }
   }
   return out.sort((a, b) => b.updatedAt - a.updatedAt);
@@ -92,7 +94,9 @@ export function listSessions(rootDir: string): SessionSummary[] {
 export interface TurnPoint {
   entryId: string;         // the user message's wrapped-entry id
   index: number;           // 1-based position among user turns on the active path
-  text: string;            // single-line preview ≤80 chars
+  text: string;            // single-line preview ≤80 chars (overlay label ONLY)
+  /** untruncated message text — the edit-and-resubmit prefill (pi sessions.md:113) */
+  fullText: string;
   parentId: string | null; // the entry's parent (rewind target: leaf moves HERE)
   branches: number;        // children of parentId in the whole tree MINUS the active-path child (0 = linear)
 }
@@ -209,6 +213,7 @@ export class SessionStore {
         entryId: w.id,
         index: out.length + 1,
         text: previewText(e),
+        fullText: e.parts.filter((p): p is TextPart => p.kind === "text").map((p) => p.text).join(""),
         parentId: w.parentId,
         branches: (children.get(w.parentId) ?? 1) - 1,
       });

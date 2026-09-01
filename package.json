@@ -4,15 +4,21 @@
   "type": "module",
   "private": true,
   "module": "src/index.ts",
-  "bin": { "aion": "src/cli/main.ts" },
+  "bin": {
+    "aion": "src/cli/main.ts"
+  },
   "scripts": {
     "test": "bun test",
     "gauntlet": "bun run src/eval/gauntlet.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@opencode-ai/models": "^0.0.61",
     "get-east-asian-width": "1.6.0",
-    "marked": "18.0.5"
+    "gpt-tokenizer": "^4.0.0",
+    "marked": "18.0.5",
+    "tokenlens": "^1.3.1"
   },
   "devDependencies": {
     "@types/bun": "latest",

@@ -136,8 +136,15 @@ test("rewind: pick an earlier turn, transcript truncates, editor prefills, resub
 
   term.sendInput("question one"); term.sendInput("\r");
   await until(term, (s) => s.includes("first answer"));
-  term.sendInput("question two"); term.sendInput("\r");
+  // >80 chars so the overlay label truncates but the prefill must NOT (critic HIGH-1)
+  const q2text = `question two ${"x".repeat(70)} END-MARKER`;
+  term.sendInput(q2text); term.sendInput("\r");
   await until(term, (s) => s.includes("second answer"));
+
+  // capture the pre-rewind tree: [q1, q2]; q2's parent is what the leaf must move to
+  const before = new SessionStore(join(cwd, ".aion", "sessions"), sid).turnPoints();
+  expect(before.length).toBe(2);
+  const q2 = before[1]!;
 
   term.sendInput("/rewind"); term.sendInput("\r");
   await until(term, (s) => s.includes("#2"));   // overlay: recent turn first
@@ -147,15 +154,21 @@ test("rewind: pick an earlier turn, transcript truncates, editor prefills, resub
   expect(afterRewind).toContain("first answer");        // history up to the rewind point
   expect(afterRewind).not.toContain("second answer");   // truncated from view (kept on disk)
   expect(afterRewind).toContain("question two");        // prefilled in the editor
+  expect(afterRewind).toContain("END-MARKER");          // FULL text prefilled, not the ≤80 label
 
   term.sendInput(" edited"); term.sendInput("\r");       // edit-and-resubmit → new branch
   await until(term, (s) => s.includes("branch answer"));
 
   const reopened = new SessionStore(join(cwd, ".aion", "sessions"), sid);
   const points = reopened.turnPoints();
+  expect(points.length).toBe(2);                         // [q1, q2-edited] — NOT 3
   const last = points[points.length - 1]!;
-  expect(last.text).toContain("question two edited");
+  expect(last.fullText).toBe(`${q2text} edited`);        // untruncated round-trip
   expect(last.branches).toBe(1);                         // the abandoned "question two" sibling
+  // pi sessions.md:106: the leaf moved to the TURN'S PARENT, so the resubmission is a
+  // SIBLING of the old turn (same parent) — branching to the turn itself would fail this
+  expect(last.parentId).toBe(q2.parentId);
+  expect(last.entryId).not.toBe(q2.entryId);
 
   term.sendInput("\x03");
   await app;

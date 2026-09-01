@@ -82,7 +82,7 @@ export async function runRepl( /* eslint-disable-line complexity */
 
     try {
       let live = "";
-      for await (const ev of agentLoop(def, text, {}, rt.buildCfg(state.yolo, approval), { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema) }, new SteeringQueue())) {
+      for await (const ev of agentLoop(def, text, {}, rt.buildCfg(state.yolo, approval), { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard }, new SteeringQueue())) {
         if (ev.type === "turn_start") { resetTurnFailureCount(); state.turns++; }
         if (ev.type === "message_update") { process.stdout.write(ev.delta); live += ev.delta; }
         if (ev.type === "tool_execution_start") { console.log(`\n  → ${ev.tool} ${JSON.stringify(ev.args).slice(0, 120)}`); }

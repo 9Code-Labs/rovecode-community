@@ -81,9 +81,11 @@ test("buildCfg gated: repl defaults with memory/skill allows and prompt gates", 
     { action: "memory.write", resource: "*", effect: "allow" },
     { action: "tool.skill_view", resource: "*", effect: "allow" },
     { action: "tool.skills_list", resource: "*", effect: "allow" },
+    { action: "tool.mcp_list", resource: "*", effect: "allow" },   // port #3
     { action: "file.write", resource: "*", effect: "prompt" },
     { action: "shell.exec", resource: "*", effect: "prompt" },
     { action: "spawn", resource: "*", effect: "prompt" },
+    { action: "tool.mcp_call", resource: "*", effect: "prompt" },  // port #3: MCP execution is gated
   ]);
   expect(cfg.approval).toBe(approval);
   rmSync(cwd, { recursive: true, force: true });
@@ -125,5 +127,23 @@ test("provider resolution: env provider populates provider/stream/defaultModel; 
     if (saved.base === undefined) delete process.env.AION_BASE_URL; else process.env.AION_BASE_URL = saved.base;
     if (saved.key === undefined) delete process.env.AION_API_KEY; else process.env.AION_API_KEY = saved.key;
     if (saved.model === undefined) delete process.env.AION_MODEL; else process.env.AION_MODEL = saved.model;
+  }
+});
+
+test("setBlockStore rebinds the memory the SYSTEM PROMPT reads (critic MEDIUM-1)", () => {
+  const cwd = tmpCwd();
+  try {
+    const rt = createRuntime({ cwd, stream: null });
+    expect(rt.systemPrompt()).not.toContain("NEW-SESSION-FACT");
+    // renderForPrompt uses the frozen-at-load snapshot, so seed the dir first,
+    // then hand the runtime a FRESH store over it (exactly what /resume does)
+    const dirB = join(cwd, "other-session-memory");
+    const { BlockStore } = require("../../src/memory/blocks.ts") as typeof import("../../src/memory/blocks.ts");
+    new BlockStore(dirB).add("memory", "NEW-SESSION-FACT");
+    rt.setBlockStore(new BlockStore(dirB));
+    expect(rt.systemPrompt()).toContain("NEW-SESSION-FACT");
+    expect(rt.blockStore.liveText("memory")).toContain("NEW-SESSION-FACT");
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
   }
 });

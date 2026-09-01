@@ -5,6 +5,7 @@ import type {
   Tool, ToolContext, ToolOutput, PermissionRule, PermissionDecision,
   ApprovalRequest, ToolCallPart, RunEvent,
 } from "./types.ts";
+import type { ToolGuard } from "./guardrails.ts";
 
 export interface ExtensionHooks {
   /** May revise args; returns revised args (omp revision gate). */
@@ -47,6 +48,7 @@ export class ToolRegistry {
     rules: PermissionRule[],
     approve: ((req: ApprovalRequest) => Promise<"once" | "always" | "deny">) | undefined,
     emit: (e: RunEvent) => void,
+    guard?: ToolGuard,
   ): Promise<ToolOutput> {
     const t0 = Date.now();
     const tool = this.tools.get(call.tool);
@@ -58,6 +60,20 @@ export class ToolRegistry {
     // 1. extension revision
     let args = call.args;
     if (hooks?.reviseToolArgs) args = await hooks.reviseToolArgs(call.tool, args);
+
+    // 1b. loop guard (port #4, hermes): stub repeated identical calls BEFORE the user is
+    // prompted for them; warn notes ride along on the result
+    let warnNote: string | undefined;
+    if (guard) {
+      const verdict = guard.checkCall(call.tool, args);
+      if (verdict.action === "stub") {
+        const note = verdict.note ?? "call blocked by loop guard: identical call repeated too often";
+        emit({ type: "tool_execution_start", callId: call.id, tool: call.tool, args });
+        emit({ type: "tool_execution_end", callId: call.id, ok: false, output: note, durationMs: 0 });
+        return { ok: false, output: note };
+      }
+      if (verdict.action === "warn") warnNote = verdict.note;
+    }
 
     // 2. policy (deny-default)
     const resource = describeResource(call.tool, args);
@@ -93,6 +109,12 @@ export class ToolRegistry {
     } catch (e) {
       out = { ok: false, output: `Error: ${e instanceof Error ? e.message : String(e)}` };
     }
+    // 4b. loop guard result pass: byte-identical duplicate results become stubs
+    if (guard) {
+      const r = guard.checkResult(call.tool, args, out.output);
+      if (r.deduped) out = { ...out, output: r.output };
+    }
+    if (warnNote) out = { ...out, output: `${out.output}\n\n[loop-guard] ${warnNote}` };
     emit({ type: "tool_execution_end", callId: call.id, ok: out.ok, output: out.output, durationMs: Date.now() - t0 });
     if (hooks?.onToolResult) await hooks.onToolResult(call.tool, args, out).catch(() => {});
     return out;
@@ -107,9 +129,10 @@ export class ToolRegistry {
     approve: ((req: ApprovalRequest) => Promise<"once" | "always" | "deny">) | undefined,
     emit: (e: RunEvent) => void,
     parallelEnabled: boolean,
+    guard?: ToolGuard,
   ): Promise<Map<string, ToolOutput>> {
     const results = new Map<string, ToolOutput>();
-    const run = async (c: ToolCallPart) => { results.set(c.id, await this.dispatch(c, ctx, hooks, rules, approve, emit)); };
+    const run = async (c: ToolCallPart) => { results.set(c.id, await this.dispatch(c, ctx, hooks, rules, approve, emit, guard)); };
     if (!parallelEnabled || calls.some((c) => this.tools.get(c.tool)?.sequential !== false)) {
       for (const c of calls) await run(c);
     } else {

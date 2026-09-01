@@ -20,7 +20,7 @@ export interface Message {
   usage?: TokenUsage;
 }
 
-export interface TokenUsage { input: number; output: number; costUsd?: number }
+export interface TokenUsage { input: number; output: number; cacheRead?: number; cacheWrite?: number; costUsd?: number }
 
 // ---------- Provider seam (ADR-003: never throws; errors are stopReasons) ----------
 
