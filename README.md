@@ -1,93 +1,181 @@
 # Aion — Research-Derived Agent Harness
 
-A production-oriented agent harness built from evidence-based analysis of 12 open-source reference harnesses (omp, pi, opencode, codex-rs, langgraph, aider, SWE-agent, letta, smolagents, swarm, phi, omp-best-of). Every architectural decision traces to a file:line-verified pattern in `research/` (see `research/architecture_decisions.md`).
+A best-of-OSS agent harness in TypeScript on Bun. Instead of inventing architecture, aion ports
+evidence-based patterns from open-source harnesses (pi, opencode, codex, cline, aider, gemini-cli,
+oh-my-pi, hermes-agent, senpi, prime-agent, OpenHands) — every port traces to file:line in a
+snapshotted source and lands only after an independent fresh-context critic verifies it against a
+pre-written bar (ledger: `PORTS.md` at the workspace root).
 
-## Status (2026-08-31)
-- **Tests**: 57 pass / 0 fail (8 files: unit + integration)
+## Status (2026-09-01, post wave 2)
+
+- **All 20 BLUEPRINT §3 ports landed** (P1 8/8 · P2 6/6 · P3 4/4 · P4 2/2)
+- **Tests**: 650 pass / 0 fail (53 files, unit + integration)
 - **Gauntlet**: 10/10 (basic, coding, failure-recovery, adversarial: loop-guard, huge-output, permission-bypass)
-- **Benchmarks** (`aion bench`): anchored-edit workload 16–27ms (8 tool calls) vs 3ms raw-fs; session durability 500 append+replay+hash-chain in ~52ms
+- **Typecheck**: 0 errors · TUI render smoke: PASS
 
-## Architecture
+## Install
 
+Requires [Bun](https://bun.sh) ≥ 1.3.14 (the CLI entry is TypeScript, executed by bun — node cannot run it).
+
+```bash
+# from source
+cd aion && bun install
+bun run src/cli/main.ts --help          # or: bun link  → `aion` on PATH
+
+# single binary (~110 MB: bun runtime + bundled deps + embedded native addons)
+bun run build                           # scripts/build.ts → dist/aion(.exe) + smoke
+dist/aion.exe --version
+
+# from an npm tarball (npm pack) — global install shims to bun via the shebang
+npm install -g ./aion-0.2.0.tgz
 ```
-providers/stream.ts   StreamFn seam — never throws; errors are stopReasons (pi)
-        ↓
-core/loop.ts          one generator agentLoop: steering+follow-up drains,
-                      truncation-fail, live context eviction, compaction,
-                      cooperative abort, depth-threaded spawns
-        ↓
-core/tools.ts         validate → revise(hooks) → policy(deny-default, last-match)
-                      → approve(revised args, cached) → execute → typed outcome
-        ↓
-core/session.ts       append-only JSONL tree: (id,parentId)+leaf, branch=rewind,
-                      sha256 hash chain, corruption taxonomy
-        ↓
-coding/hashline.ts    TAG+LINE#HASH anchored edits, reverse-order apply,
-                      nearest-match diagnostics, lint-gate revert, windowed read,
-                      bash denylist + cwd lock + retry
-        ↓
-core/orchestrator.ts  spawn preflight (depth caps, policy), git-worktree/copy
-                      isolation (win32-safe), derived child permissions,
-                      patch merge-back
-        ↓
-memory/store.ts       bounded records: budgets, decay, dedup, provenance
-        ↓
-eval/                 scripted-provider gauntlet + deterministic benches
-cli/main.ts           run / gauntlet / bench / tools / trace
-```
+
+Not yet published to the npm registry (name availability unverified; no self-update — rebuild or
+reinstall to update).
 
 ## Quickstart
 
 ```bash
-cd aion
-bun test                          # 57 tests
-bun run src/cli/main.ts gauntlet  # adversarial eval suite (10 tasks)
-bun run src/cli/main.ts bench     # deterministic benchmarks
-bun run src/cli/main.ts tools     # tool registry
+aion                        # TUI chat (default surface; --plain = readline REPL)
+aion "fix the failing test" # one-shot task
+aion run "<prompt>" --yolo  # one-shot, all tool approvals granted
+aion gauntlet               # adversarial eval suite (offline, deterministic, 10 tasks)
+aion bench                  # cross-harness micro-benchmarks
+aion tools                  # registered tool listing
+aion trace <session-id>     # replay a session's JSONL tree
+aion acp                    # Agent Client Protocol v1 over stdio (Zed/JetBrains)
+aion serve                  # headless HTTP + SSE server (AION_PORT, loopback-only)
+```
 
-# real model (any OpenAI-compatible endpoint):
-AION_BASE_URL=https://api.deepseek.com/v1 AION_API_KEY=sk-... \
-  bun run src/cli/main.ts run "fix the failing test in src/foo.ts"
+Without provider env, one-shot runs use a scripted mock provider (also how the packaging smoke
+works). For a real model set any of:
+
+```bash
+AION_BASE_URL=... AION_API_KEY=...   # any OpenAI-compatible or Anthropic endpoint (always wins)
+OPENAI_API_KEY=... / ANTHROPIC_API_KEY=... / DEEPSEEK_API_KEY=... / GROQ_API_KEY=...  # named providers
+AION_MODEL=zai-org/glm-5.3           # model id
+AION_MODEL_DEFAULT=prov/a,prov/b     # role fallback chains (DEFAULT SMOL PLAN COMMIT TASK); advance on 429/5xx
+```
+
+TUI slash commands: `/help /status /cost /model /yolo /plan /act /rewind /sessions /resume /new
+/checkpoints /restore /skills /memory /exit`.
+
+## What's ported (the 20 landed ports)
+
+Full ledger with bars, critic verdicts, and evidence: workspace `PORTS.md`. Sources are MIT or
+Apache-2.0 only; Apache attributions in `THIRD_PARTY_NOTICES.md`.
+
+**Surfaces**
+- #1 differential-render TUI, vendored pi-tui behind a `Renderer` seam (pi, MIT)
+- #2 branch navigator + rewind/edit-resubmit over the session DAG (pi pattern, MIT)
+- #15 ACP v1 endpoint for Zed/JetBrains via the official SDK (Apache-2.0)
+- #19 headless HTTP server: sessions, SSE RunEvents, OpenAPI at `/doc` (opencode design, MIT)
+- #20 Plan/Act modes with per-mode model config, plan = read-only tool rules (cline, Apache-2.0)
+
+**Providers**
+- #5 prompt-cache boundaries (`cache_control`) + normalized usage accounting (hermes pattern + tokenlens, MIT)
+- #6 models.dev pricing/context catalog, offline snapshot, `/cost` (OSS)
+- #7 tool-call middleware: XML/Hermes/JSON-in-text parsed to native tool calls for non-native models (senpi, MIT)
+- #14 role routers + fallback chains + rate-limit chain advance (OMP, MIT + gemini-cli, Apache-2.0)
+
+**Coding**
+- #11 shadow-git checkpoints, 3 restore modes, user `.git` never touched (cline, Apache-2.0)
+- #12 repo-map: tree-sitter (@ast-grep) symbols + PageRank, budgeted context chunk, persistent cache (aider, Apache-2.0)
+- #13 LSP diagnostics gate after edits (opencode/OMP, MIT)
+
+**Safety & execution**
+- #4 tool-loop guardrails: repeat-signature loop break, duplicate-result stubs (hermes-agent, MIT)
+- #9 execpolicy: declarative command policy, strictest-wins, forbidden never executes (openai/codex, Apache-2.0)
+- #10 executor sandbox ladder: direct/WSL2/Docker rungs behind one `Executor` seam (codex + OpenHands patterns)
+
+**Memory & context**
+- #3 MCP client, stdio + HTTP, lazy disclosure (two registry tools, ~0 idle token cost) (MIT)
+- #8 config inheritance: AGENTS.md / CLAUDE.md / .claude / .cursor / .github instructions harvested into capped chunks (oh-my-pi, MIT)
+- #16 versioned memory/skill edits with optimistic concurrency + one-call rollback (prime-agent, MIT)
+- #17 cross-session recall: FTS over past session JSONL (hermes-agent, MIT)
+- #18 persistent eval cell / code-mode, feature-flagged `AION_EVAL_CELL=1` (OMP/prime/codex patterns)
+
+## Architecture
+
+```
+providers/stream.ts    StreamFn seam — never throws; errors are stopReasons
+  + middleware.ts        text tool-calls → native parts (non-native models)
+  + router.ts            role tables + fallback chains
+  + cache.ts, catalog.ts prompt-cache boundaries, usage, pricing
+        ↓
+core/loop.ts           ONE generator agentLoop: steering/follow-up drains,
+                       eviction, compaction, guardrails, depth-threaded spawns
+        ↓
+core/tools.ts          validate → revise(hooks) → policy(deny-default, last-match)
+                       → approve(revised args, cached) → execute → typed outcome
+  + execpolicy.ts        declarative command rules (allow/prompt/deny/forbidden)
+  + guardrails.ts        loop signatures + duplicate stubs
+        ↓
+core/session.ts        append-only JSONL tree: branch=rewind, sha256 hash chain
+coding/                hashline anchored edits · repomap · lsp gate · checkpoints
+memory/                bounded blocks + versioned edits + cross-session recall
+mcp/ acp/ server/ tui/ surfaces over the same loop (no second loop generation)
+eval/                  scripted-provider gauntlet + deterministic benches
 ```
 
 ## Configuration
 
-Defaults < `aion.config.json` (planned) < env (`AION_BASE_URL`, `AION_API_KEY`) < CLI flags. Permission rules are deny-by-default with last-match wildcard evaluation:
+Defaults < project config chunks (harvested, capped) < env < CLI flags.
 
-```json
-[
-  { "action": "file.read",  "resource": "*",        "effect": "allow" },
-  { "action": "shell.exec", "resource": "*",        "effect": "prompt" },
-  { "action": "shell.exec", "resource": "rm *",     "effect": "deny"  },
-  { "action": "file.write", "resource": ".env*",    "effect": "deny"  }
-]
-```
+- `.aion/mcp.json` (+ harvested `.mcp.json`) — MCP servers
+- `.aion/modes.json` — per-mode model config (TUI-scoped; see limitations)
+- `.aion/` also holds sessions, checkpoints, repo-map cache
+- Permission rules: deny-by-default, last-match wildcard (`file.read/write`, `shell.exec`, `spawn`, `memory.write`, `tool.*`); `--yolo`/`AION_YOLO=1` bypasses prompts but not deny rules in plan mode
+
+## Safety model (stacked, honest)
+
+1. **Policy** — deny-default wildcard rules, evaluated on revised args
+2. **execpolicy** — declarative per-command verdicts; `forbidden` never reaches execution or a human
+3. **Gate** — approvals resolved on revised args, cached; child agents cannot prompt
+4. **Runtime** — bash denylist + cwd lock + output truncation
+
+This is **not an OS sandbox**. An executor seam with WSL2/Docker rungs exists (#10) but production
+entrypoints run the direct rung until the config field lands (wave-3 #27). Use a container/microVM
+for untrusted work.
+
+## Observability
+
+Typed `RunEvent` stream (run/turn/tool/compaction events) persisted with the session tree;
+`aion trace <id>` replays any session with corruption findings. `/cost` and `/status` surface
+tokens, cache hits, and catalog-priced spend.
+
+## Known limitations
+
+- **Cancellation lands at turn boundaries.** Esc/`session/cancel`/HTTP DELETE stop the run at the
+  next boundary; an in-flight provider fetch or bash subprocess is not killed mid-flight (per-run
+  AbortController is wave-3 port #21).
+- **Sandbox rungs are unwired by default.** WSL2/Docker executor rungs exist behind the seam but
+  nothing selects them yet (#27); default execution is direct with denylist + cwd lock.
+- **Plan/Act modes are TUI-scoped.** `run`/`acp`/`serve` ignore `.aion/modes.json` including
+  `defaultMode`.
+- **Server sessions are in-memory.** `aion serve` loses its session routing table on restart
+  (JSONL trees persist on disk).
+- **Windows-first.** Developed and gated on Windows 11 + Git Bash; POSIX paths exercised in tests
+  but Linux/macOS are not CI-verified.
+- **Packaging**: no LICENSE file yet — the package.json `license` field is intentionally unset
+  pending an owner decision; not published to npm; compiled binary is ~110 MB (bun runtime).
 
 ## Extending
 
-- **Tool**: implement `Tool` (schema + kind + execute), `registry.register(t)`. Kind maps to policy action (`file.read/write`, `shell.exec`, `spawn`, `memory.write`).
-- **Provider**: implement `StreamFn` — must not throw; failures become `{stopReason: "error"}`. `openaiCompatStream` covers any /chat/completions endpoint.
-- **Agent**: `AgentDefinition` — systemPrompt (static or fn), tools, model, maxTurns (finite always), spawn policy.
-- **Hooks**: `ExtensionHooks.reviseToolArgs` may rewrite args before policy+approval (approval always sees revised args — omp revision gate).
+- **Tool**: implement `Tool` (schema + kind + execute), `registry.register(t)`; kind maps to a policy action.
+- **Provider**: implement `StreamFn` — must not throw; failures become `{stopReason: "error"}`.
+- **Hooks**: `ExtensionHooks.reviseToolArgs` rewrites args before policy + approval (approval always sees revised args).
+- **MCP**: add servers to `.aion/mcp.json`; tools arrive lazily through `mcp_list`/`mcp_call` under the same policy pipeline.
 
-## Safety model (three stacked points)
-1. **Policy**: deny-default wildcard rules (`core/tools.ts:evaluatePermissions`)
-2. **Gate**: approval resolved on revised args; cached decisions; children cannot prompt
-3. **Runtime**: bash denylist + cwd lock (NOT a sandbox — no OS seatbelt; use container/microVM for untrusted work, see research/baseline_comparison.md sandbox tiers)
+## License & notices
 
-## Observability
-Every run emits a typed `RunEvent` stream (run_start → turn_start → message_update → tool_execution_* → compaction → turn_end → run_end) persisted alongside the session tree. `aion trace <session-id>` replays any session and surfaces corruption findings.
+Third-party attributions (Apache-2.0 NOTICE entries + MIT credits): `THIRD_PARTY_NOTICES.md`
+(shipped in the npm tarball; source of truth lives at the workspace root). No code from crush
+(FSL), claw-code, nanocoder, iflow, or the Claude Agent SDK. Aion's own license: not yet declared.
 
-## Known limitations
-- No OS-level sandbox (denylist only) — documented, deliberate scope cut
-- No repo-map (aider PageRank) yet — reserved chunk name in context assembly
-- No provider-native compaction; single head-summarize strategy
-- Memory store has no self-edit tool yet (flags declared, unwired)
-- Windows-first shell paths; POSIX paths exercised via Git-for-Windows bash
+## Roadmap (wave 3, `PORTS.md` §Wave-3)
 
-## Roadmap
-1. OS sandbox rung (Windows AppContainer / Linux bubblewrap delegate)
-2. Repo-map chunk (tree-sitter + ranking, token-budgeted)
-3. Memory self-edit tool + sleeptime background agents
-4. Best-of-N selection with capability preflight (omp-best-of pattern)
-5. Provider-native compaction strategies
+Ports #21–#39: mid-turn cancellation, first-class grep/glob/ls tools, retry-with-backoff,
+approval diff previews, compaction v2, background subagents, sandbox rung config, reflection
+retries, hooks v2, custom slash commands, web fetch, todo/ask_user tools, image input,
+JSON/NDJSON output modes, provider auth store, session export, OTel spans.

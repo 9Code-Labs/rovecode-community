@@ -1,3 +1,4 @@
+#!/usr/bin/env bun
 /** Aion CLI: run / gauntlet / agents / tools / trace / eval surfaces. */
 
 import { agentLoop, SteeringQueue } from "../core/loop.ts";
@@ -15,9 +16,18 @@ import { runRepl } from "./repl.ts";
 import { runTui } from "../tui/app.ts";
 import { parseCli } from "./dispatch.ts";
 import { join } from "node:path";
+import pkg from "../../package.json";
 
 const cli = parseCli(process.argv);
 const cmd = cli.cmd;
+
+// port #36 (packaging): --version prints the package version and exits. Must
+// precede dispatch — parseCli treats a lone flag as cmd "", which would
+// otherwise open the TUI. The JSON import is bundled into compiled binaries.
+if (process.argv.includes("--version")) {
+  console.log(pkg.version);
+  process.exit(0);
+}
 
 function resolveStream(): { stream: StreamFn; model: ModelRef; real: boolean; providerId: string } {
   const cfg = resolveProvider();

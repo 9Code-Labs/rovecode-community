@@ -4,6 +4,8 @@
     "target": "ES2024",
     "module": "ESNext",
     "moduleResolution": "bundler",
+    // package.json import in src/cli/main.ts (--version, port #36)
+    "resolveJsonModule": true,
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
@@ -15,5 +17,5 @@
     "useDefineForClassFields": false,
     "noEmit": true
   },
-  "include": ["src", "test"]
+  "include": ["src", "test", "scripts"]
 }
