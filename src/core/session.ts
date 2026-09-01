@@ -14,7 +14,8 @@ export type CorruptionKind =
   | "cycle"               // ancestry loop
   | "duplicate-id"
   | "malformed-json"
-  | "unknown-shape";
+  | "unknown-shape"
+  | "chain-broken";       // prevHash disagrees with the parent entry's hash (tree/chain fork)
 
 export interface Corruption { kind: CorruptionKind; entryId?: string; line: number; detail: string }
 
@@ -142,6 +143,7 @@ export class SessionStore {
     } catch { /* unreadable meta behaves as legacy (no persisted leaf) */ }
     if (!existsSync(this.file)) return corrupt;
     const lines = readFileSync(this.file, "utf8").split("\n").filter(Boolean);
+    const byLine = new Map<string, Wrapped>(); // ids seen so far (first occurrence wins)
     lines.forEach((line, i) => {
       let w: Wrapped;
       try {
@@ -155,6 +157,14 @@ export class SessionStore {
       if (w.parentId !== null && !seen.has(w.parentId)) {
         corrupt.push({ kind: "orphan-entry", entryId: w.id, line: i, detail: `parent ${w.parentId} missing` });
       }
+      // chain linkage: prevHash must equal the PARENT's hash ("" for roots). A leaf moved
+      // mid-run used to fork the hash chain away from the parent pointer — detect it.
+      // Missing parents are skipped here (already reported as orphan-entry above).
+      const expected = w.parentId === null ? "" : byLine.get(w.parentId)?.hash;
+      if (expected !== undefined && w.prevHash !== expected) {
+        corrupt.push({ kind: "chain-broken", entryId: w.id, line: i, detail: `prevHash disagrees with parent ${w.parentId ?? "(root)"}` });
+      }
+      if (!byLine.has(w.id)) byLine.set(w.id, w);
       this.cache.push(w);
     });
     // cycle check over ancestry
@@ -176,14 +186,23 @@ export class SessionStore {
   }
 
   append(entry: Entry): void {
+    // A supplied parentId can lag the leaf (the loop snapshots history at run start;
+    // /new and /rewind may move the leaf mid-run). The chain must follow the PARENT
+    // pointer, never the moved leaf, or hash chain and tree silently disagree.
+    const supplied = (entry as { parentId?: string | null }).parentId;
+    const parentId = supplied !== undefined ? supplied : this.leaf;
+    let prevHash = this.prevHash;
+    if (parentId !== this.leaf) {
+      prevHash = parentId === null ? "" : (this.cache.find((c) => c.id === parentId)?.hash ?? this.prevHash);
+    }
     const w: Wrapped = {
-      id: entry.id, parentId: "id" in entry && (entry as Message).parentId !== undefined ? (entry as Message).parentId : this.leaf,
+      id: entry.id, parentId,
       createdAt: entry.createdAt ?? Date.now(),
-      prevHash: this.prevHash,
+      prevHash,
       hash: "",
       entry,
     };
-    w.hash = chainHash(this.prevHash, w);
+    w.hash = chainHash(prevHash, w);
     appendFileSync(this.file, JSON.stringify(w) + "\n");
     this.cache.push(w);
     this.leaf = w.id; this.prevHash = w.hash;

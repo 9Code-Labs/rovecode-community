@@ -94,9 +94,22 @@ export function buildCostNote(messages: Message[], catalog: ModelCatalog, curren
 }
 
 export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
+  // opts.sessionId may be a unique id prefix (aion --resume <id>); resolve it against
+  // the sessions dir. Exact ids and brand-new ids pass through; an AMBIGUOUS prefix
+  // must not silently pick one — start fresh and say so (same rule as /resume).
+  let bootId = opts.sessionId;
+  let bootWarn: string | undefined;
+  if (bootId !== undefined) {
+    const known = listSessions(join(opts.cwd ?? process.cwd(), ".aion", "sessions"));
+    if (!known.some((s) => s.id === bootId)) {
+      const pre = known.filter((s) => s.id.startsWith(bootId!));
+      if (pre.length === 1) bootId = pre[0]!.id;
+      else if (pre.length > 1) { bootWarn = `"${bootId}" matches ${pre.length} sessions — started fresh; use /resume to pick one`; bootId = undefined; }
+    }
+  }
   // opts.stream passes through verbatim: a StreamFn overrides, explicit null forces
   // "no provider", undefined defers to the runtime's env-resolved provider
-  const rt = createRuntime({ cwd: opts.cwd, stream: opts.stream, sessionId: opts.sessionId });
+  const rt = createRuntime({ cwd: opts.cwd, stream: opts.stream, sessionId: bootId });
   const renderer: Renderer = opts.renderer ?? new PiTuiRenderer({ cwd: rt.cwd });
   const sessionsDir = join(rt.cwd, ".aion", "sessions");
   // /cost pricing + context window. Boots from the offline snapshot; the live models.dev
@@ -203,8 +216,15 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     if (state.busy) { renderer.addSystemNote("finish or interrupt the run first (Esc)", "warn"); return; }
     const all = listSessions(sessionsDir);
     if (directId) {
-      const hit = all.find((s) => s.id === directId || s.id.startsWith(directId));
-      if (hit) switchSession(hit.id);
+      // exact id wins outright; a prefix must match exactly ONE session — resolving an
+      // ambiguous prefix silently to the first hit resumed the wrong session
+      const exact = all.find((s) => s.id === directId);
+      const matches = exact ? [exact] : all.filter((s) => s.id.startsWith(directId));
+      if (matches.length === 1) switchSession(matches[0]!.id);
+      else if (matches.length > 1) renderer.addSystemNote(
+        `"${directId}" matches ${matches.length} sessions: ${matches.slice(0, 4).map((s) => s.id.slice(0, 8)).join(", ")}${matches.length > 4 ? ", …" : ""} — be more specific`,
+        "warn",
+      );
       else renderer.addSystemNote(`no session matching "${directId}"`, "warn");
       return;
     }
@@ -268,8 +288,13 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
         renderer.addSystemNote(blocks.renderForPrompt() || "(empty)");
         return true;
       case "new":
-        store.branch(store.messages()[0]?.id ?? "");
-        renderer.addSystemNote("branched to session start");
+        // busy gate (same as /rewind //sessions): moving the leaf mid-run would make the
+        // run's next append chain off a moved leaf while its parentId points elsewhere
+        if (state.busy) { renderer.addSystemNote("finish or interrupt the run first (Esc)", "warn"); return true; }
+        if (store.branch(store.messages()[0]?.id ?? "")) {
+          replayHistory(); refreshUsage(); pushStatus();
+          renderer.addSystemNote("branched to session start");
+        } else renderer.addSystemNote("nothing to branch — no turns yet");
         return true;
       case "rewind": case "tree":
         void cmdRewind();
@@ -356,10 +381,13 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     onInterrupt: () => { void run?.return(undefined as never); renderer.addSystemNote("run interrupted", "warn"); },
     onExit: close,
   });
+  // resumed boot: restore the transcript and usage counters (a bare session open left both blank)
+  if (bootId !== undefined) { replayHistory(); refreshUsage(); }
   renderer.addSystemNote(
     `aion — session in ${rt.cwd}\nmode: ${state.yolo ? "yolo" : "gated"} · /help for commands` +
     (rt.stream ? "" : "\nno provider configured — set AION_BASE_URL/AION_API_KEY or a <NAME>_API_KEY"),
   );
+  if (bootWarn) renderer.addSystemNote(bootWarn, "warn");
   pushStatus();
   await closedP;
 }

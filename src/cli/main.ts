@@ -134,6 +134,7 @@ function cmdHelp(): void {
 
 commands:
   aion                      interactive TUI chat (pi-tui; --plain for readline REPL)
+  aion --resume <id>        open the TUI resuming a session (full id or unique prefix)
   aion "prompt"             one-shot task (same as run)
   aion smoke-tui            render check: full pipeline into an 80x24 terminal emulator
   aion run "<prompt>"       run an agent task (--yolo allows all tools; mock provider only if no provider env set)
@@ -166,10 +167,15 @@ async function cmdTrace(sessionId: string): Promise<void> {
 }
 
 const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "trace", "help", "chat", "repl", "smoke-tui"]);
-if (cmd === "" || cmd === "chat" || cmd === "repl") {
+// --resume <id>: TUI-only value flag, parsed here (parseCli flags are boolean-only);
+// its value must not be mistaken for a one-shot prompt
+const rIx = process.argv.indexOf("--resume");
+const rArg = rIx !== -1 ? process.argv[rIx + 1] : undefined;
+const resumeId = rArg !== undefined && !rArg.startsWith("-") ? rArg : undefined;
+if (cmd === "" || cmd === "chat" || cmd === "repl" || (resumeId !== undefined && cmd === resumeId)) {
   // default surface is the pi-tui chat (port #1); --plain keeps the readline REPL
   if (cli.plain) await runRepl({ yolo: cli.yolo });
-  else await runTui({ yolo: cli.yolo });
+  else await runTui({ yolo: cli.yolo, sessionId: resumeId });
 } else if (known.has(cmd)) {
   switch (cmd) {
     case "run": await cmdRun(cli.rest.join(" ") || "hello"); break;
