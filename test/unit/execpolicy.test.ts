@@ -258,9 +258,13 @@ test("git branch destructive flags prompt; read forms stay allowed (HIGH-1b)", (
     "git branch -D topic", "git branch -d topic", "git branch -m old new",
     "git branch -M main", "git branch -f topic abc123", "git branch --delete topic",
     "git branch --force topic abc123", "git branch --move a b",
+    // git accepts the flag AFTER the positional — the escalation scan covers any slot
+    "git branch topic -D", "git branch stale --delete", "git branch old new -M",
   ]) {
     expect({ cmd, effect: refineExec(cmd).effect }).toEqual({ cmd, effect: "prompt" });
   }
+  // after `--` tokens are branch names, not flags — a branch literally named -D stays a read
+  expect(refineExec("git branch --list -- -D").effect).toBe("allow");
   // strictest-wins over the reader allow rule; the length-3 prompt rule is most specific
   expect(refineExec("git branch -D topic")).toEqual({
     effect: "prompt",

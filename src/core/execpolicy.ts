@@ -204,11 +204,25 @@ function unmatchedHeuristics(cmd: readonly string[]): RuleMatch {
  *  Tokens after `--` are pathspecs, not flags — the scan stops there
  *  (mirrors rmArgsIncludeForce, is_dangerous_command.rs:164-173). */
 const OUTPUT_FLAG_SUBCOMMANDS = new Set(["diff", "show", "log"]);
+// git accepts flags AFTER positionals (`git branch stale -D`), which the
+// positional HIGH-1b prefix rule cannot see — the same scan covers any slot.
+const BRANCH_DESTRUCTIVE_FLAGS = new Set(["-D", "-d", "-m", "-M", "-f", "--delete", "--force", "--move"]);
 function escalationMatches(cmd: readonly string[]): RuleMatch[] {
   const first = cmd[0];
   const head = first === undefined ? null : (executableLookupKey(first) ?? first);
   const sub = cmd[1];
-  if (head !== "git" || sub === undefined || !OUTPUT_FLAG_SUBCOMMANDS.has(sub)) return [];
+  if (head !== "git" || sub === undefined) return [];
+  if (sub === "branch") {
+    for (const a of cmd.slice(2)) {
+      if (a === "--") break;
+      if (BRANCH_DESTRUCTIVE_FLAGS.has(a)) {
+        return [{ kind: "heuristics", decision: "prompt", command: [...cmd],
+          justification: "deletes or rewrites branches; confirm the target" }];
+      }
+    }
+    return [];
+  }
+  if (!OUTPUT_FLAG_SUBCOMMANDS.has(sub)) return [];
   for (const a of cmd.slice(2)) {
     if (a === "--") break;
     if (a === "--output" || a.startsWith("--output=")) {
