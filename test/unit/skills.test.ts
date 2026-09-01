@@ -1,3 +1,4 @@
+import { test, expect, beforeAll, afterAll } from "bun:test";
 import type { ToolContext } from "../../src/core/types.ts";
 import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -117,7 +118,7 @@ test("manifest diff: no changes → empty diff; touch → changed; new file → 
 test("skill_view returns body and bumps usage sidecar atomically", async () => {
   const store = new SkillStore(join(root, "proj"), { globalDir: null });
   store.scan();
-  const [skillView] = createSkillTools(store);
+  const skillView = createSkillTools(store)[0]!;
   const before = readUsage(join(projSkills, "alpha", "SKILL.md"));
   expect(before).toBeUndefined();
 
@@ -175,7 +176,7 @@ test("buildSkillsIndex renders names and descriptions; empty above the 50-skill 
   expect(bigStore.list().length).toBe(INDEX_PROMPT_LIMIT + 1);
   expect(buildSkillsIndex(bigStore)).toBe("");
 
-  const [, skillsList] = createSkillTools(bigStore);
+  const skillsList = createSkillTools(bigStore)[1]!;
   const out = await skillsList.execute({}, fakeCtx());
   expect(out.ok).toBe(true);
   expect((out.data as { count: number }).count).toBe(INDEX_PROMPT_LIMIT + 1);
@@ -185,7 +186,7 @@ test("buildSkillsIndex renders names and descriptions; empty above the 50-skill 
 
 test("skills_list on an empty store reports no skills", async () => {
   const store = new SkillStore(join(root, "nothing-here"), { globalDir: null });
-  const [, skillsList] = createSkillTools(store);
+  const skillsList = createSkillTools(store)[1]!;
   const out = await skillsList.execute({}, fakeCtx());
   expect(out.ok).toBe(true);
   expect(out.output).toBe("no skills installed");

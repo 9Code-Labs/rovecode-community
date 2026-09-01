@@ -1,8 +1,9 @@
 import { test, expect } from "bun:test";
 import { evaluatePermissions } from "../../src/core/tools.ts";
+import type { PermissionRule } from "../../src/core/types.ts";
 
 // Ordered most-general first: last match wins (opencode permission.ts:126 semantics).
-const rules = [
+const rules: PermissionRule[] = [
   { action: "file.read", resource: "*", effect: "allow" },
   { action: "shell.exec", resource: "*", effect: "prompt" },
   { action: "file.write", resource: "src/**", effect: "allow" },

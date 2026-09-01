@@ -47,7 +47,7 @@ export async function runRepl( /* eslint-disable-line complexity */
   registry.register(memoryEditTool(blockStore));
 
   const state: ReplState = {
-    yolo: opts.yolo ?? process.env.AION_YOLO === "1" ?? false,
+    yolo: opts.yolo ?? process.env.AION_YOLO === "1",
     provider: "mock",
     model: opts.model ?? process.env.AION_MODEL ?? "",
     turns: 0, tokensIn: 0, tokensOut: 0,
@@ -121,7 +121,7 @@ export async function runRepl( /* eslint-disable-line complexity */
 
     try {
       let live = "";
-      for await (const ev of agentLoop(def, text, {}, buildCfg(), { stream, registry, store, tools: registry.list() }, new SteeringQueue())) {
+      for await (const ev of agentLoop(def, text, {}, buildCfg(), { stream, registry, store, tools: registry.list().map((t) => t.schema) }, new SteeringQueue())) {
         if (ev.type === "turn_start") { resetTurnFailureCount(); state.turns++; }
         if (ev.type === "message_update") { process.stdout.write(ev.delta); live += ev.delta; }
         if (ev.type === "tool_execution_start") { console.log(`\n  → ${ev.tool} ${JSON.stringify(ev.args).slice(0, 120)}`); }

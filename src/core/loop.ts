@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import type {
   AgentDefinition, Message, MessagePart, RunEvent, RunConfig, StreamFn,
   ModelRef, ToolCallPart, AgentVars, ToolContext, ToolOutput, ToolSchema,
+  StopReason, TokenUsage,
 } from "./types.ts";
 import { ToolRegistry, type ExtensionHooks } from "./tools.ts";
 import { SessionStore } from "./session.ts";
@@ -18,6 +19,8 @@ export interface LoopDeps {
   hooks?: ExtensionHooks;
   summarize?: (texts: string[]) => Promise<string>;  // weak-model head summarizer
   tools?: ToolSchema[];
+  /** orchestrator seam: run a child agent; receives parent depth + 1 */
+  childRunner?: (agent: string, goal: string, vars: AgentVars | undefined, depth: number) => Promise<{ ok: boolean; summary: string; usage: TokenUsage }>;
 }
 
 export class SteeringQueue {
@@ -80,7 +83,10 @@ export async function* agentLoop(
         parts: [{ kind: "text", text: `Summary of earlier conversation:\n${summary}` }],
         parentId: history[0]?.id ?? null, createdAt: Date.now(),
       };
-      history.length = 0; history.push(compactMsg, ...plan.keep);
+      // plan.keep holds {id,tokens,text} projections — map back to the real messages
+      const keepIds = new Set(plan.keep.map((k) => k.id));
+      const kept = history.filter((m) => keepIds.has(m.id));
+      history.length = 0; history.push(compactMsg, ...kept);
       yield { type: "compaction", strategy: "head-summarize", tokensBefore: histTokens, tokensAfter: history.reduce((n, m) => n + estimateTokens(partsText(m.parts)), 0) };
     }
 
@@ -166,9 +172,10 @@ export async function* agentLoop(
       sessionId: deps.store.id, cwd: process.cwd(), signal: ac.signal,
       spawn: undefined, permissions: { effect: "allow" },
     };
-    if (deps.childRunner) {
+    const runChild = deps.childRunner;
+    if (runChild) {
       ctx.spawn = async (req) => {
-        const r = await deps.childRunner(req.agent, req.goal, req.vars, depth + 1);
+        const r = await runChild(req.agent, req.goal, req.vars, depth + 1);
         return { agent: req.agent, ok: r.ok, summary: r.summary, usage: r.usage };
       };
     }
@@ -203,7 +210,7 @@ export async function* agentLoop(
   yield { type: "run_end", status: "budget", summary: `max turns (${cfg.maxTurns}) reached` };
 }
 
-export interface TurnOutcome { parts: MessagePart[]; stopReason: string; usage: { input: number; output: number }; error?: string }
+export interface TurnOutcome { parts: MessagePart[]; stopReason: StopReason; usage: { input: number; output: number }; error?: string }
 
 async function collectTurn(stream: StreamFn, model: ModelRef, messages: Message[], onText?: (delta: string) => void, tools?: ToolSchema[]): Promise<TurnOutcome> {
   let outcome: TurnOutcome = { parts: [], stopReason: "end_turn", usage: { input: 0, output: 0 } };

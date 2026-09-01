@@ -7,7 +7,7 @@ import { ToolRegistry } from "../core/tools.ts";
 import { SessionStore } from "../core/session.ts";
 import { readTool, editTool, writeTool } from "../coding/hashline.ts";
 import { mockStream, textTurn, toolTurn } from "../providers/stream.ts";
-import type { AgentDefinition, RunConfig } from "../core/types.ts";
+import type { AgentDefinition, RunConfig, StreamFn, AssistantTurn, Message } from "../core/types.ts";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -75,9 +75,9 @@ async function benchEditsAion(nFiles: number, nEdits: number): Promise<{ pass: b
   return { pass, ms, calls };
 }
 
-function mockStreamLike(next: () => Promise<ReturnType<typeof toolTurn> | ReturnType<typeof textTurn>>) {
-  return async function* (_model: unknown, _messages: unknown) {
-    yield { type: "turn", turn: await next() };
+function mockStreamLike(next: () => Promise<AssistantTurn>): StreamFn {
+  return async function* () {
+    yield { type: "turn" as const, turn: await next() };
   };
 }
 
@@ -120,7 +120,7 @@ function benchSessions(n: number): { pass: boolean; ms: number } {
   const s = new SessionStore(dir, randomUUID());
   let prev: string | null = null;
   for (let i = 0; i < n; i++) {
-    const m = { id: randomUUID(), role: "user" as const, parts: [{ kind: "text" as const, text: `msg ${i}` }], parentId: prev, createdAt: Date.now() };
+    const m: Message = { id: randomUUID(), role: "user", parts: [{ kind: "text", text: `msg ${i}` }], parentId: prev, createdAt: Date.now() };
     s.append(m);
     prev = m.id;
   }

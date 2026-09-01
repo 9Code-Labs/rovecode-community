@@ -85,7 +85,7 @@ async function cmdRun(prompt: string): Promise<void> {
     tools: ["*"],
   };
   const events: string[] = [];
-  for await (const ev of agentLoop(def, prompt, {}, cfg, { stream, registry, store, tools: registry.list() }, new SteeringQueue())) {
+  for await (const ev of agentLoop(def, prompt, {}, cfg, { stream, registry, store, tools: registry.list().map((t) => t.schema) }, new SteeringQueue())) {
     events.push(ev.type);
     if (ev.type === "turn_start") resetTurnFailureCount();
     if (ev.type === "tool_execution_start") console.log(`→ ${ev.tool}`, JSON.stringify(ev.args).slice(0, 100));

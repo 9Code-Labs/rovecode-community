@@ -20,8 +20,9 @@ export interface Corruption { kind: CorruptionKind; entryId?: string; line: numb
 
 export interface SessionMeta { id: string; createdAt: number; goal?: string; model?: string }
 
-/** Hash chain: each entry carries sha256(prevHash + canonical(entry)). Tamper-evident replay. */
-export function chainHash(prev: string, entry: Entry): string {
+/** Hash chain: each entry carries sha256(prevHash + canonical(entry)). Tamper-evident replay.
+ *  Accepts the wrapped envelope too — the chain hashes the full wrapper (hash field empty). */
+export function chainHash(prev: string, entry: Entry | object): string {
   const canon = JSON.stringify(sortKeys(entry));
   return createHash("sha256").update(prev + canon).digest("hex");
 }

@@ -6,7 +6,7 @@
  *  - Any custom base URL + key (AION_BASE_URL/AION_API_KEY or explicit config)
  *  Model catalogs are FETCHED from the endpoint (/v1/models) — never hard-coded (pi pattern). */
 
-import type { StreamFn, Message, AssistantTurn, StreamEvent, ModelRef } from "../core/types.ts";
+import type { StreamFn, Message, AssistantTurn, StreamEvent, ModelRef, StopReason } from "../core/types.ts";
 import { partsText } from "../core/loop.ts";
 
 export interface ProviderConfig {
@@ -108,11 +108,11 @@ export function openaiCompatStreaming(opts: { baseUrl: string; apiKey: string })
         yield { type: "turn", turn };
         return;
       }
-      let finish = "end_turn";
+      let finish: StopReason = "end_turn";
       const usage = { input: 0, output: 0 };
       for await (const line of sseLines(res.body)) {
         const ev = JSON.parse(line) as {
-          choices?: { delta?: { content?: string | null; tool_calls?: { index?: number; id?: string; function?: { name?: string; arguments?: string } }[]; finish_reason?: string | null } }[];
+          choices?: { delta?: { content?: string | null; tool_calls?: { index?: number; id?: string; function?: { name?: string; arguments?: string } }[] }; finish_reason?: string | null }[];
           usage?: { prompt_tokens?: number; completion_tokens?: number };
         };
         const c = ev.choices?.[0];
@@ -320,7 +320,7 @@ export function toolTurn(calls: { id: string; tool: string; args: unknown }[]): 
 
 // ---------- registry: named providers from env/config ----------
 
-const builtinProviders: Record<string, { baseUrl: string; protocol: "openai" | "anthropic"; envKey: string }> = {
+const builtinProviders: Record<string, { baseUrl: string; protocol: "openai" | "anthropic"; envKey: string; defaultModel?: string }> = {
   kaesra: { baseUrl: "https://api.kaesra.tech/v1", protocol: "openai", envKey: "KAESRA_API_KEY", defaultModel: "zai-org/glm-5.3-flash" },
   openai: { baseUrl: "https://api.openai.com/v1", protocol: "openai", envKey: "OPENAI_API_KEY" },
   anthropic: { baseUrl: "https://api.anthropic.com/v1", protocol: "anthropic", envKey: "ANTHROPIC_API_KEY" },
