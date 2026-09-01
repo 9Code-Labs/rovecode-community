@@ -90,7 +90,12 @@ test("the walk stops INCLUSIVELY at the first .git directory — a repo never in
 
 test("a .git FILE (git worktree marker) also stops the walk", () => {
   const outer = tmpRoot();
-  write(outer, "AGENTS.md", "outside the worktree");
+  // FW2-Q: the outer file sits at a DIFFERENT relPath than any inner file —
+  // an outer AGENTS.md would be shadowed by the inner one via nearest-wins
+  // even with the boundary stop broken, so it cannot discriminate the stop.
+  // CLAUDE.md exists ONLY outside: it shows up iff the walk crosses the
+  // .git-FILE boundary (kills a dir-only hasGitMarker mutant).
+  write(outer, "CLAUDE.md", "outside the worktree");
   write(outer, "wt/.git", "gitdir: /somewhere/else");
   write(outer, "wt/AGENTS.md", "inside the worktree");
   const sub = join(outer, "wt", "src");
@@ -98,7 +103,7 @@ test("a .git FILE (git worktree marker) also stops the walk", () => {
 
   const result = loadProjectContext(sub);
 
-  expect(result.sources.map((s) => s.path)).toEqual(["../AGENTS.md"]);
+  expect(result.sources.map((s) => s.path)).toEqual(["../AGENTS.md"]); // and nothing above the boundary
   expect(result.text).toContain("inside the worktree");
   expect(result.text).not.toContain("outside the worktree");
 

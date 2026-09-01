@@ -7,6 +7,11 @@
  * Covered entrypoints: agentLoop itself, the gauntlet runner (with a
  * discriminating without-guard control), orchestrator runChild, and the CLI
  * `run` path end-to-end via a scripted OpenAI-compatible HTTP provider.
+ *
+ * The tail section pins other registry-dispatch seams that live on the same
+ * pipeline (core/tools.ts dispatch): the out.ok argument into
+ * guard.checkResult (FW2-O), ctx.onUpdate → tool_execution_update threading
+ * (FW2-R), and the describeResource schema gate for policy resources.
  */
 import { test, expect } from "bun:test";
 import { agentLoop, SteeringQueue } from "../../src/core/loop.ts";
@@ -17,7 +22,7 @@ import { runChild } from "../../src/core/orchestrator.ts";
 import { runTask } from "../../src/eval/gauntlet-runner.ts";
 import { adversarialTasks } from "../../src/eval/gauntlet.ts";
 import { textTurn, toolTurn } from "../../src/providers/stream.ts";
-import type { AgentDefinition, RunConfig, RunEvent, StreamFn, Tool } from "../../src/core/types.ts";
+import type { AgentDefinition, PermissionRule, RunConfig, RunEvent, StreamFn, Tool, ToolContext, ToolOutput } from "../../src/core/types.ts";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -225,3 +230,122 @@ test("cmdRun: guard events reach the one-shot CLI path end-to-end", async () => 
     rmSync(tmp, { recursive: true, force: true });
   }
 }, 40_000);
+
+// ── registry dispatch seams (core/tools.ts dispatch) ─────────────────────────
+
+function dispatchCtx(): ToolContext {
+  return { sessionId: "s", cwd: process.cwd(), signal: new AbortController().signal, permissions: { effect: "allow" } };
+}
+
+// FW2-O: the out.ok argument at the guard.checkResult call (tools.ts ~:115) is
+// what exempts FAILED results from dedup. The fixture text dodges the string
+// sniff (no "Error" prefix, no '"error"'/'"failed"' head), so ONLY the
+// threaded ok:false keeps it verbatim — deleting the out.ok argument stubs
+// calls 2 and 3 and this test fails.
+test("registry dispatch: three identical FAILING calls all return the failure verbatim — ok:false results are dedup-exempt", async () => {
+  const FAILURE = "Permission denied by user. " + "d".repeat(600); // ≥ dedupMinChars, sniff-dodging
+  const reg = new ToolRegistry();
+  let runs = 0;
+  reg.register({
+    schema: { name: "flaky", description: "always fails", args: { type: "object" } },
+    kind: "custom",
+    async execute() { runs++; return { ok: false, output: FAILURE }; },
+  });
+  const guard = new ToolGuard();
+  const outs: ToolOutput[] = [];
+  for (const id of ["f1", "f2", "f3"]) {
+    outs.push(await reg.dispatch({ kind: "tool_call", id, tool: "flaky", args: { q: 1 } }, dispatchCtx(), undefined, allowAll, undefined, () => {}, guard));
+  }
+  expect(runs).toBe(3); // all executed (stub verdicts only start at the 6th) — dedup is the hazard here
+  for (const o of outs) {
+    expect(o.ok).toBe(false);
+    expect(o.output).toContain(FAILURE);               // the 3rd (and 2nd) stay verbatim…
+    expect(o.output).not.toContain("byte-identical");  // …never the dedup reference stub
+  }
+  // contrast: the SAME text with ok:true dedups through the registry — the ok
+  // flag, not the text, decides (and the dedup wiring itself is live)
+  const reg2 = new ToolRegistry();
+  reg2.register({
+    schema: { name: "chatty", description: "same text, ok", args: { type: "object" } },
+    kind: "custom",
+    async execute() { return { ok: true, output: FAILURE }; },
+  });
+  const guard2 = new ToolGuard();
+  await reg2.dispatch({ kind: "tool_call", id: "s1", tool: "chatty", args: { q: 1 } }, dispatchCtx(), undefined, allowAll, undefined, () => {}, guard2);
+  const second = await reg2.dispatch({ kind: "tool_call", id: "s2", tool: "chatty", args: { q: 1 } }, dispatchCtx(), undefined, allowAll, undefined, () => {}, guard2);
+  expect(second.output).toContain("byte-identical");
+});
+
+// FW2-R: ctx.onUpdate is wired at the execute site (tools.ts ~:108) so a
+// tool's progress notes become real tool_execution_update events — previously
+// NOTHING in src/ emitted that event and MCP onprogress hit a dead callback.
+test("registry dispatch: a tool's ctx.onUpdate('x') surfaces as a tool_execution_update with the right callId", async () => {
+  const reg = new ToolRegistry();
+  reg.register({
+    schema: { name: "prog", description: "emits progress", args: { type: "object" } },
+    kind: "custom",
+    async execute(_args, ctx) {
+      ctx.onUpdate?.("x");
+      ctx.onUpdate?.("half way");
+      return { ok: true, output: "done" };
+    },
+  });
+  const events: RunEvent[] = [];
+  const out = await reg.dispatch(
+    { kind: "tool_call", id: "call-77", tool: "prog", args: {} },
+    dispatchCtx(), undefined, allowAll, undefined, (e) => events.push(e),
+  );
+  expect(out.ok).toBe(true);
+  const updates = events.filter((e) => e.type === "tool_execution_update");
+  expect(updates).toEqual([
+    { type: "tool_execution_update", callId: "call-77", note: "x" },
+    { type: "tool_execution_update", callId: "call-77", note: "half way" },
+  ]);
+  // ordering: update events land between start and end
+  expect(events.findIndex((e) => e.type === "tool_execution_start")).toBeLessThan(events.findIndex((e) => e.type === "tool_execution_update"));
+  expect(events.findIndex((e) => e.type === "tool_execution_end")).toBeGreaterThan(events.findLastIndex((e) => e.type === "tool_execution_update"));
+});
+
+// describeResource schema gate: an args key aims the policy resource ONLY when
+// the tool's declared schema has that property. A smuggled path on a path-less
+// tool must not re-aim a tool-targeted deny rule (policy runs pre-execute, so
+// per-tool arg-stripping can never repair this).
+test("policy: a deny rule on a path-less tool holds when the call smuggles path/command keys", async () => {
+  const reg = new ToolRegistry();
+  let ran = 0;
+  reg.register({
+    schema: { name: "lookup", description: "read-class, no path arg", args: { type: "object", properties: { query: { type: "string" } } } },
+    kind: "read",
+    async execute() { ran++; return { ok: true, output: "secret" }; },
+  });
+  const rules: PermissionRule[] = [
+    { action: "file.read", resource: "*", effect: "allow" },
+    { action: "file.read", resource: "lookup", effect: "deny" }, // precise tool-targeted deny
+  ];
+  for (const args of [{ query: "q", path: "/elsewhere" }, { query: "q", command: "echo hi" }]) {
+    const out = await reg.dispatch({ kind: "tool_call", id: "d1", tool: "lookup", args }, dispatchCtx(), undefined, rules, undefined, () => {});
+    expect(out.ok).toBe(false);
+    expect(out.output).toContain("Permission denied");
+  }
+  expect(ran).toBe(0); // never executed
+});
+
+test("policy: a tool whose schema declares `path` still resolves its resource from args.path", async () => {
+  const reg = new ToolRegistry();
+  const reads: string[] = [];
+  reg.register({
+    schema: { name: "readfile", description: "file read", args: { type: "object", properties: { path: { type: "string" } }, required: ["path"] } },
+    kind: "read",
+    async execute(args) { reads.push(String((args as { path: string }).path)); return { ok: true, output: "content" }; },
+  });
+  const rules: PermissionRule[] = [
+    { action: "file.read", resource: "/workspace/*", effect: "allow" },
+    { action: "file.read", resource: "/workspace/locked.txt", effect: "deny" },
+  ];
+  const ok = await reg.dispatch({ kind: "tool_call", id: "r1", tool: "readfile", args: { path: "/workspace/notes.md" } }, dispatchCtx(), undefined, rules, undefined, () => {});
+  expect(ok.ok).toBe(true);
+  expect(reads).toEqual(["/workspace/notes.md"]);      // path-scoped allow matched the real path
+  const denied = await reg.dispatch({ kind: "tool_call", id: "r2", tool: "readfile", args: { path: "/workspace/locked.txt" } }, dispatchCtx(), undefined, rules, undefined, () => {});
+  expect(denied.ok).toBe(false);                       // path-scoped deny still lands
+  expect(reads).toEqual(["/workspace/notes.md"]);
+});

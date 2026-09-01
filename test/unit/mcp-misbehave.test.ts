@@ -71,27 +71,31 @@ describe("pagination bounds (misbehaving servers)", () => {
     await manager.close();
   });
 
-  test("abort signal cancels a slow paginating server quickly", async () => {
-    let calls = 0;
+  test("abort lands IN-FLIGHT: one slow page aborts sub-500ms (between-page checks can't save this)", async () => {
+    // ONE page slower than the whole bound: the loop's between-page
+    // `signal?.aborted` check only runs after a page RETURNS, so a mutation
+    // that drops the in-flight `signal` from the listTools request options
+    // (client.ts fetchTools) waits the full page (~1.2s) and fails the bound.
+    const PAGE_MS = 1_200;
     const manager = new McpManager([stdioCfg("slowlist")], {
       transportFactory: scripted({
         slowlist: {
           onList: async () => {
-            calls++;
-            await Bun.sleep(150);
-            return { tools: [], nextCursor: `c${calls}` }; // full walk would be 50 × 150ms = 7.5s
+            await Bun.sleep(PAGE_MS);
+            return { tools: [tool("t")] }; // final page — pagination isn't the brake here
           },
         },
       }),
     });
     await manager.connect();
     const ac = new AbortController();
-    setTimeout(() => ac.abort(), 120);
+    setTimeout(() => ac.abort(), 100);
     const started = Date.now();
     const res = await manager.callTool("slowlist", "t", {}, ac.signal);
+    const elapsed = Date.now() - started;
     expect(res.ok).toBe(false);
-    expect(Date.now() - started).toBeLessThan(3_000);
-    await Bun.sleep(200); // let the in-flight server handler drain before close
+    expect(elapsed).toBeLessThan(500); // in-flight cancellation, not page-boundary cleanup
+    await Bun.sleep(PAGE_MS + 100 - elapsed); // let the in-flight server handler drain before close
     await manager.close();
   });
 });

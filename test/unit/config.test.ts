@@ -271,6 +271,27 @@ test("an .mdc file that is only frontmatter strips to blank and is skipped (LOW-
   cleanup(dir);
 });
 
+test("the frontmatter strip is gated to .mdc candidates: a non-mdc file starting with a --- block keeps it verbatim (FW2-Q)", () => {
+  const dir = tmpDir();
+  // Same leading block shape an .mdc would carry — but CLAUDE.md is not an
+  // mdc candidate, so nothing may be stripped. Kills the strip-ALWAYS mutant
+  // (deleting the `candidate.mdc ?` gate survived every other config test).
+  const claude = "---\ndescription: looks like frontmatter\n---\nreal claude rules";
+  write(dir, "CLAUDE.md", claude);
+  write(dir, ".cursor/rules/x.mdc", "---\ndescription: real frontmatter\n---\nmdc body");
+
+  const result = loadProjectContext(dir);
+
+  expect(result.sources).toEqual([
+    { path: "CLAUDE.md", family: "claude", chars: claude.length, truncated: false }, // full length: block kept
+    { path: ".cursor/rules/x.mdc", family: "cursor", chars: "mdc body".length, truncated: false }, // stripped
+  ]);
+  expect(result.text).toContain("---\ndescription: looks like frontmatter\n---\nreal claude rules");
+  expect(result.text).not.toContain("description: real frontmatter");
+
+  cleanup(dir);
+});
+
 test("mdc frontmatter is stripped from .cursor/rules/*.mdc, body content is kept verbatim", () => {
   const dir = tmpDir();
   write(dir, ".cursor/rules/x.mdc", "---\ndescription: foo\nalwaysApply: true\n---\nActual rule body text");

@@ -76,7 +76,7 @@ export class ToolRegistry {
     }
 
     // 2. policy (deny-default)
-    const resource = describeResource(call.tool, args);
+    const resource = describeResource(tool, args);
     const decision = evaluatePermissions(rules, actionFor(tool), resource);
     if (decision.effect === "deny") {
       emit({ type: "tool_call_failed", callId: call.id, reason: "permission_denied", detail: decision.reason });
@@ -101,11 +101,13 @@ export class ToolRegistry {
       }
     }
 
-    // 4. execute with typed error capture
+    // 4. execute with typed error capture; ctx.onUpdate is wired here so a
+    // tool's progress notes (MCP onprogress, LSP/checkpoint updates) become
+    // real tool_execution_update events for ALL tools (port #3 LOW-6)
     emit({ type: "tool_execution_start", callId: call.id, tool: call.tool, args });
     let out: ToolOutput;
     try {
-      out = await tool.execute(args, ctx);
+      out = await tool.execute(args, { ...ctx, onUpdate: (note) => emit({ type: "tool_execution_update", callId: call.id, note }) });
     } catch (e) {
       out = { ok: false, output: `Error: ${e instanceof Error ? e.message : String(e)}` };
     }
@@ -155,14 +157,22 @@ function actionFor(tool: Tool): string {
   }
 }
 
-function describeResource(tool: string, args: unknown): string {
-  if (args && typeof args === "object" && "path" in (args as Record<string, unknown>)) {
-    return String((args as Record<string, unknown>).path);
+/** Resource for policy rules. An args key is only honored when the tool's
+ *  DECLARED schema has that property: args are not schema-validated before
+ *  policy, so a smuggled key ({query, path:"/tmp/x"} on recall, whose schema
+ *  has no `path`) must not re-aim a tool-targeted deny rule at another
+ *  resource. Policy runs pre-execute, so per-tool arg-stripping can't repair
+ *  this — the gate belongs here. */
+function describeResource(tool: Tool, args: unknown): string {
+  const props = tool.schema.args["properties"];
+  const declared = (key: string): boolean =>
+    typeof props === "object" && props !== null && key in (props as Record<string, unknown>);
+  if (args && typeof args === "object") {
+    const a = args as Record<string, unknown>;
+    if (declared("path") && "path" in a) return String(a.path);
+    if (declared("command") && "command" in a) return String(a.command);
   }
-  if (args && typeof args === "object" && "command" in (args as Record<string, unknown>)) {
-    return String((args as Record<string, unknown>).command);
-  }
-  return tool;
+  return tool.schema.name;
 }
 
 function cacheKey(tool: string, args: unknown): string { return tool + "|" + JSON.stringify(sortK(args)); }

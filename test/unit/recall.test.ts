@@ -434,17 +434,15 @@ test("recall.execute strips non-schema args at entry: smuggled keys change nothi
   rmSync(root, { recursive: true, force: true });
 });
 
-// KNOWN GAP — registry level, NOT fixable from recall.ts: core/tools.ts
-// describeResource() prefers an args `path` key over the tool-name fallback and
-// args are not schema-validated before policy, so {query, path:"/tmp/x"} re-aims
-// a `file.read recall` deny rule at resource "/tmp/x", which a broad
-// `file.read *` allow then matches. dispatch() evaluates policy BEFORE
-// tool.execute, so recall's own schema-args strip (tested above) cannot repair
-// this gate. The authoritative fix belongs in core/tools.ts describeResource
-// (describe from schema-validated args only). test.failing = tripwire: the day
-// describeResource is fixed this goes red, and it should be flipped to a normal
-// test.
-test.failing("KNOWN GAP (core/tools.ts describeResource): smuggled `path` arg dodges a tool-targeted deny rule", async () => {
+// Registry level (FW2 fix landed): core/tools.ts describeResource() now only
+// honors an args `path`/`command` key when the tool's DECLARED schema has that
+// property, so {query, path:"/tmp/x"} on recall (whose schema has no `path`)
+// can no longer re-aim a `file.read recall` deny rule at resource "/tmp/x".
+// dispatch() evaluates policy BEFORE tool.execute, so recall's own schema-args
+// strip (tested above) could never repair this gate — the core fix is the
+// authority; this test (the former test.failing tripwire) pins it from the
+// recall side.
+test("smuggled `path` arg no longer dodges a tool-targeted deny rule (describeResource schema gate)", async () => {
   const root = tmpRoot();
   writeSession(root, "s-alpha", [msgLine("gated gecko data")]);
   const registry = new ToolRegistry();
@@ -459,8 +457,7 @@ test.failing("KNOWN GAP (core/tools.ts describeResource): smuggled `path` arg do
   };
   const out = await registry.dispatch(call, ctx(), undefined, rules, undefined, () => {});
   rmSync(root, { recursive: true, force: true });
-  // DESIRED: the deny aimed at `recall` gates the call regardless of smuggled keys.
-  // TODAY: out.ok is true (bypass) — the sole assertion below throws, so this
-  // expected-fail test passes. Keep it single-assertion so a core fix flips it red.
+  // the deny aimed at `recall` gates the call regardless of smuggled keys
   expect(out.ok).toBe(false);
+  expect(out.output).toContain("Permission denied");
 });

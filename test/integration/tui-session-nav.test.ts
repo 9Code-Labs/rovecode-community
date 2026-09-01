@@ -321,23 +321,28 @@ test("CLI: `aion --resume <prefix>` boots the TUI on the resumed session (headle
     cwd, stdin: "pipe", stdout: "pipe", stderr: "pipe",
     env: { ...process.env, NO_COLOR: "1" },
   });
+  // Read via a single pump — NEVER race reader.read() against a timeout: a
+  // raced-out read stays queued on the stream and CONSUMES the next chunk,
+  // which is then dropped. That was this test's flake: once the child's boot
+  // crossed 250ms (bun + the full TUI import graph is ~1-2s on this box),
+  // every content chunk landed in an abandoned read and only a late cursor
+  // sequence survived, so the 15s deadline burned on a transcript that HAD
+  // been printed (~2s in). The deadline poll below just watches the buffer.
   let out = "";
-  const reader = proc.stdout.getReader();
   const dec = new TextDecoder();
-  const deadline = Date.now() + 15_000;
+  const pump = (async () => {
+    for await (const chunk of proc.stdout) out += dec.decode(chunk, { stream: true });
+  })().catch(() => {});
+  const ready = () => out.includes("CLI-RESUME-PROBE") && out.includes("probe answer");
+  const deadline = Date.now() + 20_000;
   try {
-    while (Date.now() < deadline && !(out.includes("CLI-RESUME-PROBE") && out.includes("probe answer"))) {
-      const chunk = await Promise.race([
-        reader.read(),
-        new Promise<null>((r) => setTimeout(() => r(null), 250)),
-      ]);
-      if (chunk === null) continue;
-      if (chunk.done) break;
-      out += dec.decode(chunk.value);
+    while (Date.now() < deadline && !ready()) {
+      await new Promise((r) => setTimeout(r, 50));
     }
   } finally {
     proc.kill();
     await proc.exited.catch(() => {});
+    await pump; // stdout closes after kill; collect any tail bytes
   }
   expect(out).toContain("CLI-RESUME-PROBE hello");   // replayed user turn
   expect(out).toContain("probe answer");             // replayed assistant turn
@@ -346,4 +351,4 @@ test("CLI: `aion --resume <prefix>` boots the TUI on the resumed session (headle
     try { rmSync(cwd, { recursive: true, force: true }); break; }
     catch { await new Promise((r) => setTimeout(r, 100)); }
   }
-}, 30_000);
+}, 40_000);
