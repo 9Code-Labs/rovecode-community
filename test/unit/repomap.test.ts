@@ -1,7 +1,8 @@
 import { test, expect } from "bun:test";
-import { extractTags, buildRepoMapChunk, findSrcFiles, RepoMap } from "../../src/coding/repomap.ts";
+import { extractTags, buildRepoMapChunk, findSrcFiles, RepoMap, type SrcScanStats } from "../../src/coding/repomap.ts";
 import { estimateTokens } from "../../src/core/context.ts";
-import { mkdtempSync, writeFileSync, rmSync, utimesSync, mkdirSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, utimesSync, mkdirSync, existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -185,6 +186,155 @@ test("buildRepoMapChunk returns a well-formed repo-map ContextChunk", () => {
   expect(chunk.priority).toBe(80); // between files (90) and skills: system>files>repo-map>skills>history
   expect(chunk.tokens).toBe(estimateTokens(chunk.text));
   expect(chunk.text.length).toBeGreaterThan(0);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+// --- pagerank transitivity (round-2 F4: uniform-rank mutant must fail) ---
+
+test("pagerank: multi-hop rank propagation, not raw in-degree (repomap.py L519-550)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-rm-pr-"));
+  // hub.ts is referenced by THREE leaves -> high PageRank; its single outbound
+  // reference passes that mass to midThing. popThing has MORE raw referencers
+  // (two), but both are rank-poor leaf files nothing links to. PageRank ranks
+  // midThing above popThing; a uniform-rank (1/n) mutant scores popThing 2u
+  // vs midThing u and flips the order — this fixture discriminates.
+  writeFileSync(join(dir, "hub.ts"), "export function hubThing() { return midThing(); }\n");
+  writeFileSync(join(dir, "mid.ts"), "export function midThing() { return 1; }\n");
+  writeFileSync(join(dir, "pop.ts"), "export function popThing() { return 2; }\n");
+  writeFileSync(join(dir, "leaf1.ts"), "hubThing();\n");
+  writeFileSync(join(dir, "leaf2.ts"), "hubThing();\n");
+  writeFileSync(join(dir, "leaf3.ts"), "hubThing();\n");
+  writeFileSync(join(dir, "pleaf1.ts"), "popThing();\n");
+  writeFileSync(join(dir, "pleaf2.ts"), "popThing();\n");
+  const rm = new RepoMap(dir);
+  const defOrder = rm.rankedTags([], findSrcFiles(dir), new Set())
+    .filter((e) => e.tag).map((e) => e.tag!.name);
+  expect(defOrder.indexOf("midThing")).toBeGreaterThanOrEqual(0);
+  expect(defOrder.indexOf("midThing")).toBeLessThan(defOrder.indexOf("popThing"));
+  rmSync(dir, { recursive: true, force: true });
+});
+
+// --- persistent tags cache (round-2 F1; aider .aider.tags.cache.v4) ---
+
+test("persistent tags cache: a fresh RepoMap reuses saved tags across 'launches' (repomap.py L217-222)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-rm-disk-"));
+  const p1 = join(dir, "one.ts"), p2 = join(dir, "two.ts");
+  writeFileSync(p1, "export function oneThing() { return 1; }\n");
+  writeFileSync(p2, "export function twoThing() { return oneThing(); }\n");
+  const rm1 = new RepoMap(dir);
+  const t1 = rm1.getTags(p1, "one.ts");
+  rm1.getTags(p2, "two.ts");
+  expect(rm1.extractCount).toBe(2);
+  rm1.saveCache();
+  expect(existsSync(join(dir, ".aion", "cache", "repomap.json"))).toBe(true);
+  // "second launch": brand-new instance, warm disk -> ZERO extractions
+  const rm2 = new RepoMap(dir);
+  expect(rm2.getTags(p1, "one.ts")).toEqual(t1);
+  rm2.getTags(p2, "two.ts");
+  expect(rm2.extractCount).toBe(0);
+  // invalidation: content change (mtime+size move) -> exactly that file re-extracts
+  writeFileSync(p1, "export function oneThingChanged() { return 3; }\n");
+  const future = new Date(Date.now() + 5000);
+  utimesSync(p1, future, future);
+  const rm3 = new RepoMap(dir);
+  expect(rm3.getTags(p1, "one.ts").map((t) => t.name)).toContain("oneThingChanged");
+  rm3.getTags(p2, "two.ts");
+  expect(rm3.extractCount).toBe(1);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("persistent tags cache: corrupt cache file degrades to cold and heals on save", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-rm-corrupt-"));
+  const p = join(dir, "c.ts");
+  writeFileSync(p, "export function cThing() { return 1; }\n");
+  mkdirSync(join(dir, ".aion", "cache"), { recursive: true });
+  writeFileSync(join(dir, ".aion", "cache", "repomap.json"), "{not json!!");
+  const rm = new RepoMap(dir);
+  expect(rm.getTags(p, "c.ts").map((t) => t.name)).toContain("cThing");
+  expect(rm.extractCount).toBe(1); // corrupt -> cold, no crash (aider recreates, L241-264)
+  rm.saveCache();
+  const rm2 = new RepoMap(dir);
+  rm2.getTags(p, "c.ts");
+  expect(rm2.extractCount).toBe(0); // healed
+  rmSync(dir, { recursive: true, force: true });
+});
+
+// --- bounded enumeration (round-2 F2) ---
+
+test("findSrcFiles: file-count cap stops enumeration and reports capping", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-rm-cap-"));
+  for (const n of ["a", "b", "c", "d", "e"]) writeFileSync(join(dir, `${n}.ts`), `export function ${n}Fn() {}\n`);
+  const stats: SrcScanStats = { capped: false, viaGit: false };
+  const files = findSrcFiles(dir, stats, 3);
+  expect(files.length).toBe(3);
+  expect(stats.capped).toBe(true);
+  // deterministic: lexicographically first names survive the cap
+  expect(files.map((f) => f.replaceAll("\\", "/").split("/").pop())).toEqual(["a.ts", "b.ts", "c.ts"]);
+  const stats2: SrcScanStats = { capped: false, viaGit: false };
+  expect(findSrcFiles(dir, stats2).length).toBe(5);
+  expect(stats2.capped).toBe(false);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("findSrcFiles: oversized files are skipped (minified-bundle parse guard)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-rm-size-"));
+  writeFileSync(join(dir, "small.ts"), "export function smallFn() {}\n");
+  writeFileSync(join(dir, "huge.ts"), `export const blob = "${"x".repeat(300 * 1024)}";\n`);
+  const files = findSrcFiles(dir).map((f) => f.replaceAll("\\", "/"));
+  expect(files.length).toBe(1);
+  expect(files[0]!.endsWith("/small.ts")).toBe(true);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("findSrcFiles: git repo enumerates via ls-files and honors .gitignore", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-rm-git-"));
+  const init = spawnSync("git", ["-C", dir, "init", "-q"], { encoding: "utf8" });
+  expect(init.status).toBe(0);
+  writeFileSync(join(dir, ".gitignore"), "gen/\nvendored.ts\n");
+  writeFileSync(join(dir, "a.ts"), "export function aThing() {}\n");
+  writeFileSync(join(dir, "vendored.ts"), "export function ignoredThing() {}\n");
+  mkdirSync(join(dir, "gen"));
+  writeFileSync(join(dir, "gen", "out.ts"), "export function genThing() {}\n");
+  const stats: SrcScanStats = { capped: false, viaGit: false };
+  const files = findSrcFiles(dir, stats).map((f) => f.replaceAll("\\", "/"));
+  expect(stats.viaGit).toBe(true); // ls-files path, untracked-unignored included
+  expect(files.length).toBe(1);
+  expect(files[0]!.endsWith("/a.ts")).toBe(true);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("buildRepoMapChunk: cap appends a deterministic truncation note inside the budget", () => {
+  const dir = makeFixture();
+  const c1 = buildRepoMapChunk(dir, 300, { maxFiles: 2 })!;
+  expect(c1.text).toContain("(repo map truncated: 2-file cap reached)");
+  expect(estimateTokens(c1.text)).toBeLessThanOrEqual(300);
+  expect(c1.tokens).toBeLessThanOrEqual(300);
+  const c2 = buildRepoMapChunk(dir, 300, { maxFiles: 2 })!;
+  expect(c2.text).toBe(c1.text); // note is part of the deterministic chunk text
+  rmSync(dir, { recursive: true, force: true });
+});
+
+// --- special entries vs source files (round-2 F5) ---
+
+test("readme.ts is a SOURCE file: its definitions survive instead of a bare special entry", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-rm-readme-"));
+  writeFileSync(join(dir, "readme.ts"), "export function readmeHelperFn() { return 1; }\n");
+  writeFileSync(join(dir, "use.ts"), "readmeHelperFn();\n");
+  writeFileSync(join(dir, "README.md"), "# docs\n");
+  const rm = new RepoMap(dir);
+  const text = rm.rankedTagsMap([], findSrcFiles(dir), 500);
+  expect(text).toContain("readmeHelperFn"); // definition line rendered, not swallowed
+  expect(text).toContain("README.md");      // the real docs README stays a bare special
+  rmSync(dir, { recursive: true, force: true });
+});
+
+// --- docs-only repos (round-2 F6; aider returns early, repomap.py L113-114) ---
+
+test("docs-only repo yields NO chunk instead of a junk specials-only map", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-rm-docs-"));
+  writeFileSync(join(dir, "README.md"), "# just docs\n");
+  writeFileSync(join(dir, "package.json"), "{}\n");
+  expect(buildRepoMapChunk(dir, 1000)).toBeNull();
   rmSync(dir, { recursive: true, force: true });
 });
 

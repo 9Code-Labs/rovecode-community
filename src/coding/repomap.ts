@@ -2,20 +2,27 @@
  *  order system>files>repo-map>skills>history). Port of aider's repomap.py
  *  (Apache-2.0, snapshot research/source_snapshots/Aider-AI-aider):
  *    - Tag shape + mtime-keyed tags cache ... repomap.py L29, L233-264
+ *    - persistent tags cache ................ repomap.py L217-222 (-> repomap-cache.ts)
  *    - def/ref classification ............... repomap.py L318-336
  *    - def/ref graph + ident multipliers .... repomap.py L365-514
  *    - PageRank + rank->definition spread ... repomap.py L519-550
  *    - ranked file append ................... repomap.py L560-574
  *    - binary-search token budgeting ........ repomap.py L666-706
  *    - grouped tree rendering ............... repomap.py L748-784
+ *    - no-source early return ............... repomap.py L113-114
  *  Symbol extraction uses @ast-grep/napi (tree-sitter) instead of aider's
- *  .scm tag queries; deviations recorded in the port report. */
+ *  .scm tag queries; deviations recorded in the port report. File enumeration
+ *  (git ls-files preferred, bounded walk fallback) lives in repomap-files.ts. */
 
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative, extname } from "node:path";
+import { relative, extname } from "node:path";
 import { parse, Lang } from "@ast-grep/napi";
 import type { SgNode } from "@ast-grep/napi";
 import { estimateTokens, type ContextChunk } from "../core/context.ts";
+import { TagsDiskCache } from "./repomap-cache.ts";
+import { findSrcFiles, LANG_BY_EXT, MAX_SRC_FILES, type SrcScanStats } from "./repomap-files.ts";
+
+export { findSrcFiles, MAX_SRC_FILES, MAX_SRC_BYTES, type SrcScanStats } from "./repomap-files.ts";
 
 /** repomap.py L29: Tag = namedtuple("Tag", "rel_fname fname line name kind") */
 export interface Tag {
@@ -27,12 +34,6 @@ export interface Tag {
 }
 
 // ---------------------------------------------------------------- extraction
-
-const LANG_BY_EXT: Record<string, Lang> = {
-  ".ts": Lang.TypeScript, ".mts": Lang.TypeScript, ".cts": Lang.TypeScript,
-  ".tsx": Lang.Tsx,
-  ".js": Lang.JavaScript, ".mjs": Lang.JavaScript, ".cjs": Lang.JavaScript, ".jsx": Lang.JavaScript,
-};
 
 /** def-bearing node kinds with a `name` field (tree-sitter-javascript grammar). */
 const DEF_KINDS_JS = [
@@ -146,24 +147,35 @@ function pagerank(nodes: string[], edges: Edge[], personalization?: Map<string, 
 type RankedEntry = { relFname: string; tag?: Tag };
 
 export class RepoMap {
-  /** mtime-keyed tags cache (aider get_tags L233-264; in-memory Map instead
-   *  of aider's diskcache — process-lifetime, same invalidation semantics). */
+  /** mtime-keyed in-memory tags cache (aider get_tags L233-264), backed by a
+   *  persistent per-repo disk cache (aider .aider.tags.cache.v4, L217-222) so
+   *  warm launches skip extraction entirely. */
   private tagsCache = new Map<string, { mtime: number; data: Tag[] }>();
+  private disk: TagsDiskCache;
   /** raw extraction counter, exposed so tests can prove cache hits/misses. */
   extractCount = 0;
 
-  constructor(readonly root: string) {}
+  constructor(readonly root: string) {
+    this.disk = new TagsDiskCache(root);
+  }
 
-  /** aider get_tags (repomap.py L233-264): hit when cached mtime matches. */
+  /** aider get_tags (repomap.py L233-264): hit when cached mtime matches;
+   *  disk hits (mtime+size) refill the in-memory map without re-extracting. */
   getTags(fname: string, relFname: string): Tag[] {
-    let mtime: number;
+    let st;
     try {
-      mtime = statSync(fname).mtimeMs;
+      st = statSync(fname);
     } catch {
       return []; // file vanished (repomap.py L230-231, L235-237)
     }
+    const mtime = st.mtimeMs;
     const hit = this.tagsCache.get(fname);
     if (hit && hit.mtime === mtime) return hit.data; // L246-251
+    const diskHit = this.disk.get(fname, mtime, st.size);
+    if (diskHit) {
+      this.tagsCache.set(fname, { mtime, data: diskHit });
+      return diskHit;
+    }
     this.extractCount++;
     let source = "";
     try {
@@ -173,7 +185,14 @@ export class RepoMap {
     }
     const data = extractTags(fname, relFname, source);
     this.tagsCache.set(fname, { mtime, data }); // L258
+    this.disk.set(fname, mtime, st.size, data);
     return data;
+  }
+
+  /** Persist the disk cache (no-op when nothing new was extracted). Callers
+   *  that finish a full build should call this once — cheap, write-if-dirty. */
+  saveCache(): void {
+    this.disk.save();
   }
 
   /** aider get_ranked_tags (repomap.py L365-574). */
@@ -280,13 +299,16 @@ export class RepoMap {
 
   /** special files prepended as bare entries (repomap.py L656-662; minimal
    *  filter_important_files: root-level README* / package.json / tsconfig.json,
-   *  scanned directly since findSrcFiles only yields parseable sources). */
+   *  scanned directly since findSrcFiles only yields parseable sources).
+   *  Parseable extensions are EXCLUDED (round-2 F5): a readme.ts is a source
+   *  file — a bare entry here would swallow its ranked definitions in toTree. */
   private specialEntries(): RankedEntry[] {
     let names: string[] = [];
     try {
       names = readdirSync(this.root);
     } catch { /* unreadable root -> no specials */ }
-    return names.filter((f) => /^(readme.*|package\.json|tsconfig\.json)$/i.test(f))
+    return names.filter((f) => /^(readme.*|package\.json|tsconfig\.json)$/i.test(f)
+        && LANG_BY_EXT[extname(f).toLowerCase()] === undefined)
       .sort().map((f) => ({ relFname: f }));
   }
 
@@ -345,48 +367,26 @@ export class RepoMap {
   }
 }
 
-// ---------------------------------------------------------------- walking
-
-const SKIP_DIRS = new Set(["node_modules", ".git", ".aion", "dist", "build", "out", "coverage", ".cache"]);
-
-/** Source files under root (aider find_src_files L787-795 walks everything;
- *  we filter to supported extensions and skip dependency/output dirs since
- *  we have no git tracked-file list). Sorted for determinism. */
-export function findSrcFiles(rootDir: string): string[] {
-  const out: string[] = [];
-  const walk = (dir: string) => {
-    let names: string[];
-    try {
-      names = readdirSync(dir);
-    } catch {
-      return;
-    }
-    for (const name of names.sort()) {
-      const full = join(dir, name);
-      let st;
-      try {
-        st = statSync(full);
-      } catch {
-        continue;
-      }
-      if (st.isDirectory()) {
-        if (!SKIP_DIRS.has(name) && !name.startsWith(".")) walk(full);
-      } else if (LANG_BY_EXT[extname(name).toLowerCase()] !== undefined) {
-        out.push(full);
-      }
-    }
-  };
-  walk(rootDir);
-  return out;
-}
+// ---------------------------------------------------------------- chunk
 
 /** Build the RESERVED `repo-map` ContextChunk (ADR-007). Priority 80 slots
  *  between files (90) and skills per system>files>repo-map>skills>history.
- *  Returns null when the map is empty or the budget is unusable. */
-export function buildRepoMapChunk(rootDir: string, budgetTokens: number): ContextChunk | null {
+ *  Returns null when the budget is unusable, when the repo has NO source
+ *  files (aider returns early, repomap.py L113-114 — a docs-only repo must
+ *  not emit a junk specials-only chunk), or when the map renders empty.
+ *  When the file cap truncated enumeration, a deterministic note line is
+ *  appended INSIDE the budget. Persists the tags cache after the build.
+ *  `opts.maxFiles` is a test seam only. */
+export function buildRepoMapChunk(rootDir: string, budgetTokens: number, opts?: { maxFiles?: number }): ContextChunk | null {
   if (budgetTokens <= 0) return null; // aider get_repo_map L111-112
+  const stats: SrcScanStats = { capped: false, viaGit: false };
+  const files = findSrcFiles(rootDir, stats, opts?.maxFiles ?? MAX_SRC_FILES);
+  if (files.length === 0) return null; // repomap.py L113-114
+  const note = stats.capped ? `\n(repo map truncated: ${opts?.maxFiles ?? MAX_SRC_FILES}-file cap reached)\n` : "";
   const rm = new RepoMap(rootDir);
-  const text = rm.rankedTagsMap([], findSrcFiles(rootDir), budgetTokens);
+  const text = rm.rankedTagsMap([], files, Math.max(1, budgetTokens - estimateTokens(note)));
+  rm.saveCache();
   if (!text.trim()) return null;
-  return { name: "repo-map", text, priority: 80, tokens: estimateTokens(text) };
+  const full = text + note;
+  return { name: "repo-map", text: full, priority: 80, tokens: estimateTokens(full) };
 }

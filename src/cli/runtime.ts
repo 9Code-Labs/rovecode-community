@@ -170,15 +170,23 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     : null;
 
   // port #12: repo-map fills the reserved ADR-007 chunk (priority 80, set by the
-  // module: system>files>repo-map>skills/config>history). Built ONCE per runtime —
-  // frozen like config for prompt-cache stability. AION_NO_REPOMAP=1 disables;
-  // budget override via AION_REPOMAP_TOKENS (default 1024, aider's default).
-  let repoMapChunk: ContextChunk | null = null;
-  if (process.env.AION_NO_REPOMAP !== "1") {
-    const budget = Number(process.env.AION_REPOMAP_TOKENS ?? "") || 1024;
-    try { repoMapChunk = buildRepoMapChunk(cwd, budget); } catch { repoMapChunk = null; }
-  }
-  const extraChunks = [configChunk, repoMapChunk].filter((c): c is ContextChunk => c !== null);
+  // module: system>files>repo-map>skills/config>history). Built LAZILY at the
+  // first buildDef() and memoized — createRuntime stays sync-cheap (`aion tools`,
+  // ACP session setup pay nothing) and per-file tags persist under
+  // .aion/cache/repomap.json, so warm launches skip extraction. Frozen after
+  // the first build, like config, for prompt-cache stability. AION_NO_REPOMAP=1
+  // disables; budget override via AION_REPOMAP_TOKENS (default 1024, aider's).
+  let extraChunksMemo: ContextChunk[] | null = null;
+  const extraChunks = (): ContextChunk[] => {
+    if (extraChunksMemo !== null) return extraChunksMemo;
+    let repoMapChunk: ContextChunk | null = null;
+    if (process.env.AION_NO_REPOMAP !== "1") {
+      const budget = Number(process.env.AION_REPOMAP_TOKENS ?? "") || 1024;
+      try { repoMapChunk = buildRepoMapChunk(cwd, budget); } catch { repoMapChunk = null; }
+    }
+    extraChunksMemo = [configChunk, repoMapChunk].filter((c): c is ContextChunk => c !== null);
+    return extraChunksMemo;
+  };
 
   const systemPrompt = (): string => {
     const skillsIndex = buildSkillsIndex(skillStore);
@@ -206,7 +214,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
         systemPrompt: nonNative
           ? `${base}\n\n# Tool calling\n${toolPromptBlock(registry.list().map((t) => t.schema))}`
           : base,
-        ...(extraChunks.length > 0 ? { contextChunks: extraChunks } : {}),
+        ...(extraChunks().length > 0 ? { contextChunks: extraChunks() } : {}),
       };
     },
     buildCfg: (yolo: boolean, approval?: ApprovalFn): RunConfig => ({
