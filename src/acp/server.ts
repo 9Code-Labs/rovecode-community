@@ -45,7 +45,14 @@ type RunStatus = "done" | "stopped" | "error" | "budget";
 interface AcpSessionState {
   rt: Runtime;
   steering: SteeringQueue;
-  active: { gen: AsyncGenerator<RunEvent>; cancelled: boolean } | null;
+  active: {
+    gen: AsyncGenerator<RunEvent>;
+    cancelled: boolean;
+    /** resolves null when session/cancel lands — raced against an outstanding
+     *  request_permission so a hung client cannot wedge the session (HIGH-G2) */
+    onCancel: Promise<null>;
+    fireCancel: () => void;
+  } | null;
   permSeq: number;
 }
 
@@ -175,10 +182,13 @@ export class AionAcpAgent implements Agent {
     const deps = {
       stream, registry: s.rt.registry, store: s.rt.store,
       tools: s.rt.registry.list().map((t) => t.schema), guard: s.rt.guard,
+      cwd: s.rt.cwd, // HIGH-G1: the client's authoritative session cwd reaches ToolContext
     };
 
     const gen = agentLoop(def, goal, {}, cfg, deps, s.steering);
-    const active = { gen, cancelled: false };
+    let fireCancel: () => void = () => {};
+    const onCancel = new Promise<null>((resolve) => { fireCancel = () => resolve(null); });
+    const active = { gen, cancelled: false, onCancel, fireCancel };
     s.active = active;
     let end: { status: RunStatus; summary: string } | null = null;
     try {
@@ -205,9 +215,24 @@ export class AionAcpAgent implements Agent {
     const active = this.sessions.get(params.sessionId)?.active;
     if (!active) return;
     active.cancelled = true;
+    // HIGH-G2: unblock an outstanding request_permission (→ deny) — without
+    // this a crashed client / closed popup leaves the run suspended inside the
+    // approval await forever and the session permanently "already running".
+    active.fireCancel();
     // close the generator: runs the loop's finally blocks (aborts in-flight tools).
     // Queues behind any pending next(), so the stop is cooperative (SHOULD per spec).
     await active.gen.return(undefined as never).then(() => undefined, () => undefined);
+  }
+
+  /** MED-G3: close every session runtime's MCP children. runAcpStdio calls this
+   *  when stdin closes — without it, `aion acp` in an MCP-configured project
+   *  outlives the client (children keep running until the parent is killed). */
+  async shutdown(): Promise<void> {
+    const closing: Promise<unknown>[] = [];
+    for (const s of this.sessions.values()) {
+      if (s.rt.mcp) closing.push(s.rt.mcp.close().catch(() => {}));
+    }
+    await Promise.all(closing);
   }
 
   /** ADR-005 approval seam → session/request_permission. Deny is the safe default:
@@ -217,7 +242,7 @@ export class AionAcpAgent implements Agent {
       const toolCallId = `perm-${++s.permSeq}`;
       let outcome: { outcome: "cancelled" } | { outcome: "selected"; optionId: string };
       try {
-        const resp = await this.conn.requestPermission({
+        const ask = this.conn.requestPermission({
           sessionId,
           toolCall: {
             toolCallId, title: titleFor(req.tool, req.revisedArgs), kind: kindFor(req.tool),
@@ -229,6 +254,11 @@ export class AionAcpAgent implements Agent {
             { optionId: "reject-once", name: "Deny", kind: "reject_once" },
           ],
         });
+        void ask.then(() => undefined, () => undefined); // raced loser must not surface as unhandled
+        // HIGH-G2: session/cancel must be able to interrupt an outstanding ask
+        // (client crash / closed popup) — cancel wins the race and maps to deny
+        const resp = s.active ? await Promise.race([ask, s.active.onCancel]) : await ask;
+        if (resp === null) return "deny"; // cancelled mid-permission
         outcome = resp.outcome;
       } catch {
         return "deny"; // client rejected the request itself → unsupported → deny
@@ -244,9 +274,12 @@ export class AionAcpAgent implements Agent {
 // ---------- wiring ----------
 
 /** Attach an ACP agent to a bidirectional message stream (tests use an
- *  in-process duplex; the CLI uses stdio via runAcpStdio). */
-export function serveAcp(io: Stream, opts: AcpOptions = {}): AgentSideConnection {
-  return new AgentSideConnection((conn) => new AionAcpAgent(conn, opts), io);
+ *  in-process duplex; the CLI uses stdio via runAcpStdio). The agent handle is
+ *  returned alongside the connection so callers can shutdown() its sessions. */
+export function serveAcp(io: Stream, opts: AcpOptions = {}): { conn: AgentSideConnection; agent: AionAcpAgent } {
+  let agent!: AionAcpAgent; // the factory runs synchronously inside the ctor
+  const conn = new AgentSideConnection((c) => (agent = new AionAcpAgent(c, opts)), io);
+  return { conn, agent };
 }
 
 /** `aion acp`: serve ACP v1 over stdio until the client closes stdin.
@@ -258,9 +291,12 @@ export function runAcpStdio(opts: AcpOptions = {}): Promise<void> {
     Writable.toWeb(process.stdout) as unknown as WritableStream<Uint8Array>,
     Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>,
   );
-  serveAcp(io, opts);
+  const { agent } = serveAcp(io, opts);
   return new Promise<void>((resolve) => {
-    process.stdin.once("end", () => resolve());
-    process.stdin.once("close", () => resolve());
+    // MED-G3: reap MCP children before resolving, or the process outlives a
+    // closed editor in MCP-configured projects (children hold the event loop)
+    const done = () => { void agent.shutdown().then(() => resolve(), () => resolve()); };
+    process.stdin.once("end", done);
+    process.stdin.once("close", done);
   });
 }

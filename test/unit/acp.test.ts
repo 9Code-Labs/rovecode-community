@@ -9,12 +9,13 @@ import {
   type Client, type SessionNotification,
   type RequestPermissionRequest, type RequestPermissionResponse,
 } from "@zed-industries/agent-client-protocol";
-import { serveAcp, promptText, updateForEvent, kindFor, titleFor, type AcpOptions } from "../../src/acp/server.ts";
+import { serveAcp, promptText, updateForEvent, kindFor, titleFor, type AcpOptions, type AionAcpAgent } from "../../src/acp/server.ts";
 import type { StreamEvent, StreamFn } from "../../src/core/types.ts";
 import { textTurn, toolTurn } from "../../src/providers/stream.ts";
+import { McpManager } from "../../src/mcp/client.ts";
 import { mkdtempSync, writeFileSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 // ---------- rig ----------
 
@@ -37,13 +38,13 @@ class TestClient implements Client {
 }
 
 /** In-process duplex: agent and client each get an ndJsonStream over two pipes. */
-function connect(opts: AcpOptions): { conn: ClientSideConnection; client: TestClient } {
+function connect(opts: AcpOptions): { conn: ClientSideConnection; client: TestClient; agent: AionAcpAgent } {
   const agentToClient = new TransformStream<Uint8Array, Uint8Array>();
   const clientToAgent = new TransformStream<Uint8Array, Uint8Array>();
-  serveAcp(ndJsonStream(agentToClient.writable, clientToAgent.readable), opts);
+  const { agent } = serveAcp(ndJsonStream(agentToClient.writable, clientToAgent.readable), opts);
   const client = new TestClient();
   const conn = new ClientSideConnection(() => client, ndJsonStream(clientToAgent.writable, agentToClient.readable));
-  return { conn, client };
+  return { conn, client, agent };
 }
 
 /** Per-prompt-turn script: call N of the stream yields script[N] (last repeats). */
@@ -279,6 +280,130 @@ test("max-turns budget maps to stopReason max_turn_requests", async () => {
     const resp = await conn.prompt(textPrompt(sessionId, "loop forever"));
     expect(resp.stopReason).toBe("max_turn_requests");
   } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+// ---------- wave-2 fix tests (FW2-L) ----------
+
+/** Stream whose FIRST call parks inside the provider turn (after one delta)
+ *  until released — deterministic control over run timing. Later calls answer
+ *  immediately. */
+function gatedTextStream(): { stream: StreamFn; release: () => void; reached: Promise<void> } {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  let sawGate!: () => void;
+  const reached = new Promise<void>((r) => { sawGate = r; });
+  let calls = 0;
+  const stream: StreamFn = async function* (): AsyncGenerator<StreamEvent> {
+    if (++calls === 1) {
+      yield { type: "text_delta", text: "before-cancel" };
+      sawGate();
+      await gate;
+    }
+    yield { type: "turn", turn: textTurn("done") };
+  };
+  return { stream, release, reached };
+}
+
+test("active-guard pin: second prompt while one runs → -32600; session usable after", async () => {
+  const cwd = tmpCwd();
+  const { stream, release, reached } = gatedTextStream();
+  try {
+    const { conn } = connect({ stream });
+    const sessionId = await handshake(conn, cwd);
+    const p1 = conn.prompt(textPrompt(sessionId, "first"));
+    await reached; // run 1 is inside its provider turn
+    let code = 0;
+    try { await conn.prompt(textPrompt(sessionId, "second")); } catch (e) { code = (e as { code: number }).code; }
+    expect(code).toBe(-32600); // invalid request: a prompt is already running
+    release();
+    expect((await p1).stopReason).toBe("end_turn");
+    // the guard cleared: a third prompt round-trips
+    expect((await conn.prompt(textPrompt(sessionId, "third"))).stopReason).toBe("end_turn");
+  } finally { release(); rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test("HIGH-G2: session/cancel interrupts an outstanding request_permission → deny; session NOT wedged", async () => {
+  const cwd = tmpCwd();
+  try {
+    const out = join(cwd, "out.txt");
+    const { conn, client } = connect({ stream: writeScript(out) });
+    let askSeen!: () => void;
+    const asked = new Promise<void>((r) => { askSeen = r; });
+    // the popup is never answered (client crashed / user closed it)
+    client.answer = () => { askSeen(); return new Promise(() => {}); };
+    const sessionId = await handshake(conn, cwd);
+    const p = conn.prompt(textPrompt(sessionId, "write the file"));
+    await asked;                       // the permission request is in flight
+    await conn.cancel({ sessionId });  // ← without the race fix, p never resolves (test times out)
+    const resp = await p;
+    expect(resp.stopReason).toBe("cancelled");
+    expect(existsSync(out)).toBe(false); // cancel mapped to deny: the write never ran
+    // the session is usable again — not permanently "already running"
+    const again = await conn.prompt(textPrompt(sessionId, "carry on"));
+    expect(again.stopReason).toBe("end_turn");
+    expect(client.permissionRequests).toHaveLength(1); // only the interrupted ask ever happened
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test("session/cancel mid-run → stopReason cancelled; nothing forwarded after cancel", async () => {
+  const cwd = tmpCwd();
+  const { stream, release, reached } = gatedTextStream();
+  try {
+    const { conn, client } = connect({ stream });
+    const sessionId = await handshake(conn, cwd);
+    const p = conn.prompt(textPrompt(sessionId, "run"));
+    await reached;                     // run parked inside the provider turn
+    await conn.cancel({ sessionId });
+    release();
+    const resp = await p;
+    expect(resp.stopReason).toBe("cancelled"); // pin: cancelled, not end_turn
+    // cancelled-break pin: the buffered "before-cancel" delta must NOT be
+    // forwarded once cancel landed (delete the break → this leaks through)
+    expect(client.ofType("agent_message_chunk")).toHaveLength(0);
+  } finally { release(); rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test("HIGH-G1: session cwd reaches tools — bash pwd runs in the SESSION cwd, not the agent process dir", async () => {
+  const cwd = tmpCwd();
+  try {
+    const stream = scriptedStream([
+      [{ type: "turn", turn: toolTurn([{ id: "b1", tool: "bash", args: { command: "pwd" } }]) }],
+      [{ type: "turn", turn: textTurn("done") }],
+    ]);
+    const { conn, client } = connect({ stream, yolo: true }); // no permission round-trip
+    const sessionId = await handshake(conn, cwd);
+    const resp = await conn.prompt(textPrompt(sessionId, "where am i"));
+    expect(resp.stopReason).toBe("end_turn");
+    const up = client.ofType("tool_call_update").find((u) => u.toolCallId === "b1") as
+      Extract<SessionNotification["update"], { sessionUpdate: "tool_call_update" }> | undefined;
+    expect(up).toBeDefined();
+    expect(up!.status).toBe("completed");
+    const outText = String((up!.rawOutput as { output: string }).output);
+    // mkdtemp basename is unique — provably the session cwd, not process.cwd()
+    expect(outText).toContain(basename(cwd));
+    expect(basename(process.cwd())).not.toBe(basename(cwd));
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test("MED-G3: shutdown() closes every session runtime's MCP manager (stdin-close reap seam)", async () => {
+  const cwd = tmpCwd();
+  writeFileSync(join(cwd, ".mcp.json"), JSON.stringify({ mcpServers: { toy: { command: "aion-not-a-real-binary-acp" } } }));
+  const closed: McpManager[] = [];
+  const orig = McpManager.prototype.close;
+  McpManager.prototype.close = async function (this: McpManager) { closed.push(this); return orig.call(this); };
+  try {
+    const { conn, agent } = connect({ stream: scriptedStream([[{ type: "turn", turn: textTurn("hi") }]]) });
+    const s1 = await handshake(conn, cwd);        // session runtime with a non-null mcp
+    const s2 = await conn.newSession({ cwd, mcpServers: [] });
+    expect(s2.sessionId).not.toBe(s1);
+    expect(closed.length).toBe(0);
+    await agent.shutdown();
+    expect(closed.length).toBe(2);                // BOTH sessions reaped
+    expect(new Set(closed).size).toBe(2);
+  } finally {
+    McpManager.prototype.close = orig;
+    rmSync(cwd, { recursive: true, force: true });
+  }
 });
 
 // ---------- pure translation helpers ----------

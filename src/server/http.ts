@@ -35,6 +35,12 @@ import { buildOpenApiDoc } from "./openapi.ts";
 
 export const DEFAULT_PORT = 4100;
 export const DEFAULT_HOSTNAME = "127.0.0.1";
+/** request-body bound: prompt bodies over this fail with a clean JSON 413
+ *  (checked against content-length before the body is read). Bun.serve's
+ *  maxRequestBodySize is set to 2× this as a transport ceiling for clients
+ *  that lie about / omit content-length (chunked): those are cut at the
+ *  socket instead of ballooning RSS. */
+export const MAX_BODY_BYTES = 1024 * 1024;
 
 export interface ServerOptions {
   /** TCP port; default 4100; 0 = ephemeral (tests) */
@@ -54,7 +60,10 @@ export interface AionServer {
   port: number;
   hostname: string;
   url: string;
-  /** closes listener AND in-flight SSE sockets (tests: no orphan sockets) */
+  /** closes the listener and in-flight SSE sockets, then closes every session
+   *  runtime's MCP children. Returns while in-flight runs may still be
+   *  executing to their next turn/batch boundary (cooperative cancellation —
+   *  the loop has no mid-turn suspension point). */
   stop(): Promise<void>;
 }
 
@@ -73,8 +82,12 @@ function frame(ev: RunEvent): string {
 }
 
 /** Pump loop events into an SSE response; the stream closes on run_end.
- *  Client disconnects cancel the generator, which aborts in-flight tools via
- *  the loop's cooperative-abort finally (core/loop.ts:199-203). */
+ *  Client disconnects REQUEST generator cancellation; it lands at the next
+ *  turn/batch-event boundary (the loop has no mid-turn suspension point — an
+ *  in-flight provider turn or tool keeps running until then), where the loop's
+ *  finally aborts the tool batch. `running` is cleared ONLY from the pump's
+ *  finally — when the generator has actually released the session — so the
+ *  409 one-run-per-session invariant holds across disconnects (MED-F1). */
 function sseResponse(run: AsyncGenerator<RunEvent>, onSettled: () => void): Response {
   const enc = new TextEncoder();
   let settled = false;
@@ -96,9 +109,11 @@ function sseResponse(run: AsyncGenerator<RunEvent>, onSettled: () => void): Resp
       }
     },
     cancel() {
-      // client hung up mid-run: resume the generator's finally blocks (tool abort)
+      // client hung up mid-run: ask the generator to stop (cooperative — lands
+      // at the next turn/batch boundary). Do NOT settle here: the pump's
+      // finally settles truthfully once the generator finishes; an eager
+      // settle let a second run share this session's store (MED-F1).
       void Promise.resolve(run.return(undefined)).catch(() => {});
-      settle();
     },
   });
   return new Response(stream, {
@@ -146,10 +161,15 @@ export function startServer(opts: ServerOptions = {}): AionServer {
   const prompt = async (id: string, req: Request): Promise<Response> => {
     const entry = sessions.get(id);
     if (!entry) return json({ error: `unknown session ${id}` }, 404);
+    // LOW-MED-F4: bound the request body BEFORE reading it (declared size), and
+    // the parsed text after — an unbounded body was a local RSS balloon.
+    const declared = Number(req.headers.get("content-length") ?? "0");
+    if (declared > MAX_BODY_BYTES) return json({ error: `request body too large (max ${MAX_BODY_BYTES} bytes)` }, 413);
     let body: unknown;
     try { body = await req.json(); } catch { return json({ error: "body must be JSON" }, 400); }
     const text = bodyText(body);
     if (text === null) return json({ error: 'body must be {"text": string}' }, 400);
+    if (text.length > MAX_BODY_BYTES) return json({ error: `text too large (max ${MAX_BODY_BYTES} chars)` }, 413);
     if (entry.running) return json({ error: "a run is already in progress for this session" }, 409);
     const rt = entry.runtime;
     const stream = rt.stream;
@@ -162,6 +182,7 @@ export function startServer(opts: ServerOptions = {}): AionServer {
     const run = agentLoop(def, text, {}, cfg, {
       stream, registry: rt.registry, store: rt.store,
       tools: rt.registry.list().map((t) => t.schema), guard: rt.guard,
+      cwd: rt.cwd, // session cwd reaches ToolContext (same gap as ACP HIGH-G1)
     }, new SteeringQueue());
     entry.running = true;
     return sseResponse(run, () => { entry.running = false; });
@@ -181,6 +202,9 @@ export function startServer(opts: ServerOptions = {}): AionServer {
     hostname,
     port: opts.port ?? DEFAULT_PORT,
     idleTimeout: 0, // SSE runs outlive Bun's default idle timeout
+    // transport ceiling (LOW-MED-F4): bodies without/with a lying content-length
+    // are cut here (socket close); declared oversizes get a clean 413 in prompt()
+    maxRequestBodySize: MAX_BODY_BYTES * 2,
     async fetch(req) {
       // never-throw seam: handler exceptions become JSON 500s, the server survives
       try { return await route(req); }
@@ -192,7 +216,17 @@ export function startServer(opts: ServerOptions = {}): AionServer {
     port: server.port ?? 0,
     hostname,
     url: `http://${hostname}:${server.port}`,
-    async stop() { await server.stop(true); },
+    async stop() {
+      await server.stop(true);
+      // MED-F3: reap MCP children — every POST /session spawns one set via
+      // createRuntime; without this an unauthenticated loopback port is an
+      // unbounded local spawn primitive that outlives the server.
+      const closing: Promise<unknown>[] = [];
+      for (const { runtime } of sessions.values()) {
+        if (runtime.mcp) closing.push(runtime.mcp.close().catch(() => {}));
+      }
+      await Promise.all(closing);
+    },
   };
   return api;
 }

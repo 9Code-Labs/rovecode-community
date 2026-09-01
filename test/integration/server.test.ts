@@ -3,12 +3,14 @@
  *  (no provider env needed). Servers are closed in afterAll — no orphan sockets. */
 
 import { test, expect, afterAll } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, DEFAULT_PORT, DEFAULT_HOSTNAME, type AionServer } from "../../src/server/http.ts";
+import { startServer, DEFAULT_PORT, DEFAULT_HOSTNAME, MAX_BODY_BYTES, type AionServer } from "../../src/server/http.ts";
 import type { Message, ModelRef, RunEvent, StreamEvent, StreamFn, StreamOptions } from "../../src/core/types.ts";
 import type { SessionSummary } from "../../src/core/session.ts";
+import { McpManager } from "../../src/mcp/client.ts";
+import { basename } from "node:path";
 
 // ---------- scripted stream (goal-keyed, order-independent across tests) ----------
 
@@ -33,6 +35,11 @@ const scripted: StreamFn = async function* (
   }
   const goal = lastUserText(messages);
   if (goal.includes("SLOW")) await new Promise((r) => setTimeout(r, 300));
+  if (goal.includes("PWD")) {
+    // cwd-propagation probe: where does the bash tool actually run?
+    yield { type: "turn", turn: { parts: [{ kind: "tool_call", id: "pwd-1", tool: "bash", args: { command: "pwd" } }], stopReason: "tool_use", usage: { input: 0, output: 1 } } };
+    return;
+  }
   if (goal.includes("GATED")) {
     // bash → action shell.exec → default rules say effect "prompt" → over HTTP
     // there is no approver, so the registry must fail the call unexecuted
@@ -261,6 +268,148 @@ test("concurrent prompt on the same session → 409; session usable after the ru
   expect(frames[frames.length - 1]!.data.type).toBe("run_end");
   const after = await promptSse(id, "third");
   expect(after.frames[after.frames.length - 1]!.data.type).toBe("run_end");
+});
+
+// ---------- wave-2 fix tests (FW2-M) ----------
+
+/** Stream that parks inside the provider turn until the test releases it —
+ *  deterministic control over WHEN a run settles. */
+function gatedStream(): { stream: StreamFn; release: () => void; reached: Promise<void> } {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  let sawGate!: () => void;
+  const reached = new Promise<void>((r) => { sawGate = r; });
+  const stream: StreamFn = async function* (_m: ModelRef, messages: Message[]): AsyncGenerator<StreamEvent> {
+    if (lastUserText(messages).includes("HOLD")) { sawGate(); await gate; }
+    yield { type: "turn", turn: { parts: [{ kind: "text", text: "released" }], stopReason: "end_turn", usage: { input: 0, output: 1 } } };
+  };
+  return { stream, release, reached };
+}
+
+const promptReq = (url: string, id: string, text: string, signal?: AbortSignal) =>
+  fetch(`${url}/session/${id}/prompt`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text }), ...(signal ? { signal } : {}),
+  });
+
+test("MED-F1: client disconnect does NOT free the session until the run actually settles", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-srv-f1-"));
+  const { stream, release, reached } = gatedStream();
+  const s = startServer({ port: 0, cwd: dir, stream });
+  try {
+    const id = await createSession(s.url);
+    const ac = new AbortController();
+    const res1 = await promptReq(s.url, id, "HOLD this run", ac.signal);
+    expect(res1.status).toBe(200);
+    await reached;            // the run is inside the provider turn
+    ac.abort();               // client hangs up mid-run
+    await new Promise((r) => setTimeout(r, 75)); // let the server observe the disconnect
+    // the aborted generator still owns the session: 409, NOT a second live run
+    // (mutation: re-adding settle() to sseResponse's cancel() turns this 200)
+    const res2 = await promptReq(s.url, id, "second");
+    expect(res2.status).toBe(409);
+    await res2.text();
+    release();                // the run reaches its boundary and truly settles
+    let status = 0;
+    for (let i = 0; i < 200 && status !== 200; i++) {
+      const r = await promptReq(s.url, id, "third");
+      status = r.status;
+      await r.text(); // drain (SSE body when 200, JSON otherwise)
+      if (status !== 200) await new Promise((rr) => setTimeout(rr, 20));
+    }
+    expect(status).toBe(200); // session usable once the run settled
+  } finally {
+    release();
+    await s.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("stop() with an in-flight SSE run: resolves promptly, sockets close (runs finish at their boundary)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-srv-stop-"));
+  const { stream, release, reached } = gatedStream();
+  const s = startServer({ port: 0, cwd: dir, stream });
+  try {
+    const id = await createSession(s.url);
+    const res = await promptReq(s.url, id, "HOLD forever");
+    expect(res.status).toBe(200);
+    await reached;
+    await s.stop(); // must resolve with the run still live (honest semantics)
+    // socket is closed: reading the body settles instead of hanging the test
+    try { await res.text(); } catch { /* aborted body is fine — it must not hang */ }
+  } finally {
+    release();
+    await s.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("MED-F3: stop() closes every session runtime's MCP manager", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-srv-mcp-"));
+  writeFileSync(join(dir, ".mcp.json"), JSON.stringify({ mcpServers: { toy: { command: "aion-not-a-real-binary-srv" } } }));
+  const closed: McpManager[] = [];
+  const orig = McpManager.prototype.close;
+  McpManager.prototype.close = async function (this: McpManager) { closed.push(this); return orig.call(this); };
+  try {
+    const s = startServer({ port: 0, cwd: dir, stream: scripted });
+    await createSession(s.url);
+    await createSession(s.url); // one manager (→ child set) per POST /session
+    expect(closed.length).toBe(0);
+    await s.stop();
+    expect(closed.length).toBe(2);          // ALL sessions reaped, not just one
+    expect(new Set(closed).size).toBe(2);   // two distinct managers
+  } finally {
+    McpManager.prototype.close = orig;
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("LOW-MED-F4: oversized request body → 413; server stays healthy", async () => {
+  const id = await createSession();
+  const res = await fetch(`${base}/session/${id}/prompt`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ text: "x".repeat(MAX_BODY_BYTES + 1024) }),
+  });
+  expect(res.status).toBe(413);
+  expect(((await res.json()) as { error: string }).error).toContain("too large");
+  // a normal-size prompt on the SAME session still round-trips
+  const { frames } = await promptSse(id, "small after big");
+  expect(frames[frames.length - 1]!.data.type).toBe("run_end");
+});
+
+test("prompt route id refuses multi-segment / traversal ids (pin against ([^/]+) → (.+) loosening)", async () => {
+  // raw extra segment must die at the ROUTER ("no route"), never reach the
+  // session layer — a loosened id pattern would match and shift the error
+  const multi = await promptReq(base, "a/b", "x");
+  expect(multi.status).toBe(404);
+  expect(((await multi.json()) as { error: string }).error).toContain("no route");
+  // encoded slash / dot-dot variants stay ONE opaque id segment: clean session-level
+  // 404 (no decode-then-route, no 500, no fs contact) across encodings
+  for (const id of ["a%2Fb", "..%2F..%2Fetc", "%2E%2E%2F%2E%2E"]) {
+    const r = await promptReq(base, id, "x");
+    expect(r.status).toBe(404);
+    expect(((await r.json()) as { error: string }).error).toContain("unknown session");
+  }
+});
+
+test("session cwd reaches tools over HTTP: bash pwd lands in the server cwd, not the process dir", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-srv-cwd-"));
+  const s = startServer({ port: 0, cwd: dir, stream: scripted, yolo: true });
+  try {
+    const id = await createSession(s.url);
+    const { frames } = await promptSse(id, "PWD where am i", s.url);
+    const end = frames.find((f) => f.data.type === "tool_execution_end");
+    expect(end).toBeDefined();
+    if (end && end.data.type === "tool_execution_end") {
+      expect(end.data.ok).toBe(true);
+      // mkdtemp basename is unique — provably the session cwd, not process.cwd()
+      expect(end.data.output).toContain(basename(dir));
+      expect(basename(process.cwd())).not.toBe(basename(dir));
+    }
+  } finally {
+    await s.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("stream: null server refuses prompts with 503, still serves /doc", async () => {

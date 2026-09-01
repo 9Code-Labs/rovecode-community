@@ -24,6 +24,9 @@ export interface LoopDeps {
   childRunner?: (agent: string, goal: string, vars: AgentVars | undefined, depth: number) => Promise<{ ok: boolean; summary: string; usage: TokenUsage }>;
   /** tool-loop guardrails (port #4): loop signatures + duplicate-result stubs */
   guard?: ToolGuard;
+  /** ToolContext cwd for this run — surfaces with a session cwd (ACP, server)
+   *  pass it here; default is the agent process dir */
+  cwd?: string;
 }
 
 export class SteeringQueue {
@@ -186,7 +189,7 @@ export async function* agentLoop(
     // --- tool execution with steering preserved via abort signals ---
     const ac = new AbortController();
     const ctx: ToolContext = {
-      sessionId: deps.store.id, cwd: process.cwd(), signal: ac.signal,
+      sessionId: deps.store.id, cwd: deps.cwd ?? process.cwd(), signal: ac.signal,
       spawn: undefined, permissions: { effect: "allow" },
     };
     const runChild = deps.childRunner;
@@ -211,7 +214,8 @@ export async function* agentLoop(
       yield* flush();
     } finally {
       // cooperative abort: any exit from the batch region (normal completion,
-      // consumer .return()/.throw()) cancels in-flight tools via the signal
+      // consumer .return()/.throw()) cancels in-flight tools via the signal.
+      // Consumer cancellation lands at the next turn/batch-event boundary — there is no mid-turn suspension point (house-wide granularity).
       ac.abort();
     }
     for (const c of calls) {
