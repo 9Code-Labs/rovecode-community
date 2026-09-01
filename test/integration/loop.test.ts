@@ -5,6 +5,7 @@ import { SessionStore } from "../../src/core/session.ts";
 import { mockStream, textTurn, toolTurn } from "../../src/providers/stream.ts";
 import { readTool, writeTool } from "../../src/coding/hashline.ts";
 import type { AgentDefinition, RunConfig, Tool } from "../../src/core/types.ts";
+import type { Message, ModelRef, StreamEvent, StreamFn } from "../../src/core/types.ts";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -122,5 +123,65 @@ test("write tool actually writes through the pipeline", async () => {
     registry: reg, store,
   }, new SteeringQueue())) { void ev; }
   expect(readFileSync(join(dir, "out.txt"), "utf8")).toBe("written");
+  rmSync(dir, { recursive: true, force: true });
+});
+
+// regression: plan.keep projections must be mapped back to real messages (loop.ts compaction)
+test("compaction rebuilds history from real messages, not projections", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-loop-"));
+  const store = new SessionStore(dir, randomUUID());
+  // pre-seed long user/assistant history so the first token reduce exceeds budget * threshold
+  let parent: string | null = null;
+  for (let i = 0; i < 4; i++) {
+    const m: Message = {
+      id: randomUUID(), role: i % 2 === 0 ? "user" : "assistant",
+      parts: [{ kind: "text", text: "x".repeat(200) }], parentId: parent, createdAt: Date.now(),
+    };
+    store.append(m); parent = m.id;
+  }
+  const reg = new ToolRegistry();
+  const echoTool: Tool = {
+    schema: { name: "echo", description: "echo", args: { type: "object" } },
+    kind: "custom", async execute() { return { ok: true, output: "echoed" }; },
+  };
+  reg.register(echoTool);
+  // stream stub: records every messages array it receives; first turn is a long
+  // text + tool call (forces a second provider call), later turns end the run
+  const recorded: Message[][] = [];
+  let call = 0;
+  const stream: StreamFn = async function* (_model: ModelRef, messages: Message[]): AsyncGenerator<StreamEvent> {
+    recorded.push([...messages]);
+    call++;
+    if (call === 1) {
+      yield { type: "turn", turn: { parts: [{ kind: "text", text: "y".repeat(300) }, { kind: "tool_call", id: "c1", tool: "echo", args: {} }], stopReason: "tool_use", usage: { input: 0, output: 1 } } };
+    } else {
+      yield { type: "turn", turn: textTurn("done") };
+    }
+  };
+  const events: string[] = [];
+  let status = "";
+  let compactions = 0;
+  for await (const ev of agentLoop(baseDef, "compact this run", {}, cfg({ contextBudgetTokens: 60, compactionThreshold: 0.5 }), {
+    stream, registry: reg, store, summarize: async () => "SUMMARY",
+  }, new SteeringQueue())) {
+    events.push(ev.type);
+    if (ev.type === "compaction") compactions++;
+    if (ev.type === "run_end") status = ev.status;
+  }
+  // (1) a compaction event was yielded, and another provider call happened after it
+  //     (compaction is emitted at turn start, before that turn's provider call)
+  expect(compactions).toBeGreaterThanOrEqual(1);
+  expect(recorded.length).toBeGreaterThanOrEqual(2);
+  // (2) every message in every provider call is a real Message: role string + parts array
+  //     (the {id,tokens,text} projections from planCompaction have neither)
+  for (const msgs of recorded) {
+    for (const m of msgs) {
+      expect(typeof m.role).toBe("string");
+      expect(Array.isArray(m.parts)).toBe(true);
+    }
+  }
+  // (3) the run completes with run_end
+  expect(status).toBe("done");
+  expect(events.at(-1)).toBe("run_end");
   rmSync(dir, { recursive: true, force: true });
 });

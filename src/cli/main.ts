@@ -14,6 +14,8 @@ import { BlockStore } from "../memory/blocks.ts";
 import { memoryEditTool, resetTurnFailureCount } from "../memory/tools.ts";
 import type { RunConfig, ModelRef, StreamFn } from "../core/types.ts";
 import { runRepl } from "./repl.ts";
+import { runTui } from "../tui/app.ts";
+import { runTuiSmoke } from "../tui/smoke.ts";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -123,8 +125,9 @@ function cmdHelp(): void {
   console.log(`aion — agent harness
 
 commands:
-  aion                      interactive agent chat (default — omp/claude-code style)
+  aion                      interactive TUI chat (pi-tui; --plain for readline REPL)
   aion "prompt"             one-shot task (same as run)
+  aion smoke-tui            render check: full pipeline into an 80x24 terminal emulator
   aion run "<prompt>"       run an agent task (--yolo allows all tools; mock provider only if no provider env set)
   aion bench                run cross-harness micro-benchmarks (edits, sessions)
   aion gauntlet             run the adversarial evaluation suite
@@ -154,9 +157,11 @@ async function cmdTrace(sessionId: string): Promise<void> {
   }
 }
 
-const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "trace", "help", "chat", "repl"]);
+const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "trace", "help", "chat", "repl", "smoke-tui"]);
 if (cmd === "" || cmd === "chat" || cmd === "repl") {
-  await runRepl({ yolo: process.argv.includes("--yolo") });
+  // default surface is the pi-tui chat (port #1); --plain keeps the readline REPL
+  if (process.argv.includes("--plain")) await runRepl({ yolo: process.argv.includes("--yolo") });
+  else await runTui({ yolo: process.argv.includes("--yolo") });
 } else if (known.has(cmd)) {
   switch (cmd) {
     case "run": await cmdRun(process.argv.filter((a, i) => i > 2 && !a.startsWith("--")).join(" ") || "hello"); break;
@@ -164,6 +169,7 @@ if (cmd === "" || cmd === "chat" || cmd === "repl") {
     case "bench": await cmdBench(); break;
     case "tools": cmdTools(); break;
     case "trace": await cmdTrace(process.argv[3] ?? ""); break;
+    case "smoke-tui": await runTuiSmoke(); break;
     default: cmdHelp(); break;
   }
 } else {

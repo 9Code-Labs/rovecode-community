@@ -1,0 +1,49 @@
+/** The Renderer seam (BLUEPRINT port #1): the TUI app talks only to this interface.
+ *  PiTuiRenderer is today's implementation; OpenTUI or others can slot in later
+ *  without touching the app/loop. House code outside src/tui must not import vendor. */
+
+export type ApprovalAnswer = "once" | "always" | "deny";
+
+export interface StatusInfo {
+  provider: string;
+  model: string;
+  yolo: boolean;
+  turns: number;
+  tokensIn: number;
+  tokensOut: number;
+}
+
+export interface RendererHooks {
+  /** user submitted a line from the editor (already trimmed, non-empty) */
+  onSubmit: (text: string) => void;
+  /** user asked to interrupt the in-flight run (Escape on the loader) */
+  onInterrupt: () => void;
+  /** user asked to leave (Ctrl+C) */
+  onExit: () => void;
+}
+
+/** A streaming assistant message in the transcript. */
+export interface AssistantView {
+  append(delta: string): void;
+  /** finalize; no more appends */
+  done(): void;
+}
+
+export interface SlashCommand { name: string; description: string }
+
+export interface Renderer {
+  start(hooks: RendererHooks): void;
+  stop(): void;
+  /** slash commands offered by editor autocomplete; call before start() */
+  setCommands(cmds: SlashCommand[]): void;
+  addUser(text: string): void;
+  addSystemNote(text: string, tone?: "info" | "warn" | "error"): void;
+  beginAssistant(): AssistantView;
+  toolStart(callId: string, tool: string, argsPreview: string): void;
+  toolUpdate(callId: string, note: string): void;
+  toolEnd(callId: string, ok: boolean, outputPreview: string, durationMs: number): void;
+  /** modal approval; resolves deny on cancel/escape */
+  askApproval(tool: string, argsPreview: string): Promise<ApprovalAnswer>;
+  setBusy(busy: boolean, label?: string): void;
+  setStatus(info: StatusInfo): void;
+}
