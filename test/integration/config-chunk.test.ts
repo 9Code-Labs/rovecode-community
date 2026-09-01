@@ -17,7 +17,7 @@ import type { AgentDefinition, Message, RunConfig, RunEvent, StreamFn } from "..
 function cfg(budget: number): RunConfig {
   return {
     maxTurns: 3, contextBudgetTokens: budget, compactionThreshold: 0.8,
-    parallelTools: true, retry: { maxAttempts: 1, backoffMs: 1 },
+    parallelTools: true,
     permissionRules: [{ action: "*", resource: "*", effect: "allow" }],
   };
 }

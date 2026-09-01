@@ -149,6 +149,10 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   const fallbackRef: ModelRef = { provider: provider?.id ?? "mock", model: defaultModel || "default" };
   const router = createRouter({
     roles: roleTableFromEnv(fallbackRef),
+    // MED-3: an explicitly configured default chain is the fallback pool even for models
+    // outside it (requested model prepended as primary); the synthesized single-model
+    // default (env unset) must NOT capture loose models — hence the env gate.
+    looseFallback: (process.env.AION_MODEL_DEFAULT ?? "").trim().length > 0,
     onNote: (n) => routerNotes.push(
       `router: ${n.chain} ${n.from.provider}/${n.from.model} → ${n.to ? `${n.to.provider}/${n.to.model}` : "chain exhausted"} (${n.reason})`),
   });
@@ -221,7 +225,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     },
     buildCfg: (yolo: boolean, approval?: ApprovalFn): RunConfig => ({
       maxTurns: 60, contextBudgetTokens: 200_000, compactionThreshold: 0.8,
-      parallelTools: true, retry: { maxAttempts: 3, backoffMs: 400 },
+      parallelTools: true,
       permissionRules: yolo
         ? [{ action: "*", resource: "*", effect: "allow" }]
         : [

@@ -18,7 +18,7 @@ const allowAll = [
 function cfg(over: Partial<RunConfig> = {}): RunConfig {
   return {
     maxTurns: 8, contextBudgetTokens: 100_000, compactionThreshold: 0.8,
-    parallelTools: true, retry: { maxAttempts: 2, backoffMs: 10 },
+    parallelTools: true,
     permissionRules: allowAll, ...over,
   };
 }

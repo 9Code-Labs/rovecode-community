@@ -160,7 +160,6 @@ export interface RunConfig {
   contextBudgetTokens: number;
   compactionThreshold: number;   // fraction of budget triggering compaction
   parallelTools: boolean;
-  retry: { maxAttempts: number; backoffMs: number };
   permissionRules: PermissionRule[];
   approval?: ApprovalFn;
 }

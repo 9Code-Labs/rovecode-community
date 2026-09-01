@@ -46,7 +46,18 @@
  *    collectTurn:219-226), so the final message is never corrupted. The "note" on each
  *    advance is therefore an onNote CALLBACK, not a StreamEvent.
  *  - Exhausted chain → terminal turn with stopReason "error"; this wrapper NEVER throws
- *    (ADR-003 seam contract), even when the wrapped stream does. */
+ *    (ADR-003 seam contract), even when the wrapped stream does.
+ *  - A SINGLE-candidate chain has nothing to advance to: a retryable failure is yielded
+ *    UNTOUCHED — no exhausted-rewrite, no note — so plain provider errors survive verbatim
+ *    (R2 #14 LOW/MED-4).
+ *  - A requested model outside every configured chain is a passthrough singleton, unless
+ *    `looseFallback` is set (runtime sets it when chains are explicit user config): then the
+ *    request is PREPENDED to the default chain — gemini-cli's shape, where "the first model
+ *    in the chain is the primary model" is whatever was requested and configured fallbacks
+ *    follow (R2 #14 MED-3).
+ *  - The candidate that produced each terminal turn is recorded per turn object (servedBy)
+ *    so the loop stamps Message.origin with the model that SERVED, not the one it asked
+ *    for (R2 #14 HIGH-2). */
 
 import type { AssistantTurn, ModelRef, StreamFn, StreamEvent, TokenUsage } from "../core/types.ts";
 
@@ -74,6 +85,11 @@ export interface RouterConfig {
   /** Keep fallback switches for later calls on the same wrapped stream (gemini-cli
    *  activateFallbackMode, handler.ts:163-169). Default true; exhaustion resets. */
   sticky?: boolean;
+  /** Treat the default chain as the fallback pool for models outside EVERY configured
+   *  chain: the requested model is prepended as the primary (header: MED-3). Default
+   *  false — a synthesized single-model default (no explicit chain config) must not
+   *  drag loose models onto a placeholder ref. */
+  looseFallback?: boolean;
   /** Advance notification — see header for why this is a callback, not a StreamEvent. */
   onNote?: (note: RouterNote) => void;
 }
@@ -153,6 +169,21 @@ export function classifyStreamError(error: string | undefined): StreamErrorClass
   return { retryable: true };
 }
 
+// ---------- served-model tagging (R2 #14 HIGH-2) ----------
+
+/** ModelRef that actually produced a terminal turn, keyed on the turn object itself — a
+ *  WeakMap side-channel because the StreamEvent grammar (core/types.ts:49-52) is shared/
+ *  untouchable (no new event variant, no new turn field). Per-invocation by construction:
+ *  each terminal turn is a distinct object. Unwrapped streams never mark their turns, so
+ *  consumers fall back to the model they asked for. */
+const SERVED = new WeakMap<AssistantTurn, ModelRef>();
+
+/** The chain candidate that served `turn`, when the router produced it. loop.ts stamps
+ *  Message.origin with this so /cost prices the model that ANSWERED after a fallback. */
+export function servedBy(turn: AssistantTurn): ModelRef | undefined {
+  return SERVED.get(turn);
+}
+
 // ---------- router ----------
 
 const sameRef = (a: ModelRef, b: ModelRef): boolean => a.provider === b.provider && a.model === b.model;
@@ -176,8 +207,10 @@ export function createRouter(config: RouterConfig): Router {
   const chainFor = (role: string): readonly ModelRef[] => table.get(role as ModelRole) ?? defaults;
 
   /** Chain containing `model`: prefer the role whose chain HEAD is the model (that is what
-   *  resolve() hands the loop), else the first role chain containing it anywhere, else a
-   *  singleton passthrough chain. Scan order = MODEL_ROLES order (deterministic). */
+   *  resolve() hands the loop), else the first role chain containing it anywhere, else —
+   *  under `looseFallback` — the model PREPENDED to the default chain (header: MED-3; the
+   *  request stays the primary, configured models become its fallbacks), else a singleton
+   *  passthrough chain. Scan order = MODEL_ROLES order (deterministic). */
   const locate = (model: ModelRef): { key: string; chain: readonly ModelRef[]; index: number } => {
     let containing: { key: string; chain: readonly ModelRef[]; index: number } | null = null;
     for (const role of MODEL_ROLES) {
@@ -187,7 +220,10 @@ export function createRouter(config: RouterConfig): Router {
       if (idx === 0) return { key: role, chain, index: 0 };
       if (idx > 0 && containing === null) containing = { key: role, chain, index: idx };
     }
-    return containing ?? { key: refKey(model), chain: [model], index: 0 };
+    if (containing) return containing;
+    // model ∉ any chain (the scan above covered `default`), so the prepend never duplicates
+    const chain = config.looseFallback === true ? [model, ...defaults] : [model];
+    return { key: refKey(model), chain, index: 0 };
   };
 
   return {
@@ -226,7 +262,10 @@ export function createRouter(config: RouterConfig): Router {
           }
           const t: AssistantTurn = turn ?? errorTurn("stream ended without a terminal turn");
           const aborted = options?.signal?.aborted === true; // retry.ts:337-339: aborts never advance
-          if (t.stopReason !== "error" || aborted || !classifyStreamError(t.error).retryable) {
+          // chain.length === 1: nothing to advance to — surface the provider error untouched,
+          // no exhausted-rewrite, no note (header: LOW/MED-4)
+          if (t.stopReason !== "error" || aborted || !classifyStreamError(t.error).retryable || chain.length === 1) {
+            SERVED.set(t, candidate); // header: HIGH-2 — this candidate produced the turn
             yield { type: "turn", turn: t }; // success or non-retryable: NO advance
             return;
           }
@@ -237,12 +276,11 @@ export function createRouter(config: RouterConfig): Router {
         }
         if (sticky) survivors.delete(key); // exhausted: reset so recovered models get retried
         const tried = chain.length - start;
-        yield {
-          type: "turn",
-          turn: errorTurn(
-            `model chain '${key}' exhausted (${tried} candidate${tried === 1 ? "" : "s"} failed); last: ${last?.error ?? "unknown error"}`,
-          ),
-        };
+        const exhausted = errorTurn(
+          `model chain '${key}' exhausted (${tried} candidate${tried === 1 ? "" : "s"} failed); last: ${last?.error ?? "unknown error"}`,
+        );
+        SERVED.set(exhausted, chain[chain.length - 1]!); // last candidate attempted (status honesty)
+        yield { type: "turn", turn: exhausted };
       };
     },
   };

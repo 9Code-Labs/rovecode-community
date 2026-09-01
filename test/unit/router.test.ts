@@ -9,6 +9,7 @@ import {
   parseModelChain,
   parseModelRef,
   roleTableFromEnv,
+  servedBy,
   type RouterNote,
 } from "../../src/providers/router.ts";
 import { textTurn } from "../../src/providers/stream.ts";
@@ -221,7 +222,7 @@ test("sticky: false restarts every call at the requested model", async () => {
   expect(calls).toEqual(["p/primary", "s/secondary", "p/primary", "s/secondary"]);
 });
 
-test("model outside every chain is a passthrough singleton: retryable failure exhausts immediately", async () => {
+test("model outside every chain (no looseFallback) is a singleton: provider error untouched, no note", async () => {
   const calls: string[] = [];
   const notes: RouterNote[] = [];
   const r = createRouter({ roles: twoChain, onNote: (n) => notes.push(n) });
@@ -230,8 +231,55 @@ test("model outside every chain is a passthrough singleton: retryable failure ex
   const { turn } = await run(wrapped, loose);
   expect(calls).toEqual(["x/y"]);
   expect(turn.stopReason).toBe("error");
-  expect(turn.error).toContain("exhausted");
-  expect(notes).toEqual([{ chain: "x/y", from: loose, to: null, reason: "HTTP 429: rate limited" }]);
+  expect(turn.error).toBe("HTTP 429: rate limited"); // LOW/MED-4: no exhausted-rewrite
+  expect(notes).toHaveLength(0);
+});
+
+test("looseFallback: a model outside every chain gets the default chain as its fallback pool", async () => {
+  const calls: string[] = [];
+  const notes: RouterNote[] = [];
+  const r = createRouter({ roles: twoChain, looseFallback: true, onNote: (n) => notes.push(n) });
+  const loose = ref("x", "y");
+  const wrapped = r.wrap(scripted({ "x/y": [err("HTTP 429: rate limited")], "p/primary": [textTurn("ok")] }, calls));
+  const { turn } = await run(wrapped, loose);
+  expect(calls).toEqual(["x/y", "p/primary"]); // requested model stays the primary (MED-3)
+  expect(turn.stopReason).toBe("end_turn");
+  expect(notes).toEqual([{ chain: "x/y", from: loose, to: ref("p", "primary"), reason: "HTTP 429: rate limited" }]);
+});
+
+test("single-candidate chain: retryable failure surfaces the provider error verbatim (LOW/MED-4)", async () => {
+  const calls: string[] = [];
+  const notes: RouterNote[] = [];
+  const r = createRouter({ roles: { default: ref("p", "only") }, onNote: (n) => notes.push(n) });
+  const wrapped = r.wrap(scripted({ "p/only": [err("HTTP 429: rate limited")] }, calls));
+  const { turn } = await run(wrapped, r.resolve("default"));
+  expect(calls).toEqual(["p/only"]);
+  expect(turn.stopReason).toBe("error");
+  expect(turn.error).toBe("HTTP 429: rate limited");
+  expect(turn.error).not.toContain("exhausted");
+  expect(notes).toHaveLength(0); // no misleading advance note either
+});
+
+test("servedBy tags the candidate that produced each terminal turn (HIGH-2)", async () => {
+  const r = createRouter({ roles: twoChain });
+  // fallback: the surviving turn is tagged with the SERVING candidate, not the requested one
+  const fell = await run(
+    r.wrap(scripted({ "p/primary": [err("HTTP 429: rate limited")], "s/secondary": [textTurn("ok")] }, [])),
+    r.resolve("default"),
+  );
+  expect(servedBy(fell.turn)).toEqual(ref("s", "secondary"));
+  // no fallback: tagged with the primary
+  const direct = await run(r.wrap(scripted({ "p/primary": [textTurn("ok")] }, [])), r.resolve("default"));
+  expect(servedBy(direct.turn)).toEqual(ref("p", "primary"));
+  // exhausted: tagged with the last candidate attempted
+  const dead = await run(
+    r.wrap(scripted({ "p/primary": [err("HTTP 429: a")], "s/secondary": [err("HTTP 500: b")] }, [])),
+    r.resolve("default"),
+  );
+  expect(dead.turn.error).toContain("exhausted");
+  expect(servedBy(dead.turn)).toEqual(ref("s", "secondary"));
+  // an unwrapped stream's turn carries no tag
+  expect(servedBy(textTurn("plain"))).toBeUndefined();
 });
 
 test("text_delta events pass through live before the terminal turn", async () => {

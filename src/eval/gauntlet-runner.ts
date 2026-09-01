@@ -111,7 +111,7 @@ export async function runTask(task: GauntletTask, workspace: string, guard: Tool
   };
   const cfg: RunConfig = {
     maxTurns, contextBudgetTokens: 400_000, compactionThreshold: 0.8, parallelTools: true,
-    retry: { maxAttempts: 2, backoffMs: 10 }, permissionRules: rules,
+    permissionRules: rules,
   };
   const toolCalls: { tool: string; args: unknown }[] = [];
   const events: { type: string }[] = [];

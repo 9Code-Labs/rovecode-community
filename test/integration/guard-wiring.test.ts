@@ -29,7 +29,7 @@ const STUB_AT = GUARDRAIL_DEFAULTS.stubAfterRepeats + 1; // 6th identical call i
 function cfg(over: Partial<RunConfig> = {}): RunConfig {
   return {
     maxTurns: 12, contextBudgetTokens: 100_000, compactionThreshold: 0.8,
-    parallelTools: true, retry: { maxAttempts: 2, backoffMs: 10 },
+    parallelTools: true,
     permissionRules: allowAll, ...over,
   };
 }

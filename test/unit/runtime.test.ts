@@ -77,7 +77,6 @@ test("buildCfg gated: repl defaults with memory/skill allows and prompt gates", 
   expect(cfg.contextBudgetTokens).toBe(200_000);
   expect(cfg.compactionThreshold).toBe(0.8);
   expect(cfg.parallelTools).toBe(true);
-  expect(cfg.retry).toEqual({ maxAttempts: 3, backoffMs: 400 });
   expect(cfg.permissionRules).toEqual([
     { action: "file.read", resource: "*", effect: "allow" },
     { action: "memory.write", resource: "*", effect: "allow" },

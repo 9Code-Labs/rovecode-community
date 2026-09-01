@@ -52,7 +52,7 @@ test("prompt→deny narrowing still overrides a broader parent allow (parent rul
 function cfg(rules: PermissionRule[]): RunConfig {
   return {
     maxTurns: 6, contextBudgetTokens: 100_000, compactionThreshold: 0.8,
-    parallelTools: false, retry: { maxAttempts: 2, backoffMs: 10 },
+    parallelTools: false,
     permissionRules: rules,
   };
 }

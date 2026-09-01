@@ -10,6 +10,7 @@ import type {
 } from "./types.ts";
 import { ToolRegistry, type ExtensionHooks } from "./tools.ts";
 import type { ToolGuard } from "./guardrails.ts";
+import { servedBy } from "../providers/router.ts";
 import { SessionStore } from "./session.ts";
 import { assembleContext, planCompaction, estimateTokens, type ContextChunk } from "./context.ts";
 
@@ -140,7 +141,9 @@ export async function* agentLoop(
     const { parts, stopReason, usage } = turnResult;
     const assistant: Message = {
       id: msgId, role: "assistant", parts, parentId: history.at(-1)?.id ?? null,
-      createdAt: Date.now(), origin: model, usage,
+      // origin = the model that SERVED the turn (router fallback may differ from the one
+      // asked for; /cost prices per-message via origin — port #14 HIGH-2), else the request
+      createdAt: Date.now(), origin: turnResult.origin ?? model, usage,
     };
     deps.store.append(assistant);
     history.push(assistant);
@@ -231,13 +234,17 @@ export async function* agentLoop(
   yield { type: "run_end", status: "budget", summary: `max turns (${cfg.maxTurns}) reached` };
 }
 
-export interface TurnOutcome { parts: MessagePart[]; stopReason: StopReason; usage: TokenUsage; error?: string }
+export interface TurnOutcome {
+  parts: MessagePart[]; stopReason: StopReason; usage: TokenUsage; error?: string;
+  /** model that actually SERVED the turn (router servedBy tag) — unset for unwrapped streams */
+  origin?: ModelRef;
+}
 
 async function collectTurn(stream: StreamFn, model: ModelRef, messages: Message[], onText?: (delta: string) => void, tools?: ToolSchema[]): Promise<TurnOutcome> {
   let outcome: TurnOutcome = { parts: [], stopReason: "end_turn", usage: { input: 0, output: 0 } };
   for await (const ev of stream(model, messages, { tools })) {
     if (ev.type === "text_delta") onText?.(ev.text);
-    else if (ev.type === "turn") { outcome = { parts: ev.turn.parts, stopReason: ev.turn.stopReason, usage: ev.turn.usage, error: ev.turn.error }; }
+    else if (ev.type === "turn") { outcome = { parts: ev.turn.parts, stopReason: ev.turn.stopReason, usage: ev.turn.usage, error: ev.turn.error, origin: servedBy(ev.turn) }; }
   }
   return outcome;
 }
