@@ -109,9 +109,11 @@ export class ToolRegistry {
     } catch (e) {
       out = { ok: false, output: `Error: ${e instanceof Error ? e.message : String(e)}` };
     }
-    // 4b. loop guard result pass: byte-identical duplicate results become stubs
+    // 4b. loop guard result pass: byte-identical duplicate results become stubs.
+    // out.ok is threaded through so FAILED results are never stubbed (hermes
+    // keeps errors verbatim) even when the text dodges the string sniff.
     if (guard) {
-      const r = guard.checkResult(call.tool, args, out.output);
+      const r = guard.checkResult(call.tool, args, out.output, out.ok);
       if (r.deduped) out = { ...out, output: r.output };
     }
     if (warnNote) out = { ...out, output: `${out.output}\n\n[loop-guard] ${warnNote}` };

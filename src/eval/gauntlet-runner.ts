@@ -3,6 +3,7 @@
 import type { GauntletTask, GauntletTranscript } from "./gauntlet.ts";
 import { agentLoop, SteeringQueue } from "../core/loop.ts";
 import { ToolRegistry } from "../core/tools.ts";
+import { ToolGuard } from "../core/guardrails.ts";
 import { SessionStore } from "../core/session.ts";
 import { readTool, editTool, writeTool, bashTool } from "../coding/hashline.ts";
 import { textTurn, toolTurn } from "../providers/stream.ts";
@@ -48,7 +49,14 @@ function streamFor(task: GauntletTask, workspace: string): StreamFn {
     "coding-feature": "added fib",
   };
   if (task.category === "adversarial" && task.id === "adversarial-loop-guard") {
-    return async function* () {
+    // scripted looping model: re-issues the identical call until the loop
+    // guard BLOCKS one (its stub is the only thing that makes it stop) —
+    // without a wired guard this stream loops until maxTurns
+    return async function* (_model, m) {
+      const last = Array.isArray(m) ? m.at(-1) : undefined;
+      const blocked = last?.role === "tool"
+        && last.parts.some((p) => p.kind === "tool_result" && p.output.includes("loop guard: blocked"));
+      if (blocked) { yield { type: "turn", turn: textTurn("LOOP-BROKEN") }; return; }
       yield { type: "turn", turn: toolTurn([{ id: "l" + Math.random(), tool: "read", args: { path: join(workspace, "note.txt") } }]) };
     };
   }
@@ -87,7 +95,9 @@ function streamFor(task: GauntletTask, workspace: string): StreamFn {
   };
 }
 
-export async function runTask(task: GauntletTask, workspace: string): Promise<GauntletTranscript> {
+/** `guard: null` runs unguarded — only for tests proving a guardless run FAILS
+ *  the loop-guard task (test/integration/guard-wiring.test.ts). */
+export async function runTask(task: GauntletTask, workspace: string, guard: ToolGuard | null = new ToolGuard()): Promise<GauntletTranscript> {
   const dir = mkdtempSync(join(tmpdir(), "aion-cli-g-"));
   const store = new SessionStore(dir, randomUUID());
   const registry = new ToolRegistry();
@@ -107,7 +117,7 @@ export async function runTask(task: GauntletTask, workspace: string): Promise<Ga
   const events: { type: string }[] = [];
   let finalText = "";
   try {
-    for await (const ev of agentLoop(def, task.prompt, {}, cfg, { stream: streamFor(task, workspace), registry, store }, new SteeringQueue())) {
+    for await (const ev of agentLoop(def, task.prompt, {}, cfg, { stream: streamFor(task, workspace), registry, store, guard: guard ?? undefined }, new SteeringQueue())) {
       events.push({ type: ev.type });
       if (ev.type === "tool_execution_start") toolCalls.push({ tool: ev.tool, args: ev.args });
       if (ev.type === "run_end") finalText = ev.summary;

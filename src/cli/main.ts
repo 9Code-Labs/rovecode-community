@@ -2,6 +2,7 @@
 
 import { agentLoop, SteeringQueue } from "../core/loop.ts";
 import { ToolRegistry } from "../core/tools.ts";
+import { ToolGuard } from "../core/guardrails.ts";
 import { SessionStore } from "../core/session.ts";
 import { readTool, editTool, writeTool, bashTool } from "../coding/hashline.ts";
 import { mockStream, textTurn, providerStream, openaiCompatStreaming, resolveProvider, fetchModels, listBuiltinProviders } from "../providers/stream.ts";
@@ -88,7 +89,13 @@ async function cmdRun(prompt: string): Promise<void> {
     tools: ["*"],
   };
   const events: string[] = [];
-  for await (const ev of agentLoop(def, prompt, {}, cfg, { stream, registry, store, tools: registry.list().map((t) => t.schema) }, new SteeringQueue())) {
+  // Provider streams read tool entries as {schema:{name,...}} (stream.ts
+  // toOpenAiToolSchemas + anthropic branch) — passing bare ToolSchema objects
+  // crashes every real-provider run before the first fetch. Wrap them; the
+  // ToolSchema[] seam type predates the provider implementations.
+  const providerTools = registry.list().map((t) => ({ schema: t.schema })) as unknown as import("../core/types.ts").ToolSchema[];
+  // port #4: loop guardrails — one-shot runs get a fresh guard (parity with repl/tui via runtime.guard)
+  for await (const ev of agentLoop(def, prompt, {}, cfg, { stream, registry, store, tools: providerTools, guard: new ToolGuard() }, new SteeringQueue())) {
     events.push(ev.type);
     if (ev.type === "turn_start") resetTurnFailureCount();
     if (ev.type === "tool_execution_start") console.log(`→ ${ev.tool}`, JSON.stringify(ev.args).slice(0, 100));

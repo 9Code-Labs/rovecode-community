@@ -66,6 +66,12 @@ export async function* agentLoop(
   const emit = (e: RunEvent) => { events.push(e); };
   const flush = function* (): Generator<RunEvent> { yield* events.splice(0, events.length); };
 
+  // guard resets once per USER turn — one agentLoop invocation ≈ one hermes
+  // run_conversation (reset_for_turn at turn_context.py:700). The `turn` loop
+  // below is model iterations; resetting there would wipe the streak and make
+  // the guard inert. Follow-ups are new user turns (second reset below).
+  deps.guard?.onTurn();
+
   for (let turn = 1; turn <= cfg.maxTurns; turn++) {
     // --- steering drain point: before the model call ---
     for (const s of steering.drainAll()) {
@@ -75,7 +81,6 @@ export async function* agentLoop(
     }
 
     yield { type: "turn_start", turn };
-    deps.guard?.onTurn();
 
     // --- context assembly + compaction (ADR-007) ---
     // counted over ALL parts (partsTokenText): tool calls/results dominate agentic histories,
@@ -166,6 +171,7 @@ export async function* agentLoop(
       // --- follow-up drain point: a queued follow-up continues the run instead of ending it ---
       const follow = followUps ? followUps.drainAll() : [];
       if (follow.length > 0) {
+        deps.guard?.onTurn(); // a follow-up is a new user turn (upstream: new run_conversation → reset)
         for (const f of follow) {
           const fm: Message = { id: randomUUID(), role: "user", parts: [{ kind: "text", text: f }], parentId: history.at(-1)?.id ?? null, createdAt: Date.now() };
           deps.store.append(fm); history.push(fm);

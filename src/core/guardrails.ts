@@ -5,55 +5,49 @@
  *
  * Pure and injectable: no I/O, no globals, no clock. State is one consecutive
  * identical-call streak plus a per-turn call ordinal — O(1) by construction
- * (upstream keeps the streak as scalar fields, :353-359, and resets all state
- * per turn in `reset_for_turn`, :340-369). Result payloads are never retained,
- * only sha256 hashes, so memory is bounded regardless of session length.
+ * (upstream scalar fields :353-359, reset per user turn in `reset_for_turn`
+ * :340-369). Only sha256 hashes are retained, never result payloads.
  *
  * Ported behavior:
- *  - Call signature = tool name + canonical JSON args (recursively sorted
- *    keys, compact separators, unicode preserved, `default=str` fallback)
- *    — canonical_tool_args :285-295, hashed via ToolCallSignature.from_call
- *    :243-246 and _sha256 :849-855. Non-mapping args coerce to {} (:770-771).
- *  - Consecutive identical-call escalation, warn before stub:
- *      warn  once the streak exceeds `warnAfterRepeats` (default 2 — upstream
- *            exact_failure_warn_after :119 / no_progress_warn_after :123), so
- *            the first warn lands on the 3rd consecutive identical call, which
- *            is also upstream's loop-notice threshold
- *            STALL_GUARD_IDENTICAL_CALL_THRESHOLD = 3 (:85, fired :596-599).
- *      stub  once the streak exceeds `stubAfterRepeats` (default 5 — upstream
- *            exact_failure_block_after :120 / no_progress_block_after :124).
- *            Upstream `before_call` blocks the call after 5 identical
- *            completions (:391-427) and the runtime replaces it with a
- *            synthetic explanatory result (run_agent.py:8517-8519,
- *            toolguard_synthetic_result :727-735) — the "stub" verdict here.
+ *  - Call signature = tool name + canonical JSON args (sorted keys, compact,
+ *    unicode raw, `default=str`) — canonical_tool_args :285-295, hashed via
+ *    ToolCallSignature.from_call :243-246 and _sha256 :849-855. Non-mapping
+ *    args coerce to {} (:770-771).
+ *  - Consecutive identical-call escalation, warn before stub: warn once the
+ *    streak exceeds `warnAfterRepeats` (default 2, :119/:123 — first warn is
+ *    the 3rd consecutive call, upstream's loop-notice threshold :85, fired
+ *    :596-599); stub once it exceeds `stubAfterRepeats` (default 5,
+ *    :120/:124 — before_call blocks :391-427 and the runtime substitutes a
+ *    synthetic result, run_agent.py:8517-8519, :727-735 = "stub" here).
  *  - Duplicate-result dedup: from the 2nd consecutive identical call whose
- *    fresh result hashes identical (:608-616, count >= 2 at :611), the payload
- *    is replaced by a short reference stub (_build_result_reference_stub
- *    :629-657): min 512 chars (:93, :613), never for error-looking results
- *    (:91-92, :612; classifier tail :326-328), canonical-args preview capped
- *    at 120 chars (:98, :642-643). A changed result flows through whole and
- *    resets the streak (:570-571, :585-591; run_agent.py:8496-8504).
+ *    fresh result hashes identical (:608-616, :611), the payload becomes a
+ *    reference stub (:629-657): min 512 chars (:93, :613), never for failed /
+ *    error-looking results (:91-92, :612; classifier tail :326-328), args
+ *    preview capped at 120 chars (:98, :642-643). A changed result flows
+ *    through whole and resets the streak (:570-571, :585-591).
  *  - Poller exemption: repeatable tools (`process`, `*_get_result`, `*_poll`)
  *    never receive warn/stub verdicts (:63-80, :101-105) but their duplicate
  *    results ARE still dedup-stubbed (:562-567).
  *
  * Deliberate deviations (also listed in the port report):
- *  - `hardStop` defaults to true (upstream hard_stop_enabled defaults false,
- *    :118): the aion GuardVerdict contract requires warn→stub escalation by
+ *  - `hardStop` defaults to true (upstream hard_stop_enabled false, :118):
+ *    the aion GuardVerdict contract requires warn→stub escalation by
  *    default. Pass `hardStop: false` for upstream's warn-only default.
- *  - Upstream escalates on *failed* or idempotent-no-progress completions
- *    (:443-520) using failure signals this API does not receive; the port
- *    escalates on consecutive same-signature repetition (upstream's streak
- *    semantics, :344-359) and forgives the streak when `checkResult` sees a
- *    changed result — the same progress-resets rule (:502-503, :585-591).
- *  - Hermes-specific failure classifiers (terminal exit codes :312-318,
- *    memory-tool :320-324), the web_search/delegate_task per-turn caps
- *    (:659-724), and spillover-path stubs (:619-627, :651-657) are out of
- *    scope for this module.
+ *  - Upstream escalates on failed / idempotent-no-progress completions
+ *    (:443-520); the port escalates on consecutive same-signature repetition
+ *    (:344-359), forgiven when `checkResult` sees a changed result
+ *    (progress-resets, :502-503, :585-591).
+ *  - Hermes failure classifiers (:312-324), per-turn caps (:659-724), and
+ *    spillover-path stubs (:619-627, :651-657) are out of scope here.
  *  - The dedup stub notes the original result length (task requirement;
  *    upstream omits it, :646-650) and points at the per-turn call ordinal
  *    instead of a tool_call_id (this API has none; upstream likewise omits
  *    the pointer when no id exists, :644-645).
+ *  - Poller exemption reaches THROUGH aion's mcp_call indirection: every
+ *    MCP tool is funneled via the single mcp_call house tool
+ *    (src/mcp/tools.ts), so upstream's suffix exemption — aimed at
+ *    "generated / MCP tool surfaces" (:74-76) — checks the INNER args.tool
+ *    name for mcp_call. Signatures are unaffected (they hash full args).
  *
  * Wiring contract (sequential, as upstream executes tool batches): per tool
  * call run `checkCall` → execute when action !== "stub" → `checkResult` with
@@ -126,20 +120,19 @@ interface Streak {
   count: number;
   /** hash of the streak's last observed result; null until one is seen */
   resultHash: string | null;
-  /** 1-based per-turn ordinal of the streak's first call (dedup stub pointer,
-   *  upstream _identical_streak_first_call_id :357-359) */
+  /** 1-based per-turn ordinal of the streak's first call — the dedup stub
+   *  pointer (_identical_streak_first_call_id :357-359) */
   firstCallIndex: number;
-  /** ordinal of the streak's most recent call — becomes the new first when a
-   *  changed result starts a fresh streak (:589-591) */
+  /** ordinal of the most recent call — becomes the new first when a changed
+   *  result starts a fresh streak (:589-591) */
   lastCallIndex: number;
 }
 
 /** Sorted-key compact JSON — ports canonical_tool_args (:285-295): sort_keys,
- *  separators (",",":"), ensure_ascii=False (unicode kept raw), default=str
- *  for non-JSON values. Key sort is UTF-16 code-unit order (Python sorts by
- *  code point; differs only for astral-plane keys — deterministic either way).
- *  Cycles degrade to a marker instead of throwing: a guardrail must never
- *  take down the conversation loop. */
+ *  separators (",",":"), unicode kept raw, default=str for non-JSON values.
+ *  Key sort is UTF-16 code-unit order (deterministic; differs from Python's
+ *  code-point sort only for astral-plane keys). Cycles degrade to a marker
+ *  instead of throwing: a guardrail must never take down the loop. */
 export function canonicalJson(value: unknown, seen: Set<object> = new Set()): string {
   if (value === null) return "null";
   switch (typeof value) {
@@ -173,8 +166,7 @@ export function canonicalJson(value: unknown, seen: Set<object> = new Set()): st
   }
 }
 
-/** Non-mapping args (including arrays) coerce to {} — ports _coerce_args
- *  (:770-771): Python treats anything that is not a Mapping as empty args. */
+/** Non-mapping args (arrays included) coerce to {} — ports _coerce_args (:770-771). */
 function coerceArgs(args: unknown): Record<string, unknown> {
   if (typeof args === "object" && args !== null && !Array.isArray(args)) {
     return args as Record<string, unknown>;
@@ -182,10 +174,9 @@ function coerceArgs(args: unknown): Record<string, unknown> {
   return {};
 }
 
-/** Deterministic content hash. Upstream hashes utf-8 with surrogatepass so
- *  unpaired surrogates in scraped tool output cannot crash the loop
- *  (:849-855); hashing the UTF-16LE code units is likewise lossless for lone
- *  surrogates and never throws. */
+/** Deterministic content hash. Upstream hashes utf-8 with surrogatepass
+ *  (:849-855); hashing UTF-16LE code units is likewise lossless for lone
+ *  surrogates (utf-8 would collapse them to U+FFFD) and never throws. */
 function sha256(text: string): string {
   return createHash("sha256").update(Buffer.from(text, "utf16le")).digest("hex");
 }
@@ -197,10 +188,21 @@ function signatureOf(tool: string, args: unknown): string {
   return `${tool}\u0000${sha256(canonicalJson(coerceArgs(args)))}`;
 }
 
-/** Ports _result_hash (:774-789): JSON results are canonicalized (key-order
- *  insensitive) before hashing; non-JSON results hash raw. Upstream's
- *  safe_json_loads yields None for both invalid JSON and a literal null, so a
- *  parsed null falls back to the raw string here too. */
+/** Poller-exemption name: aion routes all MCP tools through the one `mcp_call`
+ *  house tool, so upstream's MCP-surface poller suffixes (:74-80) can never
+ *  match the outer name — unwrap to inner args.tool (module doc "deviations").
+ *  Exemption only; signatures stay outer name + full args. */
+function exemptionName(tool: string, args: unknown): string {
+  if (tool === "mcp_call") {
+    const inner = coerceArgs(args)["tool"];
+    if (typeof inner === "string" && inner.length > 0) return inner;
+  }
+  return tool;
+}
+
+/** Ports _result_hash (:774-789): JSON results are canonicalized before
+ *  hashing; non-JSON hashes raw. Upstream's safe_json_loads yields None for
+ *  invalid JSON and literal null alike, so parsed null also hashes raw. */
 function resultHash(output: string): string {
   let canonical = output;
   try {
@@ -213,9 +215,8 @@ function resultHash(output: string): string {
 }
 
 /** Generic error sniff, ported from classify_tool_failure's fallback tail
- *  (:326-328). Error results are never dedup-stubbed — the model must see
- *  every fresh error verbatim (:91-92, :612). Hermes-specific branches
- *  (terminal exit codes :312-318, memory-tool :320-324) are not ported. */
+ *  (:326-328); errors are never dedup-stubbed (:91-92, :612). Hermes-specific
+ *  branches (:312-324) are not ported. */
 function looksFailed(output: string): boolean {
   if (output.startsWith("Error")) return true;
   const head = output.slice(0, 500).toLowerCase();
@@ -261,17 +262,17 @@ export class ToolGuard {
     };
   }
 
-  /** Signature records currently tracked — ≤ 1 by construction (single
-   *  consecutive streak, :353-359). Exposed so tests can pin the memory bound. */
-  get trackedSignatures(): 0 | 1 {
+  /** Count of signature records retained. Typed `number` (not `0 | 1`) so
+   *  tests of the O(1) bound are not type-system tautologies; the
+   *  single-streak design (:353-359) keeps it ≤ 1. */
+  get trackedSignatures(): number {
     return this.streak ? 1 : 0;
   }
 
   /** Before execution: same-signature repetition tracking (tool + canonical
    *  args). Any different call resets the streak (:344-351); pollers are
    *  never annotated (:63-72). Escalation: allow → warn (> warnAfterRepeats)
-   *  → stub (> stubAfterRepeats), matching upstream's warn-before-block order
-   *  (warn thresholds :119/:123 < block thresholds :120/:124). */
+   *  → stub (> stubAfterRepeats), upstream's warn-before-block order. */
   checkCall(tool: string, args: unknown): GuardVerdict {
     this.callIndex += 1;
     const sig = signatureOf(tool, args);
@@ -287,7 +288,7 @@ export class ToolGuard {
         lastCallIndex: this.callIndex,
       };
     }
-    if (this.isRepeatable(tool)) return { action: "allow" };
+    if (this.isRepeatable(exemptionName(tool, args))) return { action: "allow" };
     const count = this.streak.count;
     if (this.opts.hardStop && count > this.opts.stubAfterRepeats) {
       // block message modeled on before_call's (:396-399, :416-419); surfaced
@@ -313,12 +314,14 @@ export class ToolGuard {
     return { action: "allow" };
   }
 
-  /** After execution: byte-identical duplicate result detection. From the 2nd
-   *  consecutive identical call whose fresh result hashes identical (:608-616)
-   *  the payload is replaced by a reference stub pointing at the first
-   *  occurrence; a changed result passes through whole and resets the streak
-   *  (:570-571, :585-591). Call with the RAW output (run_agent.py:8475-8478). */
-  checkResult(tool: string, args: unknown, output: string): { output: string; deduped: boolean } {
+  /** After execution: byte-identical duplicate result detection (:608-616);
+   *  from the 2nd consecutive identical call the payload becomes a reference
+   *  stub; a changed result passes whole and resets the streak (:570-571,
+   *  :585-591). Call with the RAW output (run_agent.py:8475-8478). `ok` is
+   *  the caller's structured success flag: FAILED results (ok=false) are
+   *  NEVER stubbed — upstream keeps every error verbatim (:91-92, :612) —
+   *  the string sniff is only a fallback when `ok` is not given. */
+  checkResult(tool: string, args: unknown, output: string, ok?: boolean): { output: string; deduped: boolean } {
     const sig = signatureOf(tool, args);
     const hash = resultHash(output);
     if (this.streak === null || this.streak.sig !== sig) {
@@ -347,21 +350,24 @@ export class ToolGuard {
     if (
       s.count < 2 || // stub only from the 2nd identical call (:611)
       output.length < this.opts.dedupMinChars || // (:93, :613)
-      looksFailed(output) // errors always pass verbatim (:91-92, :612)
+      ok === false || // structured failure: errors always pass verbatim (:91-92, :612)
+      looksFailed(output) // string-sniff fallback when the caller gave no ok flag
     ) {
       return { output, deduped: false };
     }
     return { output: this.buildDedupStub(tool, args, output.length, s.firstCallIndex), deduped: true };
   }
 
-  /** New turn boundary: every counter here is per-turn upstream —
-   *  reset_for_turn runs at the start of each agent loop (:338, :340-369). */
+  /** USER-turn boundary — call once per agentLoop invocation (and per queued
+   *  follow-up), NEVER per model iteration inside the loop: upstream
+   *  reset_for_turn runs at the start of each run_conversation
+   *  (turn_context.py:700), once per user message; the streak must survive
+   *  model iterations or the guard is inert (:338, :340-369). */
   onTurn(): void {
     this.reset();
   }
 
-  /** Full reset. Identical to onTurn because all upstream state is per-turn
-   *  (:340-369); kept distinct for lifecycle clarity. */
+  /** Full reset — same as onTurn (all upstream state is per-user-turn). */
   reset(): void {
     this.streak = null;
     this.callIndex = 0;

@@ -180,6 +180,63 @@ test("error-looking results are never stubbed (:91-92, :612; classifier :326-328
   expect(g2.checkResult("t", {}, jsonErr).deduped).toBe(false);
 });
 
+test("ok:false results are never stubbed even when the text dodges the string sniff (MED-3)", () => {
+  // aion failure shapes that do NOT start with "Error" and contain no
+  // '"error"'/'"failed"' in the head — the sniff alone would let these stub
+  const failure = "Permission denied by user. " + "d".repeat(600);
+  const g = new ToolGuard();
+  expect(looksLikeSniffMiss(failure)).toBe(true); // guard the fixture: it must dodge the sniff
+  g.checkCall("t", {});
+  g.checkResult("t", {}, failure, false);
+  g.checkCall("t", {});
+  expect(g.checkResult("t", {}, failure, false).deduped).toBe(false); // errors stay verbatim
+  g.checkCall("t", {});
+  expect(g.checkResult("t", {}, failure, false).deduped).toBe(false); // …every time
+  // same payload with ok:true dedups — proving ok, not the text, decides
+  const g2 = new ToolGuard();
+  g2.checkCall("t", {});
+  g2.checkResult("t", {}, failure, true);
+  g2.checkCall("t", {});
+  expect(g2.checkResult("t", {}, failure, true).deduped).toBe(true);
+});
+
+/** True when the sniff heuristic alone would NOT classify this as failed. */
+function looksLikeSniffMiss(output: string): boolean {
+  const head = output.slice(0, 500).toLowerCase();
+  return !output.startsWith("Error") && !head.includes('"error"') && !head.includes('"failed"');
+}
+
+test("omitted ok flag falls back to the string sniff (:326-328)", () => {
+  const err = "Error: " + "e".repeat(600);
+  const g = new ToolGuard();
+  g.checkCall("t", {});
+  g.checkResult("t", {}, err); // no ok given
+  g.checkCall("t", {});
+  expect(g.checkResult("t", {}, err).deduped).toBe(false);
+});
+
+test("mcp_call unwraps the inner tool name for the poller exemption (LOW-6)", () => {
+  const g = new ToolGuard();
+  // MCP poller via indirection: exempt from warn/stub, like a direct *_poll
+  for (let i = 0; i < 8; i++) {
+    expect(g.checkCall("mcp_call", { server: "jobs", tool: "render_poll", args: { id: 1 } }).action).toBe("allow");
+  }
+  const g2 = new ToolGuard();
+  for (let i = 0; i < 8; i++) {
+    expect(g2.checkCall("mcp_call", { server: "fal", tool: "fal_get_result", args: {} }).action).toBe("allow");
+  }
+  // non-poller inner tools still escalate — the unwrap is exemption-only
+  const g3 = new ToolGuard();
+  const seq: string[] = [];
+  for (let i = 0; i < 6; i++) seq.push(g3.checkCall("mcp_call", { server: "s", tool: "search", args: { q: "same" } }).action);
+  expect(seq).toEqual(["allow", "allow", "warn", "warn", "warn", "stub"]);
+  // distinct inner tools never share a streak (signature hashes full args)
+  const g4 = new ToolGuard();
+  for (let i = 0; i < 8; i++) {
+    expect(g4.checkCall("mcp_call", { server: "s", tool: `t${i}`, args: {} }).action).toBe("allow");
+  }
+});
+
 test("JSON results are canonically compared: reordered keys still dedup (_result_hash :774-789)", () => {
   const pad = "p".repeat(600);
   const o1 = JSON.stringify({ a: 1, b: pad });
@@ -230,13 +287,19 @@ test("dedup stub args preview is truncated to argsPreviewChars plus ellipsis (:9
   expect(m?.[1]?.endsWith("…")).toBe(true);
 });
 
-test("lone surrogates in output hash without throwing (surrogatepass analog, :849-855)", () => {
+test("lone-surrogate hashing is lossless (surrogatepass analog, :849-855): distinct surrogates never collide", () => {
+  // Discriminating probe: utf-8 encoding collapses EVERY unpaired surrogate to
+  // U+FFFD, so "\uD800"+pad and "\uDC00"+pad would hash identically and the
+  // CHANGED result below would falsely dedup. utf16le keeps them distinct.
   const g = new ToolGuard();
-  const weird = "\uD800" + "w".repeat(600); // unpaired high surrogate
+  const highSurrogate = "\uD800" + "w".repeat(600);
+  const lowSurrogate = "\uDC00" + "w".repeat(600); // same length, different lone surrogate
   g.checkCall("t", {});
-  expect(() => g.checkResult("t", {}, weird)).not.toThrow();
+  g.checkResult("t", {}, highSurrogate);
   g.checkCall("t", {});
-  expect(g.checkResult("t", {}, weird).deduped).toBe(true);
+  expect(g.checkResult("t", {}, lowSurrogate).deduped).toBe(false); // changed content ⇒ no dedup
+  g.checkCall("t", {});
+  expect(g.checkResult("t", {}, lowSurrogate).deduped).toBe(true); // identical content still dedups
 });
 
 // ── behavior 4: thresholds configurable, defaults = upstream's ──────────────
@@ -289,11 +352,17 @@ test("custom dedupMinChars is honored", () => {
 
 test("memory stays O(1): 10k distinct signatures never accumulate (single streak, :353-359)", () => {
   const g = new ToolGuard();
-  for (let i = 0; i < 10_000; i++) {
+  // build a streak of 2 on sig-0, then bury it under 10k distinct calls
+  g.checkCall("t", { i: 0 });
+  g.checkCall("t", { i: 0 });
+  for (let i = 1; i < 10_000; i++) {
     g.checkCall("t", { i });
     g.checkResult("t", { i }, `out-${i}`);
   }
-  expect(g.trackedSignatures).toBeLessThanOrEqual(1);
+  expect(g.trackedSignatures).toBe(1); // exactly the current streak — a per-sig map would hold 10k
+  // discriminating probe: an accumulating per-signature counter would resume
+  // sig-0 at count 3 ⇒ warn; the single-streak design starts fresh ⇒ allow
+  expect(g.checkCall("t", { i: 0 }).action).toBe("allow");
 });
 
 test("onTurn() resets escalation and dedup baselines (reset_for_turn :338, :340-369)", () => {

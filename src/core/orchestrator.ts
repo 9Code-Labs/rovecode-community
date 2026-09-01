@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentDefinition, AgentVars, SpawnRequest, SpawnResult, RunConfig, StreamFn, PermissionRule } from "../core/types.ts";
 import { ToolRegistry } from "../core/tools.ts";
+import { ToolGuard } from "../core/guardrails.ts";
 import { SessionStore } from "../core/session.ts";
 import { agentLoop, SteeringQueue } from "../core/loop.ts";
 
@@ -108,7 +109,8 @@ export async function runChild(deps: ChildRunnerDeps, req: SpawnRequest, depth =
       permissionRules: deriveChildRules(deps.baseConfig.permissionRules, iso.dir, iso.kind !== "none"),
     };
     for await (const ev of agentLoop(def, req.goal, req.vars ?? {}, cfg, {
-      stream: deps.stream, registry, store,
+      // port #4: children get their own loop guard — subagents loop too
+      stream: deps.stream, registry, store, guard: new ToolGuard(),
     }, steering, depth + 1)) {
       void ev;
     }
