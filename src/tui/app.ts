@@ -1,18 +1,23 @@
 /** TUI chat app (port #1): wires the ONE agentLoop (ADR-003) into a Renderer.
  *  All vendor contact lives behind Renderer (renderer.ts) — swap-friendly. */
 
-import { agentLoop, SteeringQueue, partsText, partsTokenText } from "../core/loop.ts";
+import { agentLoop, SteeringQueue, partsText } from "../core/loop.ts";
 import { resetTurnFailureCount } from "../memory/tools.ts";
 import { createRuntime } from "../cli/runtime.ts";
 import { SessionStore, listSessions } from "../core/session.ts";
 import { BlockStore } from "../memory/blocks.ts";
 import { ModelCatalog } from "../providers/catalog.ts";
-import { costUsd, contextHealth, countTokens } from "../core/usage.ts";
+import { ModeManager, buildModeChangeEntry, loadModesConfig, modeFromEntries, type AgentMode } from "../core/modes.ts";
+import { togglePlanAct, applyModeToRun } from "./modes-cmd.ts";
+import { cmdCheckpoints, cmdRestore, type CheckpointCmdCtx } from "./checkpoints-cmd.ts";
+import { buildCostNote } from "./cost.ts";
 import type { Renderer, AssistantView, StatusInfo } from "./renderer.ts";
 import { PiTuiRenderer } from "./pi-renderer.ts";
-import type { Message, RunEvent, StreamFn } from "../core/types.ts";
+import type { RunEvent, StreamFn } from "../core/types.ts";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
+
+export { buildCostNote } from "./cost.ts"; // moved for the ADR-002 cap; re-exported for tests
 
 export interface TuiAppOptions {
   yolo?: boolean;
@@ -41,56 +46,16 @@ export const TUI_COMMANDS = [
   { name: "tree", description: "Alias of /rewind" },
   { name: "sessions", description: "Pick a previous session to resume" },
   { name: "resume", description: "Resume a session by id: /resume <id>" },
+  { name: "plan", description: "Switch to plan mode (read-only tools)" },
+  { name: "act", description: "Switch to act mode (full tools)" },
+  { name: "checkpoints", description: "List shadow-git snapshots of this session" },
+  { name: "restore", description: "Restore a checkpoint: /restore <ref> [files|conversation|both]" },
 ];
 
 interface TuiState {
-  yolo: boolean; provider: string; model: string;
+  yolo: boolean; provider: string; model: string; mode: AgentMode;
   turns: number; tokensIn: number; tokensOut: number;
   busy: boolean;
-}
-
-/** /cost note body. Usage is priced PER MESSAGE at the model recorded in Message.origin —
- *  a session that switched models mid-way is not silently re-priced at the current model.
- *  Messages without an origin fall back to the current model WITH an explicit caveat; messages
- *  whose model has no catalog pricing are excluded and flagged (cost becomes a lower bound).
- *  Context health counts ALL parts (partsTokenText): tool calls/results dominate agentic
- *  sessions, and a text-only count reads ~0% forever. */
-export function buildCostNote(messages: Message[], catalog: ModelCatalog, current: { provider: string; model: string }): string {
-  let inTok = 0, outTok = 0, cacheRead = 0, cacheWrite = 0;
-  let cost = 0, priced = 0, unpriced = 0, noOrigin = 0;
-  for (const m of messages) {
-    const u = m.usage;
-    if (!u) continue;
-    inTok += u.input; outTok += u.output;
-    cacheRead += u.cacheRead ?? 0; cacheWrite += u.cacheWrite ?? 0;
-    if (u.input === 0 && u.output === 0 && !u.cacheRead && !u.cacheWrite) continue; // nothing to price
-    if (!m.origin) noOrigin += 1;
-    const origin = m.origin ?? current;
-    const info = catalog.lookup(origin.provider, origin.model);
-    const c = info?.pricing
-      ? costUsd({ input: u.input, output: u.output, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0 }, info.pricing)
-      : undefined;
-    if (c === undefined) unpriced += 1;
-    else { cost += c; priced += 1; }
-  }
-  const info = catalog.lookup(current.provider, current.model);
-  const est = countTokens(messages.map((m) => partsTokenText(m.parts)).join("\n"));
-  const health = info?.contextWindow ? contextHealth(est, info.contextWindow) : undefined;
-  let costLine: string;
-  if (priced === 0 && unpriced > 0) {
-    costLine = `pricing unknown for ${current.provider}/${current.model}`;
-  } else {
-    costLine = `estimated cost: $${cost.toFixed(4)}`;
-    if (unpriced > 0) costLine += ` — ${unpriced} message${unpriced > 1 ? "s" : ""} unpriced (lower bound)`;
-    if (noOrigin > 0) costLine += ` — ${noOrigin} without origin priced at the current model`;
-  }
-  return [
-    `tokens: ${inTok} in / ${outTok} out · cache: ${cacheRead} read / ${cacheWrite} written`,
-    health
-      ? `context: ~${est} of ${info?.contextWindow} (${Math.round(health.fraction * 100)}%${health.nearLimit ? " — near limit" : ""})`
-      : `context: ~${est} tokens (window unknown)`,
-    costLine,
-  ].join("\n");
 }
 
 export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
@@ -120,10 +85,18 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   let store = rt.store;
   let blocks = rt.blockStore;
   const steering = new SteeringQueue();
-  const state: TuiState = {
-    yolo: opts.yolo ?? process.env.AION_YOLO === "1",
+  // port #20: per-mode model slots from .aion/modes.json, restored from session entries
+  const modesCfg = loadModesConfig(rt.cwd);
+  const modes = new ModeManager(modesCfg, {
     provider: rt.provider?.id ?? "mock",
     model: opts.model ?? process.env.AION_MODEL ?? rt.defaultModel ?? "",
+  });
+  modes.restore(modeFromEntries(store.messages()) ?? modes.mode);
+  const state: TuiState = {
+    yolo: opts.yolo ?? process.env.AION_YOLO === "1",
+    provider: modes.modelFor().provider,
+    model: modes.modelFor().model,
+    mode: modes.mode,
     turns: 0, tokensIn: 0, tokensOut: 0, busy: false,
   };
   let run: AsyncGenerator<RunEvent> | null = null;
@@ -132,7 +105,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   const closedP = new Promise<void>((r) => { resolveClosed = r; });
 
   const status = (): StatusInfo => ({
-    provider: state.provider, model: state.model, yolo: state.yolo,
+    provider: state.provider, model: state.model, yolo: state.yolo, mode: state.mode,
     turns: state.turns, tokensIn: state.tokensIn, tokensOut: state.tokensOut,
   });
   const pushStatus = () => renderer.setStatus(status());
@@ -178,11 +151,26 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     // rebind BOTH consumers: the memory tool AND the system prompt's memory block
     // (critic finding: prompt kept reading the boot session's memory after /resume)
     rt.setBlockStore(blocks);
+    rt.setSessionStore(store); // port #11: checkpoint entryId capture follows the active session
+    // port #20: the switched-to session resumes ITS last recorded mode
+    modes.restore(modeFromEntries(store.messages()) ?? modesCfg.defaultMode ?? "act");
+    const cur = modes.modelFor();
+    state.mode = modes.mode; state.model = cur.model; state.provider = cur.provider;
     state.turns = 0;
     replayHistory();
     refreshUsage();
     pushStatus();
     if (announce) renderer.addSystemNote(`session ${id.slice(0, 8)} (${store.messages().length} messages)`);
+  };
+
+  // port #11: checkpoint command context (store/busy read live via closures)
+  const cpCtx: CheckpointCmdCtx = {
+    renderer,
+    busy: () => state.busy,
+    sessionId: () => store.id,
+    checkpointsFor: (sid) => rt.checkpointsFor(sid),
+    branchTo: (entryId) => store.branch(entryId),
+    replayAndRefresh: () => { replayHistory(); refreshUsage(); pushStatus(); },
   };
 
   const cmdRewind = async () => {
@@ -252,8 +240,19 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
         renderer.addSystemNote(`mode: ${state.yolo ? "yolo (all tools allowed)" : "gated (asks before writes/exec)"}`);
         pushStatus(); return true;
       case "model":
-        if (arg) { state.model = arg; renderer.addSystemNote(`model → ${arg}`); pushStatus(); }
+        // port #20: model writes land in the CURRENT mode's slot (mirrored to both
+        // when planActSeparateModels is off)
+        if (arg) { modes.setModel({ model: arg }); state.model = modes.modelFor().model; renderer.addSystemNote(`model → ${arg}${modes.separate ? ` (${modes.mode} mode)` : ""}`); pushStatus(); }
         else renderer.addSystemNote("usage: /model <id>", "warn");
+        return true;
+      case "plan": case "act":
+        togglePlanAct(modes, cmd as AgentMode, state, renderer, pushStatus);
+        return true;
+      case "checkpoints":
+        void cmdCheckpoints(cpCtx);
+        return true;
+      case "restore":
+        void cmdRestore(cpCtx, arg);
         return true;
       case "status": {
         // port #8: config provenance — dropped/truncated sources must be visible (HIGH-2)
@@ -312,7 +311,6 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     }
   };
 
-
   const startRun = async (goal: string) => {
     const stream = rt.stream; // runtime already applied any opts.stream override
     if (!stream) {
@@ -324,7 +322,10 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     pushStatus();
     const cfg = rt.buildCfg(state.yolo, state.yolo ? undefined : async (req) =>
       renderer.askApproval(req.tool, JSON.stringify(req.revisedArgs).slice(0, 140)));
-    const def = rt.buildDef({ provider: state.provider, model: state.model });
+    // port #20: per-mode model resolution + plan-mode rule/prompt enforcement
+    const cur = modes.modelFor();
+    const def = rt.buildDef({ provider: cur.provider, model: cur.model });
+    applyModeToRun(modes, cfg, def);
     const views = new Map<string, AssistantView>();
     let lastView: AssistantView | null = null;
     run = agentLoop(def, goal, {}, cfg, {
@@ -365,6 +366,8 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
       run = null;
       state.busy = false;
       refreshUsage();
+      // port #14: surface any fallback-chain advances the router made during the run
+      for (const n of rt.drainRouterNotes()) renderer.addSystemNote(n, "warn");
       renderer.setBusy(false);
       pushStatus();
     }
@@ -375,6 +378,10 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     onSubmit: (text) => {
       if (text.startsWith("/")) { handleSlash(text); return; }
       renderer.addUser(text);
+      // port #20: a pending mode switch becomes a durable session entry on the next
+      // submit (round-trip cancellation: toggling back before submitting records nothing)
+      const sw = modes.consumeSwitchNotice();
+      if (sw) store.append(buildModeChangeEntry(sw, store.messages().at(-1)?.id ?? null));
       if (state.busy) { steering.push(text); renderer.addSystemNote("queued as steering (applies before the next model turn)"); return; }
       void startRun(text);
     },

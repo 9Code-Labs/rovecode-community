@@ -93,6 +93,7 @@ export async function runRepl( /* eslint-disable-line complexity */
           if (ev.status !== "done") console.log(`  [${ev.status}]`);
         }
       }
+      for (const n of rt.drainRouterNotes()) console.log(`  [${n}]`); // port #14 fallback advances
       for (const m of rt.store.messages()) if (m.usage) { state.tokensIn += m.usage.input; state.tokensOut += m.usage.output; }
     } catch (e) {
       console.log(`error: ${e instanceof Error ? e.message : String(e)}`);

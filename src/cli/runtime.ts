@@ -2,7 +2,7 @@
  *  registration, skills/memory indexes, provider resolution, RunConfig defaults.
  *  Extracted from repl.ts/main.ts so every surface builds the same agent. */
 
-import type { AgentDefinition, ApprovalFn, ModelRef, RunConfig, StreamFn } from "../core/types.ts";
+import type { AgentDefinition, ApprovalFn, ModelRef, RunConfig, StreamFn, Tool } from "../core/types.ts";
 import { SessionStore } from "../core/session.ts";
 import { ToolRegistry } from "../core/tools.ts";
 import { SkillStore } from "../skills/index.ts";
@@ -19,6 +19,9 @@ import { loadMcpConfig, McpManager } from "../mcp/client.ts";
 import { createMcpTools } from "../mcp/tools.ts";
 import { readTool, editTool, writeTool, bashTool } from "../coding/hashline.ts";
 import { withLspGate, lspGateNote } from "../coding/lsp.ts";
+import { buildRepoMapChunk } from "../coding/repomap.ts";
+import { Checkpoints, MUTATING_KINDS } from "../coding/checkpoints.ts";
+import { createRouter, roleTableFromEnv, type Router } from "../providers/router.ts";
 import { createEvalCellTool } from "../tools/evalcell.ts";
 import { execPolicyApprover } from "../core/execpolicy.ts";
 import { recallTool } from "../memory/recall.ts";
@@ -61,6 +64,16 @@ export interface Runtime {
    *  source stubs for /status. Mid-session config edits are intentionally not
    *  picked up — restart aion (a new runtime) to refresh. */
   projectContext: ProjectContext;
+  /** port #14: role→model router with fallback chains (env AION_MODEL_<ROLE>). */
+  router: Router;
+  /** port #14: fallback-advance notes accumulated since the last drain. */
+  drainRouterNotes(): string[];
+  /** port #11: shadow-git checkpoints for a session (lazy; null when git is absent
+   *  or AION_NO_CHECKPOINTS=1). Snapshots land automatically after mutating tools. */
+  checkpointsFor(sessionId: string): Promise<Checkpoints | null>;
+  /** port #11: point checkpoint entryId capture at the ACTIVE session store after
+   *  a TUI session switch (pairs with setBlockStore). */
+  setSessionStore(s: SessionStore): void;
 }
 
 export function createRuntime(opts: RuntimeOptions = {}): Runtime {
@@ -70,11 +83,36 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   const sessionId = opts.sessionId ?? randomUUID();
   const store = new SessionStore(sessionsDir, sessionId);
 
+  // port #11: shadow-git checkpoints — one repo per session under .aion/checkpoints/,
+  // snapshot after every SUCCESSFUL mutating tool call (kinds write/execute). Lazy
+  // per-session init; git absent or AION_NO_CHECKPOINTS=1 → silently off.
+  const cpBySession = new Map<string, Promise<Checkpoints | null>>();
+  const checkpointsFor = (sid: string): Promise<Checkpoints | null> => {
+    if (process.env.AION_NO_CHECKPOINTS === "1") return Promise.resolve(null);
+    let p = cpBySession.get(sid);
+    if (!p) { p = Checkpoints.init({ workspace: cwd, sessionId: sid }).then((c) => c, () => null); cpBySession.set(sid, p); }
+    return p;
+  };
+  let activeStore = store; // TUI session switches re-point it via setSessionStore
+  const withCheckpoint = (t: Tool): Tool => !MUTATING_KINDS.has(t.kind) ? t : {
+    ...t,
+    execute: async (a, c) => {
+      const out = await t.execute(a, c);
+      if (out.ok) {
+        const cp = await checkpointsFor(c.sessionId);
+        // conversation-restore anchor: current leaf, when the active store IS this session
+        const entryId = activeStore.id === c.sessionId ? activeStore.messages().at(-1)?.id : undefined;
+        await cp?.snapshot(t.schema.name, entryId).catch(() => {});
+      }
+      return out;
+    },
+  };
+
   const registry = new ToolRegistry();
   // port #13: successful edits/writes get LSP diagnostics appended within a ≤2s
   // settle window (typescript-language-server on PATH; absent → silently off).
   const lspNote = (p: string): Promise<string> => lspGateNote(p, cwd);
-  registry.register(readTool, withLspGate(editTool, lspNote), withLspGate(writeTool, lspNote), bashTool);
+  registry.register(readTool, withCheckpoint(withLspGate(editTool, lspNote)), withCheckpoint(withLspGate(writeTool, lspNote)), withCheckpoint(bashTool));
   const skillStore = new SkillStore(cwd);
   skillStore.scan();
   registry.register(...createSkillTools(skillStore));
@@ -82,7 +120,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   registry.register(memoryEditTool(blocks));
   // port #18: persistent eval cell — registered ONLY when AION_EVAL_CELL=1
   const evalCell = createEvalCellTool();
-  if (evalCell) registry.register(evalCell);
+  if (evalCell) registry.register(withCheckpoint(evalCell));
   // port #17: cross-session recall (kind read → file.read gate; pure transcript search)
   registry.register(recallTool(sessionsDir));
   const guard = new ToolGuard(); // port #4: loop signatures + duplicate-result stubs
@@ -101,13 +139,23 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   }
 
   const provider = resolveProvider();
+  const defaultModel = provider?.defaultModel ?? process.env.AION_MODEL ?? "";
+  // port #14: role router + fallback chains (env AION_MODEL_DEFAULT/SMOL/PLAN/COMMIT/TASK,
+  // comma-separated provider/model chains). Model-level fallback shares THIS provider's
+  // wire — a chain entry naming another provider resolves but streams over the same endpoint.
+  const routerNotes: string[] = [];
+  const fallbackRef: ModelRef = { provider: provider?.id ?? "mock", model: defaultModel || "default" };
+  const router = createRouter({
+    roles: roleTableFromEnv(fallbackRef),
+    onNote: (n) => routerNotes.push(
+      `router: ${n.chain} ${n.from.provider}/${n.from.model} → ${n.to ? `${n.to.provider}/${n.to.model}` : "chain exhausted"} (${n.reason})`),
+  });
   // port #7: provider streams get the non-native tool-call parser (strict-gated passthrough
   // for native turns); injected test streams stay untouched. Kill switch: AION_NO_TOOL_MIDDLEWARE=1
+  // port #14: the router wraps OUTERMOST (chain advance re-drives the whole turn).
   const rawStream = provider ? providerStream(provider) : null;
-  const stream = opts.stream !== undefined
-    ? opts.stream
-    : rawStream && process.env.AION_NO_TOOL_MIDDLEWARE !== "1" ? withToolCallParsing(rawStream) : rawStream;
-  const defaultModel = provider?.defaultModel ?? process.env.AION_MODEL ?? "";
+  const middlewared = rawStream && process.env.AION_NO_TOOL_MIDDLEWARE !== "1" ? withToolCallParsing(rawStream) : rawStream;
+  const stream = opts.stream !== undefined ? opts.stream : middlewared ? router.wrap(middlewared) : null;
   const catalog = new ModelCatalog(); // offline models.dev snapshot (port #6)
 
   // port #8: harvest AGENTS.md / CLAUDE.md / .cursor / copilot instructions
@@ -121,6 +169,17 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     ? { name: "config", text: configText, priority: 70, tokens: estimateTokens(configText) }
     : null;
 
+  // port #12: repo-map fills the reserved ADR-007 chunk (priority 80, set by the
+  // module: system>files>repo-map>skills/config>history). Built ONCE per runtime —
+  // frozen like config for prompt-cache stability. AION_NO_REPOMAP=1 disables;
+  // budget override via AION_REPOMAP_TOKENS (default 1024, aider's default).
+  let repoMapChunk: ContextChunk | null = null;
+  if (process.env.AION_NO_REPOMAP !== "1") {
+    const budget = Number(process.env.AION_REPOMAP_TOKENS ?? "") || 1024;
+    try { repoMapChunk = buildRepoMapChunk(cwd, budget); } catch { repoMapChunk = null; }
+  }
+  const extraChunks = [configChunk, repoMapChunk].filter((c): c is ContextChunk => c !== null);
+
   const systemPrompt = (): string => {
     const skillsIndex = buildSkillsIndex(skillStore);
     const memoryIndex = blocks.renderForPrompt();
@@ -131,7 +190,10 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     cwd, sessionId, store, registry, skillStore,
     get blockStore() { return blocks; },
     setBlockStore(b: BlockStore) { blocks = b; registry.register(memoryEditTool(b)); },
-    guard, mcp, projectContext,
+    guard, mcp, projectContext, router,
+    drainRouterNotes: () => routerNotes.splice(0),
+    checkpointsFor,
+    setSessionStore(s: SessionStore) { activeStore = s; },
     provider, stream, defaultModel, systemPrompt,
     buildDef: (model: ModelRef): AgentDefinition => {
       // models the catalog knows CANNOT do native tool calling get the senpi-format
@@ -144,7 +206,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
         systemPrompt: nonNative
           ? `${base}\n\n# Tool calling\n${toolPromptBlock(registry.list().map((t) => t.schema))}`
           : base,
-        ...(configChunk ? { contextChunks: [configChunk] } : {}),
+        ...(extraChunks.length > 0 ? { contextChunks: extraChunks } : {}),
       };
     },
     buildCfg: (yolo: boolean, approval?: ApprovalFn): RunConfig => ({

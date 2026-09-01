@@ -321,8 +321,9 @@ export class PiTuiRenderer implements Renderer {
 
 	setStatus(info: StatusInfo): void {
 		const gate = info.yolo ? "yolo" : "gated";
+		const mode = info.mode ? `${info.mode} · ` : ""; // port #20 mode indicator
 		this.statusText = st.dim(
-			`${info.provider}/${info.model} · ${gate} · turns ${info.turns} · tokens ${info.tokensIn}/${info.tokensOut}`,
+			`${mode}${info.provider}/${info.model} · ${gate} · turns ${info.turns} · tokens ${info.tokensIn}/${info.tokensOut}`,
 		);
 		const tui = this.tui;
 		if (!tui || !this.statusLine) return; // applied at start()

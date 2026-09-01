@@ -11,6 +11,8 @@ export interface StatusInfo {
   turns: number;
   tokensIn: number;
   tokensOut: number;
+  /** port #20: plan/act mode indicator (optional — plain surfaces omit it) */
+  mode?: "plan" | "act";
 }
 
 export interface RendererHooks {
