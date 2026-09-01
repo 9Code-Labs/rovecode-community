@@ -20,7 +20,7 @@ import { createMcpTools } from "../mcp/tools.ts";
 import { readTool, editTool, writeTool, bashTool } from "../coding/hashline.ts";
 import { withLspGate, lspGateNote } from "../coding/lsp.ts";
 import { buildRepoMapChunk } from "../coding/repomap.ts";
-import { Checkpoints, MUTATING_KINDS } from "../coding/checkpoints.ts";
+import { anchorEntryId, Checkpoints, MUTATING_KINDS } from "../coding/checkpoints.ts";
 import { createRouter, roleTableFromEnv, type Router } from "../providers/router.ts";
 import { createEvalCellTool } from "../tools/evalcell.ts";
 import { execPolicyApprover } from "../core/execpolicy.ts";
@@ -100,8 +100,10 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
       const out = await t.execute(a, c);
       if (out.ok) {
         const cp = await checkpointsFor(c.sessionId);
-        // conversation-restore anchor: current leaf, when the active store IS this session
-        const entryId = activeStore.id === c.sessionId ? activeStore.messages().at(-1)?.id : undefined;
+        // conversation-restore anchor: last USER message (HIGH-2 — the tail entry is the
+        // assistant message that ISSUED this very tool call; branching there strands its
+        // tool_calls with no replies -> provider 400), when the active store IS this session
+        const entryId = activeStore.id === c.sessionId ? anchorEntryId(activeStore.messages()) : undefined;
         await cp?.snapshot(t.schema.name, entryId).catch(() => {});
       }
       return out;

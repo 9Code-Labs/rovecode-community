@@ -50,7 +50,10 @@ export async function cmdRestore(ctx: CheckpointCmdCtx, arg: string): Promise<vo
   if (!MODES.includes(mode)) { ctx.renderer.addSystemNote(`unknown restore mode "${modeArg}" (files|conversation|both)`, "warn"); return; }
   const cp = await ctx.checkpointsFor(ctx.sessionId());
   if (!cp) { ctx.renderer.addSystemNote("checkpoints unavailable (git missing or AION_NO_CHECKPOINTS=1)", "warn"); return; }
-  const match = cp.list().filter((c) => c.hash.startsWith(ref));
+  // dedupe candidates BY HASH (identical content re-snapshotted shares one): counting
+  // entries made even the full 40-char hash "match 2 checkpoints" forever. Latest entry
+  // per hash wins, mirroring the module's own pick.
+  const match = [...new Map(cp.list().filter((c) => c.hash.startsWith(ref)).map((c) => [c.hash, c])).values()];
   if (match.length !== 1) {
     ctx.renderer.addSystemNote(match.length === 0 ? `no checkpoint matching "${ref}"` : `"${ref}" matches ${match.length} checkpoints — be more specific`, "warn");
     return;

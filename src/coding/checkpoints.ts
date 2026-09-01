@@ -32,7 +32,7 @@
  *  SessionStore.branch() (port #2 leaf machinery); this module never imports session.ts. */
 
 import { execFile } from "node:child_process";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 export interface Checkpoint {
@@ -52,6 +52,17 @@ export type RestoreResult =
  *  "snapshot commit after every mutating tool call"). memory writes land under the
  *  excluded .aion/; spawned children's own write/execute calls hit the same hook. */
 export const MUTATING_KINDS: ReadonlySet<string> = new Set(["write", "execute"]);
+
+/** Conversation-restore anchor for a snapshot: the LAST role:"user" message on the
+ *  active path. At snapshot time the tail entry is the assistant message that ISSUED
+ *  the in-flight tool call (the loop appends it pre-dispatch), so anchoring the tail
+ *  branches to a history ending in tool_calls with no tool replies → provider 400.
+ *  cline anchors the user run message instead (checkpoint-restore.ts:217-250).
+ *  Wiring contract (like MUTATING_KINDS): runtime.ts withCheckpoint computes
+ *  `anchorEntryId(activeStore.messages())`. */
+export function anchorEntryId(messages: ReadonlyArray<{ id: string; role: string }>): string | undefined {
+  return messages.findLast((m) => m.role === "user")?.id;
+}
 
 export interface CheckpointsInit {
   workspace: string;
@@ -76,17 +87,30 @@ const EXCLUDES = [
   ".DS_Store",
 ];
 
-function runGit(args: string[], cwd: string): Promise<string> {
+/** `verb` names the failing subcommand in errors; the default suits bare invocations
+ *  like ["init"], but --git-dir'd calls must pass it (the first non-dash arg there is
+ *  the git-dir PATH — blaming a path instead of the verb misled /restore users). */
+function runGit(args: string[], cwd: string, verb = args.find((a) => !a.startsWith("-")) ?? ""): Promise<string> {
   // Explicit env hygiene: a caller's GIT_* vars must not redirect shadow commands
   // at the USER repo (cline relies on simple-git cwd instead — GitOperations.ts:88).
   const env = { ...process.env };
   for (const k of ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_COMMON_DIR"]) delete env[k];
   return new Promise((res, rej) => {
     execFile("git", args, { cwd, env, windowsHide: true, maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err) rej(new Error(`git ${args.find((a) => !a.startsWith("-")) ?? ""} failed: ${stderr.trim() || err.message}`));
+      if (err) rej(new Error(`git ${verb} failed: ${stderr.trim() || err.message}`));
       else res(stdout.trim());
     });
   });
+}
+
+/** Canonical form for workspace-identity compares: realpath fixes case/8.3 aliases of
+ *  EXISTING paths (C:\foo vs c:\foo reopened the shadow repo as "another workspace"
+ *  and silently disabled checkpoints); the case-fold below covers paths realpath
+ *  cannot resolve, on the case-insensitive platform only. */
+function canonPath(p: string): string {
+  let r = p;
+  try { r = (realpathSync.native ?? realpathSync)(p); } catch { /* nonexistent: compare as given */ }
+  return process.platform === "win32" ? r.toLowerCase() : r;
 }
 
 export class Checkpoints {
@@ -103,14 +127,17 @@ export class Checkpoints {
   /** Every shadow command names its git-dir and work-tree explicitly, so no cwd or
    *  environment state can ever point one at the user's repo. */
   private git(...args: string[]): Promise<string> {
-    return runGit(["--git-dir", this.gitDir, "--work-tree", this.workspace, ...args], this.workspace);
+    return runGit(["--git-dir", this.gitDir, "--work-tree", this.workspace, ...args], this.workspace, args[0]);
   }
 
   /** Create or reopen the shadow repo for a session. Works whether or not the workspace
    *  is a git repo — the shadow git-dir is entirely separate (non-git workspaces bar). */
   static async init(opts: CheckpointsInit): Promise<Checkpoints> {
     const workspace = resolve(opts.workspace);
-    const session = opts.sessionId.replace(/[^A-Za-z0-9._-]/g, "_");
+    // dot-only ids ("."/"..") survive the charwise filter but escape or collapse the
+    // shadow root under join() — fold them (and "") to underscores
+    const cleaned = opts.sessionId.replace(/[^A-Za-z0-9._-]/g, "_");
+    const session = /^\.*$/.test(cleaned) ? cleaned.replace(/\./g, "_") || "_" : cleaned;
     const shadowDir = join(opts.shadowRoot ?? join(workspace, ".aion", "checkpoints"), session);
     const gitDir = join(shadowDir, ".git"); // cline layout: <checkpointsDir>/.git (CheckpointUtils.ts:20-23)
     mkdirSync(shadowDir, { recursive: true });
@@ -129,9 +156,10 @@ export class Checkpoints {
       ] as const) await cp.git("config", k, v);
     } else {
       // reuse check: refuse a shadow repo whose recorded worktree is another path
-      // (GitOperations.ts:70-73 "Checkpoints can only be used in the original workspace")
+      // (GitOperations.ts:70-73 "Checkpoints can only be used in the original workspace").
+      // Compared canonically — a case-variant reopen (C:\foo vs c:\foo) is the SAME dir.
       const wt = await cp.git("config", "core.worktree").catch(() => "");
-      if (resolve(wt) !== workspace) throw new Error(`checkpoints: shadow repo belongs to ${wt}, not ${workspace}`);
+      if (canonPath(resolve(wt)) !== canonPath(workspace)) throw new Error(`checkpoints: shadow repo belongs to ${wt}, not ${workspace}`);
     }
     // (re)write excludes into the shadow git-dir every init (CheckpointExclusions.ts:297-301)
     mkdirSync(join(gitDir, "info"), { recursive: true });
@@ -171,10 +199,14 @@ export class Checkpoints {
    *  - "files": worktree → checkpoint state (reset --hard + clean -fd; ignored paths survive)
    *  - "conversation": NO file changes; returns the entryId for SessionStore.branch()
    *  - "both": files restored AND entryId returned
-   *  Never throws for bad refs/modes — a structured error comes back instead. */
+   *  Never throws — bad refs/modes AND shadow-git failures (a stale index.lock used to
+   *  escape here and kill the TUI on unhandled rejection) come back structured, the
+   *  error naming the failing verb (reset/clean). */
   async restore(ref: string, mode: RestoreMode): Promise<RestoreResult> {
     const hits = this.log.filter((c) => c.hash === ref || c.hash.startsWith(ref));
-    const target = hits[0];
+    // duplicate hashes (identical content re-snapshotted) are ONE candidate — the
+    // LATEST entry wins so its (newer) conversation anchor is the one restored
+    const target = hits.at(-1);
     if (!target || ref.length < 4) return { ok: false, error: `no checkpoint matches ${ref}` };
     if (new Set(hits.map((h) => h.hash)).size > 1) return { ok: false, error: `ambiguous checkpoint prefix ${ref}` };
     // conversation restore needs a recorded entryId — reject BEFORE touching any file,
@@ -183,10 +215,14 @@ export class Checkpoints {
       return { ok: false, error: `checkpoint ${target.hash.slice(0, 8)} has no session entryId` };
     }
     if (mode !== "conversation") {
-      await this.git("reset", "--hard", target.hash);          // CheckpointTracker.ts:364
-      // remove files created after the checkpoint; single -f spares nested git repos,
-      // no -x spares ignored/excluded paths (checkpoint-restore.ts:458-470)
-      await this.git("clean", "-fd");
+      try {
+        await this.git("reset", "--hard", target.hash);        // CheckpointTracker.ts:364
+        // remove files created after the checkpoint; single -f spares nested git repos,
+        // no -x spares ignored/excluded paths (checkpoint-restore.ts:458-470)
+        await this.git("clean", "-fd");
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
     }
     return {
       ok: true, mode, checkpoint: target,
