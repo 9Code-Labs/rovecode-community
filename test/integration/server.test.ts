@@ -41,9 +41,15 @@ const scripted: StreamFn = async function* (
     return;
   }
   if (goal.includes("GATED")) {
-    // bash → action shell.exec → default rules say effect "prompt" → over HTTP
-    // there is no approver, so the registry must fail the call unexecuted
+    // bash → action shell.exec → default rules say effect "prompt"; `echo` is
+    // policy allow-listed, so the port #9 wrapper auto-runs it even approver-less
     yield { type: "turn", turn: { parts: [{ kind: "tool_call", id: "gated-1", tool: "bash", args: { command: "echo gated-test" } }], stopReason: "tool_use", usage: { input: 0, output: 1 } } };
+    return;
+  }
+  if (goal.includes("NEEDS-APPROVAL")) {
+    // `git push` is prompt-classified by the exec policy; over HTTP there is no
+    // human to ask, so the wrapper fails closed — the call must die unexecuted
+    yield { type: "turn", turn: { parts: [{ kind: "tool_call", id: "gated-1", tool: "bash", args: { command: "git push" } }], stopReason: "tool_use", usage: { input: 0, output: 1 } } };
     return;
   }
   yield { type: "text_delta", text: "PONG" };
@@ -192,17 +198,17 @@ test("GET /doc: parseable OpenAPI 3.1 with exactly the four routes + honesty not
   }
 });
 
-test("gated tool without approver: prompt-effect rule surfaces as FAILED tool call, never executes", async () => {
+test("gated tool without approver: prompt-classified argv surfaces as FAILED tool call, never executes; allow-listed argv auto-runs (policy-only approvals, R2 #9 LOW-3)", async () => {
   const id = await createSession();
-  const { frames } = await promptSse(id, "GATED run the tool");
+  const { frames } = await promptSse(id, "NEEDS-APPROVAL run the tool");
 
-  // the call failed at the permission seam…
+  // the call failed at the permission seam (the port #9 wrapper fails closed headless)…
   const failed = frames.find((f) => f.data.type === "tool_call_failed");
   expect(failed).toBeDefined();
   if (failed && failed.data.type === "tool_call_failed") {
     expect(failed.data.callId).toBe("gated-1");
     expect(failed.data.reason).toBe("permission_denied");
-    expect(failed.data.detail).toContain("no approver");
+    expect(failed.data.detail).toContain("denied");
   }
   // …and the tool NEVER started executing
   expect(frames.some((f) => f.data.type === "tool_execution_start")).toBe(false);
@@ -211,6 +217,14 @@ test("gated tool without approver: prompt-effect rule surfaces as FAILED tool ca
   const last = frames[frames.length - 1]!.data;
   expect(last.type).toBe("run_end");
   if (last.type === "run_end") expect(last.status).toBe("done");
+
+  // the flip side of policy-only approvals: an allow-listed argv runs with no human
+  const id2 = await createSession();
+  const ran = await promptSse(id2, "GATED run the tool");
+  expect(ran.frames.some((f) => f.data.type === "tool_call_failed")).toBe(false);
+  const end = ran.frames.find((f) => f.data.type === "tool_execution_end");
+  expect(end).toBeDefined();
+  if (end && end.data.type === "tool_execution_end") expect(end.data.output).toContain("gated-test");
 });
 
 test("yolo server executes the same gated tool (policy is the only difference)", async () => {

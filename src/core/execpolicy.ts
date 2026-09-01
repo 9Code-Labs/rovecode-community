@@ -129,10 +129,12 @@ export class ExecPolicy {
   }
 
   /** Evaluate ONE tokenized command; unmatched falls back to heuristics, so the
-   *  match list is never empty (policy.rs:305-332). */
+   *  match list is never empty (policy.rs:305-332). Flag-aware escalations ride
+   *  along regardless — they only ADD prompt matches, never remove any. */
   check(cmd: readonly string[]): Evaluation {
     let matched = collectMatches(this.rulesByProgram, cmd);
     if (matched.length === 0) matched = [unmatchedHeuristics(cmd)];
+    matched = [...matched, ...escalationMatches(cmd)];
     return { decision: strictest(matched.map((m) => m.decision)), matchedRules: matched };
   }
 
@@ -192,6 +194,29 @@ function unmatchedHeuristics(cmd: readonly string[]): RuleMatch {
       ? "rm -f style commands are not permitted. Use a safer approach" // exec_policy.rs:1071-1074
       : danger === "other" ? "blocked by policy" : undefined, // exec_policy.rs:1075
   };
+}
+
+/** R2 #9 HIGH-1c (aion escalation, no upstream twin): `--output <path>` /
+ *  `--output=<path>` turns git's readers (diff/show/log) into WRITERS, so a
+ *  rule-allowed invocation gains a write side effect. Prefix rules match
+ *  whole tokens positionally and cannot see `--output=x` mid-argv, so this
+ *  scan adds a prompt match that strictest-wins aggregates with the rules.
+ *  Tokens after `--` are pathspecs, not flags — the scan stops there
+ *  (mirrors rmArgsIncludeForce, is_dangerous_command.rs:164-173). */
+const OUTPUT_FLAG_SUBCOMMANDS = new Set(["diff", "show", "log"]);
+function escalationMatches(cmd: readonly string[]): RuleMatch[] {
+  const first = cmd[0];
+  const head = first === undefined ? null : (executableLookupKey(first) ?? first);
+  const sub = cmd[1];
+  if (head !== "git" || sub === undefined || !OUTPUT_FLAG_SUBCOMMANDS.has(sub)) return [];
+  for (const a of cmd.slice(2)) {
+    if (a === "--") break;
+    if (a === "--output" || a.startsWith("--output=")) {
+      return [{ kind: "heuristics", decision: "prompt", command: [...cmd],
+        justification: "--output writes the result to a file; confirm the destination" }];
+    }
+  }
+  return [];
 }
 
 export type DangerKind = "forced-rm" | "other";

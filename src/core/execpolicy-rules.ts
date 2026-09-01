@@ -172,10 +172,18 @@ export const DEFAULT_RULES: readonly PrefixRuleSpec[] = [
   { pattern: ["which"], match: ["which python3"] },        // :72-78
   { pattern: ["printenv"], notMatch: [["print", "-0"]] },  // :54-63
   { pattern: ["grep"] },
-  { pattern: ["rg"] },
+  // NO rg rule (R2 #9 HIGH-1a): `rg --pre <cmd>` / `--hostname-bin <cmd>` execute
+  // arbitrary programs, and the rule was an aion ADDITION absent from upstream
+  // example.codexpolicy — unknown rg falls to heuristics → prompt.
   { pattern: ["cd"] },
   { pattern: ["git", ["status", "log", "diff", "show", "branch"]],
     match: ["git status", ["git", "log", "--oneline"]], notMatch: ["git stash"] },
+  // R2 #9 HIGH-1b: destructive git-branch flags escalate the reader rule above
+  // via strictest-wins; bare `git branch` / `git branch --list` stay allowed.
+  { pattern: ["git", "branch", ["-D", "-d", "-m", "-M", "-f", "--delete", "--force", "--move"]],
+    decision: "prompt", justification: "deletes or rewrites branches; confirm the target",
+    match: ["git branch -D feature", ["git", "branch", "--delete", "old"]],
+    notMatch: ["git branch", "git branch --list", "git branch -a"] },
   { pattern: ["git", "push"], decision: "prompt", justification: "pushes publish state; confirm the remote and branch",
     match: ["git push", "git push --force-with-lease"] },
   { pattern: ["git", "push", ["--force", "-f"]], decision: "forbidden",

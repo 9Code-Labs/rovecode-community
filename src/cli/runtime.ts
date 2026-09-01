@@ -241,7 +241,11 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
           ],
       // port #9: execpolicy refines the PROMPT branch only (allow-listed argv →
       // "once", forbidden → deny before any human); rules above stay the outer gate.
-      approval: yolo ? undefined : approval ? execPolicyApprover(approval) : undefined,
+      // The wrap is UNCONDITIONAL on gated configs (R2 #9 LOW-3): headless surfaces
+      // (run/serve pass no approver) get allow-list auto-run + forbidden hard-stop,
+      // and prompt-classified argv fails closed instead of "no approver connected".
+      // yolo stays approver-free — its allow-all rules never reach the prompt branch.
+      approval: yolo ? undefined : execPolicyApprover(approval),
     }),
   };
 }

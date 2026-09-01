@@ -9,7 +9,7 @@ import {
 } from "../../src/core/execpolicy.ts";
 import { ToolRegistry } from "../../src/core/tools.ts";
 import type {
-  ApprovalRequest, PermissionRule, RunEvent, Tool, ToolCallPart, ToolContext,
+  ApprovalFn, ApprovalRequest, PermissionRule, RunEvent, Tool, ToolCallPart, ToolContext,
 } from "../../src/core/types.ts";
 
 // ── classification table (default rules; bar: safe / needs-approval / forbidden) ──
@@ -34,6 +34,15 @@ const CASES: [string, "allow" | "prompt" | "deny"][] = [
   ["git stash", "prompt"],
   ["frobnicate --yes", "prompt"],                // unknown command → deny-default spirit
   ["python -c 'print(1)'", "prompt"],
+  // R2 #9 HIGH-1: rg dropped from the allow list (--pre/--hostname-bin run programs);
+  // git branch destructive flags and git diff/show/log --output escalate to prompt
+  ["rg -n TODO src", "prompt"],
+  ["rg --pre /tmp/payload.sh secrets.txt", "prompt"],
+  ["git branch", "allow"],
+  ["git branch --list", "allow"],
+  ["git branch -D feature", "prompt"],
+  ["git diff --output=/tmp/x.patch HEAD", "prompt"],
+  ["ls && git diff --output out.txt", "prompt"], // escalation aggregates across chains too
   // chaining: composite escalates to the STRICTEST member (policy.rs:265-288,402-411)
   ["ls && pwd; echo hi | wc -l", "allow"],
   ["ls && git push", "prompt"],
@@ -229,6 +238,54 @@ test("refineExec reasons follow the most specific matching rule", () => {
   expect(refineExec("ls -la")).toEqual({ effect: "allow" });
 });
 
+// ── R2 #9 HIGH-1 regressions (each block fails if its fix is reverted) ───────
+
+test("rg is NOT allow-listed: --pre/--hostname-bin are exec trampolines, so ALL rg prompts (HIGH-1a)", () => {
+  // re-adding `{ pattern: ["rg"] }` to DEFAULT_RULES turns every line below "allow" → fails
+  for (const cmd of [
+    "rg --pre /tmp/payload.sh secrets.txt",
+    "rg --hostname-bin=/tmp/payload.sh x",
+    "rg -n TODO src",
+  ]) {
+    expect({ cmd, effect: refineExec(cmd).effect }).toEqual({ cmd, effect: "prompt" });
+  }
+});
+
+test("git branch destructive flags prompt; read forms stay allowed (HIGH-1b)", () => {
+  expect(refineExec("git branch").effect).toBe("allow");
+  expect(refineExec("git branch --list").effect).toBe("allow");
+  for (const cmd of [
+    "git branch -D topic", "git branch -d topic", "git branch -m old new",
+    "git branch -M main", "git branch -f topic abc123", "git branch --delete topic",
+    "git branch --force topic abc123", "git branch --move a b",
+  ]) {
+    expect({ cmd, effect: refineExec(cmd).effect }).toEqual({ cmd, effect: "prompt" });
+  }
+  // strictest-wins over the reader allow rule; the length-3 prompt rule is most specific
+  expect(refineExec("git branch -D topic")).toEqual({
+    effect: "prompt",
+    reason: "`git branch -D topic` requires approval: deletes or rewrites branches; confirm the target",
+  });
+});
+
+test("git diff/show/log --output turns a reader into a writer → prompt escalation (HIGH-1c)", () => {
+  expect(refineExec("git diff").effect).toBe("allow");
+  expect(refineExec("git log --oneline").effect).toBe("allow");
+  for (const cmd of [
+    "git diff --output=/tmp/x.patch HEAD",   // =-joined, flag mid-argv
+    "git diff --output /tmp/x.patch",        // two-token form
+    "git log --output=log.txt",
+    "git show --output x HEAD",
+  ]) {
+    expect({ cmd, effect: refineExec(cmd).effect }).toEqual({ cmd, effect: "prompt" });
+  }
+  // the escalation is a heuristics match, so its justification IS the prompt reason
+  expect(refineExec("git log --output=log.txt")).toEqual({
+    effect: "prompt", reason: "--output writes the result to a file; confirm the destination",
+  });
+  expect(refineExec("git diff -- --output").effect).toBe("allow"); // post-`--` it is a pathspec, not a flag
+});
+
 // ── module-level integration: forbidden argv never reaches execution ─────────
 // Wiring mirror: dispatch (ADR-005 pipeline, tools.ts) with the shell.exec
 // prompt rule as the OUTER gate and execPolicyApprover as the approver.
@@ -286,6 +343,46 @@ test("an allow-listed argv runs without consulting the inner approver", async ()
   expect(executed).toEqual(["ls -la"]);
   expect(seen).toEqual([]);
   expect(out.ok).toBe(true);
+  // MED-2 pin: the auto-allow verdict is exactly "once" — "always" would enter
+  // dispatch's approval cache (tools.ts:99-100) and skip policy on repeats
+  const approve = execPolicyApprover(async () => { throw new Error("inner must not be consulted on allow"); });
+  await expect(approve({ tool: "bash", args: { command: "ls -la" }, revisedArgs: { command: "ls -la" }, reason: "r" }))
+    .resolves.toBe("once");
+});
+
+test('allow verdicts are never cached: dispatch re-consults the policy on every repeat ("once" ≠ "always")', async () => {
+  const executed: string[] = [];
+  const reg = new ToolRegistry();
+  reg.register(bashTool(executed));
+  let policyConsults = 0;
+  const wrapped = execPolicyApprover(undefined);
+  const approve: ApprovalFn = async (req) => { policyConsults++; return wrapped(req); };
+  await reg.dispatch(call("ls -la", "c1"), ctx(), undefined, PROMPT_EXEC, approve, () => {});
+  await reg.dispatch(call("ls -la", "c2"), ctx(), undefined, PROMPT_EXEC, approve, () => {});
+  expect(executed).toEqual(["ls -la", "ls -la"]);
+  expect(policyConsults).toBe(2); // an "always" verdict would cache after c1 → 1 consult
+});
+
+test("a rule-level deny hard-stops BEFORE the wrapper: policy cannot resurrect a denied call", async () => {
+  const executed: string[] = [];
+  const reg = new ToolRegistry();
+  reg.register(bashTool(executed));
+  const events: RunEvent[] = [];
+  let approverCalls = 0;
+  const wrapped = execPolicyApprover(async () => "once");
+  const approve: ApprovalFn = async (req) => { approverCalls++; return wrapped(req); };
+  const DENY_EXEC: PermissionRule[] = [{ action: "shell.exec", resource: "*", effect: "deny" }];
+  // even a policy-ALLOW-listed argv stays denied (the wrapper can never widen rules, ADR-005)…
+  const out = await reg.dispatch(call("ls -la"), ctx(), undefined, DENY_EXEC, approve, (e) => events.push(e));
+  expect(out.ok).toBe(false);
+  expect(out.output).toContain("Permission denied");
+  // …and a policy-forbidden argv dies at the same rule gate
+  const out2 = await reg.dispatch(call("git push --force", "c2"), ctx(), undefined, DENY_EXEC, approve, (e) => events.push(e));
+  expect(out2.ok).toBe(false);
+  expect(approverCalls).toBe(0);                      // approver (and thus policy) never consulted
+  expect(executed).toEqual([]);
+  expect(events.filter((e) => e.type === "tool_call_failed" && e.reason === "permission_denied")).toHaveLength(2);
+  expect(events.some((e) => e.type === "tool_execution_start")).toBe(false);
 });
 
 test("a prompt argv reaches the inner approver with the policy justification", async () => {
