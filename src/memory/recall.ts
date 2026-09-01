@@ -26,6 +26,9 @@
  *  - NO LLM anywhere in the search path (tools/session_search_tool.py:25-33 — the
  *    historical "summary mode" was removed upstream); summarization is an optional
  *    injected fn here, off by default.
+ *  - Trust boundary: previews get the same per-line injection neutralization as
+ *    BlockStore (blocks.ts:24-27) — threat lines render as [BLOCKED]; disk is never
+ *    rewritten. The query echo in tool output is bounded to MAX_QUERY_CHARS.
  */
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -90,6 +93,25 @@ function parseLine(line: string): { entryId: string; text: string; timestamp: nu
   return { entryId: w.id, text, timestamp: typeof w.createdAt === "number" ? w.createdAt : 0 };
 }
 
+/** Recalled transcript text sits at the SAME trust level as BlockStore markdown:
+ *  text a past model/user wrote, re-entering a live context. Local copy of the
+ *  blocks.ts:24-27 neutralization — any line matching the injection pattern
+ *  renders as [BLOCKED]; the raw text on disk is never rewritten. */
+const THREAT = /(?:ignore previous|disregard above|system prompt)/i;
+function neutralize(text: string): string {
+  return text.split("\n").map((l) => (THREAT.test(l) ? "[BLOCKED]" : l)).join("\n");
+}
+
+/** Slicing by UTF-16 unit can strand half of a surrogate pair at either cut —
+ *  drop a leading low / trailing high orphan so emitted text stays well-formed. */
+function trimOrphanSurrogates(s: string): string {
+  const head = s.charCodeAt(0); // NaN on empty: both range checks are false
+  if (head >= 0xdc00 && head <= 0xdfff) s = s.slice(1);
+  const tail = s.charCodeAt(s.length - 1);
+  if (tail >= 0xd800 && tail <= 0xdbff) s = s.slice(0, -1);
+  return s;
+}
+
 /** Single-line preview: 120-char window starting 40 before the first matched term
  *  (hermes_state_search.py:1585-1595). Ellipses mark clipping. */
 function makePreview(text: string, terms: string[]): string {
@@ -101,7 +123,7 @@ function makePreview(text: string, terms: string[]): string {
     if (i !== -1 && (pos === -1 || i < pos)) pos = i;
   }
   const start = pos === -1 ? 0 : Math.max(0, pos - PREVIEW_LEAD);
-  const clip = flat.slice(start, start + PREVIEW_WINDOW);
+  const clip = trimOrphanSurrogates(flat.slice(start, start + PREVIEW_WINDOW));
   return (start > 0 ? "…" : "") + clip + (start + PREVIEW_WINDOW < flat.length ? "…" : "");
 }
 
@@ -165,7 +187,13 @@ export class RecallIndex {
       if (!line.trim()) continue;
       const parsed = parseLine(line);
       if (!parsed) continue;
-      const key = sessionId + "0000" + parsed.entryId;
+      // length-prefixed doc key: immune to separator-content collisions — session
+      // "s" + entry "0000e1" and session "s0000" + entry "e1" must stay distinct.
+      // The previous separator was the literal 4-char string "0000" (bytes 0x30
+      // 0x30 0x30 0x30 — an intended U+0000 NUL escape written without the
+      // backslash-u), so exactly that pair collided and the second doc was
+      // silently dropped by the duplicate-key guard below.
+      const key = `${sessionId.length}:${sessionId}:${parsed.entryId}`;
       if (this.docs.has(key)) continue; // duplicate-id guard (session.ts corruption class)
       const tokens = new Map<string, number>();
       for (const t of tokenize(parsed.text)) tokens.set(t, (tokens.get(t) ?? 0) + 1);
@@ -234,7 +262,9 @@ export class RecallIndex {
     return ranked.slice(0, Math.max(0, limit)).map(({ doc }) => ({
       sessionId: doc.sessionId,
       entryId: doc.entryId,
-      preview: makePreview(doc.text, terms),
+      // neutralized HERE so every consumer — tool output, data.hits, the injected
+      // summarizer — sees the scanned view, never the verbatim transcript line
+      preview: neutralize(makePreview(doc.text, terms)),
       timestamp: doc.timestamp,
     }));
   }
@@ -279,10 +309,25 @@ export function recallTool(sessionsRoot: string, opts: RecallToolOptions = {}): 
     kind: "read",
     sequential: false, // pure read: safe to run concurrently with sibling reads
     async execute(args: unknown, ctx: ToolContext): Promise<ToolOutput> {
-      const a = (args ?? {}) as { query?: unknown; limit?: unknown };
+      // Defense in depth: keep ONLY schema args (query, limit) — smuggled keys,
+      // notably `path`, must never influence behavior. core/tools.ts
+      // describeResource() prefers an args `path` over the tool-name fallback, so
+      // {query, path:"/x"} re-aims a `file.read recall` deny rule at "/x"; policy
+      // runs BEFORE execute, so this strip cannot repair that gate — the
+      // authoritative fix belongs in describeResource (validate against the tool
+      // schema). Residual gap documented in recall.test.ts. A fresh object (not
+      // deletes on `args`) because the registry reuses the caller's object for
+      // loop-guard identity and onToolResult after execute.
+      const raw = (args && typeof args === "object" ? args : {}) as Record<string, unknown>;
+      const a: { query?: unknown; limit?: unknown } = { query: raw.query, limit: raw.limit };
       if (typeof a.query !== "string" || a.query.trim().length === 0) {
         return { ok: false, output: "recall failed: query must be a non-empty string" };
       }
+      // the echoed query is bounded like the searched one: a 200k-char query must
+      // not reflect 200k chars into tool output (truncation marked with an ellipsis)
+      const trimmed = a.query.trim();
+      const echo = trimmed.length > MAX_QUERY_CHARS
+        ? trimOrphanSurrogates(trimmed.slice(0, MAX_QUERY_CHARS)) + "…" : trimmed;
       // hermes limit clamp: max(1, min(limit, ceiling)) (session_search_tool.py:1040-1046)
       let limit = Math.min(DEFAULT_RESULTS, ceiling);
       if (typeof a.limit === "number" && Number.isFinite(a.limit)) limit = Math.trunc(a.limit);
@@ -291,11 +336,11 @@ export function recallTool(sessionsRoot: string, opts: RecallToolOptions = {}): 
       const hits = index.search(a.query, limit, ctx.sessionId);
       if (hits.length === 0) {
         // actionable empty message, hermes session_search_tool.py:806-810
-        return { ok: true, output: `recall: no matches for "${a.query.trim()}" — terms are ANDed; try fewer or broader terms`, data: { hits } };
+        return { ok: true, output: `recall: no matches for "${echo}" — terms are ANDed; try fewer or broader terms`, data: { hits } };
       }
       const lines = hits.map((h) =>
         `- [${h.sessionId}] entry ${h.entryId} @ ${h.timestamp > 0 ? new Date(h.timestamp).toISOString() : "unknown time"}\n  ${h.preview}`);
-      let output = `recall: ${hits.length} hit(s) for "${a.query.trim()}"\n` + lines.join("\n");
+      let output = `recall: ${hits.length} hit(s) for "${echo}"\n` + lines.join("\n");
       if (opts.summarize) {
         try {
           const summary = await opts.summarize(a.query, hits);
