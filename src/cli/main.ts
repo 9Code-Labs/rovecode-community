@@ -2,43 +2,22 @@
 
 import { agentLoop, SteeringQueue } from "../core/loop.ts";
 import { ToolRegistry } from "../core/tools.ts";
-import { ToolGuard } from "../core/guardrails.ts";
 import { SessionStore } from "../core/session.ts";
 import { readTool, editTool, writeTool, bashTool } from "../coding/hashline.ts";
-import { mockStream, textTurn, providerStream, openaiCompatStreaming, resolveProvider, fetchModels, listBuiltinProviders } from "../providers/stream.ts";
+import { mockStream, textTurn, providerStream, openaiCompatStreaming, resolveProvider } from "../providers/stream.ts";
 import { runGauntlet, reportResults, providerPreflight, basicTasks, codingTasks, failureTasks, adversarialTasks } from "../eval/gauntlet.ts";
 import { runTask } from "../eval/gauntlet-runner.ts";
 import { runBenchmarks } from "../eval/bench.ts";
-import { SkillStore } from "../skills/index.ts";
-import { createSkillTools, buildSkillsIndex } from "../skills/tools.ts";
-import { BlockStore } from "../memory/blocks.ts";
-import { memoryEditTool, resetTurnFailureCount } from "../memory/tools.ts";
-import type { RunConfig, ModelRef, StreamFn } from "../core/types.ts";
+import { resetTurnFailureCount } from "../memory/tools.ts";
+import type { ModelRef, StreamFn } from "../core/types.ts";
+import { createRuntime } from "./runtime.ts";
 import { runRepl } from "./repl.ts";
 import { runTui } from "../tui/app.ts";
 import { parseCli } from "./dispatch.ts";
-import { mkdirSync } from "node:fs";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
 
 const cli = parseCli(process.argv);
 const cmd = cli.cmd;
-
-/** Permission tiers (omp approval modes): yolo = allow all; default = prompt for writes/exec. */
-function defaultConfig(yolo: boolean): RunConfig {
-  return {
-    maxTurns: 40, contextBudgetTokens: 200_000, compactionThreshold: 0.8,
-    parallelTools: true, retry: { maxAttempts: 3, backoffMs: 500 },
-    permissionRules: yolo
-      ? [{ action: "*", resource: "*", effect: "allow" }]
-      : [
-          { action: "file.read", resource: "*", effect: "allow" },
-          { action: "file.write", resource: "*", effect: "prompt" },
-          { action: "shell.exec", resource: "*", effect: "prompt" },
-          { action: "spawn", resource: "*", effect: "prompt" },
-        ],
-  };
-}
 
 function resolveStream(): { stream: StreamFn; model: ModelRef; real: boolean; providerId: string } {
   const cfg = resolveProvider();
@@ -66,42 +45,30 @@ async function preflightProvider(): Promise<void> {
 }
 
 async function cmdRun(prompt: string): Promise<void> {
-  const cwd = process.cwd();
-  const stateDir = join(cwd, ".aion", "sessions");
-  mkdirSync(stateDir, { recursive: true });
-  const store = new SessionStore(stateDir, randomUUID());
-  const registry = new ToolRegistry();
-  registry.register(readTool, editTool, writeTool, bashTool);
-  const skillStore = new SkillStore(cwd);
-  skillStore.scan();
-  registry.register(...createSkillTools(skillStore));
-  const blockStore = new BlockStore(join(stateDir, "memory"));
-  registry.register(memoryEditTool(blockStore));
-  const skillsIndex = buildSkillsIndex(skillStore);
-  const memoryIndex = blockStore.renderForPrompt();
   const yolo = process.argv.includes("--yolo") || process.env.AION_YOLO === "1";
-  const cfg = defaultConfig(yolo);
-  const { stream, model } = resolveStream();
-  const def = {
-    name: "main",
-    model,
-    systemPrompt: `You are Aion, a coding agent in ${cwd}. Use read/edit/write/bash tools. Edits require line hashes from read output.${skillsIndex ? "\n\n# Skills\n" + skillsIndex : ""}${memoryIndex ? "\n\n# Memory\n" + memoryIndex : ""}`,
-    tools: ["*"],
+  // One-shot runs build the SAME agent as repl/tui (createRuntime: tools incl.
+  // MCP/recall/eval-cell, guardrails, config chunk, execpolicy approver seam).
+  // AION_STREAM=sse keeps its meaning: raw SSE adapter, no middleware wrap.
+  const providerCfg = resolveProvider();
+  const sse = providerCfg && process.env.AION_STREAM === "sse"
+    ? openaiCompatStreaming({ baseUrl: providerCfg.baseUrl, apiKey: providerCfg.apiKey })
+    : undefined;
+  const rt = createRuntime(sse ? { stream: sse } : {});
+  const model: ModelRef = rt.provider
+    ? { provider: rt.provider.id, model: process.env.AION_MODEL ?? rt.provider.defaultModel ?? "gpt-4o-mini" }
+    : { provider: "mock", model: "default" };
+  const stream = rt.stream ?? mockStream({ turns: [textTurn("Aion mock provider: set AION_BASE_URL and AION_API_KEY (or a named provider env key) for a real model.")] });
+  const exit = async (code: number): Promise<never> => {
+    await rt.mcp?.close().catch(() => {});
+    return process.exit(code);
   };
-  const events: string[] = [];
-  // Provider streams read tool entries as {schema:{name,...}} (stream.ts
-  // toOpenAiToolSchemas + anthropic branch) — passing bare ToolSchema objects
-  // crashes every real-provider run before the first fetch. Wrap them; the
-  // ToolSchema[] seam type predates the provider implementations.
-  const providerTools = registry.list().map((t) => ({ schema: t.schema })) as unknown as import("../core/types.ts").ToolSchema[];
-  // port #4: loop guardrails — one-shot runs get a fresh guard (parity with repl/tui via runtime.guard)
-  for await (const ev of agentLoop(def, prompt, {}, cfg, { stream, registry, store, tools: providerTools, guard: new ToolGuard() }, new SteeringQueue())) {
-    events.push(ev.type);
+  for await (const ev of agentLoop(rt.buildDef(model), prompt, {}, rt.buildCfg(yolo), { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard }, new SteeringQueue())) {
     if (ev.type === "turn_start") resetTurnFailureCount();
     if (ev.type === "tool_execution_start") console.log(`→ ${ev.tool}`, JSON.stringify(ev.args).slice(0, 100));
     if (ev.type === "tool_execution_end") console.log(`← ${ev.ok ? "ok" : "FAIL"} ${ev.output.slice(0, 200).replace(/\n/g, " ⏎ ")}`);
-    if (ev.type === "run_end") { console.log(`\n${ev.summary}`); process.exit(ev.status === "done" ? 0 : 1); }
+    if (ev.type === "run_end") { console.log(`\n${ev.summary}`); await exit(ev.status === "done" ? 0 : 1); }
   }
+  await exit(1); // stream ended without run_end (defensive)
 }
 
 async function cmdGauntlet(): Promise<void> {
@@ -143,6 +110,8 @@ commands:
   aion tools                list registered tools
   aion trace <session-id>   print session tree events (JSONL)
   aion eval                 alias for gauntlet
+  aion acp                  Agent Client Protocol v1 endpoint over stdio (Zed/JetBrains)
+  aion serve                headless HTTP server (AION_PORT, default 4100; loopback-only)
 
 env:
   AION_BASE_URL   any OpenAI-compatible or Anthropic endpoint
@@ -166,7 +135,7 @@ async function cmdTrace(sessionId: string): Promise<void> {
   }
 }
 
-const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "trace", "help", "chat", "repl", "smoke-tui"]);
+const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "trace", "help", "chat", "repl", "smoke-tui", "acp", "serve"]);
 // --resume <id>: TUI-only value flag, parsed here (parseCli flags are boolean-only);
 // its value must not be mistaken for a one-shot prompt
 const rIx = process.argv.indexOf("--resume");
@@ -186,6 +155,18 @@ if (cmd === "" || cmd === "chat" || cmd === "repl" || (resumeId !== undefined &&
     // dynamic import: smoke pulls in @xterm/headless (devDependency) — must not
     // load on ordinary CLI startup
     case "smoke-tui": await (await import("../tui/smoke.ts")).runTuiSmoke(); break;
+    // port #15: ACP v1 endpoint over stdio (Zed/JetBrains). Dynamic import keeps
+    // the ACP SDK off ordinary CLI startup.
+    case "acp": await (await import("../acp/server.ts")).runAcpStdio({ yolo: cli.yolo }); break;
+    // port #19: headless HTTP server (loopback by default; approvals are
+    // policy-only over HTTP — see GET /doc). Bun.serve keeps the process alive.
+    case "serve": {
+      const { startServer } = await import("../server/http.ts");
+      const port = Number(process.env.AION_PORT ?? "") || undefined;
+      const srv = startServer({ ...(port !== undefined ? { port } : {}), yolo: cli.yolo });
+      console.log(`aion server listening on ${srv.url} — POST /session · POST /session/:id/prompt (SSE) · GET /sessions · GET /doc`);
+      break;
+    }
     default: cmdHelp(); break;
   }
 } else {

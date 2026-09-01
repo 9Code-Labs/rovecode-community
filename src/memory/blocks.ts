@@ -3,8 +3,9 @@
  *  cache-stable; tools mutate live state + disk only. A threat-scan neutralizes injection
  *  lines in the rendered view — raw text on disk is never rewritten by the scan. */
 
-import { mkdirSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { VersionLedger } from "../skills/versioned.ts";
 
 export type BlockName = "memory" | "user";
 
@@ -37,6 +38,9 @@ function occurrences(haystack: string, needle: string): number {
 export class BlockStore {
   private live: Record<BlockName, string> = { memory: "", user: "" };
   private readonly frozen: Record<BlockName, string>;
+  /** port #16: versioned edits — every commit lands through a sidecar ledger
+   *  (<file>.versions.jsonl), enabling one-call rollback + drift detection. */
+  private readonly ledgers: Record<BlockName, VersionLedger>;
 
   constructor(
     private readonly dir: string,
@@ -47,6 +51,10 @@ export class BlockStore {
     this.live.user = this.read("USER.md");
     // snapshot is the threat-scanned view of what session start loaded
     this.frozen = { memory: scan(this.live.memory), user: scan(this.live.user) };
+    this.ledgers = {
+      memory: new VersionLedger(this.file("memory")),
+      user: new VersionLedger(this.file("user")),
+    };
   }
 
   private read(name: string): string {
@@ -97,10 +105,24 @@ export class BlockStore {
         current: this.live[block].length, limit,
       };
     }
+    // ledger-first write (port #16): version record appended, then the target
+    // is written atomically by the ledger — never writeFileSync directly.
+    const r = this.ledgers[block].commit(next, "memory_edit", this.ledgers[block].version());
+    if (!r.ok) return { ok: false, reason: r.message };
     this.live[block] = next;
-    writeFileSync(this.file(block), next);
     return { ok: true, current: next.length, limit };
   }
+
+  /** port #16: one-call rollback of a block to any retained version. */
+  rollback(block: BlockName, toVersion: number): BlockEditResult {
+    const r = this.ledgers[block].rollback(toVersion, "memory_rollback");
+    if (!r.ok) return { ok: false, reason: r.message };
+    this.live[block] = this.ledgers[block].read();
+    return { ok: true, current: this.live[block].length, limit: this.caps[block] };
+  }
+
+  /** port #16: version history access for status/debug surfaces. */
+  ledger(block: BlockName): VersionLedger { return this.ledgers[block]; }
 
   /** Session-start snapshot (threat-scanned). Tool writes never change it. */
   renderForPrompt(): string {

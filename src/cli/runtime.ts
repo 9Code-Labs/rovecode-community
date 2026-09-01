@@ -18,6 +18,10 @@ import { ToolGuard } from "../core/guardrails.ts";
 import { loadMcpConfig, McpManager } from "../mcp/client.ts";
 import { createMcpTools } from "../mcp/tools.ts";
 import { readTool, editTool, writeTool, bashTool } from "../coding/hashline.ts";
+import { withLspGate, lspGateNote } from "../coding/lsp.ts";
+import { createEvalCellTool } from "../tools/evalcell.ts";
+import { execPolicyApprover } from "../core/execpolicy.ts";
+import { recallTool } from "../memory/recall.ts";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -67,12 +71,20 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   const store = new SessionStore(sessionsDir, sessionId);
 
   const registry = new ToolRegistry();
-  registry.register(readTool, editTool, writeTool, bashTool);
+  // port #13: successful edits/writes get LSP diagnostics appended within a ≤2s
+  // settle window (typescript-language-server on PATH; absent → silently off).
+  const lspNote = (p: string): Promise<string> => lspGateNote(p, cwd);
+  registry.register(readTool, withLspGate(editTool, lspNote), withLspGate(writeTool, lspNote), bashTool);
   const skillStore = new SkillStore(cwd);
   skillStore.scan();
   registry.register(...createSkillTools(skillStore));
   let blocks = new BlockStore(join(sessionsDir, sessionId, "memory"));
   registry.register(memoryEditTool(blocks));
+  // port #18: persistent eval cell — registered ONLY when AION_EVAL_CELL=1
+  const evalCell = createEvalCellTool();
+  if (evalCell) registry.register(evalCell);
+  // port #17: cross-session recall (kind read → file.read gate; pure transcript search)
+  registry.register(recallTool(sessionsDir));
   const guard = new ToolGuard(); // port #4: loop signatures + duplicate-result stubs
 
   // port #3: MCP servers from .aion/mcp.json + harvested .mcp.json; two lazy tools only.
@@ -151,7 +163,9 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
             { action: "spawn", resource: "*", effect: "prompt" },
             { action: "tool.mcp_call", resource: "*", effect: "prompt" },
           ],
-      approval: yolo ? undefined : approval,
+      // port #9: execpolicy refines the PROMPT branch only (allow-listed argv →
+      // "once", forbidden → deny before any human); rules above stay the outer gate.
+      approval: yolo ? undefined : approval ? execPolicyApprover(approval) : undefined,
     }),
   };
 }

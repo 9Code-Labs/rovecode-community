@@ -6,6 +6,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import type { Tool, ToolContext, ToolOutput } from "../core/types.ts";
+import { getExecutor } from "../core/executor.ts";
 
 /** FNV-1a over whitespace-stripped line → 3 base36 chars (phi hash.go). */
 export function lineHash(line: string): string {
@@ -220,8 +221,11 @@ export const bashTool: Tool = {
     const cmd = String((args as { command: string }).command);
     const denied = deniedCommand(cmd);
     if (denied) return { ok: false, output: denied };
-    let r = await runOnce(cmd, ctx.cwd, ctx.signal);
-    if (r.code !== 0) r = await runOnce(cmd, ctx.cwd, ctx.signal); // single self-contained retry
+    // port #10: shell execution goes through the Executor seam (direct/wsl/docker
+    // rungs, probed not assumed). Direct rung is byte-compatible with the old
+    // inline runOnce; a missing bash now returns exit=-1 instead of throwing.
+    let r = await getExecutor().run(cmd, ctx.cwd, ctx.signal);
+    if (r.code !== 0) r = await getExecutor().run(cmd, ctx.cwd, ctx.signal); // single self-contained retry
     return { ok: r.code === 0, output: `exit=${r.code}\n${r.text}` };
   },
 };
@@ -253,21 +257,3 @@ function deniedCommand(cmd: string): string | null {
     : null;
 }
 
-/** One bash attempt; cwd locked to the session cwd. On Windows, System32 bash.exe
- *  is the WSL relay (breaks on non-WSL machines) — prefer Git bash when present. */
-async function runOnce(cmd: string, cwd: string, signal: AbortSignal): Promise<{ code: number; text: string }> {
-  const proc = Bun.spawn([bashBin(), "-c", cmd], { cwd, signal, stdout: "pipe", stderr: "pipe" });
-  const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
-  const code = await proc.exited;
-  const text = (out + (err ? `\nstderr:\n${err}` : "")).slice(0, 10_000);
-  return { code, text };
-}
-
-let bashCache: string | null = null;
-function bashBin(): string {
-  if (bashCache !== null) return bashCache;
-  if (process.platform !== "win32") return (bashCache = "bash");
-  const git = "C:/Program Files/Git/bin/bash.exe";
-  bashCache = existsSync(git) ? git : "bash";
-  return bashCache;
-}

@@ -26,7 +26,8 @@ test("createRuntime registers the full CLI tool set", () => {
   const cwd = tmpCwd();
   const rt = createRuntime({ cwd, stream: null });
   const names = rt.registry.list().map((t) => t.schema.name).sort();
-  expect(names).toEqual(["bash", "edit", "memory_edit", "read", "skill_view", "skills_list", "write"]);
+  // port #17 adds recall; eval_cell must stay ABSENT while AION_EVAL_CELL is unset (port #18 flag door)
+  expect(names).toEqual(["bash", "edit", "memory_edit", "read", "recall", "skill_view", "skills_list", "write"]);
   rmSync(cwd, { recursive: true, force: true });
 });
 
@@ -66,10 +67,11 @@ test("buildDef returns main agent with wildcard tools and the runtime prompt", (
   rmSync(cwd, { recursive: true, force: true });
 });
 
-test("buildCfg gated: repl defaults with memory/skill allows and prompt gates", () => {
+test("buildCfg gated: repl defaults with memory/skill allows and prompt gates", async () => {
   const cwd = tmpCwd();
   const rt = createRuntime({ cwd, stream: null });
-  const approval: ApprovalFn = async () => "once";
+  const seen: string[] = [];
+  const approval: ApprovalFn = async (req) => { seen.push(req.tool); return "once"; };
   const cfg = rt.buildCfg(false, approval);
   expect(cfg.maxTurns).toBe(60);
   expect(cfg.contextBudgetTokens).toBe(200_000);
@@ -87,7 +89,14 @@ test("buildCfg gated: repl defaults with memory/skill allows and prompt gates", 
     { action: "spawn", resource: "*", effect: "prompt" },
     { action: "tool.mcp_call", resource: "*", effect: "prompt" },  // port #3: MCP execution is gated
   ]);
-  expect(cfg.approval).toBe(approval);
+  // port #9: the passed approver is WRAPPED by execPolicyApprover (shell prompts
+  // refined by policy; everything else delegates). Non-shell requests must reach
+  // the inner approver unchanged.
+  expect(typeof cfg.approval).toBe("function");
+  expect(cfg.approval).not.toBe(approval);
+  const verdict = await cfg.approval!({ tool: "write", args: { path: "x" }, revisedArgs: { path: "x" }, reason: "file.write x" });
+  expect(verdict).toBe("once");
+  expect(seen.length).toBe(1);
   rmSync(cwd, { recursive: true, force: true });
 });
 
