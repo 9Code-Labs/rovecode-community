@@ -6,7 +6,7 @@
 import { test, expect } from "bun:test";
 import {
   ModeManager, applyModeRules, planModeRules, loadModesConfig,
-  buildModeChangeEntry, modeFromEntries, formatModeSwitchNotice,
+  buildModeChangeEntry, modeFromEntries, modeSwitchOf, formatModeSwitchNotice,
   createModeSwitchNoticeTracker, planModePromptSection, DEFAULT_MODE,
 } from "../../src/core/modes.ts";
 import { evaluatePermissions, ToolRegistry } from "../../src/core/tools.ts";
@@ -69,6 +69,19 @@ test("allowTools re-allows vouched read-only custom tools after the blanket tool
   const rules = planModeRules(["mcp_list"]);
   expect(evaluatePermissions(rules, "tool.mcp_list", "x").effect).toBe("allow");
   expect(evaluatePermissions(rules, "tool.mcp_call", "x").effect).toBe("deny");
+});
+
+test("applyModeRules appends mode rules AFTER the base set — the append order IS the enforcement (FW2-G)", () => {
+  // evaluatePermissions is last-match-wins: if the mode rules came FIRST, a
+  // yolo/user allow-all base would win every evaluation and plan mode would be
+  // decoration. Pin the physical order, then the outcome that order buys.
+  const yolo: PermissionRule[] = [{ action: "*", resource: "*", effect: "allow" }];
+  const rules = applyModeRules("plan", yolo, ["vouched"]);
+  expect(rules.slice(0, yolo.length)).toEqual(yolo);                 // base first
+  expect(rules.slice(yolo.length)).toEqual(planModeRules(["vouched"])); // mode rules appended last
+  expect(evaluatePermissions(rules, "file.write", "x").effect).toBe("deny"); // …so denies beat allow-all
+  expect(evaluatePermissions(rules, "shell.exec", "x").effect).toBe("deny");
+  expect(evaluatePermissions(rules, "tool.vouched", "x").effect).toBe("allow"); // vouched re-allow stays last
 });
 
 // ---------- enforcement flows through the ONE dispatch pipeline ----------
@@ -244,6 +257,15 @@ test("modeFromEntries ignores plain system messages and junk modeSwitch fields",
   expect(modeFromEntries([])).toBeNull();
   const real = buildModeChangeEntry({ from: "act", to: "plan" }, "a");
   expect(modeFromEntries([plain, junk, real])).toBe("plan");
+});
+
+test("modeSwitchOf extracts the switch from real entries, null for notes/junk (replay seam)", () => {
+  expect(modeSwitchOf(buildModeChangeEntry({ from: "plan", to: "act" }, null))).toEqual({ from: "plan", to: "act" });
+  const plain: Message = { id: "a", role: "system", parts: [{ kind: "text", text: "note" }], parentId: null, createdAt: 1 };
+  expect(modeSwitchOf(plain)).toBeNull();
+  expect(modeSwitchOf({ ...plain, modeSwitch: { from: "turbo", to: "act" } })).toBeNull(); // junk mode
+  expect(modeSwitchOf({ ...plain, role: "user", modeSwitch: { from: "act", to: "plan" } })).toBeNull(); // wrong role
+  expect(modeSwitchOf(null)).toBeNull();
 });
 
 // ---------- config file loading ----------

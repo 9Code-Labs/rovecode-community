@@ -26,8 +26,6 @@
  *    (sdk/packages/shared/src/prompt/format.ts:41-80, tracker semantics
  *     :61-80; per-session scoping of pending notices:
  *     apps/vscode/src/sdk/sdk-mode-coordinator.ts:79-81,101-112).
- *  - ACT_MODE_CONTINUATION_PROMPT ported verbatim
- *    (apps/vscode/src/sdk/sdk-user-message-mapping.ts:9).
  *  - Plan-mode behavioral contract for the system prompt adapted from
  *    sdk/packages/shared/src/prompt/cline.ts:34-45 (base) + :52-59 (the
  *    no-self-switch tail used by hosts without a switch_to_act_mode tool).
@@ -49,6 +47,10 @@
  *    next user message — aion sessions are an append-only tree, so the entry
  *    lands exactly where the switch happened. Round-trip cancellation is
  *    kept: a cancelled switch never becomes an entry.
+ *
+ * Scope: modes are a TUI feature — only src/tui consumes this module;
+ * `aion run`/acp/serve ignore .aion/modes.json (incl. defaultMode) and own
+ * their RunConfig outright (R2 #20 LOW-4 decision: documented, not wired).
  */
 
 import { randomUUID } from "node:crypto";
@@ -63,11 +65,6 @@ export type AgentMode = "plan" | "act";
 /** Upstream default mode (state-keys.ts:281). */
 export const DEFAULT_MODE: AgentMode = "act";
 
-/** Verbatim from apps/vscode/src/sdk/sdk-user-message-mapping.ts:9 — sent as
- *  the continuation prompt when the user approves a plan by switching to act. */
-export const ACT_MODE_CONTINUATION_PROMPT =
-  "The user approved switching to act mode. Continue with the approved plan now.";
-
 function isMode(v: unknown): v is AgentMode {
   return v === "plan" || v === "act";
 }
@@ -81,7 +78,8 @@ export interface ModeModelSelection {
 }
 
 export interface ModesConfig {
-  /** Starting mode; default "act" (state-keys.ts:281). */
+  /** Starting mode; default "act" (state-keys.ts:281). Read by the TUI only —
+   *  headless entrypoints (run/acp/serve) never load modes.json (LOW-4). */
   defaultMode?: AgentMode;
   /** Write-time sync gate; default false (planActSeparateModelsSetting,
    *  state-keys.ts:272): false = setting a model in one mode mirrors it to
@@ -248,7 +246,10 @@ export function buildModeChangeEntry(sw: ModeSwitch, parentId: string | null): M
   };
 }
 
-function switchOf(entry: unknown): ModeSwitch | null {
+/** The ModeSwitch a session entry carries, or null for anything else (plain
+ *  system notes, junk fields). Lets replay render a switch as a human line
+ *  ("mode → plan") instead of the raw <mode_notice> XML (R2 #20 LOW-3). */
+export function modeSwitchOf(entry: unknown): ModeSwitch | null {
   if (!entry || typeof entry !== "object") return null;
   const e = entry as { role?: unknown; modeSwitch?: unknown };
   if (e.role !== "system") return null;
@@ -261,7 +262,7 @@ function switchOf(entry: unknown): ModeSwitch | null {
  *  the active path wins; null when the session never switched. */
 export function modeFromEntries(entries: readonly unknown[]): AgentMode | null {
   for (let i = entries.length - 1; i >= 0; i--) {
-    const sw = switchOf(entries[i]);
+    const sw = modeSwitchOf(entries[i]);
     if (sw) return sw.to;
   }
   return null;

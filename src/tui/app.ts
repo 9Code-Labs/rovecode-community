@@ -7,8 +7,8 @@ import { createRuntime } from "../cli/runtime.ts";
 import { SessionStore, listSessions } from "../core/session.ts";
 import { BlockStore } from "../memory/blocks.ts";
 import { ModelCatalog } from "../providers/catalog.ts";
-import { ModeManager, buildModeChangeEntry, loadModesConfig, modeFromEntries, type AgentMode } from "../core/modes.ts";
-import { togglePlanAct, applyModeToRun } from "./modes-cmd.ts";
+import { ModeManager, loadModesConfig, modeFromEntries, type AgentMode } from "../core/modes.ts";
+import { togglePlanAct, applyModeToRun, flushModeSwitch, replayLabel } from "./modes-cmd.ts";
 import { cmdCheckpoints, cmdRestore, type CheckpointCmdCtx } from "./checkpoints-cmd.ts";
 import { buildCostNote } from "./cost.ts";
 import type { Renderer, AssistantView, StatusInfo } from "./renderer.ts";
@@ -113,6 +113,8 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   const close = () => {
     if (closed) return;
     closed = true;
+    // port #20 MED-2: /plan then quit resumes in plan (append is sync — lands pre-exit)
+    flushModeSwitch(modes, store);
     void run?.return(undefined as never);
     void rt.mcp?.close().catch(() => {}); // stop MCP child processes/connections
     renderer.stop();
@@ -141,11 +143,13 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
         for (const p of m.parts) {
           if (p.kind === "tool_result") renderer.toolEnd(p.callId, p.ok, p.output.slice(0, 160).replace(/\n/g, " ⏎ "), 0);
         }
-      } else if (m.role === "system" && text) renderer.addSystemNote(text);
+      // port #20 LOW-3: mode switches replay as a human line, not raw <mode_notice> XML
+      } else if (m.role === "system" && text) renderer.addSystemNote(replayLabel(m, text));
     }
   };
 
   const switchSession = (id: string, announce = true) => {
+    flushModeSwitch(modes, store); // port #20 MED-2: don't discard a pending switch on /sessions away
     store = new SessionStore(sessionsDir, id);
     blocks = new BlockStore(join(sessionsDir, id, "memory"));
     // rebind BOTH consumers: the memory tool AND the system prompt's memory block
@@ -380,8 +384,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
       renderer.addUser(text);
       // port #20: a pending mode switch becomes a durable session entry on the next
       // submit (round-trip cancellation: toggling back before submitting records nothing)
-      const sw = modes.consumeSwitchNotice();
-      if (sw) store.append(buildModeChangeEntry(sw, store.messages().at(-1)?.id ?? null));
+      flushModeSwitch(modes, store);
       if (state.busy) { steering.push(text); renderer.addSystemNote("queued as steering (applies before the next model turn)"); return; }
       void startRun(text);
     },
