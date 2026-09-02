@@ -196,6 +196,10 @@ Environment knobs (`aion help` prints the same list):
   escape for loopback/private hosts (local dev servers) (#31)
 - `AION_COMPACTION` — `head-summarize` (default) | `keep-window` | `provider-native` (#25)
 - `AION_TASKS_MAX` (default 3) — concurrent background tasks; extra `task start`s queue FIFO (#26)
+- `AION_OTEL_ENDPOINT` (e.g. `http://host:4318`) — OTLP/HTTP collector; exports one trace per run (`aion.run` ⊃
+  `aion.turn` ⊃ `aion.tool`) with token/latency/cost attributes; unset = off, the exporter is never constructed (#39);
+  `AION_OTEL_HEADERS=k=v,k2=v2` — extra OTLP headers (e.g. `authorization=Bearer …`)
+- `AION_REFLECTION=0` disables the reflection nudges; `AION_REFLECTION_MAX` (default 2) caps them per run (#28)
 - `AION_SANDBOX` / `AION_SANDBOX_IMAGE` — executor rung for `bash` and the docker image (#27)
 - `--output text|json|ndjson` (flag, `aion run` only) — output mode (#35); `AION_YOLO=1` — allow all tool actions;
   `AION_STREAM=sse` — raw SSE adapter; `AION_HOME` — credentials + user-scope commands dir (default `~/.aion`)
@@ -223,6 +227,12 @@ the cap and report unavailable: warm it (`wsl.exe --exec bash -c true`) and retr
 active rung. Use a container/microVM for untrusted work.
 
 ## Observability
+
+**OTel spans** (#39, `telemetry/otel.ts`): set `AION_OTEL_ENDPOINT` and every run exports one trace as
+OTLP/HTTP JSON — `aion.run` ⊃ `aion.turn` (one per model step) ⊃ `aion.tool`, with per-span tokens, latency,
+served model and cost (omitted when unpriced), compaction and never-dispatched calls as span events; ids, sizes
+and outcomes only (no goal, args, output or headers). Batched once per run, 5 s timeout, a failed export is one
+`hooks:` warning and never blocks a run. Unset = zero cost: the exporter is never constructed.
 
 Typed `RunEvent` stream (run/turn/tool/compaction events) persisted with the session tree;
 `aion trace <id>` replays any session with corruption findings. `/cost` and `/status` surface

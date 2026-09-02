@@ -175,6 +175,9 @@ env:
   AION_WEBFETCH_ALLOW_PRIVATE=1  let web_fetch reach loopback/private hosts (SSRF guard escape for local dev)
   AION_COMPACTION  history compaction strategy: head-summarize (default) | keep-window | provider-native
   AION_TASKS_MAX  concurrent background tasks (default 3; further task starts queue FIFO)
+  AION_OTEL_ENDPOINT  OTLP/HTTP collector, e.g. http://host:4318 — one trace per run (run ⊃ turn ⊃ tool); unset = off
+  AION_OTEL_HEADERS  extra OTLP headers as k=v,k2=v2 (e.g. authorization=Bearer …)
+  AION_REFLECTION=0  disable reflection nudges after failed edits; AION_REFLECTION_MAX caps them per run (default 2)
 providers: kaesra openai anthropic deepseek groq openrouter ollama lmstudio
             together mistral cerebras fireworks perplexity xai moondream vllm
             (aion auth set <name>, or set <NAME>_API_KEY — stored creds beat env;

@@ -18,6 +18,7 @@ import { parseCompactionStrategy } from "../core/compaction.ts";
 import { ToolGuard } from "../core/guardrails.ts";
 import { HookRunner } from "../core/hooks.ts";
 import { createReflectionHooks, reflectionEnabled } from "../core/reflection.ts";
+import { createOtelHooks, otelOptionsFromEnv } from "../telemetry/otel.ts";
 import { loadMcpConfig, McpManager } from "../mcp/client.ts";
 import { createMcpTools } from "../mcp/tools.ts";
 import { readTool, editTool, writeTool, bashTool } from "../coding/hashline.ts";
@@ -234,6 +235,10 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   const middlewared = rawStream && process.env.AION_NO_TOOL_MIDDLEWARE !== "1" ? withToolCallParsing(rawStream) : rawStream;
   const stream = opts.stream !== undefined ? opts.stream : middlewared ? router.wrap(withRetry(middlewared, { ...retryOptionsFromEnv(), onRetry: (n) => routerNotes.push(`retry: ${n.model.provider}/${n.model.model} attempt ${n.attempt} in ${n.delayMs}ms (${n.reason})`) })) : null; // retries surface as router-style notes (drainRouterNotes)
   const catalog = new ModelCatalog(); // offline models.dev snapshot (port #6)
+  // port #39: OTel span export rides the hook seam — attached ONLY when AION_OTEL_ENDPOINT is set (off:
+  // nothing constructed, no on_event tap → zero cost); export failures surface through hooks.warnings
+  const otel = otelOptionsFromEnv();
+  if (otel) hooks.add(createOtelHooks({ ...otel, pricing: catalog, messages: () => activeStore.messages() }), "otel");
 
   // port #8: harvest AGENTS.md / CLAUDE.md / .cursor / copilot instructions
   // cwd-UPWARD (OMP ancestor-walk pattern) ONCE per runtime — a snapshot, like
