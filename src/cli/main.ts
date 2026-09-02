@@ -13,7 +13,8 @@ import { runTask } from "../eval/gauntlet-runner.ts";
 import { runBenchmarks } from "../eval/bench.ts";
 import { resetTurnFailureCount } from "../memory/tools.ts";
 import type { ModelRef, StreamFn } from "../core/types.ts";
-import { createRuntime } from "./runtime.ts";
+import { bootRuntime } from "./runtime.ts";
+import { SandboxConfigError } from "../core/sandbox-config.ts";
 import { runRepl } from "./repl.ts";
 import { runTui } from "../tui/app.ts";
 import { parseCli } from "./dispatch.ts";
@@ -65,7 +66,12 @@ async function cmdRun(prompt: string): Promise<void> {
   const sse = providerCfg && process.env.AION_STREAM === "sse"
     ? openaiCompatStreaming({ baseUrl: providerCfg.baseUrl, apiKey: providerCfg.apiKey })
     : undefined;
-  const rt = createRuntime(sse ? { stream: sse } : {});
+  // port #27: a sandbox misconfig or an unavailable configured rung is a clean one-line
+  // startup error (exit 2, like a failed provider preflight) — never a stack trace
+  const rt = await bootRuntime(sse ? { stream: sse } : {}).catch((e: unknown): never => {
+    if (e instanceof SandboxConfigError) { console.error(`error: ${e.message}`); process.exit(2); }
+    throw e;
+  });
   const model: ModelRef = rt.provider
     ? { provider: rt.provider.id, model: process.env.AION_MODEL ?? rt.provider.defaultModel ?? "gpt-4o-mini" }
     : { provider: "mock", model: "default" };
@@ -138,6 +144,8 @@ env:
                   (e.g. AION_MODEL_DEFAULT=kaesra/zai-org/glm-5.3-flash,openai/gpt-4o-mini)
   AION_STREAM=sse use SSE streaming
   AION_YOLO=1     allow all tool actions
+  AION_SANDBOX    executor rung for bash: direct (default) | wsl | docker; beats .aion/sandbox.json {"rung","dockerImage"}
+  AION_SANDBOX_IMAGE  image for the docker rung (default debian:stable-slim; must contain bash)
 providers: kaesra openai anthropic deepseek groq openrouter ollama lmstudio
             together mistral cerebras fireworks perplexity xai moondream vllm
             (aion auth set <name>, or set <NAME>_API_KEY — stored creds beat env;

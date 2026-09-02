@@ -103,7 +103,7 @@ Apache-2.0 only; Apache attributions in `THIRD_PARTY_NOTICES.md`.
 **Safety & execution**
 - #4 tool-loop guardrails: repeat-signature loop break, duplicate-result stubs (hermes-agent, MIT)
 - #9 execpolicy: declarative command policy, strictest-wins, forbidden never executes (openai/codex, Apache-2.0)
-- #10 executor sandbox ladder: direct/WSL2/Docker rungs behind one `Executor` seam (codex + OpenHands patterns)
+- #10 executor sandbox ladder: direct/WSL2/Docker rungs behind one `Executor` seam, probed not assumed (codex + OpenHands patterns); #27 makes the rung selectable per project (`.aion/sandbox.json` / `AION_SANDBOX`)
 
 **Memory & context**
 - #3 MCP client, stdio + HTTP, lazy disclosure (two registry tools, ~0 idle token cost) (MIT)
@@ -141,6 +141,8 @@ Defaults < project config chunks (harvested, capped) < env < CLI flags.
 
 - `.aion/mcp.json` (+ harvested `.mcp.json`) — MCP servers
 - `.aion/modes.json` — per-mode model config (TUI-scoped; see limitations)
+- `.aion/sandbox.json` — `{"rung": "direct"|"wsl"|"docker", "dockerImage"?: "…"}` selects where `bash` runs (#27);
+  `AION_SANDBOX=<rung>` / `AION_SANDBOX_IMAGE=<image>` override it; default `direct`
 - `.aion/` also holds sessions, checkpoints, repo-map cache
 - Permission rules: deny-by-default, last-match wildcard (`file.read/write`, `shell.exec`, `spawn`, `memory.write`, `tool.*`); `--yolo`/`AION_YOLO=1` bypasses prompts but not deny rules in plan mode
 
@@ -151,9 +153,18 @@ Defaults < project config chunks (harvested, capped) < env < CLI flags.
 3. **Gate** — approvals resolved on revised args, cached; child agents cannot prompt
 4. **Runtime** — bash denylist + cwd lock + output truncation
 
-This is **not an OS sandbox**. An executor seam with WSL2/Docker rungs exists (#10) but production
-entrypoints run the direct rung until the config field lands (wave-3 #27). Use a container/microVM
-for untrusted work.
+This is **not an OS sandbox**. Where `bash` runs is selectable (#10 seam + #27 config):
+`.aion/sandbox.json` `{"rung": "direct"|"wsl"|"docker", "dockerImage"?: "…"}`, or `AION_SANDBOX=<rung>`
+(+ `AION_SANDBOX_IMAGE`; env beats file; default `direct`). Every rung is **delegation, not isolation**:
+`direct` is in-process bash with the denylist + cwd lock; `wsl` runs each command through `wsl.exe` in the
+default distro, which must contain bash (Docker Desktop's `docker-desktop` distro has none — set a real
+distro as default); `docker` runs each command in `docker run --rm -v <cwd>:/workspace <image>` and needs a
+running daemon plus an image with bash (default `debian:stable-slim`). A configured rung is probed at boot
+by a 500 ms trial through its own wrapper (`wsl.exe --exec bash -c true` / `docker run --rm <image> bash -c
+true`); an unavailable rung is a one-line startup error on every entrypoint (`run`/TUI/`--plain` exit 2,
+`serve` 503, `acp` JSON-RPC error) — never a silent fallback to `direct`. A cold WSL utility VM can exceed
+the cap and report unavailable: warm it (`wsl.exe --exec bash -c true`) and retry. `/status` shows the
+active rung. Use a container/microVM for untrusted work.
 
 ## Observability
 
@@ -166,8 +177,10 @@ tokens, cache hits, and catalog-priced spend.
 - **Cancellation lands at turn boundaries.** Esc/`session/cancel`/HTTP DELETE stop the run at the
   next boundary; an in-flight provider fetch or bash subprocess is not killed mid-flight (per-run
   AbortController is wave-3 port #21).
-- **Sandbox rungs are unwired by default.** WSL2/Docker executor rungs exist behind the seam but
-  nothing selects them yet (#27); default execution is direct with denylist + cwd lock.
+- **Sandbox rungs delegate, they do not isolate.** `wsl`/`docker` (#27) isolate only as well as the
+  wrapped runtime does; `direct` (the default) is denylist + cwd lock. The executor seam is process-wide:
+  `aion serve`/`aion acp` sessions booted from different project dirs share the most recently booted
+  session's rung. `aion gauntlet` always runs `direct` (it never builds a runtime).
 - **Plan/Act modes are TUI-scoped.** `run`/`acp`/`serve` ignore `.aion/modes.json` including
   `defaultMode`.
 - **Server sessions are in-memory.** `aion serve` loses its session routing table on restart

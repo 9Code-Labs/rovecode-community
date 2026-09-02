@@ -6,7 +6,8 @@ import { agentLoop, SteeringQueue } from "../core/loop.ts";
 import { resetTurnFailureCount } from "../memory/tools.ts";
 import { providerStream } from "../providers/stream.ts";
 import type { ApprovalFn, RunEvent } from "../core/types.ts";
-import { createRuntime } from "./runtime.ts";
+import { bootRuntime } from "./runtime.ts";
+import { SandboxConfigError, describeSandbox } from "../core/sandbox-config.ts";
 
 export interface ReplState {
   yolo: boolean;
@@ -24,7 +25,11 @@ function ask(rl: readline.Interface, q: string): Promise<string> {
 export async function runRepl( /* eslint-disable-line complexity */
   opts: { yolo?: boolean; model?: string } = {},
 ): Promise<void> {
-  const rt = createRuntime();
+  // port #27: sandbox misconfig / unavailable configured rung → one-line startup error, exit 2
+  const rt = await bootRuntime().catch((e: unknown): never => {
+    if (e instanceof SandboxConfigError) { console.error(`error: ${e.message}`); process.exit(2); }
+    throw e;
+  });
 
   const state: ReplState = {
     yolo: opts.yolo ?? process.env.AION_YOLO === "1",
@@ -79,7 +84,7 @@ export async function runRepl( /* eslint-disable-line complexity */
     if (!text) { rl.prompt(); return; }
     if (text === "/exit" || text === "/quit") { rl.close(); return; }
     if (text === "/yolo") { state.yolo = !state.yolo; console.log(`mode: ${state.yolo ? "yolo" : "gated"}`); rl.prompt(); return; }
-    if (text === "/status") { console.log(`provider=${state.provider} model=${state.model} turns=${state.turns} tokens=${state.tokensIn}in/${state.tokensOut}out`); rl.prompt(); return; }
+    if (text === "/status") { console.log(`provider=${state.provider} model=${state.model} turns=${state.turns} tokens=${state.tokensIn}in/${state.tokensOut}out\nsandbox: ${describeSandbox(rt.sandbox)}`); rl.prompt(); return; }
     if (text === "/skills") { for (const s of rt.skillStore.list()) console.log(`  ${s.name.padEnd(20)} ${s.description}`); rl.prompt(); return; }
     if (text === "/memory") { console.log(rt.blockStore.renderForPrompt() || "(empty)"); rl.prompt(); return; }
     if (text.startsWith("/model ")) { state.model = text.slice(7).trim(); console.log(`model → ${state.model}`); rl.prompt(); return; }

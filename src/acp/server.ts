@@ -4,7 +4,9 @@
  *
  *  Mapping:
  *    initialize            → protocol v1 + capabilities (no loadSession, text-only prompts)
- *    session/new           → createRuntime (same stores/tools/config as repl/tui)
+ *    session/new           → bootRuntime (same stores/tools/config as repl/tui); a sandbox
+ *                            misconfig / unavailable rung in the client's cwd (port #27)
+ *                            → JSON-RPC invalid params {cwd, error: one-line message}
  *    session/prompt        → agentLoop run; RunEvents stream out as session/update
  *      message_update      → agent_message_chunk
  *      tool_execution_*    → tool_call / tool_call_update
@@ -32,7 +34,8 @@ import {
 } from "@zed-industries/agent-client-protocol";
 import { Readable, Writable } from "node:stream";
 import { agentLoop, SteeringQueue } from "../core/loop.ts";
-import { createRuntime, type Runtime } from "../cli/runtime.ts";
+import { bootRuntime, type Runtime } from "../cli/runtime.ts";
+import { SandboxConfigError } from "../core/sandbox-config.ts";
 import type { ApprovalFn, RunEvent, StreamFn } from "../core/types.ts";
 
 export interface AcpOptions {
@@ -164,7 +167,17 @@ export class AionAcpAgent implements Agent {
   async newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
     // v1 scope: params.mcpServers is not wired into the runtime — the runtime
     // already loads project-level .aion/mcp.json + .mcp.json (port #3)
-    const rt = createRuntime({ cwd: params.cwd, stream: this.opts.stream });
+    let rt: Runtime;
+    try {
+      rt = await bootRuntime({ cwd: params.cwd, stream: this.opts.stream });
+    } catch (e) {
+      // port #27: the client's cwd asked for a rung this machine cannot provide (or
+      // its sandbox.json is broken) — invalid params carrying the one-line message,
+      // the same shape as "unknown session" below (the parameter names something
+      // we cannot serve); the agent process stays up for the next session/new
+      if (e instanceof SandboxConfigError) throw RequestError.invalidParams({ cwd: params.cwd, error: e.message });
+      throw e;
+    }
     if (!rt.stream) {
       throw RequestError.authRequired({
         details: "no provider configured: run `aion auth set <provider>`, or set AION_BASE_URL/AION_API_KEY or a <NAME>_API_KEY",

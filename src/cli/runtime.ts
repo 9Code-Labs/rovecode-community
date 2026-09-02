@@ -27,6 +27,8 @@ import { retryOptionsFromEnv, withRetry } from "../providers/retry.ts";
 import { createEvalCellTool } from "../tools/evalcell.ts";
 import { execPolicyApprover } from "../core/execpolicy.ts";
 import { recallTool } from "../memory/recall.ts";
+import { configureExecutor, type SpawnRunner } from "../core/executor.ts";
+import { loadSandboxConfig, unavailableRungError, type SandboxConfig } from "../core/sandbox-config.ts";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -36,6 +38,20 @@ export interface RuntimeOptions {
   sessionId?: string;
   /** override the provider-derived stream (tests); null forces "no stream" */
   stream?: StreamFn | null;
+  /** port #27 test seam: process runner behind the executor rung (probe AND
+   *  commands); default Bun.spawn. Tests must never probe a real wsl.exe/docker. */
+  spawnRunner?: SpawnRunner;
+  /** port #27 test seam: platform the rung probe assumes; default process.platform */
+  platform?: NodeJS.Platform;
+}
+
+/** port #27: the rung this runtime asked the executor seam for, plus its probe. */
+export interface SandboxState extends SandboxConfig {
+  /** settles once the rung is probed + installed behind getExecutor(); rejects
+   *  with SandboxConfigError (one line). Await it before the first tool call —
+   *  bootRuntime does; until then a non-direct rung is "desired, not yet met"
+   *  and bashTool would get the seam's RungUnavailableError, never lazy direct. */
+  ready: Promise<void>;
 }
 
 export interface Runtime {
@@ -76,10 +92,23 @@ export interface Runtime {
   /** port #11: point checkpoint entryId capture at the ACTIVE session store after
    *  a TUI session switch (pairs with setBlockStore). */
   setSessionStore(s: SessionStore): void;
+  /** port #27: executor rung selected by .aion/sandbox.json / AION_SANDBOX (+ probe) */
+  sandbox: SandboxState;
 }
 
 export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   const cwd = opts.cwd ?? process.cwd();
+  // port #27: sandbox rung selection comes FIRST — a config error throws before any
+  // side effect (no sessions dir, no MCP children). The probe (wsl/docker trial
+  // spawn, 500ms cap) runs concurrently with the rest of construction; its verdict
+  // is `sandbox.ready`. The seam records the DESIRED rung synchronously (#10 G7),
+  // so an unmet wsl/docker desire is loud at bashTool, never a silent direct.
+  const sandboxCfg = loadSandboxConfig(cwd);
+  const ready = configureExecutor(sandboxCfg.rung, {
+    runner: opts.spawnRunner, dockerImage: sandboxCfg.dockerImage, platform: opts.platform,
+  }).then(() => undefined, (e: unknown) => { throw unavailableRungError(sandboxCfg, e); });
+  void ready.catch(() => {}); // verdict is read via bootRuntime / await — never an unhandled rejection
+  const sandbox: SandboxState = { ...sandboxCfg, ready };
   const sessionsDir = join(cwd, ".aion", "sessions");
   mkdirSync(sessionsDir, { recursive: true });
   const sessionId = opts.sessionId ?? randomUUID();
@@ -213,6 +242,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     drainRouterNotes: () => routerNotes.splice(0),
     checkpointsFor,
     setSessionStore(s: SessionStore) { activeStore = s; },
+    sandbox,
     provider, stream, defaultModel, systemPrompt,
     buildDef: (model: ModelRef): AgentDefinition => {
       // models the catalog knows CANNOT do native tool calling get the senpi-format
@@ -253,4 +283,22 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
       approval: yolo ? undefined : execPolicyApprover(approval),
     }),
   };
+}
+
+/** port #27: construct + await the sandbox probe — the boot path for every
+ *  entrypoint that must fail CLEANLY at startup (run/repl/tui/acp/serve).
+ *  createRuntime stays sync (its many callers/tests build synchronously); this
+ *  is the one place the async verdict is joined. Throws SandboxConfigError
+ *  (one actionable line) for a bad config or a configured rung the machine
+ *  cannot provide; MCP children spawned during construction are reaped first,
+ *  so a failed boot leaves no processes behind. */
+export async function bootRuntime(opts: RuntimeOptions = {}): Promise<Runtime> {
+  const rt = createRuntime(opts);
+  try {
+    await rt.sandbox.ready;
+  } catch (e) {
+    await rt.mcp?.close().catch(() => {});
+    throw e;
+  }
+  return rt;
 }

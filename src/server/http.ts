@@ -27,7 +27,8 @@
 
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { createRuntime, type Runtime } from "../cli/runtime.ts";
+import { bootRuntime, type Runtime } from "../cli/runtime.ts";
+import { SandboxConfigError } from "../core/sandbox-config.ts";
 import { agentLoop, SteeringQueue } from "../core/loop.ts";
 import { listSessions } from "../core/session.ts";
 import type { ModelRef, RunEvent, StreamFn } from "../core/types.ts";
@@ -157,11 +158,19 @@ export function startServer(opts: ServerOptions = {}): AionServer {
   const yolo = opts.yolo ?? false;
   const sessions = new Map<string, SessionEntry>();
 
-  const createSession = (): Response => {
+  const createSession = async (): Promise<Response> => {
     const id = randomUUID();
     // Reuse the ONE runtime construction every surface uses (cli/runtime.ts):
     // same stores, same tools, same provider resolution. Injectable stream for tests.
-    const runtime = createRuntime({ cwd, sessionId: id, stream: opts.stream });
+    let runtime: Runtime;
+    try {
+      runtime = await bootRuntime({ cwd, sessionId: id, stream: opts.stream });
+    } catch (e) {
+      // port #27: sandbox misconfig / unavailable configured rung → 503 with the
+      // one-line message (the server cwd cannot provide the requested executor)
+      if (e instanceof SandboxConfigError) return json({ error: e.message }, 503);
+      throw e; // never-throw seam below turns anything else into a JSON 500
+    }
     sessions.set(id, { runtime, running: false, abort: null });
     return json({ id }, 201);
   };

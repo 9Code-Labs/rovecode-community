@@ -13,7 +13,7 @@ import { serveAcp, promptText, updateForEvent, kindFor, titleFor, type AcpOption
 import type { StreamEvent, StreamFn } from "../../src/core/types.ts";
 import { textTurn, toolTurn } from "../../src/providers/stream.ts";
 import { McpManager } from "../../src/mcp/client.ts";
-import { mkdtempSync, writeFileSync, existsSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
@@ -97,6 +97,36 @@ test("session/new without a provider fails auth_required (-32000)", async () => 
       expect(String(err.data?.details)).toContain("no provider configured");
     }
   } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test("port #27: session/new in a cwd with a broken sandbox config → JSON-RPC error carrying the one-line message; the agent stays alive", async () => {
+  const bad = tmpCwd();
+  const good = tmpCwd();
+  const savedSandbox = process.env.AION_SANDBOX; // a host AION_SANDBOX would override the file under test
+  delete process.env.AION_SANDBOX;
+  try {
+    mkdirSync(join(bad, ".aion"), { recursive: true });
+    writeFileSync(join(bad, ".aion", "sandbox.json"), JSON.stringify({ rung: "bubblewrap" }));
+    const { conn } = connect({ stream: scriptedStream([[{ type: "turn", turn: textTurn("hi") }]]) });
+    await conn.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} });
+    let err: { code: number; data?: { cwd?: string; error?: string } } | null = null;
+    try { await conn.newSession({ cwd: bad, mcpServers: [] }); } catch (e) { err = e as typeof err; }
+    expect(err).not.toBeNull();
+    // invalid params {cwd, error} — the house shape for "unknown session" (mutation:
+    // drop the mapping → the SDK's generic fallback is -32603 internal error)
+    expect(err!.code).toBe(-32602);
+    expect(err!.data?.cwd).toBe(bad);
+    expect(String(err!.data?.error)).toContain('sandbox rung "bubblewrap"');
+    expect(String(err!.data?.error)).toContain("default: direct");
+    expect(String(err!.data?.error)).not.toMatch(/[\r\n]/);
+    // the connection/process survives: the next session/new in a sane cwd works
+    const s = await conn.newSession({ cwd: good, mcpServers: [] });
+    expect(s.sessionId.length).toBeGreaterThan(0);
+  } finally {
+    if (savedSandbox === undefined) delete process.env.AION_SANDBOX; else process.env.AION_SANDBOX = savedSandbox;
+    rmSync(bad, { recursive: true, force: true });
+    rmSync(good, { recursive: true, force: true });
+  }
 });
 
 test("prompt on an unknown session is rejected with invalid params", async () => {

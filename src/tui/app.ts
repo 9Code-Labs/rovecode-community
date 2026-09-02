@@ -4,6 +4,7 @@
 import { agentLoop, SteeringQueue, partsText } from "../core/loop.ts";
 import { resetTurnFailureCount } from "../memory/tools.ts";
 import { createRuntime } from "../cli/runtime.ts";
+import { SandboxConfigError, describeSandbox } from "../core/sandbox-config.ts";
 import { SessionStore, listSessions } from "../core/session.ts";
 import { BlockStore } from "../memory/blocks.ts";
 import { ModelCatalog } from "../providers/catalog.ts";
@@ -77,7 +78,18 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   }
   // opts.stream passes through verbatim: a StreamFn overrides, explicit null forces
   // "no provider", undefined defers to the runtime's env-resolved provider
-  const rt = createRuntime({ cwd: opts.cwd, stream: opts.stream, sessionId: bootId });
+  // port #27: a sandbox MISCONFIG throws synchronously here (before any side effect) — a clean
+  // one-line startup error (exit 2), never a stack, never a silent direct fallback. The rung
+  // PROBE verdict (rt.sandbox.ready) is awaited at the end of boot: runTui must stay
+  // synchronous until the renderer's input handlers are wired (tests/smoke send input right
+  // after calling runTui), so no await may sit above that point.
+  const rt = (() => {
+    try { return createRuntime({ cwd: opts.cwd, stream: opts.stream, sessionId: bootId }); }
+    catch (e) {
+      if (e instanceof SandboxConfigError && opts.exitOnClose !== false) { console.error(`error: ${e.message}`); process.exit(2); }
+      throw e;
+    }
+  })();
   const renderer: Renderer = opts.renderer ?? new PiTuiRenderer({ cwd: rt.cwd });
   const sessionsDir = join(rt.cwd, ".aion", "sessions");
   // /cost pricing + context window. Boots from the offline snapshot; the live models.dev
@@ -226,6 +238,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
         if (pc.skippedFiles > 0) cfgBits.push(`+${pc.skippedFiles} skipped (file cap)`);
         renderer.addSystemNote(
           `provider=${state.provider} model=${state.model} turns=${state.turns} tokens=${state.tokensIn}in/${state.tokensOut}out` +
+          `\nsandbox: ${describeSandbox(rt.sandbox)}` + // port #27: active executor rung + origin
           `\nconfig: ${cfgBits.length > 0 ? cfgBits.join(", ") : "(none)"}`,
         );
         return true;
@@ -371,5 +384,11 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   );
   if (bootWarn) renderer.addSystemNote(bootWarn, "warn");
   pushStatus();
+  // port #27: an unavailable configured rung (probe failed) is a clean one-line startup
+  // error — stop the renderer first so the terminal is restored, then exit 2
+  await rt.sandbox.ready.catch((e: unknown) => {
+    if (e instanceof SandboxConfigError && opts.exitOnClose !== false) { renderer.stop(); console.error(`error: ${e.message}`); process.exit(2); }
+    throw e;
+  });
   await closedP;
 }
