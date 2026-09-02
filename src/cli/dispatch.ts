@@ -15,10 +15,11 @@ export interface CliInvocation {
 
 /** Every flag the CLI hand-parses a VALUE for out of process.argv: --resume
  *  (main.ts, TUI session id), --key (cmdAuth, key name), --out (export.ts, target
- *  path). parseCli only skips the value when locating cmd; the owners still read
- *  it themselves, and `rest` keeps post-command values (cmdAuth/export.ts drop
- *  their own). Add here when a new value flag lands. */
-export const VALUE_FLAGS: ReadonlySet<string> = new Set(["--resume", "--key", "--out"]);
+ *  path), --output (output.ts, cmdRun output mode). parseCli only skips the value
+ *  when locating cmd; the owners still read it themselves, and `rest` keeps
+ *  post-command values (cmdAuth/export.ts/output.ts drop their own). Add here
+ *  when a new value flag lands. */
+export const VALUE_FLAGS: ReadonlySet<string> = new Set(["--resume", "--key", "--out", "--output"]);
 
 export function parseCli(argv: string[]): CliInvocation {
   const args = argv.slice(2);

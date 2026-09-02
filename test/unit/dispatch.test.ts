@@ -57,11 +57,20 @@ test("boolean flags before the command are unchanged", () => {
   expect(parseCli(argv("--yolo", "run", "x"))).toMatchObject({ cmd: "run", yolo: true, rest: ["x"] });
 });
 
-test("a value flag AFTER the command leaves its value in rest (contract cmdAuth/export.ts rely on: they drop their own)", () => {
+test("a value flag AFTER the command leaves its value in rest (contract cmdAuth/export.ts/output.ts rely on: they drop their own)", () => {
   expect(parseCli(argv("auth", "set", "p", "--key", "NAME"))).toMatchObject({ cmd: "auth", rest: ["set", "p", "NAME"] });
   expect(parseCli(argv("export", "abc", "--out", "o.md"))).toMatchObject({ cmd: "export", rest: ["abc", "o.md"] });
+  expect(parseCli(argv("run", "hi", "--output", "json"))).toMatchObject({ cmd: "run", rest: ["hi", "json"] }); // output.ts runPromptWords drops "json"
 });
 
-test("VALUE_FLAGS is the inventory of every value flag main.ts/export.ts hand-parse", () => {
-  expect([...VALUE_FLAGS].sort()).toEqual(["--key", "--out", "--resume"]);
+// port #35: --output is a value flag — `aion --output json run hi` must dispatch run, not a
+// one-shot prompt named "json" (which would spend tokens on a real provider)
+test("--output <mode> before the command: cmd is the command, the mode is never the command", () => {
+  expect(parseCli(argv("--output", "json", "run", "hi"))).toMatchObject({ cmd: "run", rest: ["hi"] });
+  expect(parseCli(argv("--output", "ndjson", "hi", "there"))).toMatchObject({ cmd: "hi", rest: ["there"] });
+  expect(parseCli(argv("--output=json", "run", "hi"))).toMatchObject({ cmd: "run", rest: ["hi"] }); // = form is a plain flag
+});
+
+test("VALUE_FLAGS is the inventory of every value flag main.ts/export.ts/output.ts hand-parse", () => {
+  expect([...VALUE_FLAGS].sort()).toEqual(["--key", "--out", "--output", "--resume"]);
 });

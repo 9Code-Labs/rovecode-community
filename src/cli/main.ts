@@ -20,6 +20,7 @@ import { SandboxConfigError } from "../core/sandbox-config.ts";
 import { runRepl } from "./repl.ts";
 import { runTui } from "../tui/app.ts";
 import { parseCli } from "./dispatch.ts";
+import { createOutputSink, parseOutputMode, runPromptWords } from "./output.ts";
 import { join } from "node:path";
 import pkg from "../../package.json";
 
@@ -82,13 +83,16 @@ async function cmdRun(prompt: string): Promise<void> {
     await rt.mcp?.close().catch(() => {});
     return process.exit(code);
   };
-  for await (const ev of agentLoop(rt.buildDef(model), prompt, {}, rt.buildCfg(yolo), { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard }, rt.steering)) { // port #26: runtime queue → task notes reach the run
+  // port #35: --output text|json|ndjson — the sink owns every stdout byte of the run (text mode is
+  // byte-identical to the pre-port console.log lines; json/ndjson guard stdout and send human
+  // progress to stderr) and its signal aborts on SIGINT, so Ctrl-C ends the run "stopped" (exit 130)
+  const sink = createOutputSink(parseOutputMode(process.argv), { stdout: process.stdout, stderr: process.stderr, model, messages: () => rt.store.messages() });
+  for await (const ev of agentLoop(rt.buildDef(model), prompt, {}, rt.buildCfg(yolo), { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, cwd: rt.cwd, signal: sink.signal }, rt.steering)) { // port #26: runtime queue -> task notes reach the run; cwd threaded like every other surface
     if (ev.type === "turn_start") resetTurnFailureCount();
-    if (ev.type === "tool_execution_start") console.log(`→ ${ev.tool}`, JSON.stringify(ev.args).slice(0, 100));
-    if (ev.type === "tool_execution_end") console.log(`← ${ev.ok ? "ok" : "FAIL"} ${ev.output.slice(0, 200).replace(/\n/g, " ⏎ ")}`);
-    if (ev.type === "run_end") { console.log(`\n${ev.summary}`); await exit(ev.status === "done" ? 0 : 1); }
+    sink.onEvent(ev);
+    if (ev.type === "run_end") await exit(sink.finish(ev));
   }
-  await exit(1); // stream ended without run_end (defensive)
+  await exit(sink.finish()); // stream ended without run_end (defensive): status "error", exit 1
 }
 
 async function cmdGauntlet(): Promise<void> {
@@ -230,7 +234,7 @@ if (cmd === "" || cmd === "chat" || cmd === "repl") {
   else await runTui({ yolo: cli.yolo, sessionId: resumeId });
 } else if (known.has(cmd)) {
   switch (cmd) {
-    case "run": await cmdRun(cli.rest.join(" ") || "hello"); break;
+    case "run": await cmdRun(runPromptWords(cli, process.argv).join(" ") || "hello"); break; // port #35: drops a post-command --output value
     case "gauntlet": case "eval": await cmdGauntlet(); break;
     case "bench": await cmdBench(); break;
     case "tools": cmdTools(); break;
@@ -272,6 +276,6 @@ if (cmd === "" || cmd === "chat" || cmd === "repl") {
     default: cmdHelp(); break;
   }
 } else {
-  // bare prompt: one-shot task
-  await cmdRun([cmd, ...cli.rest].join(" "));
+  // bare prompt: one-shot task (port #35: a post-command --output value is not a prompt word)
+  await cmdRun(runPromptWords(cli, process.argv).join(" "));
 }
