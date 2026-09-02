@@ -23,33 +23,39 @@ const MAX_QUESTION_ROWS = 6;
 
 const VERB_GLYPH: Record<string, string> = { read: "·", edit: "~", write: "+", remove: "−", run: "$", search: "⌕", fetch: "↗", task: "»" };
 
+/** cells a string takes: one per code point (types.ts) — `.length` would count an emoji twice */
+const cells = (s: string): number => [...s].length;
+
 /** `<glyph> <verb> <label>` with the detail right-aligned: `· read x … N lines`, `~ edit x +a −b`,
- *  `$ run cmd … last line`; the spinner replaces the glyph while the call runs (app.js:561-571) */
+ *  `$ run cmd … last line`; the spinner replaces the glyph while the call runs (app.js:561-571).
+ *  A failed edit shows its rejection detail, never the +a −b it did not apply. */
 export function toolRow(t: ToolRow, w: number, theme: Theme, now: number): Seg[] {
   const failed = !t.running && t.ok === false;
   const g = t.running ? spinner(now) : VERB_GLYPH[t.verb] ?? "·";
   const gc = t.running ? theme.accent : failed ? theme.err : "~+−".includes(g) ? theme.fg2 : theme.dim;
-  const verb = (t.verb === "other" ? t.tool : t.verb).padEnd(7);
+  const verb = ((t.verb === "other" ? t.tool : t.verb) + " ").padEnd(7); // always ≥1 space before the label (ask_user, todo_write, MCP names)
   const detail: Seg[] = [];
-  if (t.verb === "edit" && (t.add !== undefined || t.del !== undefined)) {
+  if (t.verb === "edit" && !failed && (t.add || t.del)) {
     if (t.add) detail.push([`+${t.add}`, st(theme.ok)]);
     if (t.del) detail.push([`${t.add ? " " : ""}−${t.del}`, st(theme.err)]);
   } else if (t.detail) detail.push([(t.verb === "edit" ? "" : "… ") + t.detail, st(failed ? theme.err : theme.muted)]);
-  const dw = detail.reduce((n, [s]) => n + s.length, 0);
+  const dw = detail.reduce((n, [s]) => n + cells(s), 0);
   let label = t.label;
   let labelMax = w - 2 - verb.length;
   if (dw) {
     if (labelMax - dw - 2 >= 8) labelMax -= dw + 2; // clip the label before dropping the detail
     else detail.length = 0;
   }
-  if (label.length > labelMax) label = labelMax > 1 ? label.slice(0, Math.max(0, labelMax - 1)) + "…" : "";
+  if (cells(label) > labelMax) label = labelMax > 1 ? [...label].slice(0, labelMax - 1).join("") + "…" : "";
   const segs: Seg[] = [[g + " ", st(gc)], [verb, st(t.running ? theme.fg2 : theme.muted)], [label, st(t.running ? theme.fg : failed ? theme.err : theme.fg2)]];
-  if (detail.length) segs.push([" ".repeat(Math.max(1, w - 2 - verb.length - label.length - dw)), st(-1)], ...detail);
+  if (detail.length) segs.push([" ".repeat(Math.max(1, w - 2 - verb.length - cells(label) - dw)), st(-1)], ...detail);
   return segs;
 }
 
-/** the status word after `◆ aion ·` for the current run: the live activity while running, else the outcome */
+/** the status word after `◆ aion ·` for the current run: `needs you` while a card waits (the frame
+ *  header's word, draw-frame.ts), else the live activity while running, else the outcome */
 export function activityLabel(s: SextantState): string {
+  if (s.card) return "needs you";
   const a = s.activity;
   if (s.running) return a.label || a.state.toLowerCase();
   switch (a.state) {
@@ -67,8 +73,10 @@ function mentionSegs(line: string, theme: Theme): Seg[] {
 }
 
 /** Flatten s.messages into drawable rows for a panel `w` cells wide (app.js:572-637). Each run
- *  (the rows after a user row) opens with a `◆ aion · <status>` header before its first row; the
- *  current run carries the live status, earlier ones just the diamond. */
+ *  (the rows after a user row) opens with a `◆ aion · <status>` header before its first row of any
+ *  kind — a permission refusal can be the first thing a run says; the current run carries the live
+ *  status, earlier ones just the diamond. System/compaction rows outside a run (idle notes before
+ *  any user row) get no header. */
 export function buildRows(s: SextantState, w: number, theme: Theme, now: number): Row[] {
   const rows: Row[] = [];
   const blank = (): void => { rows.push({ segs: [] }); };
@@ -77,6 +85,7 @@ export function buildRows(s: SextantState, w: number, theme: Theme, now: number)
   s.messages.forEach((m, i) => { if (m.kind === "user") lastUser = i; });
   let prev: SextantState["messages"][number] | null = null;
   let headerDue = true;
+  let inRun = s.running; // a live run, or the rows after a user row
   const outcome = s.activity.state === "SUCCESS" ? theme.ok : s.activity.state === "ERROR" ? theme.err : theme.accentDim;
   const header = (i: number): void => {
     const current = i > lastUser;
@@ -93,7 +102,7 @@ export function buildRows(s: SextantState, w: number, theme: Theme, now: number)
         rows.push({ segs: [["you", st(last ? theme.accent : theme.muted)], [last ? "  · sent" : "", st(theme.accentDim)]] });
         for (const l of wrap(m.text, iw)) rows.push({ segs: mentionSegs(l, theme), indent: 2 });
         if (m.images?.length) rows.push({ segs: m.images.flatMap((name): Seg[] => [[` ▣ ${name} `, st(theme.fg2, theme.selBg)], ["  ", st(-1)]]), indent: 2 });
-        headerDue = true;
+        headerDue = true; inRun = true;
         break;
       }
       case "assistant": {
@@ -116,11 +125,11 @@ export function buildRows(s: SextantState, w: number, theme: Theme, now: number)
         wrap(m.text, iw).forEach((l, k) => rows.push({ segs: [[k === 0 ? "» " : "  ", st(theme.accent)], [l, st(theme.fg)]] }));
         break;
       case "compaction":
-        blank();
+        if (headerDue && inRun) { blank(); header(i); } else blank();
         for (const l of wrap(m.text, iw)) rows.push({ segs: [["▸ ", st(theme.accentDim)], [l, st(theme.muted, -1, ATTR.ITALIC)]] });
         break;
       case "system": {
-        if (prev && prev.kind !== "system") blank();
+        if (headerDue && inRun) { blank(); header(i); } else if (prev && prev.kind !== "system") blank();
         const err = m.tone === "error";
         const gc = err ? theme.err : m.tone === "warn" ? theme.warn : theme.accentDim;
         for (const l of wrap(m.text, iw)) rows.push({ segs: [[err ? "× " : "▸ ", st(gc)], [l, st(err ? theme.err : theme.muted)]] });
@@ -136,13 +145,20 @@ export function buildRows(s: SextantState, w: number, theme: Theme, now: number)
  *  geometry behind `cardRows` and `promptCursor` */
 export function cardShape(card: CardState, w: number, maxDetail: number): { total: number; freeText: number | null } {
   if (card.kind === "approval") {
-    const n = card.detail ? card.detail.split("\n").length : 0;
+    const n = card.detail ? detailLines(card.detail).length : 0;
     return { total: 3 + Math.min(n, Math.max(1, maxDetail)), freeText: null };
   }
   const q = Math.min(MAX_QUESTION_ROWS, wrap(card.prompt.question, Math.max(1, w - 2)).length);
   const opts = card.prompt.options?.length ?? 0;
   const free = card.prompt.allowFreeText !== false;
   return { total: 1 + q + opts + (free ? 1 : 0) + 2, freeText: free ? 1 + q + opts : null };
+}
+
+/** the previewDiff lines worth a card row: the leading `--- a/x` / `+++ b/x` pair is dropped (the
+ *  title's `<tool> <args>` already names the file); hunk headers, signed lines and markers stay */
+function detailLines(detail: string): string[] {
+  const all = detail.split("\n");
+  return all[0]?.startsWith("--- ") && all[1]?.startsWith("+++ ") ? all.slice(2) : all;
 }
 
 /** color of one previewDiff line inside the approval card */
@@ -163,7 +179,7 @@ export function cardRows(card: CardState, w: number, maxDetail: number, theme: T
   if (card.kind === "approval") {
     rows.push({ segs: [["◆ ", st(theme.warn)], ["needs your permission", st(theme.fg, -1, ATTR.BOLD)], [`   ${card.tool} ${card.argsPreview}`.trimEnd(), st(theme.fg2)]] });
     if (card.detail) {
-      const all = card.detail.split("\n");
+      const all = detailLines(card.detail);
       const max = Math.max(1, maxDetail);
       const lines = all.length > max ? [...all.slice(0, max - 1), moreMarker(all.length - max + 1)] : all;
       for (const l of lines) rows.push({ segs: [diffLineStyle(l, theme)], indent: 2 });
@@ -190,8 +206,9 @@ export function cardRows(card: CardState, w: number, maxDetail: number, theme: T
   return rows;
 }
 
-/** detail rows an approval card may take inside a message area `h` rows tall (≈60 % of it) */
-const detailBudget = (h: number): number => Math.max(2, Math.floor(h * 0.6) - 3);
+/** detail rows an approval card may take inside a message area `h` rows tall: all but the card's
+ *  blank + title + buttons and two message rows (the 160×44 frame's h = 10 → 5: a small hunk whole) */
+const detailBudget = (h: number): number => Math.max(2, h - 5);
 
 /** message rows above the rule, card rows (bounded so ≥1 message row survives), rows per message area */
 function areas(B: Rect, s: SextantState): { h: number; cardH: number; msgH: number; maxDetail: number } {

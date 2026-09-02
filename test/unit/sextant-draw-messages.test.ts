@@ -11,7 +11,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ATTR, SPIN, type CardState, type MessageRow, type SextantState, type ToolRow } from "../../src/sextant/types.ts";
-import { FREE_TEXT_HINT, PLACEHOLDER, SKIP_LABEL, activityLabel, buildRows, cardRows, cardShape, drawMessages, messagesScroll, promptCursor, toolRow } from "../../src/sextant/draw-messages.ts";
+import { FREE_TEXT_HINT, SKIP_LABEL, activityLabel, buildRows, cardRows, cardShape, drawMessages, messagesScroll, promptCursor, toolRow } from "../../src/sextant/draw-messages.ts";
 import { previewDiff } from "../../src/coding/diff.ts";
 import { GridScreen, THEME, baseState, untouchedOutside } from "../helpers/sextant-grid.ts";
 
@@ -209,12 +209,12 @@ test("approval card: `◆ needs your permission  <tool> <args>`, the previewDiff
   expect(g.cell(BX, ty).fg).toBe(THEME.warn);
   expect(g.cell(BX + 2, ty)).toMatchObject({ fg: THEME.fg, at: ATTR.BOLD });
   const detailRows = rows(g, ty + 1, RULE_Y - 1);
-  expect(detailRows).toEqual(["  --- a/f.txt", "  +++ b/f.txt", "  @@ -2,7 +2,7 @@", "  … +8 more lines"]); // 12 rows → 4 detail rows: 3 + the clip marker
+  expect(detailRows).toEqual(["  @@ -2,7 +2,7 @@", "   line-2", "   line-3", "   line-4", "  -line-5", "  +LINE-5", "  … +3 more lines"]); // 12 rows → 7 detail rows (h − 5): 6 + the clip marker; the ---/+++ pair is never drawn
   expect(g.cell(BX + 2, ty + 1).fg).toBe(THEME.dim);
   const tall = new GridScreen(90, 40, "░");
-  drawMessages(tall, { x: 2, y: 1, w: 70, h: 30 }, s, THEME, 0); // 26 rows → 12 detail rows: the whole 11-line preview fits
+  drawMessages(tall, { x: 2, y: 1, w: 70, h: 30 }, s, THEME, 0); // 26 rows → 21 detail rows: the whole 9-line hunk fits
   const tty = rowOf(tall, "needs your permission");
-  expect(rows(tall, tty + 1, tty + 12)).toEqual(text.split("\n").map((l) => "  " + l));
+  expect(rows(tall, tty + 1, tty + 10)).toEqual(text.split("\n").slice(2).map((l) => "  " + l)); expect(tall.toText()).not.toContain("+++ b/f.txt");
   expect(tall.cell(BX + 2, rowOf(tall, "-line-5")).fg).toBe(THEME.err);
   expect(tall.cell(BX + 2, rowOf(tall, "+LINE-5")).fg).toBe(THEME.ok);
   expect(tall.cell(BX + 2, rowOf(tall, " line-2")).fg).toBe(THEME.fg2);
@@ -306,7 +306,7 @@ test("prompt line: `▌ <text>` bold with the cursor cell from promptCursor; pla
   expect(g.row(RULE_Y).slice(BX, BX + BW)).toBe("╌".repeat(BW));
   expect(g.cell(BX, RULE_Y).fg).toBe(THEME.frameDim);
   const empty = draw(baseState());
-  expect(empty.span(BX, PROMPT_Y, BW)).toBe(`▌ ${PLACEHOLDER}`);
+  expect(empty.span(BX, PROMPT_Y, BW)).toBe("▌ ask aion — e.g. fix the failing test"); // the bar's literal wording, not the constant
   expect(empty.cell(BX + 2, PROMPT_Y).fg).toBe(THEME.dim);
   expect(empty.cell(BX, PROMPT_Y).fg).toBe(THEME.accent); // focused → accent bar even when empty
   expect(promptCursor(RECT, baseState())).toEqual({ x: BX + 2, y: PROMPT_Y });

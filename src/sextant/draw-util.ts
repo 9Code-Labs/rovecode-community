@@ -17,30 +17,34 @@ export function splitLines(s: string): string[] {
   return l;
 }
 
-/** Word-wrap to `width` cells, keeping explicit newlines (a blank paragraph stays a blank row);
- *  a word longer than the width is hard-split wherever it starts. Never returns []. */
+/** Word-wrap to `width` cells — one cell per code point (types.ts), so an emoji counts once and a
+ *  surrogate pair never straddles two rows — keeping explicit newlines (a blank paragraph stays a
+ *  blank row); a word longer than the width is hard-split wherever it starts. Never returns []. */
 export function wrap(text: string, width: number): string[] {
   const w = Math.max(1, width);
   const out: string[] = [];
   for (const para of String(text).split("\n")) {
-    let line = "";
+    let line = "", len = 0;
     for (const word of para.split(" ")) {
-      if (line && line.length + 1 + word.length <= w) { line += " " + word; continue; }
+      const cps = [...word];
+      if (line && len + 1 + cps.length <= w) { line += " " + word; len += 1 + cps.length; continue; }
       if (line) out.push(line);
-      line = word;
-      while (line.length > w) { out.push(line.slice(0, w)); line = line.slice(w); }
+      while (cps.length > w) out.push(cps.splice(0, w).join(""));
+      line = cps.join(""); len = cps.length;
     }
     out.push(line);
   }
   return out;
 }
 
-/** hard-split a line into `width`-cell chunks (terminal-style, no word boundaries); "" → [""] */
+/** hard-split a line into `width`-cell chunks (terminal-style, no word boundaries; one cell per
+ *  code point — an astral glyph moves to the next row whole); "" → [""] */
 export function hardWrap(line: string, width: number): string[] {
   const w = Math.max(1, width);
-  if (line.length <= w) return [line];
+  const cps = [...line];
+  if (cps.length <= w) return [line];
   const out: string[] = [];
-  for (let i = 0; i < line.length; i += w) out.push(line.slice(i, i + w));
+  for (let i = 0; i < cps.length; i += w) out.push(cps.slice(i, i + w).join(""));
   return out;
 }
 
