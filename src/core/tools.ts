@@ -154,6 +154,7 @@ function actionFor(tool: Tool): string {
     case "execute": return "shell.exec";
     case "spawn": return "spawn";
     case "memory": return "memory.write";
+    case "network": return "net.fetch"; // port #31: outbound requests; resource = URL host
     default: return `tool.${tool.schema.name}`;
   }
 }
@@ -184,7 +185,16 @@ function describeResource(tool: Tool, args: unknown, cwd: string): string {
     return isAbsolute(String(p)) ? String(p) : join(cwd, String(p));
   }
   if (a && declared("command") && "command" in a) return String(a["command"]);
+  if (a && declared("url") && "url" in a) return hostOf(String(a["url"]));
   return tool.schema.name;
+}
+
+/** Policy resource for url-declared tools (port #31): the URL's hostname — no
+ *  scheme/port/credentials/path — so `allow net.fetch docs.example.com` and
+ *  `deny net.fetch *` read naturally. Unparseable URLs keep the raw string (the
+ *  tool rejects them anyway), so `*` rules still see a stable resource. */
+function hostOf(url: string): string {
+  try { return new URL(url).hostname || url; } catch { return url; }
 }
 
 function cacheKey(tool: string, args: unknown): string { return tool + "|" + JSON.stringify(sortK(args)); }

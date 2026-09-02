@@ -25,6 +25,7 @@ import { anchorEntryId, Checkpoints, MUTATING_KINDS } from "../coding/checkpoint
 import { createRouter, roleTableFromEnv, type Router } from "../providers/router.ts";
 import { retryOptionsFromEnv, withRetry } from "../providers/retry.ts";
 import { createEvalCellTool } from "../tools/evalcell.ts";
+import { webFetchTool } from "../tools/webfetch.ts";
 import { execPolicyApprover } from "../core/execpolicy.ts";
 import { recallTool } from "../memory/recall.ts";
 import { configureExecutor, type SpawnRunner } from "../core/executor.ts";
@@ -147,6 +148,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   const lspNote = (p: string): Promise<string> => lspGateNote(p, cwd);
   registry.register(readTool, withCheckpoint(withLspGate(editTool, lspNote)), withCheckpoint(withLspGate(writeTool, lspNote)), withCheckpoint(bashTool));
   registry.register(globTool, grepTool, lsTool); // port #22: bounded, gitignore-aware search/list (kind read → file.read auto-allow; non-mutating, no checkpoint)
+  registry.register(webFetchTool); // port #31: kind network → net.fetch, PROMPT by default (rule below); SSRF-guarded, bounded; no checkpoint
   const skillStore = new SkillStore(cwd);
   skillStore.scan();
   registry.register(...createSkillTools(skillStore));
@@ -273,6 +275,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
             { action: "shell.exec", resource: "*", effect: "prompt" },
             { action: "spawn", resource: "*", effect: "prompt" },
             { action: "tool.mcp_call", resource: "*", effect: "prompt" },
+            { action: "net.fetch", resource: "*", effect: "prompt" }, // port #31: resource = host; `allow net.fetch <host>` auto-runs
           ],
       // port #9: execpolicy refines the PROMPT branch only (allow-listed argv →
       // "once", forbidden → deny before any human); rules above stay the outer gate.

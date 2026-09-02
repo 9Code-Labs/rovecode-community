@@ -109,6 +109,19 @@ the port #14 router (`classifyStreamError`).
 CR-tolerant line comparison of `diff-utils.ts:22`. Snapshot
 `research/source_snapshots/google-gemini-gemini-cli` @ 0bd1d43.
 
+### Port #31 — web_fetch tool
+`src/tools/webfetch.ts` contains code adapted from gemini-cli: the bounded streaming body
+reader is a TypeScript adaptation of `readResponseWithLimit`
+(`packages/core/src/tools/web-fetch.ts:555-587`, changed to truncate with a marker instead of
+throwing); the timer-driven AbortController chained to the caller's signal follows
+`fetchWithTimeout` (`packages/core/src/utils/fetch.ts:190-230`); the private-host refusal
+semantics — localhost/loopback names, resolve-then-check over all addresses, IPv4-mapped
+unmapping, the 198.18.0.0/15 benchmark range — follow `isBlockedHost`/`isAddressPrivate`/
+`isPrivateIpAsync` (`web-fetch.ts:270-281`, `fetch.ts:94-169`) reimplemented without ipaddr.js.
+Snapshot `research/source_snapshots/google-gemini-gemini-cli` @ 0bd1d43. Tool contract, scheme
+gate, default timeout and html/passthrough split follow opencode (MIT, credited in the module
+header); html-to-text/htmlparser2/turndown are replaced by `src/tools/html-text.ts`.
+
 ## Zed Industries — agent-client-protocol (Apache-2.0)
 
 - **ACP endpoint (port #15)** — `src/acp/server.ts` speaks ACP v1 via the official SDK

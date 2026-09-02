@@ -26,8 +26,8 @@ test("createRuntime registers the full CLI tool set", () => {
   const cwd = tmpCwd();
   const rt = createRuntime({ cwd, stream: null });
   const names = rt.registry.list().map((t) => t.schema.name).sort();
-  // port #17 adds recall; port #22 adds glob/grep/ls; eval_cell must stay ABSENT while AION_EVAL_CELL is unset (port #18 flag door)
-  expect(names).toEqual(["bash", "edit", "glob", "grep", "ls", "memory_edit", "read", "recall", "skill_view", "skills_list", "write"]);
+  // port #17 adds recall; port #22 adds glob/grep/ls; port #31 adds web_fetch; eval_cell must stay ABSENT while AION_EVAL_CELL is unset (port #18 flag door)
+  expect(names).toEqual(["bash", "edit", "glob", "grep", "ls", "memory_edit", "read", "recall", "skill_view", "skills_list", "web_fetch", "write"]);
   rmSync(cwd, { recursive: true, force: true });
 });
 
@@ -87,6 +87,7 @@ test("buildCfg gated: repl defaults with memory/skill allows and prompt gates", 
     { action: "shell.exec", resource: "*", effect: "prompt" },
     { action: "spawn", resource: "*", effect: "prompt" },
     { action: "tool.mcp_call", resource: "*", effect: "prompt" },  // port #3: MCP execution is gated
+    { action: "net.fetch", resource: "*", effect: "prompt" },      // port #31: web_fetch prompts unless a host is explicitly allowed
   ]);
   // port #9: the passed approver is WRAPPED by execPolicyApprover (shell prompts
   // refined by policy; everything else delegates). Non-shell requests must reach

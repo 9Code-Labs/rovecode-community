@@ -6,6 +6,7 @@ import { ToolRegistry } from "../core/tools.ts";
 import { SessionStore } from "../core/session.ts";
 import { readTool, editTool, writeTool, bashTool } from "../coding/hashline.ts";
 import { globTool, grepTool, lsTool } from "../coding/files.ts";
+import { webFetchTool } from "../tools/webfetch.ts";
 import { mockStream, textTurn, providerStream, openaiCompatStreaming, resolveProvider, listBuiltinProviders } from "../providers/stream.ts";
 import { saveCredential, removeCredential, listProviders, keyNameFor, credentialsPath, readSecret } from "../providers/auth.ts";
 import { runGauntlet, reportResults, providerPreflight, basicTasks, codingTasks, failureTasks, adversarialTasks } from "../eval/gauntlet.ts";
@@ -108,6 +109,7 @@ async function cmdBench(): Promise<void> {
 function cmdTools(): void {
   const registry = new ToolRegistry();
   registry.register(readTool, editTool, writeTool, bashTool, globTool, grepTool, lsTool);
+  registry.register(webFetchTool); // port #31
   for (const t of registry.list()) {
     console.log(`${t.schema.name.padEnd(8)} ${t.kind.padEnd(8)} sequential=${t.sequential !== false}`);
     console.log(`         ${t.schema.description}`);

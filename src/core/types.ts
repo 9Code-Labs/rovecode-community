@@ -62,7 +62,7 @@ export interface ToolSchema {
   args: Record<string, unknown>;
 }
 
-export type ToolKind = "read" | "write" | "execute" | "spawn" | "memory" | "custom";
+export type ToolKind = "read" | "write" | "execute" | "spawn" | "memory" | "network" | "custom";
 
 export interface ToolContext {
   sessionId: string;
