@@ -18,6 +18,7 @@ import { cmdCheckpoints, cmdRestore, type CheckpointCmdCtx } from "./checkpoints
 import { cmdRewind, cmdSessions, cmdNew, replayTranscript, usageOf, resolveBootSession, type SessionCmdCtx } from "./session-cmd.ts";
 import { cmdHelp, cmdStatus, cmdCost, cmdSkills, cmdMemory, cmdExport, cmdTodos, cmdTasks, todoLabel, type InfoCmdCtx } from "./info-cmd.ts";
 import { cmdAttach, carryOverAttachments, queuedAttachNote, userTurnLine, ATTACH_COMMAND, type AttachCtx } from "./attach.ts";
+import { compactionNote } from "./replay-marker.ts";
 import { previewDiff } from "../coding/diff.ts";
 import { discoverCommands, commandsForPalette, dispatchCustomCommand, type CustomCommandCtx } from "./commands.ts";
 import type { Renderer, AssistantView, StatusInfo } from "./renderer.ts";
@@ -143,12 +144,20 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     closed = true;
     // port #20 MED-2: /plan then quit resumes in plan (append is sync — lands pre-exit)
     flushModeSwitch(modes, store);
-    runAbort?.abort(); void run?.return(undefined as never); // abort kills in-flight fetch/tools; return settles the generator
+    runAbort?.abort(); // abort kills in-flight fetch/tools; return() settles the generator — kept, so the exit below waits for it
+    const settled = run?.return(undefined as never).then(() => undefined, () => undefined) ?? Promise.resolve();
     rt.tasks.cancelAll(); // port #26: background children die with the surface, never after it
     void rt.mcp?.close().catch(() => {}); // stop MCP child processes/connections
     renderer.stop();
-    resolveClosed();
-    if (opts.exitOnClose !== false) process.exit(0);
+    // port #29: session_close fires ONCE, after the aborted run settled and its in-flight on_event
+    // taps drained (hooks.close() waits for those) — cmdRun's exit() order; the app promise
+    // resolves (and the process exits) only after it, so a quit never outruns the hook
+    void (async () => {
+      await settled;
+      await rt.hooks.close().catch(() => {});
+      resolveClosed();
+      if (opts.exitOnClose !== false) process.exit(0);
+    })();
   };
 
   // both read the ACTIVE store live — /sessions and a root /rewind swap it (session-cmd.ts helpers)
@@ -277,7 +286,6 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     const def = rt.buildDef({ provider: cur.provider, model: cur.model });
     applyModeToRun(modes, cfg, def);
     const views = new Map<string, AssistantView>();
-    const toolNames = new Map<string, string>(); // callId → tool (tool_execution_end carries no name)
     let lastView: AssistantView | null = null;
     runAbort = new AbortController();
     rt.tasks.bindRun(runAbort.signal); // port #26: Esc/quit cancel the background tasks THIS run starts; a normal end leaves them running
@@ -286,26 +294,25 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
       tools: rt.registry.list().map((t) => t.schema),
       guard: rt.guard, signal: runAbort.signal, // port #21: Esc aborts this run's controller
       cwd: rt.cwd, // cwd must be threaded — tools resolve relative paths against it, same as checkpoints/LSP/preview
+      hooks: rt.hooks, // port #29: pre_tool/approval/post_tool at dispatch, pre_run/compaction/post_run/on_event via the loop observer
     }, steering);
     try {
       for await (const ev of run) {
-        if (ev.type === "turn_start") { resetTurnFailureCount(); state.turns++; pushStatus(); }
+        if (ev.type === "turn_start") { resetTurnFailureCount(); state.turns++; pushStatus(); } // pushStatus here + in the finally also refreshes the port #32 todo label after a todo_write
         else if (ev.type === "message_update") {
           let v = views.get(ev.messageId);
           if (!v) { v = renderer.beginAssistant(); views.set(ev.messageId, v); lastView?.done(); lastView = v; }
           v.append(ev.delta);
         } else if (ev.type === "tool_execution_start") {
-          toolNames.set(ev.callId, ev.tool);
           renderer.toolStart(ev.callId, ev.tool, JSON.stringify(ev.args).slice(0, 120));
         } else if (ev.type === "tool_execution_update") {
           renderer.toolUpdate(ev.callId, ev.note);
         } else if (ev.type === "tool_execution_end") {
           renderer.toolEnd(ev.callId, ev.ok, ev.output.slice(0, 160).replace(/\n/g, " ⏎ "), ev.durationMs);
-          if (ev.ok && toolNames.get(ev.callId) === "todo_write") pushStatus(); // port #32: the status-bar todo label follows the list
         } else if (ev.type === "tool_call_failed") {
           renderer.toolEnd(ev.callId, false, `${ev.reason}: ${ev.detail}`.slice(0, 160), 0);
         } else if (ev.type === "compaction") {
-          renderer.addSystemNote(`compacted (${ev.strategy}): ${ev.tokensBefore} → ${ev.tokensAfter} tokens`);
+          renderer.addSystemNote(compactionNote(ev)); // one wording with the replayed marker (port #25 LOW-4)
         } else if (ev.type === "steer") {
           renderer.addSystemNote("↪ steering applied");
         } else if (ev.type === "run_end") {
@@ -353,12 +360,14 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   );
   if (boot.warn) renderer.addSystemNote(boot.warn, "warn");
   for (const w of custom.warnings) renderer.addSystemNote(w, "warn"); // port #30: skipped/shadowed command files
+  rt.hooks.onWarning((w) => renderer.addSystemNote(`hooks: ${w}`, "warn")); // port #29: hook load/runtime notes (buffered ones replay first)
   pushStatus();
   // port #27: an unavailable configured rung (probe failed) is a clean one-line startup
   // error — stop the renderer first so the terminal is restored, reap the MCP children
   // construction spawned (LOW-3, as bootRuntime does), then exit 2 (embedders: rethrow)
   await rt.sandbox.ready.catch(async (e: unknown) => {
     renderer.stop();
+    await rt.hooks.close().catch(() => {}); // port #29: a runtime exists (session_open fired) — session_close before this exit too
     await rt.mcp?.close().catch(() => {});
     if (e instanceof SandboxConfigError && opts.exitOnClose !== false) { console.error(`error: ${e.message}`); process.exit(2); }
     throw e;

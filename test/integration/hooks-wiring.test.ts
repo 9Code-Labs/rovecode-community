@@ -439,7 +439,7 @@ test("child runs (port #26 task) run under the parent runtime's hooks: a pre_too
     const goal = goalOf(messages); const tools = messages.filter((m) => m.role === "tool").length;
     if (goal.startsWith("PARENT")) {
       if (tools === 0) { yield { type: "turn", turn: toolTurn([{ id: "p1", tool: "task", args: { action: "start", goal: "CHILD shell", label: "sh" } }]) }; return; }
-      if (tools === 1) { yield { type: "turn", turn: toolTurn([{ id: "p2", tool: "task", args: { action: "result", id: "t1", timeout_ms: 20_000 } }]) }; return; }
+      if (tools === 1) { yield { type: "turn", turn: toolTurn([{ id: "p2", tool: "task_status", args: { action: "result", id: "t1", timeout_ms: 20_000 } }]) }; return; } // #26 fix wave split reads onto task_status
       yield { type: "turn", turn: textTurn(`PARENT-DONE: ${outputs(messages)}`) }; return;
     }
     // the child: a shell call (vetoed by the parent's hook) and a read-only ls (allowed), then report what came back
@@ -470,7 +470,7 @@ test("child runs (port #26 task) run under the parent runtime's hooks: a pre_too
     const childSessions = [...new Set(preTool.map((s) => s.split(":")[0]!))].filter((s) => s !== "sess-parent");
     expect(childSessions).toHaveLength(1);
     const child = childSessions[0]!;
-    expect(preTool.filter((s) => s.startsWith("sess-parent:"))).toEqual(["sess-parent:task", "sess-parent:task"]);
+    expect(preTool.filter((s) => s.startsWith("sess-parent:"))).toEqual(["sess-parent:task", "sess-parent:task_status"]); // start on `task`, result on `task_status` (#26 split)
     expect(preTool.filter((s) => s.startsWith(`${child}:`)).sort()).toEqual([`${child}:bash`, `${child}:ls`]);
     expect(postTool).toContain(`${child}:ls`);        // post_tool saw the child's allowed call
     expect(postTool).not.toContain(`${child}:bash`);  // a vetoed call never reaches post_tool

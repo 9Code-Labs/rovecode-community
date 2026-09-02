@@ -6,6 +6,7 @@ import { agentLoop } from "../core/loop.ts";
 import { resetTurnFailureCount } from "../memory/tools.ts";
 import { providerStream } from "../providers/stream.ts";
 import type { ApprovalFn, RunEvent } from "../core/types.ts";
+import type { AskFn } from "../tools/ask-user.ts";
 import { bootRuntime } from "./runtime.ts";
 import { SandboxConfigError, describeSandbox } from "../core/sandbox-config.ts";
 
@@ -20,6 +21,34 @@ export interface ReplState {
 
 function ask(rl: readline.Interface, q: string): Promise<string> {
   return new Promise((res) => rl.question(q, (a) => res(a.trim().toLowerCase())));
+}
+
+/** port #33: the `--plain` asker behind ask_user — `--plain` HAS a human (the y/n/a approvals prove
+ *  it), headless surfaces leave the tool unbound and it fails closed. Numbered options plus free text
+ *  when allowed: a number picks, other text is the typed answer, an empty line declines (null). Piped
+ *  stdin is fine — it just consumes the next line. The run's abort resolves null AND is handed to
+ *  rl.question itself (WIRE-1 LOW): an aborted question's callback is DISARMED, so the user's next
+ *  line is a normal `line` event again instead of being swallowed by the dead callback. `out` is
+ *  console.log; tests capture it. */
+export function readlineAsker(rl: readline.Interface, out: (line: string) => void = console.log): AskFn {
+  return (q, signal) => new Promise((resolve) => {
+    const options = q.options ?? [];
+    const free = q.allowFreeText !== false;
+    out(`\n  question: ${q.question}`);
+    options.forEach((o, i) => out(`    ${i + 1}) ${o}`));
+    const hint = [options.length > 0 ? `1-${options.length}` : "", free ? "text" : ""].filter(Boolean).join(" or ");
+    const onAbort = (): void => { resolve(null); };
+    signal.addEventListener("abort", onAbort, { once: true });
+    rl.question(`  answer [${hint}; empty = decline]: `, { signal }, (line) => {
+      signal.removeEventListener("abort", onAbort);
+      const a = line.trim();
+      const n = Number(a);
+      if (a === "") resolve(null);
+      else if (Number.isInteger(n) && n >= 1 && n <= options.length) resolve({ choice: n - 1, label: options[n - 1] });
+      else if (free) resolve({ text: a });
+      else { out("  (not one of the options — declined)"); resolve(null); }
+    });
+  });
 }
 
 export async function runRepl( /* eslint-disable-line complexity */
@@ -53,6 +82,7 @@ export async function runRepl( /* eslint-disable-line complexity */
     }
   }
   if (cfgProvider) { state.provider = cfgProvider.id; state.model = state.model || cfgProvider.defaultModel || "gpt-4o-mini"; }
+  rt.hooks.onWarning((w) => console.error(`hooks: ${w}`)); // port #29: load + runtime hook notes → stderr (cmdRun idiom)
 
   console.log(`aion — interactive agent (${state.provider}/${state.model})`);
   console.log(`session ${rt.sessionId.slice(0, 8)} in ${rt.cwd}`);
@@ -61,29 +91,7 @@ export async function runRepl( /* eslint-disable-line complexity */
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: "aion> " });
 
-  // port #33: `--plain` HAS a human (the y/n/a approvals below prove it) — bind ask_user to the same
-  // readline; headless surfaces leave it unbound and the tool fails closed. Numbered options plus
-  // free text when allowed: a number picks, other text is the typed answer, an empty line declines
-  // (null). Piped stdin is fine — it just consumes the next line. The run's abort resolves null so
-  // an interrupted run never stays parked on the question.
-  rt.setAskUser((q, signal) => new Promise((resolve) => {
-    const options = q.options ?? [];
-    const free = q.allowFreeText !== false;
-    console.log(`\n  question: ${q.question}`);
-    options.forEach((o, i) => console.log(`    ${i + 1}) ${o}`));
-    const hint = [options.length > 0 ? `1-${options.length}` : "", free ? "text" : ""].filter(Boolean).join(" or ");
-    const onAbort = (): void => { resolve(null); };
-    signal.addEventListener("abort", onAbort, { once: true });
-    rl.question(`  answer [${hint}; empty = decline]: `, (line) => {
-      signal.removeEventListener("abort", onAbort);
-      const a = line.trim();
-      const n = Number(a);
-      if (a === "") resolve(null);
-      else if (Number.isInteger(n) && n >= 1 && n <= options.length) resolve({ choice: n - 1, label: options[n - 1] });
-      else if (free) resolve({ text: a });
-      else { console.log("  (not one of the options — declined)"); resolve(null); }
-    });
-  }));
+  rt.setAskUser(readlineAsker(rl)); // port #33: ask_user over the same readline (readlineAsker above)
 
   const approval: ApprovalFn = async (req) => {
     const argPreview = JSON.stringify(req.revisedArgs).slice(0, 140);
@@ -120,7 +128,9 @@ export async function runRepl( /* eslint-disable-line complexity */
 
     const ac = new AbortController();
     rt.tasks.bindRun(ac.signal); // port #26: Ctrl-C (ac.abort above) also cancels the background tasks this run started
-    const gen = agentLoop(def, text, {}, rt.buildCfg(state.yolo, approval), { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, cwd: rt.cwd, signal: ac.signal }, rt.steering); // port #26: the runtime's queue — task completion notes reach the next turn
+    // port #29: hooks ride the deps like every surface; port #26: the runtime's ONE steering queue (not a
+    // fresh one) so background-task completion notes — and any hook-pushed steer — reach the next turn
+    const gen = agentLoop(def, text, {}, rt.buildCfg(state.yolo, approval), { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, cwd: rt.cwd, signal: ac.signal, hooks: rt.hooks }, rt.steering);
     running = { ac, gen };
     try {
       let live = "";
@@ -145,15 +155,18 @@ export async function runRepl( /* eslint-disable-line complexity */
     rl.prompt();
   });
 
-  rl.on("close", () => {
-    void (async () => {
-      // port #26: quitting leaves no background children — their runs (and subprocess trees) die
-      // now and settle, bounded, before the process goes (same policy as cmdRun's exit())
-      rt.tasks.cancelAll();
-      await rt.tasks.drain(2_000);
-      void rt.mcp?.close().catch(() => {}); // kill MCP child processes (TUI does the same in app.ts)
-      console.log(`\nbye — session ${rt.sessionId.slice(0, 8)} saved (${state.turns} turns, ${state.tokensIn}in/${state.tokensOut}out tokens)`);
-      process.exit(0);
-    })();
+  // every quit path lands here (Ctrl+D, /exit, /quit, idle Ctrl+C → rl.close()), so this is the ONE exit
+  rl.on("close", async () => {
+    // port #29: a run still in flight dies with the surface (abort, then let its generator settle) BEFORE
+    // session_close fires once — after in-flight on_event taps drained (hooks.close() waits for them)
+    if (running) { running.ac.abort(); await running.gen.return(undefined as never).catch(() => {}); }
+    // port #26: quitting leaves no background children — their runs (and subprocess trees) die
+    // now and settle, bounded, before the process goes (same policy as cmdRun's exit())
+    rt.tasks.cancelAll();
+    await rt.tasks.drain(2_000);
+    await rt.hooks.close().catch(() => {});
+    void rt.mcp?.close().catch(() => {}); // kill MCP child processes (TUI does the same in app.ts)
+    console.log(`\nbye — session ${rt.sessionId.slice(0, 8)} saved (${state.turns} turns, ${state.tokensIn}in/${state.tokensOut}out tokens)`);
+    process.exit(0);
   });
 }

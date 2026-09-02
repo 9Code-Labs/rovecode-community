@@ -139,7 +139,7 @@ test("/todos: empty → hint; after a scripted todo_write the checkbox rows rend
   rmSync(cwd, { recursive: true, force: true });
 }, 20_000);
 
-test("status seam: the `todos` key is OMITTED while the list is empty and reads `todos 1/3` right after the successful todo_write (FakeRenderer pin)", async () => {
+test("status seam: the `todos` key is OMITTED while the list is empty and reads `todos 1/3` once the run that wrote it settles — pushStatus at turn_start and in the run's finally recompute todoLabel, no per-tool bookkeeping (FakeRenderer pin)", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "aion-tuiwire-"));
   const fake = new FakeRenderer();
   const stream = mockStream({ turns: [toolTurn([{ id: "w1", tool: "todo_write", args: { todos: TODOS } }]), textTurn("planned.")] });
@@ -147,7 +147,7 @@ test("status seam: the `todos` key is OMITTED while the list is empty and reads 
   expect(fake.statuses.length).toBeGreaterThan(0);            // boot pushStatus (synchronous)
   expect(fake.statuses.every((s) => !("todos" in s))).toBe(true);
   fake.hooks.onSubmit("make a plan");
-  await waitFor(() => fake.statuses.at(-1)?.todos === "todos 1/3", 8000, "todos label after todo_write");
+  await waitFor(() => fake.statuses.at(-1)?.todos === "todos 1/3", 8000, "todos label once the writing run settled");
   fake.hooks.onExit();
   await app;
   rmSync(cwd, { recursive: true, force: true });
