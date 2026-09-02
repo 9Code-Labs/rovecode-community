@@ -4,10 +4,12 @@
  *  the mock cmdRun auto-selects when nothing is configured, and a loopback OpenAI-compatible
  *  server (tool call → text; HTTP 400 → error run). Bar items: one JSON result / NDJSON RunEvent
  *  stream, stdout purity (progress → stderr), meaningful exit codes (0 done · 1 error · 2 usage),
- *  schema pins, text mode unchanged. */
+ *  schema pins, text mode unchanged. Critic closes: a usage error exits BEFORE the runtime boots —
+ *  a pristine cwd gets no .aion at all (MED-1); purity is STRUCTURAL — a project hook's stray
+ *  console.log / process.stdout.write mid-run lands on stderr (LOW-1, real fd 1). */
 
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { RunResult } from "../../src/cli/output.ts";
@@ -28,22 +30,31 @@ beforeAll(() => {
   note = join(work, "note.txt");
   writeFileSync(note, "hello from note\n");
 });
+const scratch: string[] = [];
 afterAll(() => {
   rmSync(work, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
+  for (const d of scratch) rmSync(d, { recursive: true, force: true });
 });
+
+/** A pristine cwd for tests that assert on what the CLI leaves behind (`work` accumulates .aion). */
+function fresh(): string {
+  const d = mkdtempSync(join(tmpdir(), "aion-out-fresh-"));
+  scratch.push(d);
+  return d;
+}
 
 /** Spawn the real CLI with a scrubbed env + empty AION_HOME; `extra` adds this test's provider.
  *  ASYNC on purpose: the loopback provider below is a Bun.serve in THIS process — a spawnSync
  *  would block the event loop and the child's fetch could never be answered. */
-async function cli(args: string[], extra: Record<string, string> = {}): Promise<{ code: number; stdout: string; stderr: string }> {
+async function cli(args: string[], extra: Record<string, string> = {}, cwd = work): Promise<{ code: number; stdout: string; stderr: string }> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (v !== undefined && !/^AION_/i.test(k) && !/_API_KEY$/i.test(k)) env[k] = v;
   }
   env.AION_HOME = home;
   Object.assign(env, extra);
-  const p = Bun.spawn([process.execPath, MAIN, ...args], { cwd: work, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const p = Bun.spawn([process.execPath, MAIN, ...args], { cwd, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
   return { code, stdout, stderr };
 }
@@ -125,6 +136,32 @@ describe("output modes: mock provider", () => {
     const text = await cli(["run", "say hi"]);
     expect(text.code).toBe(0);
     expect(text.stdout).toBe(`\n${json.summary}\n`);
+  }, T);
+
+  test("the --output=<mode> form stays supported end to end: `--output=json` → exit 0, one JSON object, and the token is not a prompt word", async () => {
+    const r = await cli(["run", "say hi", "--output=json"]);
+    expect(r.code).toBe(0);
+    expect(single(r.stdout)).toMatchObject({ status: "done", exitCode: 0 });
+  }, T);
+});
+
+// ---------- stdout purity is structural (pi core/output-guard.ts takeOverStdout) ----------
+
+describe("output modes: stdout guard over the real fd 1", () => {
+  test("a project hook that console.logs AND process.stdout.writes mid-run: both strays land on stderr; json stdout stays ONE object, ndjson stays all-JSON (mutation: skip the guard install → the stray lines reach stdout)", async () => {
+    const cwd = fresh();
+    mkdirSync(join(cwd, ".aion"));
+    writeFileSync(join(cwd, ".aion", "hooks.ts"), 'export default { version: 1, hooks: {\n  pre_run() { console.log("STRAY-LOG"); process.stdout.write("STRAY-WRITE\\n"); },\n} };\n');
+    const j = await cli(["run", "say hi", "--output", "json"], {}, cwd);
+    expect(j.code).toBe(0);
+    expect(single(j.stdout).status).toBe("done");
+    expect(j.stderr).toContain("STRAY-LOG\n");
+    expect(j.stderr).toContain("STRAY-WRITE\n");
+    const n = await cli(["run", "say hi", "--output", "ndjson"], {}, cwd);
+    expect(n.code).toBe(0);
+    expect(ndjson(n.stdout).at(-1)).toMatchObject({ type: "result", status: "done", exitCode: 0 });
+    expect(n.stderr).toContain("STRAY-LOG\n");
+    expect(n.stderr).toContain("STRAY-WRITE\n");
   }, T);
 });
 
@@ -211,19 +248,33 @@ describe("output modes: exit codes", () => {
     } finally { p.stop(); }
   }, T);
 
-  test("invalid --output value → exit 2, empty stdout, exactly one stderr line naming the value", async () => {
-    const r = await cli(["run", "hi", "--output", "xml"]);
+  test("invalid --output value → exit 2, empty stdout, exactly one stderr line naming the value — validated BEFORE the runtime boots: a pristine cwd gets NO .aion (no sessions dir, meta.json or memory dir) (mutation: parse after bootRuntime → .aion/sessions/<id> exists)", async () => {
+    const cwd = fresh();
+    const r = await cli(["run", "hi", "--output", "xml"], {}, cwd);
     expect(r.code).toBe(2);
     expect(r.stdout).toBe("");
     expect(r.stderr.trimEnd().split("\n")).toHaveLength(1);
     expect(r.stderr).toContain('unknown --output mode "xml"');
+    expect(existsSync(join(cwd, ".aion", "sessions"))).toBe(false);
+    expect(existsSync(join(cwd, ".aion"))).toBe(false);
   }, T);
 
-  test("dangling --output → exit 2 with a one-line usage error (never a silent default)", async () => {
-    const r = await cli(["run", "hi", "--output"]);
-    expect(r.code).toBe(2);
-    expect(r.stdout).toBe("");
-    expect(r.stderr.trimEnd().split("\n")).toHaveLength(1);
-    expect(r.stderr).toContain("--output needs a value");
+  test("help documents exit 2 as usage/startup error with NOTHING on stdout, and the --output=<mode> form (DOC item; mutation: drop the sentence)", async () => {
+    const r = await cli(["help"]);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/^\s*exit 2 = usage\/startup error .*:\s*$/m);
+    expect(r.stdout).toContain("one stderr line, nothing on stdout; --output=<mode> is accepted as well");
+  }, T);
+
+  test("dangling --output (end of argv, or followed by a flag) → exit 2 with a one-line usage error (never a silent default), and no .aion left behind", async () => {
+    for (const args of [["run", "hi", "--output"], ["run", "hi", "--output", "--yolo"]]) {
+      const cwd = fresh();
+      const r = await cli(args, {}, cwd);
+      expect(r.code).toBe(2);
+      expect(r.stdout).toBe("");
+      expect(r.stderr.trimEnd().split("\n")).toHaveLength(1);
+      expect(r.stderr).toContain("--output needs a value");
+      expect(existsSync(join(cwd, ".aion"))).toBe(false);
+    }
   }, T);
 });

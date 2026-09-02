@@ -38,7 +38,9 @@
  *  its 0 done / 1 otherwise, plus 130 for the (newly reachable) aborted run. */
 
 import { format } from "node:util";
-import type { Message, ModelRef, RunEvent } from "../core/types.ts";
+import type { Message, ModelRef, RunEvent, StreamFn } from "../core/types.ts";
+import type { LoopDeps } from "../core/loop.ts";
+import type { Runtime } from "./runtime.ts";
 import { costUsd, type PricingRow } from "../core/usage.ts";
 import { ModelCatalog } from "../providers/catalog.ts";
 import { VALUE_FLAGS } from "./dispatch.ts";
@@ -86,6 +88,11 @@ export interface OutputSink {
   /** After the loop settles: writes the text summary / the json result / the ndjson result line
    *  and returns the exit code. No `end` = the loop ended without run_end → status "error", 1. */
   finish(end?: RunEnd): number;
+  /** Uninstalls the stdout guard (installed for json/ndjson over the REAL process.stdout; a no-op
+   *  otherwise) so console.log / process.stdout.write reach fd 1 again — for embedders and tests.
+   *  cmdRun never calls it: hooks.close()/mcp.close() run AFTER finish and may still print, so the
+   *  guard must hold until process.exit. */
+  close(): void;
 }
 
 // ---------- argv ----------
@@ -103,7 +110,9 @@ function isOutputMode(v: string): v is OutputMode {
 
 /** `--output <mode>` or `--output=<mode>`, anywhere in argv (dispatch.ts VALUE_FLAGS keeps the
  *  value from being taken for the command). Missing or unknown value → one-line stderr usage
- *  error, exit 2 (the usage/startup-error class; `fail` is injectable for tests). Last one wins. */
+ *  error, exit 2 (the usage/startup-error class; `fail` is injectable for tests). Last one wins.
+ *  cmdRun calls this FIRST — before bootRuntime — so a usage error leaves no trace: no
+ *  .aion/sessions/<id> (meta.json, memory dir), no sandbox probe, no MCP children to reap. */
 export function parseOutputMode(argv: readonly string[], fail: (msg: string) => never = usageExit): OutputMode {
   const args = argv.slice(2);
   let mode: string | undefined;
@@ -190,7 +199,7 @@ export function createOutputSink(mode: OutputMode, opts: OutputSinkOptions): Out
   // bind the raw writer BEFORE guarding: the guard turns process.stdout.write into a stderr relay
   const real = opts.stdout === process.stdout;
   const out: Writer = real ? { write: process.stdout.write.bind(process.stdout) } : opts.stdout;
-  if (mode !== "text" && real) guardStdout(opts.stderr);
+  const guard = mode !== "text" && real ? guardStdout(opts.stderr) : null;
   const ac = new AbortController();
   const uninstall = (opts.onInterrupt ?? installSigint)(() => ac.abort());
   let sessionId: string | null = null;
@@ -232,7 +241,18 @@ export function createOutputSink(mode: OutputMode, opts: OutputSinkOptions): Out
       out.write(`${JSON.stringify(mode === "json" ? result : { type: "result", ...result })}\n`);
       return exitCode;
     },
+    close() { guard?.restore(); },
   };
+}
+
+// ---------- run deps ----------
+
+/** cmdRun's LoopDeps, built in one place so the wiring is unit-testable (LOW-2): the runtime's
+ *  registry/store/tools, guard (port #4), cwd (port #26) and hooks (port #29), with the sink's
+ *  SIGINT signal (port #21) — the fields agentLoop reads. Same object literal cmdRun used to inline,
+ *  evaluated at the same argument position (tools listed at call time). */
+export function buildRunDeps(rt: Pick<Runtime, "registry" | "store" | "guard" | "cwd" | "hooks">, stream: StreamFn, sink: Pick<OutputSink, "signal">): LoopDeps {
+  return { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, cwd: rt.cwd, signal: sink.signal, hooks: rt.hooks };
 }
 
 function summarize(

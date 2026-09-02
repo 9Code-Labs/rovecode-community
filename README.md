@@ -102,7 +102,8 @@ file in `.aion/commands/` (project) or `~/.aion/commands/` (user scope).
 - **Output modes** (#35) — `aion run --output text|json|ndjson`: `json` = exactly ONE result object
   `{status, summary, sessionId, model, origin, usage, costUsd, toolCalls, durationMs, exitCode}` on stdout;
   `ndjson` = every RunEvent as a JSON line then a final `{type:"result"}` line; stdout is JSON-only
-  (progress → stderr); exit 0 done · 1 error/budget · 2 usage/startup error · 130 aborted.
+  (progress → stderr); `--output=<mode>` also accepted; exit 0 done · 1 error/budget · 2 usage/startup
+  error (one stderr line, nothing on stdout — validated before the runtime boots) · 130 aborted.
 - **Reflection** (#28, aider pattern) — a failed `edit`/`write` (or one that introduces LSP diagnostics)
   gets ONE `reflection: …` nudge on the next turn with the error in context, capped at 2 per run
   (`AION_REFLECTION_MAX`; `AION_REFLECTION=0` disables); identical repeat failures are not re-nudged and

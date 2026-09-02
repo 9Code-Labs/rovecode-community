@@ -22,7 +22,7 @@ import { runRepl } from "./repl.ts";
 import { runTui } from "../tui/app.ts";
 import { expandSlashPrompt } from "../tui/commands.ts";
 import { parseCli } from "./dispatch.ts";
-import { createOutputSink, parseOutputMode, runPromptWords } from "./output.ts";
+import { buildRunDeps, createOutputSink, parseOutputMode, runPromptWords } from "./output.ts";
 import { join } from "node:path";
 import pkg from "../../package.json";
 
@@ -63,6 +63,10 @@ async function preflightProvider(): Promise<void> {
 }
 
 async function cmdRun(prompt: string): Promise<void> {
+  // port #35: --output is validated FIRST. bootRuntime has side effects (mkdir .aion/sessions/<id>
+  // + meta.json + memory dir, skills scan, sandbox probe, MCP children) and a usage error is a bare
+  // process.exit(2) — parsing after the boot left a stray session dir behind every `--output xml`.
+  const mode = parseOutputMode(process.argv);
   const yolo = process.argv.includes("--yolo") || process.env.AION_YOLO === "1";
   // One-shot runs build the SAME agent as repl/tui (createRuntime: tools incl.
   // MCP/recall/eval-cell, guardrails, config chunk, execpolicy approver seam).
@@ -90,8 +94,8 @@ async function cmdRun(prompt: string): Promise<void> {
   // port #35: --output text|json|ndjson — the sink owns every stdout byte of the run (text mode is
   // byte-identical to the pre-port console.log lines; json/ndjson guard stdout and send human
   // progress to stderr) and its signal aborts on SIGINT, so Ctrl-C ends the run "stopped" (exit 130)
-  const sink = createOutputSink(parseOutputMode(process.argv), { stdout: process.stdout, stderr: process.stderr, model, messages: () => rt.store.messages() });
-  for await (const ev of agentLoop(rt.buildDef(model), prompt, {}, rt.buildCfg(yolo), { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, cwd: rt.cwd, signal: sink.signal, hooks: rt.hooks }, rt.steering)) { // port #26: runtime queue -> task notes reach the run; cwd threaded like every other surface
+  const sink = createOutputSink(mode, { stdout: process.stdout, stderr: process.stderr, model, messages: () => rt.store.messages() });
+  for await (const ev of agentLoop(rt.buildDef(model), prompt, {}, rt.buildCfg(yolo), buildRunDeps(rt, stream, sink), rt.steering)) { // port #26: runtime queue -> task notes reach the run; cwd threaded like every other surface
     if (ev.type === "turn_start") resetTurnFailureCount();
     sink.onEvent(ev);
     if (ev.type === "run_end") await exit(sink.finish(ev));
@@ -146,6 +150,8 @@ commands:
                             ndjson: one JSON line per RunEvent, then a final {type:"result"} line
                             json/ndjson: stdout carries only JSON, progress goes to stderr
                             exit codes: 0 done · 1 error/budget · 2 usage/startup error · 130 aborted (Ctrl-C)
+                            exit 2 = usage/startup error (bad --output value, sandbox misconfig or unavailable rung):
+                            one stderr line, nothing on stdout; --output=<mode> is accepted as well
   aion bench                run cross-harness micro-benchmarks (edits, sessions)
   aion gauntlet             run the adversarial evaluation suite
   aion tools                list registered tools

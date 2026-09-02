@@ -2,16 +2,26 @@
  *  post-command value strip (by position), text mode byte-identity with the pre-port console.log
  *  lines, json purity (nothing on stdout before finish) + result shape from a scripted event
  *  sequence, per-message origin pricing (unpriced → null), ndjson framing (verbatim events + one
- *  result line), exit-code mapping (stopped/aborted → 130), the SIGINT seam, and the stdout guard.
- *  The mutation each test kills is named inline. */
+ *  result line), exit-code mapping (stopped/aborted → 130), the SIGINT seam, the stdout guard, its
+ *  INSTALL for json/ndjson over the real process.stdout + close() (LOW-1), and buildRunDeps —
+ *  cmdRun's LoopDeps wiring incl. sink.signal (LOW-2). The mutation each test kills is named inline. */
 
 import { test, expect, describe } from "bun:test";
 import { randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
-  createOutputSink, parseOutputMode, runPromptWords, exitCodeFor, guardStdout,
+  createOutputSink, parseOutputMode, runPromptWords, exitCodeFor, guardStdout, buildRunDeps,
   type OutputMode, type RunResult, type RunEndStatus, type Writer, type PricingSource,
 } from "../../src/cli/output.ts";
 import type { Message, ModelRef, RunEvent } from "../../src/core/types.ts";
+import { ToolRegistry } from "../../src/core/tools.ts";
+import { ToolGuard } from "../../src/core/guardrails.ts";
+import { HookRunner } from "../../src/core/hooks.ts";
+import { SessionStore } from "../../src/core/session.ts";
+import { readTool } from "../../src/coding/hashline.ts";
+import { mockStream, textTurn } from "../../src/providers/stream.ts";
 
 const argv = (...a: string[]) => ["bun", "main.ts", ...a];
 const fail = (msg: string): never => { throw new Error(`usage: ${msg}`); };
@@ -337,5 +347,71 @@ describe("guardStdout (pi output-guard takeOverStdout)", () => {
     drive("ndjson");
     expect(console.log).toBe(orig.log);
     expect(process.stdout.write).toBe(orig.write);
+  });
+
+  test("LOW-1: a json/ndjson sink over the REAL process.stdout installs the guard — strays via console.log AND process.stdout.write relay to the sink's stderr; close() restores the originals (mutation: `false && mode !== \"text\"` → console.log stays the original)", () => {
+    for (const mode of ["json", "ndjson"] as const) {
+      const err = capture();
+      const orig = { log: console.log, info: console.info, debug: console.debug, write: process.stdout.write };
+      const sink = createOutputSink(mode, { stdout: process.stdout, stderr: err, model, messages: () => [], onInterrupt: () => () => {} });
+      try {
+        expect(console.log).not.toBe(orig.log);
+        expect(process.stdout.write).not.toBe(orig.write);
+        console.log("LEAK %s", mode);
+        process.stdout.write("LEAK2\n");
+      } finally {
+        sink.close();
+      }
+      expect(err.text()).toBe(`LEAK ${mode}\nLEAK2\n`);
+      expect(console.log).toBe(orig.log);
+      expect(console.info).toBe(orig.info);
+      expect(console.debug).toBe(orig.debug);
+      expect(process.stdout.write).toBe(orig.write);
+    }
+  });
+
+  test("text mode over the real process.stdout installs NO guard (its console.log lines ARE the transcript); close() is a no-op (mutation: drop `mode !== \"text\"` → text mode hijacks console.log)", () => {
+    const orig = { log: console.log, write: process.stdout.write };
+    const sink = createOutputSink("text", { stdout: process.stdout, stderr: capture(), model, messages: () => [], onInterrupt: () => () => {} });
+    try {
+      expect(console.log).toBe(orig.log);
+      expect(process.stdout.write).toBe(orig.write);
+    } finally {
+      sink.close(); // a mutant that DID install the guard must not leak a hijacked console into later tests
+    }
+    expect(console.log).toBe(orig.log);
+    expect(process.stdout.write).toBe(orig.write);
+  });
+});
+
+// ---------- cmdRun's LoopDeps ----------
+
+describe("buildRunDeps (LOW-2: the hand-merged cmdRun LoopDeps, now one testable function)", () => {
+  test("threads sink.signal and the runtime's hooks/guard/cwd/registry/store by IDENTITY, lists the registry's tool schemas, and nothing else; the signal is LIVE — the sink's SIGINT is the abort the loop sees (mutation: drop `signal` → deps.signal undefined)", () => {
+    const root = mkdtempSync(join(tmpdir(), "aion-deps-"));
+    try {
+      const registry = new ToolRegistry();
+      registry.register(readTool);
+      const rt = { registry, store: new SessionStore(root, "s1"), guard: new ToolGuard(), cwd: root, hooks: new HookRunner({ cwd: root, sessionId: "s1" }) };
+      const stream = mockStream({ turns: [textTurn("unused")] });
+      let fire: (() => void) | undefined;
+      const sink = createOutputSink("json", { stdout: capture(), stderr: capture(), model, messages: () => [], onInterrupt: (h) => { fire = h; return () => {}; } });
+      const deps = buildRunDeps(rt, stream, sink);
+      expect(deps.signal).toBe(sink.signal);
+      expect(deps.hooks).toBe(rt.hooks);
+      expect(deps.guard).toBe(rt.guard);
+      expect(deps.cwd).toBe(rt.cwd);
+      expect(deps.stream).toBe(stream);
+      expect(deps.registry).toBe(rt.registry);
+      expect(deps.store).toBe(rt.store);
+      expect(deps.tools).toEqual(registry.list().map((t) => t.schema));
+      expect(deps.tools!.map((s) => s.name)).toEqual(["read"]);
+      expect(Object.keys(deps).sort()).toEqual(["cwd", "guard", "hooks", "registry", "signal", "store", "stream", "tools"]);
+      expect(deps.signal!.aborted).toBe(false);
+      fire!();
+      expect(deps.signal!.aborted).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
