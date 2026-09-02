@@ -5,16 +5,23 @@
  *    2. smokes the BINARY (not the source tree):
  *       a. --version prints exactly package.json's version
  *       b. --help exits 0 and prints usage
- *       c. one-shot `run` in a fresh temp dir with AION_* and *_API_KEY scrubbed
- *          from the env — must take the mock-provider path and exit 0 (proves
- *          the full createRuntime→agentLoop pipeline works inside the binary,
- *          including the embedded @ast-grep/napi native addon)
+ *       c. one-shot `run` in a fresh temp workspace — git-initialised, holding
+ *          one small .ts file — with AION_* and *_API_KEY scrubbed from the env
+ *          and AION_HOME pointed at an empty dir (a host `aion auth set`
+ *          credential beats env, port #37, and would steer resolveProvider onto
+ *          a real endpoint): must take the mock-provider path and exit 0 AND
+ *          leave a repo-map tags
+ *          cache naming that file's symbol. That proves the createRuntime→
+ *          agentLoop pipeline works inside the binary and that the embedded
+ *          @ast-grep/napi native addon actually PARSED source (an empty dir only
+ *          showed it loaded; runtime.ts swallows extraction failures into a null
+ *          chunk, so the persisted cache is the one observable).
  *
  *  The compile is deliberately NOT part of `bun test` (too slow for the suite);
  *  test/integration/packaging.test.ts covers the package invariants instead.
  *  Exit code: 0 only when the build and all three smokes pass. */
 
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import pkg from "../package.json";
@@ -35,8 +42,8 @@ function scrubbedEnv(): Record<string, string> {
 }
 
 interface Run { exitCode: number; stdout: string; stderr: string }
-function run(cmd: string[], opts: { cwd?: string } = {}): Run {
-  const p = Bun.spawnSync(cmd, { cwd: opts.cwd ?? root, env: scrubbedEnv(), stdout: "pipe", stderr: "pipe" });
+function run(cmd: string[], opts: { cwd?: string; env?: Record<string, string> } = {}): Run {
+  const p = Bun.spawnSync(cmd, { cwd: opts.cwd ?? root, env: { ...scrubbedEnv(), ...opts.env }, stdout: "pipe", stderr: "pipe" });
   return { exitCode: p.exitCode, stdout: p.stdout.toString(), stderr: p.stderr.toString() };
 }
 
@@ -66,15 +73,27 @@ const help = run([outfile, "--help"]);
 check("--help", help.exitCode === 0 && help.stdout.includes("commands:") && help.stdout.includes("aion"),
   `exit=${help.exitCode} stdout=${JSON.stringify(help.stdout.slice(0, 120))}`);
 
-// 2c. one-shot mock run -------------------------------------------------
+// 2c. one-shot mock run + repo-map extraction ---------------------------
 // Fresh temp cwd: keeps .aion/ session/checkpoint artifacts out of the repo
-// and guarantees no .aion/mcp.json / project config is picked up.
+// and guarantees no .aion/mcp.json / project config is picked up. It is a
+// REAL (tiny) workspace: the repo map only builds when source files exist, and
+// `git init` exercises the git ls-files enumeration path the binary uses.
+// AION_HOME → an empty dir beside it: the user-scope credential store must not
+// leak in (the env scrub cannot see ~/.aion/credentials.json).
 const smokeDir = mkdtempSync(join(tmpdir(), "aion-smoke-"));
 try {
-  const oneShot = run([outfile, "run", "packaging smoke"], { cwd: smokeDir });
-  check("one-shot mock run",
-    oneShot.exitCode === 0 && oneShot.stdout.includes("Aion mock provider"),
-    `exit=${oneShot.exitCode} stdout=${JSON.stringify(oneShot.stdout.slice(0, 200))} stderr=${JSON.stringify(oneShot.stderr.slice(0, 200))}`);
+  const PROBE_SYMBOL = "smokeProbeSymbol";
+  writeFileSync(join(smokeDir, "probe.ts"), `export function ${PROBE_SYMBOL}(): number { return 42; }\n`);
+  const gi = Bun.spawnSync(["git", "init", "-q"], { cwd: smokeDir, stdout: "pipe", stderr: "pipe" });
+  if (gi.exitCode !== 0) console.warn("warn: git init failed in the smoke dir — enumeration falls back to the walk");
+  const oneShot = run([outfile, "run", "packaging smoke"], { cwd: smokeDir, env: { AION_HOME: join(smokeDir, ".aion-home") } });
+  // the tags cache is persisted only after a successful extraction over probe.ts
+  const cachePath = join(smokeDir, ".aion", "cache", "repomap.json");
+  const cache = existsSync(cachePath) ? readFileSync(cachePath, "utf8") : "";
+  check("one-shot mock run + repo-map extraction",
+    oneShot.exitCode === 0 && oneShot.stdout.includes("Aion mock provider") && cache.includes(PROBE_SYMBOL),
+    `exit=${oneShot.exitCode} stdout=${JSON.stringify(oneShot.stdout.slice(0, 200))} stderr=${JSON.stringify(oneShot.stderr.slice(0, 200))}`
+    + ` cache=${cache ? JSON.stringify(cache.slice(0, 200)) : "(absent)"}`);
 } finally {
   rmSync(smokeDir, { recursive: true, force: true });
 }

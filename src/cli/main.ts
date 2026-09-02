@@ -115,7 +115,7 @@ commands:
   aion                      interactive TUI chat (pi-tui; --plain for readline REPL)
   aion --resume <id>        open the TUI resuming a session (full id or unique prefix)
   aion "prompt"             one-shot task (same as run)
-  aion smoke-tui            render check: full pipeline into an 80x24 terminal emulator
+  aion smoke-tui            render check: full pipeline into an 80x24 terminal emulator (dev-only)
   aion run "<prompt>"       run an agent task (--yolo allows all tools; mock provider only if no provider env set)
   aion bench                run cross-harness micro-benchmarks (edits, sessions)
   aion gauntlet             run the adversarial evaluation suite
@@ -227,9 +227,18 @@ if (cmd === "" || cmd === "chat" || cmd === "repl" || (resumeId !== undefined &&
     // port #38: session export (markdown transcript or raw JSONL copy) — local only.
     // Hand-parses its own argv: --out takes a value, and parseCli flags are boolean-only.
     case "export": (await import("./export.ts")).cmdExport(process.argv); break;
-    // dynamic import: smoke pulls in @xterm/headless (devDependency) — must not
-    // load on ordinary CLI startup
-    case "smoke-tui": await (await import("../tui/smoke.ts")).runTuiSmoke(); break;
+    // dynamic import: smoke pulls in @xterm/headless (a devDependency) — it must
+    // not load on ordinary CLI startup, and it is ABSENT from an npm-installed
+    // tree, so a failed import is reported as dev-only instead of a stack trace
+    case "smoke-tui": {
+      const smoke = await import("../tui/smoke.ts").catch(() => null);
+      if (smoke === null) {
+        console.error("smoke-tui is dev-only — run from a source checkout with devDependencies installed");
+        process.exit(1);
+      }
+      await smoke.runTuiSmoke();
+      break;
+    }
     // port #15: ACP v1 endpoint over stdio (Zed/JetBrains). Dynamic import keeps
     // the ACP SDK off ordinary CLI startup.
     case "acp": await (await import("../acp/server.ts")).runAcpStdio({ yolo: cli.yolo }); break;

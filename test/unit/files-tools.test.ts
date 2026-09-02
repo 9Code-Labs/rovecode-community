@@ -1,16 +1,18 @@
 /** Port #22 glob/grep/ls: output shapes (file:line, truncation markers pinned
- *  byte-exact), bounds, gitignore awareness, binary skip, read-class policy
- *  (deny-default auto-allow, resource = searched path), registration in all
- *  three sites, Windows path handling. */
+ *  byte-exact), bounds (clampLimit contract, SCAN_CAP + its note through the
+ *  fileTools seam), gitignore awareness, binary + 1MB skip, mid-scan abort,
+ *  junction-cycle safety, the bounded ls stat sweep, read-class policy
+ *  (deny-default auto-allow, resource = searched path — also when `path` is
+ *  omitted or relative), registration in all three sites, Windows paths. */
 
 import { test, expect } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, utimesSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, rmdirSync, unlinkSync, symlinkSync, writeFileSync, utimesSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import {
-  globTool, grepTool, lsTool, listFiles,
-  GLOB_LIMIT_DEFAULT, GREP_LIMIT_DEFAULT, LS_LIMIT_DEFAULT, LIMIT_CAP, GREP_LINE_CAP,
+  globTool, grepTool, lsTool, listFiles, fileTools, clampLimit, scanCapLine,
+  GLOB_LIMIT_DEFAULT, GREP_LIMIT_DEFAULT, LS_LIMIT_DEFAULT, LIMIT_CAP, SCAN_CAP, GREP_LINE_CAP, GREP_FILE_BYTES_CAP,
 } from "../../src/coding/files.ts";
 import { ToolRegistry } from "../../src/core/tools.ts";
 import { createRuntime } from "../../src/cli/runtime.ts";
@@ -98,6 +100,20 @@ test("glob: non-directory targets are rejected", async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
+// ---------- bounds: the clamp contract (literal cap, ceiling, floor) ----------
+
+test("clampLimit: LIMIT_CAP is the literal 1000 and the ceiling; absent/NaN/non-positive fall back to the default; fractions floor", () => {
+  expect(LIMIT_CAP).toBe(1000); // the literal — a self-referential `cap ${LIMIT_CAP}` pin survives a raise
+  expect(clampLimit(1e7, 100)).toBe(LIMIT_CAP);
+  expect(clampLimit(LIMIT_CAP + 1, 100)).toBe(LIMIT_CAP);
+  expect(clampLimit(LIMIT_CAP, 100)).toBe(LIMIT_CAP);
+  expect(clampLimit(-1, 100)).toBe(100);
+  expect(clampLimit(0, 100)).toBe(100);
+  expect(clampLimit(undefined, 100)).toBe(100);
+  expect(clampLimit(Number.NaN, 100)).toBe(100);
+  expect(clampLimit(2.9, 100)).toBe(2);
+});
+
 // ---------- grep: output shape + bounds ----------
 
 test("grep: file:line output shape with 'Found N matches' header", async () => {
@@ -173,6 +189,39 @@ test("grep: a single-file path searches just that file", async () => {
   rmSync(root, { recursive: true, force: true });
 });
 
+test("grep: an abort issued while the scan is in flight ends it with 'grep aborted' (the loop yields per file); a pre-aborted signal short-circuits", async () => {
+  const root = tmpRoot();
+  for (let i = 0; i < 8; i++) writeFileSync(join(root, `f${i}.txt`), "needle\n");
+  // execute() runs synchronously up to its first awaited read, then hands back
+  // the pending promise; abort() lands before that read settles, so the check at
+  // the top of the NEXT iteration must see it. The old synchronous scan had
+  // already produced all 8 matches by the time abort() ran.
+  const ac = new AbortController();
+  const pending = grepTool.execute({ pattern: "needle", path: root }, { ...ctx(), signal: ac.signal });
+  ac.abort();
+  expect(await pending).toEqual({ ok: false, output: "grep aborted" });
+
+  const pre = new AbortController();
+  pre.abort();
+  expect(await grepTool.execute({ pattern: "needle", path: root }, { ...ctx(), signal: pre.signal })).toEqual({ ok: false, output: "grep aborted" });
+
+  // unaborted control over the same fixture
+  const full = await grepTool.execute({ pattern: "needle", path: root }, ctx());
+  expect(full.output.split("\n")[0]).toBe("Found 8 matches");
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("grep: files over GREP_FILE_BYTES_CAP (1MB) are skipped — as directory candidates and as a single-file target", async () => {
+  const root = tmpRoot();
+  writeFileSync(join(root, "big.txt"), "needle\n" + "x".repeat(GREP_FILE_BYTES_CAP)); // cap + 7 bytes
+  writeFileSync(join(root, "small.txt"), "needle\n");
+  const out = await grepTool.execute({ pattern: "needle", path: root }, ctx());
+  expect(out.output.split("\n")).toEqual(["Found 1 matches", `${join(root, "small.txt")}:1: needle`]);
+  const single = await grepTool.execute({ pattern: "needle", path: join(root, "big.txt") }, ctx());
+  expect(single.output).toBe("No matches found");
+  rmSync(root, { recursive: true, force: true });
+});
+
 // ---------- gitignore + default excludes ----------
 
 test("gitignore honored in a git repo: glob and grep drop ignored files; ls hides + counts them", async () => {
@@ -221,6 +270,74 @@ test("outside git: node_modules and dotfiles are excluded by default (glob/grep 
   rmSync(root, { recursive: true, force: true });
 });
 
+// ---------- SCAN_CAP: injectable cap on both enumeration paths + the exact note through every tool ----------
+
+test("SCAN_CAP: listFiles caps the walk AND the git ls-files path (reported via .capped); SCAN_CAP and the note string are pinned", () => {
+  expect(SCAN_CAP).toBe(10_000);
+  expect(scanCapLine(SCAN_CAP)).toBe("(File enumeration capped at 10000 files; results may be incomplete.)");
+
+  const walk = tmpRoot();
+  for (const n of ["a.txt", "b.txt", "c.txt"]) writeFileSync(join(walk, n), "x");
+  expect(listFiles(walk)).toEqual({ rel: ["a.txt", "b.txt", "c.txt"], viaGit: false, capped: false });
+  expect(listFiles(walk, 2)).toEqual({ rel: ["a.txt", "b.txt"], viaGit: false, capped: true });
+
+  const repo = tmpRoot();
+  gitInit(repo);
+  for (const n of ["a.txt", "b.txt", "c.txt"]) writeFileSync(join(repo, n), "x");
+  const viaGit = listFiles(repo, 2);
+  expect(viaGit.viaGit).toBe(true);
+  expect(viaGit.capped).toBe(true);
+  expect(viaGit.rel).toHaveLength(2);
+  expect(listFiles(repo).capped).toBe(false);
+  rmSync(walk, { recursive: true, force: true });
+  rmSync(repo, { recursive: true, force: true });
+});
+
+test("SCAN_CAP note: glob/grep/ls built over a 2-file cap append the exact marker (hits and no-hits); the SCAN_CAP tools stay silent below the cap", async () => {
+  const root = tmpRoot();
+  for (const n of ["a.txt", "b.txt", "c.txt"]) writeFileSync(join(root, n), "needle\n");
+  const NOTE = "(File enumeration capped at 2 files; results may be incomplete.)";
+  const small = fileTools(2);
+
+  const g = await small.globTool.execute({ pattern: "*.txt", path: root }, ctx());
+  const gl = g.output.split("\n");
+  expect(gl.slice(0, 2).sort()).toEqual([join(root, "a.txt"), join(root, "b.txt")]); // recency order among same-ms files is not pinned
+  expect(gl.slice(2)).toEqual(["", NOTE]);
+  const gNone = await small.globTool.execute({ pattern: "*.nope", path: root }, ctx());
+  expect(gNone.output).toBe(`No files found\n\n${NOTE}`);
+
+  const s = await small.grepTool.execute({ pattern: "needle", path: root }, ctx());
+  const sl = s.output.split("\n");
+  expect(sl[0]).toBe("Found 2 matches");
+  expect(sl.slice(-2)).toEqual(["", NOTE]);
+  const sNone = await small.grepTool.execute({ pattern: "zebra", path: root }, ctx());
+  expect(sNone.output).toBe(`No matches found\n\n${NOTE}`);
+
+  const l = await small.lsTool.execute({ path: root }, ctx());
+  expect(l.output).toBe(`Directory listing for ${root}:\na.txt (7 bytes)\nb.txt (7 bytes)\n\n${NOTE}`);
+
+  for (const out of [
+    await globTool.execute({ pattern: "*.txt", path: root }, ctx()),
+    await grepTool.execute({ pattern: "needle", path: root }, ctx()),
+    await lsTool.execute({ path: root }, ctx()),
+  ]) expect(out.output).not.toContain("File enumeration capped");
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("listFiles (non-git walk): a directory junction/symlink back into an ancestor is skipped, not descended — no duplicates, terminates", () => {
+  const root = tmpRoot();
+  mkdirSync(join(root, "sub"));
+  writeFileSync(join(root, "sub", "file.txt"), "x");
+  writeFileSync(join(root, "top.txt"), "x");
+  // "junction" needs no privilege on Windows; POSIX ignores the type hint and makes a plain symlink
+  const loop = join(root, "sub", "loop");
+  symlinkSync(root, loop, "junction");
+  expect(listFiles(root)).toEqual({ rel: ["sub/file.txt", "top.txt"], viaGit: false, capped: false });
+  // drop the link itself before the recursive rm so nothing walks through it
+  try { rmdirSync(loop); } catch { unlinkSync(loop); }
+  rmSync(root, { recursive: true, force: true });
+});
+
 // ---------- ls: output shape + bounds ----------
 
 test("ls: dirs first as [DIR], files with sizes, alphabetical; exact shape pinned", async () => {
@@ -252,6 +369,22 @@ test("ls: maxEntries bound with truncation marker; empty dir and non-dir errors"
   expect(missing.ok).toBe(false);
   rmSync(root, { recursive: true, force: true });
   rmSync(emptyRoot, { recursive: true, force: true });
+});
+
+test("ls: the stat sweep is bounded by the scan cap — alphabetical slice BEFORE statting (dirs-first applies within the slice); both notes compose", async () => {
+  const root = tmpRoot();
+  writeFileSync(join(root, "a.txt"), "x");
+  writeFileSync(join(root, "b.txt"), "x");
+  mkdirSync(join(root, "zdir")); // would lead the listing if everything were statted first
+  const NOTE = "(File enumeration capped at 2 files; results may be incomplete.)";
+  const { lsTool: capped } = fileTools(2);
+  const out = await capped.execute({ path: root }, ctx());
+  expect(out.output).toBe(`Directory listing for ${root}:\na.txt (1 bytes)\nb.txt (1 bytes)\n\n${NOTE}`);
+  expect(out.data).toEqual({ entries: 2, truncated: false });
+  const both = await capped.execute({ path: root, maxEntries: 1 }, ctx());
+  expect(both.output).toBe(`Directory listing for ${root}:\na.txt (1 bytes)\n\n(Results truncated: showing first 1 of 2 entries.)\n\n${NOTE}`);
+  expect(both.data).toEqual({ entries: 1, truncated: true });
+  rmSync(root, { recursive: true, force: true });
 });
 
 // ---------- Windows path handling ----------
@@ -316,6 +449,33 @@ test("policy: resource is the searched/listed path — a path-targeted deny rule
     expect(out.output).toContain("Permission denied");
   }
   rmSync(root, { recursive: true, force: true });
+});
+
+test("policy: omitting `path` (tools default to ctx.cwd), '' or '.' cannot dodge a path-targeted deny — the resource falls back to ctx.cwd", async () => {
+  const root = tmpRoot();
+  writeFileSync(join(root, "p.txt"), "x");
+  const other = tmpRoot();
+  writeFileSync(join(other, "q.txt"), "x");
+  const registry = new ToolRegistry();
+  registry.register(globTool, grepTool, lsTool);
+  const rules: PermissionRule[] = [
+    { action: "file.read", resource: "*", effect: "allow" },
+    { action: "file.read", resource: root, effect: "deny" },
+  ];
+  const calls = [
+    ["glob", { pattern: "*" }], ["grep", { pattern: "x" }], ["ls", {}],
+    ["glob", { pattern: "*", path: "." }], ["grep", { pattern: "x", path: "" }], ["ls", { path: "." }],
+  ] as const;
+  for (const [tool, args] of calls) {
+    const denied = await registry.dispatch({ kind: "tool_call", id: "cwd-" + tool, tool, args }, ctx(root), undefined, rules, undefined, () => {});
+    expect(denied.ok).toBe(false);
+    expect(denied.output).toContain("Permission denied");
+    // the same call from an un-denied cwd runs — the deny is on the path, not the tool
+    const allowed = await registry.dispatch({ kind: "tool_call", id: "other-" + tool, tool, args }, ctx(other), undefined, rules, undefined, () => {});
+    expect(allowed.ok).toBe(true);
+  }
+  rmSync(root, { recursive: true, force: true });
+  rmSync(other, { recursive: true, force: true });
 });
 
 test("tool contracts: kind read, parallel-safe, schemas advertise defaults and caps", () => {

@@ -6,6 +6,7 @@ import type {
   ApprovalRequest, ToolCallPart, RunEvent,
 } from "./types.ts";
 import type { ToolGuard } from "./guardrails.ts";
+import { isAbsolute, join } from "node:path";
 
 export interface ExtensionHooks {
   /** May revise args; returns revised args (omp revision gate). */
@@ -76,7 +77,7 @@ export class ToolRegistry {
     }
 
     // 2. policy (deny-default)
-    const resource = describeResource(tool, args);
+    const resource = describeResource(tool, args, ctx.cwd);
     const decision = evaluatePermissions(rules, actionFor(tool), resource);
     if (decision.effect === "deny") {
       emit({ type: "tool_call_failed", callId: call.id, reason: "permission_denied", detail: decision.reason });
@@ -162,16 +163,23 @@ function actionFor(tool: Tool): string {
  *  policy, so a smuggled key ({query, path:"/tmp/x"} on recall, whose schema
  *  has no `path`) must not re-aim a tool-targeted deny rule at another
  *  resource. Policy runs pre-execute, so per-tool arg-stripping can't repair
- *  this — the gate belongs here. */
-function describeResource(tool: Tool, args: unknown): string {
+ *  this — the gate belongs here.
+ *  For a path-declared tool the resource is the path the tool will actually
+ *  touch: a missing/empty `path` defaults to ctx.cwd and a relative one
+ *  resolves against it (the tools' own resolvePath rule), so neither omitting
+ *  nor relativizing the arg can dodge a path-targeted rule (port #22 MED-4).
+ *  Command resources and the tool-name fallback are untouched. */
+function describeResource(tool: Tool, args: unknown, cwd: string): string {
   const props = tool.schema.args["properties"];
   const declared = (key: string): boolean =>
     typeof props === "object" && props !== null && key in (props as Record<string, unknown>);
-  if (args && typeof args === "object") {
-    const a = args as Record<string, unknown>;
-    if (declared("path") && "path" in a) return String(a.path);
-    if (declared("command") && "command" in a) return String(a.command);
+  const a = args && typeof args === "object" ? (args as Record<string, unknown>) : undefined;
+  if (declared("path")) {
+    const p = a?.["path"];
+    if (p === undefined || p === null || p === "") return cwd;
+    return isAbsolute(String(p)) ? String(p) : join(cwd, String(p));
   }
+  if (a && declared("command") && "command" in a) return String(a["command"]);
   return tool.schema.name;
 }
 

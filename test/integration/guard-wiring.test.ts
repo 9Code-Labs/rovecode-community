@@ -11,11 +11,13 @@
  * The tail section pins other registry-dispatch seams that live on the same
  * pipeline (core/tools.ts dispatch): the out.ok argument into
  * guard.checkResult (FW2-O), ctx.onUpdate → tool_execution_update threading
- * (FW2-R), and the describeResource schema gate for policy resources.
+ * (FW2-R), and the describeResource schema gate for policy resources plus its
+ * ctx.cwd fallback / relative-path resolution (port #22 MED-4).
  */
 import { test, expect } from "bun:test";
 import { agentLoop, SteeringQueue } from "../../src/core/loop.ts";
 import { ToolRegistry } from "../../src/core/tools.ts";
+import { readTool } from "../../src/coding/hashline.ts";
 import { ToolGuard, GUARDRAIL_DEFAULTS } from "../../src/core/guardrails.ts";
 import { SessionStore } from "../../src/core/session.ts";
 import { runChild } from "../../src/core/orchestrator.ts";
@@ -23,7 +25,7 @@ import { runTask } from "../../src/eval/gauntlet-runner.ts";
 import { adversarialTasks } from "../../src/eval/gauntlet.ts";
 import { textTurn, toolTurn } from "../../src/providers/stream.ts";
 import type { AgentDefinition, PermissionRule, RunConfig, RunEvent, StreamFn, Tool, ToolContext, ToolOutput } from "../../src/core/types.ts";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -348,4 +350,34 @@ test("policy: a tool whose schema declares `path` still resolves its resource fr
   const denied = await reg.dispatch({ kind: "tool_call", id: "r2", tool: "readfile", args: { path: "/workspace/locked.txt" } }, dispatchCtx(), undefined, rules, undefined, () => {});
   expect(denied.ok).toBe(false);                       // path-scoped deny still lands
   expect(reads).toEqual(["/workspace/notes.md"]);
+});
+
+// MED-4 (port #22): path-declared tools resolve a RELATIVE path against ctx.cwd
+// (hashline/files resolvePath) and default a MISSING one to ctx.cwd, so the
+// policy resource is built the same way — `read {path:"secrets/creds.txt"}`
+// used to dodge a deny on the absolute path (the resource was the raw string).
+test("policy: a relative `path` is resolved against ctx.cwd before matching — an absolute-path deny holds for the real read tool", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "aion-gw-rel-"));
+  mkdirSync(join(cwd, "secrets"));
+  writeFileSync(join(cwd, "secrets", "creds.txt"), "TOPSECRET\n");
+  writeFileSync(join(cwd, "public.txt"), "PUBLIC-OK\n");
+  const reg = new ToolRegistry();
+  reg.register(readTool);
+  const rules: PermissionRule[] = [
+    { action: "file.read", resource: "*", effect: "allow" },
+    { action: "file.read", resource: join(cwd, "secrets", "creds.txt"), effect: "deny" },
+  ];
+  const c: ToolContext = { ...dispatchCtx(), cwd };
+  const read = (id: string, path: string) =>
+    reg.dispatch({ kind: "tool_call", id, tool: "read", args: { path } }, c, undefined, rules, undefined, () => {});
+  const relative = await read("rel", "secrets/creds.txt");
+  expect(relative.ok).toBe(false);
+  expect(relative.output).toContain("Permission denied");
+  expect(relative.output).not.toContain("TOPSECRET");
+  const absolute = await read("abs", join(cwd, "secrets", "creds.txt"));
+  expect(absolute.ok).toBe(false);                     // the absolute form, as before
+  const open = await read("pub", "public.txt");
+  expect(open.ok).toBe(true);                          // relative path to an un-denied file still reads
+  expect(open.output).toContain("PUBLIC-OK");
+  rmSync(cwd, { recursive: true, force: true });
 });

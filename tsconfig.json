@@ -12,8 +12,11 @@
     "skipLibCheck": true,
     "types": ["bun-types"],
     "allowImportingTsExtensions": true,
-    // matches upstream pi-tui build semantics (their tsconfig.base.json) — Bun's
-    // transpiler reads this flag, so it affects vendored class RUNTIME behavior
+    // compiler-setting parity with upstream pi-tui (their tsconfig.base.json) for
+    // the vendored source. Typecheck-only: Bun's runtime transpiler does NOT read
+    // this flag (bun 1.3.14 — output is byte-identical with it flipped or this
+    // file absent), and tsc passes either way today. tsconfig ships in files[]
+    // so the installed source stays typecheckable in place (`bun x tsc --noEmit`).
     "useDefineForClassFields": false,
     "noEmit": true
   },
