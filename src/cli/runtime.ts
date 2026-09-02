@@ -318,7 +318,9 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     // (run/serve pass no approver) get allow-list auto-run + forbidden hard-stop,
     // and prompt-classified argv fails closed instead of "no approver connected".
     // yolo stays approver-free — its allow-all rules never reach the prompt branch.
-    approval: yolo ? undefined : execPolicyApprover(approval),
+    // port #29: the approval hook sits INSIDE the wrap, where the human would — a
+    // forbidden argv never reaches a hook, an allow-listed one never asks (hooks.ts).
+    approval: yolo ? undefined : execPolicyApprover(hooks.approver(approval)),
   });
 
   // port #26: background subagents. Children run through orchestrator runChild (the ONE
@@ -343,6 +345,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
       defs: new Map([["main", buildDef(activeModel ?? fallbackRef)]]),
       stream, registryFactory: childRegistry, rootDir: cwd, sessionsDir,
       baseConfig: activeCfg ?? buildCfg(false),
+      hooks, // port #29: children run under the runtime's hooks (a veto cannot be dodged by delegation)
     } : null,
   });
   tasks.attach(steering);

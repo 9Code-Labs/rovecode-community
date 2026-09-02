@@ -190,6 +190,17 @@ test("AION_NO_HOOKS=1 skips the files silently", async () => {
   }
 });
 
+test("version gate shows a STRING version quoted: `version: \"1\"` is refused as \"1\", never rendered as the supported number 1", async () => {
+  const r = rig();
+  try {
+    const strV = project(r.cwd, moduleText(r.key, `pre_run() { log.push("never"); }`, '"1"'));
+    const loaded = await loadHooks(r.cwd, { home: r.home });
+    expect(loaded.hooks).toEqual([]);
+    expect(loaded.warnings).toEqual([`${strV}: hooks API version "1" is not supported (this aion speaks 1) — skipped`]);
+    expect(r.log).toEqual([]);
+  } finally { r.done(); }
+});
+
 // ---------- runner ----------
 
 test("run(pre_tool): sets run in attach order, the first deny wins and later sets are not consulted; void falls through", async () => {
@@ -224,6 +235,36 @@ test("results are validated: bad pre_tool/approval results are ignored with a wa
   quiet.add({ pre_run: () => 42 as never });
   expect(await quiet.run("pre_run", ctx)).toBeUndefined();
   expect(quiet.warnings).toEqual([]);
+});
+
+test("approver(): the approval hook as an ApprovalFn — 'allow' → 'once', 'deny' → 'deny', void → the human's verdict, void with no human → 'deny' (fail closed); an invalid result is void + a warning; ctx is the runner's own", async () => {
+  const seen: HookCtx[] = [];
+  let answer: unknown = "allow";
+  const runner = new HookRunner(ctx);
+  runner.add({ approval: (c) => { seen.push(c); return answer as "allow"; } }, "set");
+  const req = { tool: "bash", args: { command: "x" }, revisedArgs: { command: "x" }, reason: "r" };
+  const human: string[] = [];
+  const withHuman = runner.approver(async (r) => { human.push(r.reason); return "always"; });
+  expect(await withHuman(req)).toBe("once");
+  answer = "deny";
+  expect(await withHuman(req)).toBe("deny");
+  answer = undefined;
+  expect(await withHuman(req)).toBe("always");
+  expect(human).toEqual(["r"]);
+  answer = "maybe";
+  expect(await withHuman(req)).toBe("always"); // invalid → void → the human decides
+  expect(runner.warnings).toEqual(['set: approval hook returned an invalid result ("maybe") — ignored']);
+  const headless = runner.approver();
+  answer = undefined;
+  expect(await headless(req)).toBe("deny");
+  answer = "allow";
+  expect(await headless(req)).toBe("once");
+  expect(seen.length).toBe(6);
+  expect(seen.every((c) => c === ctx)).toBe(true); // the runner's base ctx, by identity
+  // no approval hook at all → straight to the human, or fail closed without one
+  const bare = new HookRunner(ctx);
+  expect(await bare.approver(async () => "once")(req)).toBe("once");
+  expect(await bare.approver()(req)).toBe("deny");
 });
 
 test("run(post_tool): sets chain (the next set sees the previous output), {} leaves the output alone, growth is bounded with a marker", async () => {

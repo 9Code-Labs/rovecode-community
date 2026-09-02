@@ -20,7 +20,8 @@
  *  timer) and isolated — a throwing or hanging hook records one bounded warning note and the run
  *  continues as if the hook had returned void. Results are validated and bounded (deny reason
  *  ≤ MAX_DENY_REASON_CHARS; post_tool may grow the tool's output by ≤ MAX_POST_TOOL_GROWTH_CHARS).
- *  pre_tool / approval / post_tool ride core/tools.ts dispatch at the existing hook seams; the
+ *  pre_tool / post_tool ride core/tools.ts dispatch at the existing hook seams; approval rides the
+ *  ApprovalFn chain as approver() (composed in cli/runtime.ts buildCfg — see Authority); the
  *  run-level hooks ride the event stream via observer() in core/loop.ts agentLoop (pre_run /
  *  compaction / post_run awaited in order, on_event a fire-and-forget tap — port #39 OTel builds on
  *  it); session_open/close are the runtime's lifetime (cli/runtime.ts + the surfaces' close paths).
@@ -28,11 +29,14 @@
  *  Authority: POLICY WINS. Permission rules (deny-default, last-match) are evaluated BEFORE pre_tool,
  *  so a hook never sees — and can never "un-deny" — a rule-rejected call; pre_tool can only deny,
  *  and its deny applies in every mode including yolo (a hook is the user's own stricter layer). The
- *  approval hook stands in for the HUMAN: consulted only on a policy "prompt" with nothing cached;
- *  "allow" is a one-shot yes (never cached), "deny" a hook deny, void → the approver chain as before.
- *  It precedes that chain (execpolicy argv refinement + human), so a hook "allow" is exactly as
- *  strong as a user allow rule — never stronger than policy. A failing/timed-out hook cannot deny
- *  (fail-open to policy, which already ran).
+ *  approval hook stands in for the HUMAN — literally: approver(human) is an ApprovalFn that buildCfg
+ *  composes INSIDE execPolicyApprover, so the order is permission rules → execpolicy argv
+ *  classification (port #9: forbidden → deny before any hook or human; allow-listed → runs, nobody
+ *  asked) → approval hook → human. Consulted only on a policy "prompt" with nothing cached; "allow"
+ *  is a one-shot yes (never cached), "deny" denies (the chain's deny shape, as execpolicy's), void →
+ *  the human, or fail closed when there is none (headless). A hook "allow" is exactly as strong as
+ *  the human's "once" — never stronger than policy or execpolicy. A failing/timed-out hook cannot
+ *  deny (fail-open to policy, which already ran).
  *
  *  TRUST: hooks are code the user placed in their own project or home dir, executed in-process with
  *  the user's privileges — the same trust class as .aion/commands and .aion/mcp.json (which spawns
@@ -58,7 +62,7 @@
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { ApprovalRequest, RunEvent, ToolOutput } from "./types.ts";
+import type { ApprovalFn, ApprovalRequest, RunEvent, ToolOutput } from "./types.ts";
 import { aionHome } from "../providers/auth.ts";
 
 export const HOOKS_API_VERSION = 1;
@@ -86,7 +90,8 @@ export interface HookSet {
   pre_tool?: Hook<[call: HookToolCall], { deny: string }>;
   /** after a tool ran; {output} replaces what the model sees (growth-bounded), {} = unchanged */
   post_tool?: Hook<[call: HookToolCall, result: ToolOutput], { output?: string }>;
-  /** policy said prompt and nothing is cached: pre-answer instead of the human, or void to ask */
+  /** policy said prompt, execpolicy left it to a human, nothing is cached: pre-answer instead of the
+   *  human ("allow" one-shot / "deny"), or void to ask them — ctx is the runtime's (no runId) */
   approval?: Hook<[req: ApprovalRequest], "allow" | "deny">;
   /** after a history compaction (the event as yielded: strategy, trigger, token counts) */
   compaction?: Hook<[event: CompactionEvent]>;
@@ -152,7 +157,9 @@ async function importHookSet(file: string, timeoutMs: number, warnings: string[]
 function validateModule(file: string, dflt: unknown, warnings: string[]): HookSet | null {
   if (!isRecord(dflt)) { warnings.push(`${file}: default export must be { version: ${HOOKS_API_VERSION}, hooks: {…} } — skipped`); return null; }
   if (dflt["version"] !== HOOKS_API_VERSION) {
-    warnings.push(`${file}: hooks API version ${dflt["version"] === undefined ? "missing" : String(dflt["version"])} is not supported (this aion speaks ${HOOKS_API_VERSION}) — skipped`);
+    const v = dflt["version"]; // a string "1" is shown quoted, never disguised as the supported number
+    const shown = v === undefined ? "missing" : typeof v === "string" ? JSON.stringify(v) : String(v);
+    warnings.push(`${file}: hooks API version ${shown} is not supported (this aion speaks ${HOOKS_API_VERSION}) — skipped`);
     return null;
   }
   if (!isRecord(dflt["hooks"])) { warnings.push(`${file}: "hooks" must be an object of hook functions — skipped`); return null; }
@@ -268,6 +275,20 @@ export class HookRunner {
     };
   }
 
+  /** The approval hook as an ApprovalFn for the approver chain — cli/runtime.ts buildCfg composes
+   *  execPolicyApprover(hooks.approver(human)), so this runs only for prompt-classified calls that
+   *  execpolicy did not settle (header: Authority). "allow" → "once" (dispatch never caches once),
+   *  "deny" → "deny", void → the human; no human (headless) → fail closed like execpolicy's prompt
+   *  arm. ctx is the runtime's {cwd, sessionId}: the chain is composed per config, before any run. */
+  approver(human?: ApprovalFn): ApprovalFn {
+    return async (req) => {
+      const pre = await this.run("approval", this.base, { ...req, args: cloneForHook(req.args), revisedArgs: cloneForHook(req.revisedArgs) });
+      if (pre === "allow") return "once";
+      if (pre === "deny") return "deny";
+      return human ? human(req) : "deny";
+    };
+  }
+
   private tap(ctx: HookCtx, ev: RunEvent): void {
     if (!this.loading && !this.has("on_event")) return; // zero cost without an on_event hook
     const p: Promise<void> = this.run("on_event", ctx, ev).then(() => undefined, () => undefined);
@@ -300,6 +321,12 @@ export class HookRunner {
 }
 
 // ---------- result validation + helpers ----------
+
+/** Hooks get COPIES of a call's args and a tool's result: a hook that mutates its argument must not
+ *  re-aim a call policy already evaluated, rewrite the persisted tool_call, or dodge the post_tool
+ *  growth bound (which applies to the RETURNED {output} only). JSON-derived values clone; anything
+ *  structuredClone rejects (never off the wire) passes through as is rather than failing the call. */
+export function cloneForHook<T>(v: T): T { try { return structuredClone(v); } catch { return v; } }
 
 function normalize<K extends HookName>(name: K, raw: unknown, args: HookArgs<K>, warn: (w: string) => void): HookDecision<K> | undefined {
   if (raw === undefined || raw === null) return undefined;

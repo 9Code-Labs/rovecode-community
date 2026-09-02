@@ -1,5 +1,6 @@
 /** Hooks v2 (port #29) WIRING tests: the typed hook set threaded through core/tools.ts dispatch
- *  (pre_tool after policy, approval before the human, post_tool after execute), core/loop.ts
+ *  (pre_tool after policy, post_tool after execute), the approval hook as HookRunner.approver INSIDE
+ *  the execpolicy wrap (cli/runtime.ts buildCfg: rules → execpolicy → hook → human), core/loop.ts
  *  agentLoop (pre_run / compaction / post_run / on_event via the observer), cli/runtime.ts
  *  (.aion/hooks.ts + ~/.aion loaded at boot, session_open/close) and the surfaces (cmdRun as a
  *  subprocess against a scripted provider, serve stop(), ACP shutdown()). "Policy wins" and
@@ -10,7 +11,7 @@ import {
   ClientSideConnection, ndJsonStream, PROTOCOL_VERSION,
   type Client, type SessionNotification, type RequestPermissionRequest, type RequestPermissionResponse,
 } from "@zed-industries/agent-client-protocol";
-import { agentLoop, SteeringQueue } from "../../src/core/loop.ts";
+import { agentLoop, SteeringQueue, partsText } from "../../src/core/loop.ts";
 import { ToolRegistry } from "../../src/core/tools.ts";
 import { SessionStore } from "../../src/core/session.ts";
 import { HookRunner, MAX_POST_TOOL_GROWTH_CHARS, type HookSet } from "../../src/core/hooks.ts";
@@ -119,29 +120,30 @@ test("policy still wins: a rule deny is never un-denied — pre_tool/approval ho
   expect(probe.runs()).toBe(0);
 });
 
-test("approval hook pre-answers only a policy PROMPT with nothing cached: 'allow' runs without the human (one-shot, not cached), 'deny' denies without the human, void asks the human; allow-rules and a cached 'always' never consult it", async () => {
+test("approval hook rides the approver chain (hooks.approver) for a policy PROMPT with nothing cached: 'allow' runs without the human (one-shot, not cached), 'deny' denies without the human, void asks the human; allow-rules and a cached 'always' never consult it; headless fails closed on void", async () => {
   const reg = new ToolRegistry(); const probe = probeTool(); reg.register(probe.tool);
   const promptRule: PermissionRule[] = [{ action: "tool.probe", resource: "*", effect: "prompt" }];
   let answer: "allow" | "deny" | undefined = "allow";
-  const asked: string[] = [];
-  const hooks = runner({ approval: (_c, req) => { asked.push(`hook:${req.reason}`); return answer; } });
+  const asked: string[] = []; const seenCtx: unknown[] = [];
+  const hooks = runner({ approval: (c, req) => { asked.push(`hook:${req.reason}`); seenCtx.push(c); return answer; } });
   const human: string[] = [];
-  const approve: ApprovalFn = async (req) => { human.push(req.tool); return "always"; };
+  const humanFn: ApprovalFn = async (req) => { human.push(req.tool); return "always"; };
+  const approve = hooks.approver(humanFn); // the seam buildCfg wraps in execPolicyApprover
   const events: RunEvent[] = [];
-  // `null` = no approver (an explicit `undefined` would re-apply the default parameter)
-  const go = (id: string, args: unknown, rules: PermissionRule[] = promptRule, ap: ApprovalFn | null = approve) =>
-    reg.dispatch({ kind: "tool_call", id, tool: "probe", args }, dispatchCtx(), hooks, rules, ap ?? undefined, (e) => events.push(e));
-  // 1. allow → executes, human not asked
+  const go = (id: string, args: unknown, rules: PermissionRule[] = promptRule, ap: ApprovalFn = approve) =>
+    reg.dispatch({ kind: "tool_call", id, tool: "probe", args }, dispatchCtx(), hooks, rules, ap, (e) => events.push(e));
+  // 1. allow → executes, human not asked; the hook saw the runtime's ctx
   expect((await go("a1", { n: 1 })).ok).toBe(true);
   expect(human).toEqual([]); expect(probe.runs()).toBe(1);
   expect(asked).toEqual(["hook:permission required for tool.probe probe"]);
+  expect(seenCtx).toEqual([{ cwd: "/w", sessionId: "s" }]);
   // 2. the same call again → NOT cached: the hook is asked again (one-shot semantics)
   expect((await go("a2", { n: 1 })).ok).toBe(true);
   expect(asked.length).toBe(2); expect(human).toEqual([]);
-  // 3. deny → denied without the human, hook-deny shape
+  // 3. deny → denied without the human, in the approver chain's deny shape (the same one an execpolicy forbid takes)
   answer = "deny";
-  expect(await go("a3", { n: 2 })).toEqual({ ok: false, output: "Permission denied by hook" });
-  expect(events.at(-1)).toEqual({ type: "tool_call_failed", callId: "a3", reason: "permission_denied", detail: "denied by hook" });
+  expect(await go("a3", { n: 2 })).toEqual({ ok: false, output: "Permission denied by user" });
+  expect(events.at(-1)).toEqual({ type: "tool_call_failed", callId: "a3", reason: "permission_denied", detail: "user denied" });
   expect(human).toEqual([]); expect(probe.runs()).toBe(2);
   // 4. void → the human is asked, and the human's "always" caches as before
   answer = undefined;
@@ -154,12 +156,70 @@ test("approval hook pre-answers only a policy PROMPT with nothing cached: 'allow
   // 6. an allow rule never reaches the prompt branch → the hook is not consulted
   expect((await go("a6", { n: 9 }, allowAll)).ok).toBe(true);
   expect(asked.length).toBe(4);
-  // 7. headless (no approver): hook "allow" runs the call; hook void → the old no-approver failure, unchanged
+  // 7. headless (no human behind the hook): hook "allow" runs the call; hook void fails closed (execpolicy's headless arm)
+  const headless = hooks.approver(undefined);
   answer = "allow";
-  expect((await go("a7", { n: 10 }, promptRule, null)).ok).toBe(true);
+  expect((await go("a7", { n: 10 }, promptRule, headless)).ok).toBe(true);
   expect(human).toEqual(["probe"]); // still only the one human ask from step 4
   answer = undefined;
-  expect(await go("a8", { n: 11 }, promptRule, null)).toEqual({ ok: false, output: "Permission denied: approval required, no approver available" });
+  expect(await go("a8", { n: 11 }, promptRule, headless)).toEqual({ ok: false, output: "Permission denied by user" });
+  expect(asked.length).toBe(6); expect(probe.runs()).toBe(6); // a1 a2 a4 a5 a6 a7 ran; a3 a8 were denied
+  expect(hooks.warnings).toEqual([]);
+});
+
+test("ordering (port #9 contract holds under hooks): execpolicy-forbidden argv hard-stops BEFORE the approval hook (never consulted), allow-listed argv runs without asking anyone, prompt-classified argv is the hook's to pre-answer — the human only on void", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "aion-hooks-order-"));
+  const home = mkdtempSync(join(tmpdir(), "aion-hooks-orderhome-"));
+  const savedHome = process.env.AION_HOME;
+  process.env.AION_HOME = home; // pinned: never load the developer's ~/.aion/hooks.ts
+  try {
+    const rt = await bootRuntime({ cwd, sessionId: "sess-order", stream: null });
+    // spy executor: register() overwrites by schema name, so this replaces the REAL bash tool — nothing is spawned
+    const executed: string[] = [];
+    rt.registry.register({ schema: { name: "bash", description: "spy", args: {} }, kind: "execute", async execute(args) { executed.push(String((args as { command: string }).command)); return { ok: true, output: "ran" }; } });
+    let answer: "allow" | undefined = "allow";
+    const hookSaw: string[] = [];
+    rt.hooks.add({ approval: (_c, req) => { hookSaw.push(String((req.revisedArgs as { command: string }).command)); return answer; } }, "allow-hook");
+    // a pre_tool veto is the hook layer that DOES precede execpolicy's allow-list (policy → pre_tool → approve)
+    rt.hooks.add({ pre_tool: (_c, call) => ((call.args as { command: string }).command === "pwd" ? { deny: "no pwd here" } : undefined) }, "veto-hook");
+    const humanSaw: string[] = [];
+    const cfg = rt.buildCfg(false, async (req) => { humanSaw.push(req.reason); return "once"; });
+    const events: RunEvent[] = [];
+    const dispatch = (command: string, id: string) => rt.registry.dispatch(
+      { kind: "tool_call", id, tool: "bash", args: { command } },
+      { sessionId: "sess-order", cwd, signal: new AbortController().signal, permissions: { effect: "allow" } },
+      rt.hooks, cfg.permissionRules, cfg.approval, (e) => events.push(e));
+    // forbidden (execpolicy-rules.ts DEFAULT_RULES; the critic's H1/H2 repro): denied before any hook or human
+    // sees it, even though the hook would say "allow"
+    for (const [id, cmd] of [["f1", "git push --force"], ["f2", "git reset --hard"], ["f3", "git push --force origin main"]] as const) {
+      const out = await dispatch(cmd, id);
+      expect(out.ok).toBe(false);
+      expect(out.output).toBe("Permission denied by user");
+    }
+    expect(hookSaw).toEqual([]); expect(humanSaw).toEqual([]); expect(executed).toEqual([]);
+    // allow-listed: runs, nobody asked
+    expect((await dispatch("ls -la", "a1")).ok).toBe(true);
+    expect(executed).toEqual(["ls -la"]); expect(hookSaw).toEqual([]); expect(humanSaw).toEqual([]);
+    // allow-listed but pre_tool-vetoed: the veto holds (execpolicy's allow never un-denies a hook)
+    expect(await dispatch("pwd", "v1")).toEqual({ ok: false, output: "Permission denied by hook: no pwd here" });
+    expect(executed).toEqual(["ls -la"]); expect(hookSaw).toEqual([]);
+    // prompt-classified: the hook pre-answers, the human is never reached
+    expect((await dispatch("frobnicate --yes", "p1")).ok).toBe(true);
+    expect(executed).toEqual(["ls -la", "frobnicate --yes"]);
+    expect(hookSaw).toEqual(["frobnicate --yes"]); expect(humanSaw).toEqual([]);
+    // prompt-classified + hook void: the human is asked (an unknown command carries the policy prompt — execpolicy has no justification for it)
+    answer = undefined;
+    expect((await dispatch("frobnicate --no", "p2")).ok).toBe(true);
+    expect(hookSaw).toEqual(["frobnicate --yes", "frobnicate --no"]);
+    expect(humanSaw).toEqual(["permission required for shell.exec bash"]);
+    expect(executed).toEqual(["ls -la", "frobnicate --yes", "frobnicate --no"]);
+    expect(events.filter((e) => e.type === "tool_call_failed").map((e) => (e as { callId: string }).callId)).toEqual(["f1", "f2", "f3", "v1"]);
+    expect(rt.hooks.warnings).toEqual([]);
+    await rt.hooks.close(); await rt.mcp?.close();
+  } finally {
+    if (savedHome === undefined) delete process.env.AION_HOME; else process.env.AION_HOME = savedHome;
+    rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test("post_tool annotation: the stored tool_result (what the model sees) and tool_execution_end both carry the hook's text; growth is bounded", async () => {
@@ -180,6 +240,35 @@ test("post_tool annotation: the stored tool_result (what the model sees) and too
     expect(out.ok).toBe(true);
     expect(out.output.length).toBeLessThan("probe-output".length + MAX_POST_TOOL_GROWTH_CHARS + 200);
     expect(out.output).toContain("[post_tool output truncated");
+  } finally { done(); }
+});
+
+test("hooks receive COPIES: a pre_tool that mutates call.args re-aims neither the executed call nor the persisted tool_call; a post_tool that ASSIGNS r.output dodges no bound; an approval hook that mutates req changes nothing that runs", async () => {
+  const { store, done } = newStore();
+  try {
+    const reg = new ToolRegistry();
+    const executedArgs: unknown[] = [];
+    reg.register({ schema: { name: "probe", description: "probe", args: { type: "object" } }, kind: "custom", async execute(args) { executedArgs.push(args); return { ok: true, output: "probe-output" }; } });
+    const hooks = runner({
+      pre_tool: (_c, call) => { (call.args as { q: string }).q = "MUTATED"; },
+      post_tool: (_c, _call, r) => { r.output = "Z".repeat(MAX_POST_TOOL_GROWTH_CHARS * 4); }, // an assignment, not a returned {output}
+    });
+    const events: RunEvent[] = [];
+    for await (const ev of agentLoop(def, "go", {}, cfg(), {
+      stream: mockStream({ turns: [toolTurn([{ id: "c1", tool: "probe", args: { q: "original" } }]), textTurn("done")] }), registry: reg, store, hooks,
+    }, new SteeringQueue())) events.push(ev);
+    expect(executedArgs).toEqual([{ q: "original" }]);                                  // policy evaluated {q:"original"}; so did the tool
+    expect(store.messages().flatMap((m) => m.parts).find((p) => p.kind === "tool_call")).toMatchObject({ args: { q: "original" } });
+    expect(toolResults(store).map((r) => r.output)).toEqual(["probe-output"]);        // the assignment landed on a copy
+    expect((events.find((e) => e.type === "tool_execution_end") as Extract<RunEvent, { type: "tool_execution_end" }>).output).toBe("probe-output");
+    expect(events.at(-1)).toMatchObject({ type: "run_end", status: "done" });
+    // approval hook (through the approver chain): mutating req.args / req.revisedArgs changes nothing downstream
+    const promptRule: PermissionRule[] = [{ action: "tool.probe", resource: "*", effect: "prompt" }];
+    const mutating = runner({ approval: (_c, req) => { (req.revisedArgs as { q: string }).q = "MUTATED"; (req.args as { q: string }).q = "MUTATED"; return "allow"; } });
+    const out = await reg.dispatch({ kind: "tool_call", id: "a1", tool: "probe", args: { q: "orig2" } }, dispatchCtx(), mutating, promptRule, mutating.approver(), () => {});
+    expect(out.ok).toBe(true);
+    expect(executedArgs.at(-1)).toEqual({ q: "orig2" });
+    expect(hooks.warnings).toEqual([]); expect(mutating.warnings).toEqual([]);
   } finally { done(); }
 });
 
@@ -337,6 +426,62 @@ export default { version: 1, hooks: {
     rmSync(cwd2, { recursive: true, force: true }); rmSync(home2, { recursive: true, force: true });
   }
 });
+
+test("child runs (port #26 task) run under the parent runtime's hooks: a pre_tool bash veto holds INSIDE the child, and post_tool/on_event see the child's calls under the child's own session", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "aion-hooks-child-"));
+  const home = mkdtempSync(join(tmpdir(), "aion-hooks-childhome-"));
+  const savedHome = process.env.AION_HOME;
+  process.env.AION_HOME = home; // pinned: never load the developer's ~/.aion/hooks.ts
+  const goalOf = (ms: Message[]): string => { const u = ms.find((m) => m.role === "user"); return u ? partsText(u.parts) : ""; };
+  const outputs = (ms: Message[]): string => ms.flatMap((m) => m.parts).filter((p): p is Extract<MessagePart, { kind: "tool_result" }> => p.kind === "tool_result").map((p) => p.output).join(" | ");
+  // one scripted provider for parent and child — a run's identity is its goal (tasks-wiring idiom)
+  const stream: StreamFn = async function* (_m, messages) {
+    const goal = goalOf(messages); const tools = messages.filter((m) => m.role === "tool").length;
+    if (goal.startsWith("PARENT")) {
+      if (tools === 0) { yield { type: "turn", turn: toolTurn([{ id: "p1", tool: "task", args: { action: "start", goal: "CHILD shell", label: "sh" } }]) }; return; }
+      if (tools === 1) { yield { type: "turn", turn: toolTurn([{ id: "p2", tool: "task", args: { action: "result", id: "t1", timeout_ms: 20_000 } }]) }; return; }
+      yield { type: "turn", turn: textTurn(`PARENT-DONE: ${outputs(messages)}`) }; return;
+    }
+    // the child: a shell call (vetoed by the parent's hook) and a read-only ls (allowed), then report what came back
+    if (tools === 0) { yield { type: "turn", turn: toolTurn([{ id: "c1", tool: "bash", args: { command: "echo CHILD-BASH-RAN" } }, { id: "c2", tool: "ls", args: {} }]) }; return; }
+    yield { type: "turn", turn: textTurn(`CHILD-SAW: ${outputs(messages)}`) };
+  };
+  try {
+    const rt = await bootRuntime({ cwd, sessionId: "sess-parent", stream });
+    const preTool: string[] = []; const postTool: string[] = []; const eventSessions = new Set<string>();
+    rt.hooks.add({
+      pre_tool: (c, call) => { preTool.push(`${c.sessionId}:${call.tool}`); if (call.tool === "bash") return { deny: "no shell anywhere" }; },
+      post_tool: (c, call) => { postTool.push(`${c.sessionId}:${call.tool}`); },
+      on_event: (c, ev) => { if (ev.type === "tool_execution_start" || ev.type === "tool_call_failed") eventSessions.add(c.sessionId); },
+    }, "parent-hooks");
+    const def = rt.buildDef({ provider: "mock", model: "default" });
+    const cfg = rt.buildCfg(true); // yolo: nothing but the hook stands between the child and its shell
+    const events: RunEvent[] = [];
+    for await (const ev of agentLoop(def, "PARENT delegate", {}, cfg, {
+      stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, cwd: rt.cwd, hooks: rt.hooks,
+    }, rt.steering)) events.push(ev);
+    await rt.hooks.settle();
+    const end = events.at(-1) as Extract<RunEvent, { type: "run_end" }>;
+    expect(end).toMatchObject({ type: "run_end", status: "done" });
+    expect(end.summary).toContain("CHILD-SAW: Permission denied by hook: no shell anywhere"); // the veto held INSIDE the child
+    expect(end.summary).not.toContain("CHILD-BASH-RAN");
+    expect(rt.tasks.status("t1")).toMatchObject({ status: "done" });
+    // the hooks saw the child's calls under the CHILD's session (its own store id), not the parent's
+    const childSessions = [...new Set(preTool.map((s) => s.split(":")[0]!))].filter((s) => s !== "sess-parent");
+    expect(childSessions).toHaveLength(1);
+    const child = childSessions[0]!;
+    expect(preTool.filter((s) => s.startsWith("sess-parent:"))).toEqual(["sess-parent:task", "sess-parent:task"]);
+    expect(preTool.filter((s) => s.startsWith(`${child}:`)).sort()).toEqual([`${child}:bash`, `${child}:ls`]);
+    expect(postTool).toContain(`${child}:ls`);        // post_tool saw the child's allowed call
+    expect(postTool).not.toContain(`${child}:bash`);  // a vetoed call never reaches post_tool
+    expect(eventSessions).toEqual(new Set(["sess-parent", child])); // on_event tapped both runs
+    expect(rt.hooks.warnings).toEqual([]);
+    await rt.tasks.drain(4_000); await rt.hooks.close(); await rt.mcp?.close();
+  } finally {
+    if (savedHome === undefined) delete process.env.AION_HOME; else process.env.AION_HOME = savedHome;
+    rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
+  }
+}, 30_000);
 
 test("cmdRun e2e: hooks fire on the one-shot CLI path in order (session_open, pre_run, pre_tool deny, post_run, session_close); the deny reached the model; a broken user-scope file is one stderr warning", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "aion-hooks-cli-"));

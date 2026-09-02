@@ -10,7 +10,7 @@ import type {
   ModelRef, ToolCallPart, AgentVars, ToolContext, ToolOutput, ToolSchema,
   StopReason, TokenUsage,
 } from "./types.ts";
-import { ToolRegistry, type ExtensionHooks } from "./tools.ts";
+import { ToolRegistry, ABORTED_TOOL_RESULT, type ExtensionHooks } from "./tools.ts";
 import type { ToolGuard } from "./guardrails.ts";
 import { servedBy } from "../providers/router.ts";
 import { SessionStore } from "./session.ts";
@@ -46,10 +46,9 @@ export interface LoopDeps {
   signal?: AbortSignal;
 }
 
-/** Synthesized output for a tool_call the abort left unanswered (opencode
- *  session/processor.ts:587 marks them "Tool execution aborted"; codex inserts
- *  a synthetic "aborted" function_call_output — context_manager/normalize.rs:51-67). */
-export const ABORTED_TOOL_RESULT = "Tool execution aborted";
+/** Synthesized output for a tool_call the abort left unanswered — ONE owner, tools.ts (dispatch
+ *  synthesizes the same text); re-exported here for the loop's consumers (surfaces, tests). */
+export { ABORTED_TOOL_RESULT };
 
 export class SteeringQueue {
   private queue: string[] = [];
@@ -139,8 +138,10 @@ async function* runLoop(
   deps.guard?.onTurn();
 
   // port #25 emergency compaction state: an overflow rejection (error-stop block) arms ONE
-  // aggressive compaction + re-drive for the next iteration; at most one re-drive per run
-  let emergencyPending = false;
+  // aggressive compaction + re-drive for the next iteration; at most one re-drive per run. The
+  // armed value is the rejected turn's run_end summary — yielded verbatim when the compaction
+  // turns out to be a no-op (nothing droppable: re-driving the identical request is pointless)
+  let emergencyPending: string | null = null;
   let emergencyRedrives = 0;
 
   for (let turn = 1; turn <= cfg.maxTurns; turn++) {
@@ -164,8 +165,9 @@ async function* runLoop(
     // speculative: the estimate crossed budget × threshold, before this turn's provider call;
     // emergency: the previous turn was REJECTED as a context overflow (error-stop block) — plan
     // against the observed size and re-drive once (compaction.ts header: senpi/opencode cites)
-    const trigger = compactionTrigger(histTokens, cfg, emergencyPending);
-    emergencyPending = false; // consumed: one compaction per overflow
+    const trigger = compactionTrigger(histTokens, cfg, emergencyPending !== null);
+    const overflowSummary = emergencyPending;
+    emergencyPending = null; // consumed: one compaction per overflow
     if (trigger) {
       const cctx: CompactionCtx = { trigger, tokenText: (m) => partsTokenText(m.parts), summarize: deps.summarize, native: deps.compactNative, model, signal: runAc.signal };
       const plan = planCompaction(history, cfg, cctx);
@@ -175,6 +177,11 @@ async function* runLoop(
         const ev: RunEvent = { type: "compaction", strategy: out.strategy, trigger, tokensBefore: histTokens, tokensAfter: history.reduce((n, m) => n + estimateTokens(partsTokenText(m.parts)), 0) };
         deps.store.appendEvent(ev); // real sessions carry the marker (export + replay), not just fixtures
         yield ev;
+      } else if (overflowSummary !== null) {
+        // emergency with nothing droppable (a fresh session whose single turn overflows): the
+        // re-drive would repeat the rejected request byte-for-byte — end with the provider's error
+        yield { type: "run_end", status: "error", summary: overflowSummary };
+        return;
       }
     }
 
@@ -241,11 +248,14 @@ async function* runLoop(
     // --- error stops: the run ends in 'error', never a fake 'done' ---
     if (stopReason === "error") {
       const errText = turnResult.error ?? "provider stream failed";
-      // port #25: a context-overflow rejection arms an emergency compaction (next iteration's
-      // compaction block) and re-drives ONCE per run; a second overflow ends the run below
-      if (isContextOverflow(errText) && emergencyRedrives === 0) { emergencyRedrives++; emergencyPending = true; continue; }
       const partial = partsText(parts);
-      yield { type: "run_end", status: "error", summary: partial ? `${partial}\nerror: ${errText}` : `error: ${errText}` };
+      const summary = partial ? `${partial}\nerror: ${errText}` : `error: ${errText}`;
+      // port #25: a context-overflow rejection arms an emergency compaction (next iteration's
+      // compaction block) and re-drives ONCE per run — only while a turn is left to re-drive in
+      // (on the last permitted turn the run ends HERE with the provider's text, not as "budget");
+      // a second overflow ends the run below
+      if (isContextOverflow(errText) && emergencyRedrives === 0 && turn < cfg.maxTurns) { emergencyRedrives++; emergencyPending = summary; continue; }
+      yield { type: "run_end", status: "error", summary };
       return;
     }
 

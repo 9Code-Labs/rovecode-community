@@ -6,7 +6,7 @@
  *  agentLoop with a scripted overflow (one compaction, one re-drive, then a hard stop), and
  *  SessionStore.appendEvent's annotation semantics are pinned incl. reload. */
 
-import { test, expect } from "bun:test";
+import { test, expect, spyOn } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -87,6 +87,27 @@ test("head-summarize: one summarize call over the head texts; the tail is kept a
   expect(tokenText(out.history[0]!)).toBe("Summary of earlier conversation:\nSUMMARY");
   expect(out.history[1]).toBe(history[4]);   // identity: real messages, never projections
   expect(out.history[2]).toBe(history[5]);
+});
+
+test("head-summarize never plans an EMPTY tail: when the last message alone exceeds half the budget it is kept anyway (the summary is never persisted — an empty tail would orphan the next assistant)", async () => {
+  const history = [user("hi"), user("g".repeat(1000))];   // 1 + 250 tokens; window 100 → the aider tail cap (50) holds nothing
+  const summarize = async () => "S";
+  const plan = planCompaction(history, cfg({ contextBudgetTokens: 100 }), ctx({ summarize }))!;
+  expect(plan.strategy).toBe("head-summarize");
+  expect(plan.keep).toEqual([history[1]!]);                 // the last real message survives, over cap
+  expect(plan.drop).toEqual([history[0]!]);
+  const out = (await applyCompaction(history, plan, cfg({ contextBudgetTokens: 100 }), ctx({ summarize })))!;
+  expect(out.history.at(-1)).toBe(history[1]);              // the next assistant parents on a REAL message
+  // the emergency budget (observed/2 → cap 62) squeezes harder still — the tail is still never empty
+  const em = planCompaction(history, cfg({ contextBudgetTokens: 100_000 }), ctx({ summarize, trigger: "emergency" }))!;
+  expect(em.strategy).toBe("head-summarize");
+  expect(em.keep).toEqual([history[1]!]);
+  // a forced tail that is a tool result drags its calling assistant along (a wire-valid pair, as keepWindow)
+  const traffic = [user("go"), call("c1", "big"), result("c1", "R".repeat(400))];   // 1 + 2 + 100 tokens
+  const tp = planCompaction(traffic, cfg({ contextBudgetTokens: 100 }), ctx({ summarize }))!;
+  expect(tp.keep.map((m) => m.id)).toEqual([traffic[1]!.id, traffic[2]!.id]);
+  expect(tp.drop).toEqual([traffic[0]!]);
+  expect(pairsIntact(tp.keep)).toBe(true);
 });
 
 // ---------- keep-window ----------
@@ -221,7 +242,7 @@ test("emergency plans against the OBSERVED size: a history a speculative pass ke
 
 // ---------- overflow detection ----------
 
-test("isContextOverflow: provider overflow phrasings and 413 count; 429/5xx/transport/other 400s do not", () => {
+test("isContextOverflow: provider overflow phrasings and 413 count; 429/5xx/transport/other 400s do not — also behind the router's exhausted-chain rewrite", () => {
   for (const s of [
     'HTTP 400: {"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 213462 tokens > 200000 maximum"}}',
     "HTTP 400: This model's maximum context length is 128000 tokens. However, your messages resulted in 130000 tokens.",
@@ -229,33 +250,57 @@ test("isContextOverflow: provider overflow phrasings and 413 count; 429/5xx/tran
     "HTTP 413: request entity too large",
     "HTTP 400: too many tokens",
     "input is too long for requested model",
+    // router.ts wraps the last candidate's error: an overflow stays an overflow behind the prefix
+    "model chain 'default' exhausted (2 candidates failed); last: HTTP 413: request entity too large",
+    "model chain 'default' exhausted (2 candidates failed); last: HTTP 400: prompt is too long: 213462 tokens > 200000 maximum",
   ]) expect(isContextOverflow(s)).toBe(true);
   for (const s of [
     "HTTP 429: too many requests", "HTTP 429: rate limit exceeded, too many tokens per minute",
     "HTTP 500: internal error: too many tokens", "HTTP 503: service unavailable",
     "HTTP 400: invalid api key", "HTTP 401: unauthorized", "fetch failed", "", undefined,
+    // the retry classes stay non-overflow inside the exhausted-chain rewrite too: a 5xx/429 body that
+    // mentions tokens used to slip past the `^HTTP` anchor → phrase match → one spurious emergency compaction
+    "model chain 'default' exhausted (2 candidates failed); last: HTTP 500: internal error: too many tokens",
+    "model chain 'smol' exhausted (1 candidate failed); last: HTTP 529: overloaded; maximum context length",
+    "model chain 'default' exhausted (3 candidates failed); last: HTTP 429: token limit exceeded for this minute",
   ]) expect(isContextOverflow(s)).toBe(false);
 });
 
 // ---------- config surface ----------
 
-test("parseCompactionStrategy + AION_COMPACTION: known names select the RunConfig strategy in buildCfg; unknown/unset keep head-summarize", () => {
-  expect(parseCompactionStrategy("keep-window")).toBe("keep-window");
-  expect(parseCompactionStrategy(" provider-native ")).toBe("provider-native");
-  expect(parseCompactionStrategy("bogus")).toBeUndefined();
-  expect(parseCompactionStrategy(undefined)).toBeUndefined();
+test("parseCompactionStrategy + AION_COMPACTION: known names (any case) select the RunConfig strategy in buildCfg; unknown → head-summarize + ONE stderr note; unset/blank → head-summarize silently", () => {
+  const spy = spyOn(console, "error").mockImplementation(() => {});
   const prev = process.env.AION_COMPACTION;
+  const prevHome = process.env.AION_HOME;
   const cwd = mkdtempSync(join(tmpdir(), "aion-compaction-rt-"));
+  const home = mkdtempSync(join(tmpdir(), "aion-compaction-home-"));
+  process.env.AION_HOME = home; // pinned: createRuntime must never load the developer's ~/.aion/hooks.ts
   try {
-    process.env.AION_COMPACTION = "keep-window";
+    expect(parseCompactionStrategy("keep-window")).toBe("keep-window");
+    expect(parseCompactionStrategy("KEEP-WINDOW")).toBe("keep-window");
+    expect(parseCompactionStrategy(" Provider-Native ")).toBe("provider-native");
+    expect(parseCompactionStrategy(undefined)).toBeUndefined();
+    expect(parseCompactionStrategy("   ")).toBeUndefined();
+    expect(spy).toHaveBeenCalledTimes(0);                       // known / unset / blank: silent
+    const bogus = `bogus-${process.pid}-${Date.now()}`;         // unique: the note is deduped per process and value
+    expect(parseCompactionStrategy(bogus)).toBeUndefined();
+    expect(parseCompactionStrategy(` ${bogus.toUpperCase()} `)).toBeUndefined();
+    expect(spy).toHaveBeenCalledTimes(1);                       // ONE note for the two parses of the same unknown value
+    expect(String(spy.mock.calls[0]![0])).toContain(`unknown AION_COMPACTION "${bogus}"`);
+    expect(String(spy.mock.calls[0]![0])).toContain("using head-summarize");
+    process.env.AION_COMPACTION = "Keep-Window";
     expect(createRuntime({ cwd, stream: null }).buildCfg(true).compactionStrategy).toBe("keep-window");
-    process.env.AION_COMPACTION = "bogus";
+    process.env.AION_COMPACTION = bogus;
     expect(createRuntime({ cwd, stream: null }).buildCfg(true).compactionStrategy).toBe("head-summarize");
+    expect(spy).toHaveBeenCalledTimes(1);                       // buildCfg re-parses per run: still the one note
     delete process.env.AION_COMPACTION;
     expect(createRuntime({ cwd, stream: null }).buildCfg(false).compactionStrategy).toBe("head-summarize");
+    expect(spy).toHaveBeenCalledTimes(1);
   } finally {
+    spy.mockRestore();
     if (prev === undefined) delete process.env.AION_COMPACTION; else process.env.AION_COMPACTION = prev;
-    rmSync(cwd, { recursive: true, force: true });
+    if (prevHome === undefined) delete process.env.AION_HOME; else process.env.AION_HOME = prevHome;
+    rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
   }
 });
 
@@ -346,6 +391,47 @@ test("a non-overflow provider error is not an emergency: one call, error stop, n
   expect(calls.length).toBe(1);
   expect(events.some((e) => e.type === "compaction")).toBe(false);
   expect(events.at(-1)).toMatchObject({ type: "run_end", status: "error" });
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("overflow on the LAST permitted turn ends the run in error with the provider's text — no re-drive, no compaction, never a silent 'budget' stop", async () => {
+  const { dir, store } = seeded();
+  const { stream, calls } = scripted([overflowTurn, textTurn("never")]);
+  const events: RunEvent[] = [];
+  for await (const ev of agentLoop(baseDef, "go", {}, cfg({ contextBudgetTokens: 100_000, compactionStrategy: "keep-window", maxTurns: 1 }), { stream, registry: new ToolRegistry(), store }, new SteeringQueue())) events.push(ev);
+  expect(calls.length).toBe(1);
+  expect(events.some((e) => e.type === "compaction")).toBe(false);
+  expect(events.at(-1)).toEqual({ type: "run_end", status: "error", summary: `error: ${OVERFLOW}` });
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("no-op emergency: a fresh session whose only turn overflows makes exactly ONE provider call and ends in error — nothing is droppable, so the identical request is not re-driven", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-compaction-loop-"));
+  const store = new SessionStore(dir, randomUUID());   // empty store: the goal IS the whole history
+  const { stream, calls } = scripted([overflowTurn, textTurn("never")]);
+  const events: RunEvent[] = [];
+  for await (const ev of agentLoop(baseDef, "g".repeat(1000), {}, cfg({ contextBudgetTokens: 100_000 }), { stream, registry: new ToolRegistry(), store }, new SteeringQueue())) events.push(ev);
+  expect(calls.length).toBe(1);
+  expect(events.some((e) => e.type === "compaction")).toBe(false);
+  expect(events.at(-1)).toEqual({ type: "run_end", status: "error", summary: `error: ${OVERFLOW}` });
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("head-summarize with a single oversized turn keeps the store's chain intact: the reply parents on a REAL message, reload reports no corruption, messages() keeps every real message", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-compaction-loop-"));
+  const sid = randomUUID();
+  const store = new SessionStore(dir, sid);
+  store.append({ id: randomUUID(), role: "user", parts: [{ kind: "text", text: "hi" }], parentId: null, createdAt: Date.now() });
+  const { stream } = scripted([textTurn("reply")]);
+  const events: RunEvent[] = [];
+  for await (const ev of agentLoop(baseDef, "g".repeat(1000), {}, cfg({ contextBudgetTokens: 100, compactionThreshold: 0.5 }), {
+    stream, registry: new ToolRegistry(), store, summarize: async () => "SUMMARY",
+  }, new SteeringQueue())) events.push(ev);
+  expect(events.find((e) => e.type === "compaction")).toMatchObject({ strategy: "head-summarize", trigger: "speculative" });
+  expect(events.at(-1)).toEqual({ type: "run_end", status: "done", summary: "reply" });
+  const re = new SessionStore(dir, sid);
+  expect(re.reload()).toEqual([]);                                                       // no orphan-entry: the reply's parent exists
+  expect(re.messages().map((m) => partsTokenText(m.parts))).toEqual(["hi", "g".repeat(1000), "reply"]);   // nothing collapsed
   rmSync(dir, { recursive: true, force: true });
 });
 

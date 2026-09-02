@@ -45,10 +45,19 @@ export const DEFAULT_COMPACTION_STRATEGY: CompactionStrategy = "head-summarize";
 /** keep-window: user turns retained BEFORE the current one when RunConfig.compactionKeepTurns is unset */
 export const DEFAULT_KEEP_TURNS = 2;
 
-/** `AION_COMPACTION=<strategy>` — unknown or empty → undefined (the caller applies the default). */
+/** `AION_COMPACTION=<strategy>`, case-insensitive — unset/blank → undefined (the caller applies the
+ *  default). An unknown name is ALSO undefined (→ default) plus ONE stderr note per process and value:
+ *  createRuntime has no warnings channel, and buildCfg re-parses the env before every run. */
+const unknownStrategyNoted = new Set<string>();
 export function parseCompactionStrategy(raw: string | undefined): CompactionStrategy | undefined {
-  const v = (raw ?? "").trim();
-  return (COMPACTION_STRATEGIES as readonly string[]).includes(v) ? (v as CompactionStrategy) : undefined;
+  const v = (raw ?? "").trim().toLowerCase();
+  if (v === "") return undefined;
+  if ((COMPACTION_STRATEGIES as readonly string[]).includes(v)) return v as CompactionStrategy;
+  if (!unknownStrategyNoted.has(v)) {
+    unknownStrategyNoted.add(v);
+    console.error(`aion: unknown AION_COMPACTION "${(raw ?? "").trim()}" — using ${DEFAULT_COMPACTION_STRATEGY} (known: ${COMPACTION_STRATEGIES.join(", ")})`);
+  }
+  return undefined;
 }
 
 /** Server-side compaction capability. Resolve to the replacement history, or null to decline
@@ -111,7 +120,10 @@ const OVERFLOW_EXCLUSIONS = [/rate limit/i, /too many requests/i, /throttling/i,
 
 export function isContextOverflow(error: string | undefined): boolean {
   if (!error || OVERFLOW_EXCLUSIONS.some((p) => p.test(error))) return false;
-  const status = /^HTTP (\d{3})\b/.exec(error)?.[1];
+  // the status may sit behind the router's exhausted-chain rewrite ("model chain 'x' exhausted
+  // (N candidates failed); last: HTTP 500: …", router.ts) — a 5xx body that mentions tokens is
+  // still a 5xx, never an overflow
+  const status = /(?:^|last: )HTTP (\d{3})\b/.exec(error)?.[1];
   if (status === "413") return true;
   if (status === "429" || status?.startsWith("5")) return false;
   return OVERFLOW_PATTERNS.some((p) => p.test(error));
@@ -153,6 +165,16 @@ export function planCompaction(history: Message[], cfg: RunConfig, ctx: Compacti
   // the real messages (loop.test.ts "rebuilds history from real messages, not projections")
   const plan = planHeadTail(history.map((m) => ({ id: m.id, tokens: tokens(m), text: ctx.tokenText(m) })), budgetTokens);
   const keepIds = new Set(plan.keep.map((k) => k.id));
+  // never an empty tail: the summary message is working-history only (never persisted), so the next
+  // assistant must parent on a REAL message or the store reloads with an orphan chain. When the last
+  // message alone exceeds half the budget the aider plan keeps nothing — keep it anyway, and when it
+  // is a tool result keep the assistant that issued the call too (over cap accepted over an orphan,
+  // exactly keepWindow's alignCut rule; the plan's ordinary cut stays prose-oriented, as before)
+  if (keepIds.size === 0 && history.length > 0) {
+    let i = history.length - 1;
+    while (i > 0 && history[i]!.role === "tool") i--;
+    for (const m of history.slice(i)) keepIds.add(m.id);
+  }
   return { ...base, keep: history.filter((m) => keepIds.has(m.id)), drop: history.filter((m) => !keepIds.has(m.id)), summaryNeeded: true };
 }
 

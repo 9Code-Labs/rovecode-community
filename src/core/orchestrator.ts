@@ -6,7 +6,7 @@ import { cpSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AgentDefinition, AgentVars, SpawnRequest, SpawnResult, RunConfig, StreamFn, PermissionRule } from "../core/types.ts";
-import { ToolRegistry } from "../core/tools.ts";
+import { ToolRegistry, type ExtensionHooks } from "../core/tools.ts";
 import { ToolGuard } from "../core/guardrails.ts";
 import { SessionStore } from "../core/session.ts";
 import { agentLoop, SteeringQueue } from "../core/loop.ts";
@@ -104,6 +104,9 @@ export interface ChildRunnerDeps {
   rootDir: string;
   sessionsDir: string;
   baseConfig: RunConfig;
+  /** port #29: the parent runtime's hook set — a child runs under the same hooks (pre_tool vetoes,
+   *  post_tool, pre_run/post_run/on_event via the observer), so delegation cannot dodge a hook */
+  hooks?: ExtensionHooks;
 }
 
 /** Runs a child agent in its own session (+ optional isolation), returns summary + patch.
@@ -138,6 +141,7 @@ export async function runChild(deps: ChildRunnerDeps, req: SpawnRequest, depth =
       // tools resolve relative paths / run shells in the ISOLATION dir, not the process cwd
       cwd: iso.dir,
       signal,
+      hooks: deps.hooks, // port #29: the parent's hooks govern the child too
     }, steering, depth + 1)) {
       if (ev.type === "run_end") end = { status: ev.status, summary: ev.summary };
     }

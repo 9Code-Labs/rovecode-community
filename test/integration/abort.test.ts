@@ -323,7 +323,7 @@ test("abort mid-batch (sequential [bash, prompt-gated tool]): the queued call is
     }
     expect(results.get("a1")?.ok).toBe(false);
     expect(results.get("b1")).toEqual({ ok: false, output: ABORTED_TOOL_RESULT });
-    expect(TOOLS_ABORTED_RESULT).toBe(ABORTED_TOOL_RESULT); // one text, two owners until loop.ts re-exports tools.ts's
+    expect(TOOLS_ABORTED_RESULT).toBe(ABORTED_TOOL_RESULT); // one owner (tools.ts); loop.ts re-exports it
     expect(orphanCallIds(store.messages())).toEqual([]);
   } finally {
     if (isWin) await killTagged(tag);

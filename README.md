@@ -183,7 +183,8 @@ Defaults < project config chunks (harvested, capped) < env < CLI flags.
   `AION_HOME`-aware) is scanned first and shadowed by the project's (#30)
 - `.aion/` also holds sessions (each with its `todos.json`), checkpoints, repo-map cache
 - Permission rules: deny-by-default, last-match wildcard (`file.read/write`, `shell.exec`, `spawn`, `memory.write`, `net.fetch`, `tool.*`); `--yolo`/`AION_YOLO=1` bypasses prompts but not deny rules in plan mode
-- Hooks v2 (#28) is not landed yet — `ExtensionHooks.reviseToolArgs` (below) is the only hook seam today
+- `.aion/hooks.ts` (+ `~/.aion/hooks.ts`, `AION_HOME`-aware) — typed hook set (#29; see Extending → Hooks);
+  `AION_NO_HOOKS=1` skips the files, `AION_HOOK_TIMEOUT_MS` bounds every call
 
 Environment knobs (`aion help` prints the same list):
 
@@ -286,10 +287,14 @@ tokens, cache hits, and catalog-priced spend.
   pre-answer a prompt), `compaction`, `session_open`, `session_close`, `on_event` (every RunEvent, not
   awaited). Every call is timeout-bounded (`AION_HOOK_TIMEOUT_MS`, default 5000) and isolated — a throwing
   or hanging hook is one warning note, never a dead run. Policy wins: rules run before `pre_tool` (a hook
-  can only deny, in every mode incl. yolo) and the approval hook only answers prompts policy allowed to be
-  asked. Hooks are trusted code run in-process (same class as `.aion/mcp.json`); loaded once per process,
-  restart to pick up edits; `AION_NO_HOOKS=1` skips the files. The programmatic
-  `ExtensionHooks.reviseToolArgs` still rewrites args before policy + approval (approval sees revised args).
+  can only deny, in every mode incl. yolo, and the same hooks govern background-task children); the
+  approval hook sits where the human would, INSIDE the execpolicy wrap (rules → execpolicy → hook →
+  human): forbidden argv is denied before any hook sees it, allow-listed argv runs without asking one, and
+  a hook `"allow"` is exactly a human's one-shot yes (never cached). Hooks receive copies of args and
+  results — only a returned value counts. Hooks are trusted code run in-process (same class as
+  `.aion/mcp.json`); loaded once per process, restart to pick up edits; `AION_NO_HOOKS=1` skips the files.
+  The programmatic `ExtensionHooks.reviseToolArgs` still rewrites args before policy + approval (approval
+  sees revised args).
 - **MCP**: add servers to `.aion/mcp.json`; tools arrive lazily through `mcp_list`/`mcp_call` under the same policy pipeline.
 
 ## License & notices

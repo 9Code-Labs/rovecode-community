@@ -137,14 +137,20 @@ test("compaction triggers on tool-result-heavy history, not just prose", async (
     schema: { name: "big", description: "big output", args: { type: "object" } },
     kind: "custom", async execute() { return { ok: true, output: "R".repeat(400) }; },
   };
-  reg.register(bigTool);
+  const smallTool: Tool = {
+    schema: { name: "small", description: "small output", args: { type: "object" } },
+    kind: "custom", async execute() { return { ok: true, output: "ok" }; },
+  };
+  reg.register(bigTool, smallTool);
   // turn 1: bare tool call (zero prose) → 400-char tool_result lands in history;
   // turn 2 start: text-only tokens ≈ 3 (goal only), all-parts tokens ≈ 105 — only the
-  // all-parts counter crosses budget(100) × threshold(0.5)
+  // all-parts counter crosses budget(100) × threshold(0.5). The oversized result is the LAST
+  // message there, so that compaction keeps it with its call (a tail is never empty — port #25);
+  // turn 2's small call pushes it into the head and turn 3's compaction hands it to the summarizer
   const summarizeInputs: string[][] = [];
   let compactions = 0;
   for await (const ev of agentLoop(baseDef, "go", {}, cfg({ contextBudgetTokens: 100, compactionThreshold: 0.5 }), {
-    stream: mockStream({ turns: [toolTurn([{ id: "c1", tool: "big", args: {} }]), textTurn("done")] }),
+    stream: mockStream({ turns: [toolTurn([{ id: "c1", tool: "big", args: {} }]), toolTurn([{ id: "c2", tool: "small", args: {} }]), textTurn("done")] }),
     registry: reg, store,
     summarize: async (texts) => { summarizeInputs.push(texts); return "SUMMARY"; },
   }, new SteeringQueue())) {
@@ -153,6 +159,8 @@ test("compaction triggers on tool-result-heavy history, not just prose", async (
   expect(compactions).toBeGreaterThanOrEqual(1);
   // the summarizer saw the tool traffic, not empty prose
   expect(summarizeInputs.flat().join("\n")).toContain("R".repeat(400));
+  // and the forced-kept tail never orphaned the persisted chain (the summary is not a store entry)
+  expect(new SessionStore(dir, store.id).reload()).toEqual([]);
   rmSync(dir, { recursive: true, force: true });
 });
 
