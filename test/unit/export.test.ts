@@ -277,7 +277,7 @@ test("aion export e2e: prefix resolves, file lands in cwd, exit 0; unknown id ex
   expect(bad.exitCode).toBe(1);
   expect(bad.stderr.toString()).toContain('no session matching "nope"');
   rmSync(cwd, { recursive: true, force: true });
-});
+}, 30_000); // two synchronous main.ts boots (~1.4s each idle) overran Bun's 5s default under suite load
 
 test("aion export e2e: --json before the command is honored; dangling --out exits 1 and writes nothing", () => {
   const cwd = mkdtempSync(join(tmpdir(), "aion-export-e2e-"));
@@ -301,4 +301,4 @@ test("aion export e2e: --json before the command is honored; dangling --out exit
     expect(readdirSync(cwd)).toEqual(before);
   }
   rmSync(cwd, { recursive: true, force: true });
-});
+}, 30_000); // three synchronous main.ts boots — the known 5s-timeout flake under load (seen by 3 critics)
