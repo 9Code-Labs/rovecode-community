@@ -11,11 +11,12 @@
  * The tail section pins other registry-dispatch seams that live on the same
  * pipeline (core/tools.ts dispatch): the out.ok argument into
  * guard.checkResult (FW2-O), ctx.onUpdate → tool_execution_update threading
- * (FW2-R), and the describeResource schema gate for policy resources plus its
- * ctx.cwd fallback / relative-path resolution (port #22 MED-4).
+ * (FW2-R), the describeResource schema gate for policy resources plus its
+ * ctx.cwd fallback / relative-path resolution (port #22 MED-4), and the
+ * post-approval abort re-check (port #21 LOW-1).
  */
 import { test, expect } from "bun:test";
-import { agentLoop, SteeringQueue } from "../../src/core/loop.ts";
+import { agentLoop, SteeringQueue, ABORTED_TOOL_RESULT } from "../../src/core/loop.ts";
 import { ToolRegistry } from "../../src/core/tools.ts";
 import { readTool } from "../../src/coding/hashline.ts";
 import { ToolGuard, GUARDRAIL_DEFAULTS } from "../../src/core/guardrails.ts";
@@ -380,4 +381,47 @@ test("policy: a relative `path` is resolved against ctx.cwd before matching — 
   expect(open.ok).toBe(true);                          // relative path to an un-denied file still reads
   expect(open.output).toContain("PUBLIC-OK");
   rmSync(cwd, { recursive: true, force: true });
+});
+
+// LOW-1 (port #21): an approval that resolves AFTER the run aborted must not
+// execute the tool. The loop has synthesized ABORTED for the call and returned
+// after its grace while the dispatch stayed parked in approve(). Mutation
+// target: the `ctx.signal.aborted` re-check between approval and execute
+// (tools.ts step 3b) — without it the late "allow" runs the tool detached
+// from any run.
+test("registry dispatch: an approval answered AFTER the run aborted never executes the tool; the result is the aborted synthesis", async () => {
+  const reg = new ToolRegistry();
+  let executed = 0;
+  reg.register({
+    schema: { name: "gated", description: "needs approval", args: { type: "object" } },
+    kind: "custom",
+    async execute() { executed++; return { ok: true, output: "ran" }; },
+  });
+  const rules: PermissionRule[] = [{ action: "tool.gated", resource: "*", effect: "prompt" }];
+  let release!: (v: "once" | "always" | "deny") => void;
+  const parked = new Promise<"once" | "always" | "deny">((r) => { release = r; });
+  let asked = 0;
+  const approve = () => { asked++; return parked; };
+  const ac = new AbortController();
+  const events: RunEvent[] = [];
+  const out = reg.dispatch(
+    { kind: "tool_call", id: "g1", tool: "gated", args: { n: 1 } },
+    { ...dispatchCtx(), signal: ac.signal }, undefined, rules, approve, (e) => events.push(e),
+  );
+  await new Promise((r) => setTimeout(r, 30));
+  expect(asked).toBe(1);      // parked in approve()
+  expect(executed).toBe(0);
+  ac.abort();                 // the run is gone…
+  release("always");          // …then the human clicks allow
+  const result = await Promise.race([out, new Promise<"deadline">((r) => setTimeout(() => r("deadline"), 3000))]);
+  if (result === "deadline") throw new Error("dispatch did not settle after the late approval");
+  expect(executed).toBe(0);
+  expect(result).toEqual({ ok: false, output: ABORTED_TOOL_RESULT });
+  expect(events.some((e) => e.type === "tool_execution_start")).toBe(false);
+  // the "always" verdict was the user's decision about tool+args, not about
+  // this run: a fresh, live run reuses it without re-prompting and executes
+  const live = await reg.dispatch({ kind: "tool_call", id: "g2", tool: "gated", args: { n: 1 } }, dispatchCtx(), undefined, rules, approve, () => {});
+  expect(asked).toBe(1);
+  expect(live).toEqual({ ok: true, output: "ran" });
+  expect(executed).toBe(1);
 });

@@ -30,6 +30,7 @@
  *  isolate only as well as the wrapped runtime does. */
 
 import { existsSync } from "node:fs";
+import { createWinJob, type WinJob } from "./win-job.ts";
 
 // ---------- Ladder ----------
 
@@ -50,51 +51,100 @@ export interface Executor {
 
 // ---------- Raw process running (injectable so tests cover probe paths) ----------
 
-export interface RawResult { code: number; stdout: string; stderr: string }
+export interface RawResult {
+  code: number; stdout: string; stderr: string;
+  /** Windows runs with a signal: "job" (Job Object tree kill + taskkill sweep)
+   *  or the fail-safe "taskkill-only" (no bun:ffi/kernel32, or not assignable) */
+  treeKill?: "job" | "taskkill-only";
+}
 
 export type SpawnRunner = (
   argv: readonly string[],
   opts: { cwd?: string; signal?: AbortSignal },
 ) => Promise<RawResult>;
 
+/** Post-abort grace (port #21 HIGH-1b): the runner waits this long for pipes +
+ *  exit, then settles with the bytes so far + ABORT_TRUNCATED_MARKER, code 143.
+ *  Only a process outside the job can hold a pipe end past the kill (the
+ *  taskkill-only fallback measured an msys `sleep` holding stdout — and the
+ *  runner promise — for its whole duration). REF'D timer, deliberately: Bun's
+ *  AbortSignal.timeout timers are not, and an idle loop never fires them. */
+export const ABORT_GRACE_MS = 500;
+export const ABORT_TRUNCATED_MARKER = "[output truncated: process tree terminated on abort]";
+
+/** Incremental pipe reader: bytes so far are readable at any moment, and the
+ *  read is cancellable (drops our end) when an orphan holds the other.
+ *  Decodes like Response.text(): UTF-8, leading BOM stripped. */
+function collect(stream: ReadableStream<Uint8Array>): { done: Promise<void>; text(): string; cancel(): void } {
+  const chunks: Uint8Array[] = [];
+  const reader = stream.getReader();
+  const done = (async () => {
+    for (let c = await reader.read(); !c.done; c = await reader.read()) if (c.value) chunks.push(c.value);
+  })().catch(() => {});
+  return { done, text: () => new TextDecoder().decode(Buffer.concat(chunks)), cancel: () => { reader.cancel().catch(() => {}); } };
+}
+
 /** Default runner: Bun.spawn, stdout/stderr piped. A spawn failure (missing
  *  binary) is returned as code -1 with the message in stderr, so probes can
  *  report "not installed" instead of crashing.
- *
  *  Windows abort = TREE kill (port #21). Bun's own signal handling
- *  TerminateProcess-es only the DIRECT child, and git-bash `bash.exe -c` runs
- *  the script in a re-spawned msys child — measured on this box: abort at
- *  300ms, exit 143 at 317ms, and the command's `echo done > file` STILL landed
- *  2s later (the orphaned interpreter kept going). Worse, killing the parent
- *  first orphans the tree so a follow-up `taskkill /T` cannot traverse to it.
- *  So on Windows the signal is NOT handed to Bun.spawn at all: abort fires
- *  `taskkill /T /F` while the tree is intact (sole killer; measured: side
- *  effect never lands, exit ~120ms after the kill). POSIX keeps the signal
- *  passthrough: the shell dies with the signal and never reaches the script's
- *  next command. */
+ *  TerminateProcess-es only the DIRECT child, and `taskkill /T` walks live
+ *  parent links that msys2's exec breaks (win-job.ts) — measured with taskkill
+ *  alone, the `sleep` inside `a; sleep N; b`, `bash -c 'sleep N'` and
+ *  `sleep N & sleep N & wait` survived 3/3 and held stdout so the runner hung
+ *  3/3. So on Windows the signal is NOT handed to Bun.spawn: the launcher goes
+ *  into a Job Object right after spawn; abort fires TerminateJobObject (every
+ *  descendant, connected or not) plus `taskkill /T /F` as a sweep; a box
+ *  without job objects keeps taskkill alone and says so in `treeKill`.
+ *  POSIX keeps Bun's signal passthrough: SIGTERM reaches the shell, which never
+ *  runs its next statement — but NOT a forked grandchild (`sleep`/`npm` inside
+ *  a compound command), which is orphaned and finishes on its own; only a bare
+ *  command, exec'd without a fork, dies with the shell. The process-group kill
+ *  that would close this (detached spawn + kill(-pgid)) is not implemented: it
+ *  cannot be exercised on the Windows-only reference box. */
 export const bunRunner: SpawnRunner = async (argv, opts) => {
-  const treeKill = process.platform === "win32" && opts.signal !== undefined;
-  let onAbort: (() => void) | undefined;
   const signal = opts.signal;
-  // pre-aborted (G4 pin): never spawn at all — a taskkill would race a fast
+  const treeKill = process.platform === "win32" && signal !== undefined;
+  // pre-aborted (G4 pin): never spawn at all — a kill would race a fast
   // command and lose; 143 matches the killed-at-spawn shape the pin measured
   if (treeKill && signal?.aborted) return { code: 143, stdout: "", stderr: "aborted before spawn" };
+  let onAbort: (() => void) | undefined;
+  let job: WinJob | null = null;
+  let killed = false;
+  let graceTimer: ReturnType<typeof setTimeout> | undefined;
   try {
     const proc = Bun.spawn([...argv], { cwd: opts.cwd, signal: treeKill ? undefined : signal, stdout: "pipe", stderr: "pipe" });
-    if (treeKill && signal) {
+    const out = collect(proc.stdout), err = collect(proc.stderr);
+    const finished = Promise.all([out.done, err.done, proc.exited]).then(() => "done" as const);
+    let graceUp!: () => void;
+    const grace = new Promise<"grace">((r) => { graceUp = () => r("grace"); });
+    if (signal) {
+      if (treeKill) { job = createWinJob(); if (job && !job.assign(proc.pid)) job = null; } // null → taskkill-only
       onAbort = () => {
-        try { Bun.spawn(["taskkill", "/T", "/F", "/PID", String(proc.pid)], { stdout: "ignore", stderr: "ignore" }); } catch { /* best-effort */ }
+        if (proc.exitCode !== null) return; // already gone: never kill a reused pid
+        killed = treeKill;
+        if (treeKill) {
+          job?.terminate();
+          try { Bun.spawn(["taskkill", "/T", "/F", "/PID", String(proc.pid)], { stdout: "ignore", stderr: "ignore" }); } catch { /* best-effort */ }
+        }
+        graceTimer = setTimeout(graceUp, ABORT_GRACE_MS);
       };
       signal.addEventListener("abort", onAbort, { once: true });
-      // once the process is gone, a late abort must NOT taskkill a reused pid
       void proc.exited.then(() => { if (onAbort) signal.removeEventListener("abort", onAbort); }, () => {});
     }
-    const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
-    const code = await proc.exited;
-    return { code, stdout, stderr };
+    const won = await Promise.race([finished, grace]);
+    if (won === "grace") { out.cancel(); err.cancel(); }
+    const code = (killed || won === "grace") ? 143 : await proc.exited;
+    let stderr = err.text();
+    if (won === "grace") stderr += (stderr ? "\n" : "") + ABORT_TRUNCATED_MARKER;
+    const r: RawResult = { code, stdout: out.text(), stderr };
+    if (treeKill) r.treeKill = job ? "job" : "taskkill-only";
+    return r;
   } catch (e) {
     return { code: -1, stdout: "", stderr: `spawn failed: ${e instanceof Error ? e.message : String(e)}` };
   } finally {
+    clearTimeout(graceTimer);
+    if (killed) job?.terminate(); else job?.release(); // both no-ops once the abort path closed the job
     // the signal is the RUN's (long-lived): drop this spawn's listener or a
     // multi-bash run accumulates one dead closure per command
     if (onAbort) signal?.removeEventListener("abort", onAbort);

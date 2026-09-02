@@ -174,9 +174,19 @@ tokens, cache hits, and catalog-priced spend.
 
 ## Known limitations
 
-- **Cancellation lands at turn boundaries.** Esc/`session/cancel`/HTTP DELETE stop the run at the
-  next boundary; an in-flight provider fetch or bash subprocess is not killed mid-flight (per-run
-  AbortController is wave-3 port #21).
+- **Cancellation is mid-turn; how far the kill reaches is platform-specific.** Esc/`session/cancel`/HTTP
+  DELETE abort the run's controller: the in-flight provider fetch dies (≤2 ms measured) and the running
+  `bash` call is killed. Windows: the launcher is placed in a kernel Job Object right after spawn, so the
+  abort terminates the whole tree — compound, nested `bash -c`, and backgrounded children included —
+  with `taskkill /T /F` as a sweep; a box without `bun:ffi`/kernel32 job objects falls back to taskkill
+  alone, which reaches the shell but not msys children whose forked stub already exited. POSIX: the shell
+  gets SIGTERM and never runs its next statement, but a forked grandchild (`sleep`, `npm`, `python` inside
+  a compound command) is orphaned and finishes on its own — no process-group kill yet. Never reached: work
+  already handed to another process tree (a container started by the `docker` rung outlives its
+  `docker run` client; a WSL-side process may outlive `wsl.exe`; services, COM- or `schtasks`-launched
+  programs). A command that completes on its own keeps its deliberately backgrounded daemon
+  (`server > log 2>&1 &`), as before. The runner always settles within ~0.5 s of the abort even if an
+  orphan holds a pipe end: output so far + `[output truncated: process tree terminated on abort]`, exit 143.
 - **Sandbox rungs delegate, they do not isolate.** `wsl`/`docker` (#27) isolate only as well as the
   wrapped runtime does; `direct` (the default) is denylist + cwd lock. The executor seam is process-wide:
   `aion serve`/`aion acp` sessions booted from different project dirs share the most recently booted

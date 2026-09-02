@@ -9,15 +9,20 @@
  *    codex context_manager/normalize.rs:51-67, opencode message-v2.ts:349-360)
  *  - the next run on the same session works (post-abort next-turn OK)
  *  - abort mid-fallback stops the router chain (no further candidates)
- *  - TUI Esc aborts for real (surface e2e through the pi renderer) */
+ *  - TUI Esc aborts for real (surface e2e through the pi renderer)
+ *  Round-2 (critic HIGH-1 / MED-2):
+ *  - abort mid-bash kills the TREE on Windows (job object): the tagged msys
+ *    `sleep` the shell was waiting on is gone, not just the shell
+ *  - an aborted sequential batch never starts (or prompts for) its queued
+ *    calls; they persist as the aborted synthesis */
 
 import { test, expect } from "bun:test";
-import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { agentLoop, SteeringQueue, partsText, ABORTED_TOOL_RESULT, type LoopDeps } from "../../src/core/loop.ts";
-import { ToolRegistry } from "../../src/core/tools.ts";
+import { ToolRegistry, ABORTED_TOOL_RESULT as TOOLS_ABORTED_RESULT } from "../../src/core/tools.ts";
 import { SessionStore } from "../../src/core/session.ts";
 import { openaiCompatStreaming, toOpenAiMessages, mockStream, textTurn, toolTurn } from "../../src/providers/stream.ts";
 import { createRouter } from "../../src/providers/router.ts";
@@ -26,9 +31,41 @@ import { VirtualTerminal } from "../../vendor/pi-tui/test/virtual-terminal.ts";
 import { PiTuiRenderer } from "../../src/tui/pi-renderer.ts";
 import { runTui } from "../../src/tui/app.ts";
 import type {
-  AgentDefinition, Message, ModelRef, RunConfig, RunEvent,
+  AgentDefinition, Message, ModelRef, PermissionRule, RunConfig, RunEvent,
   StreamEvent, StreamFn, StreamOptions, Tool,
 } from "../../src/core/types.ts";
+
+// ---------- Windows tree-kill probes: a tagged msys `sleep` findable via Win32_Process ----------
+// msys `sleep` on purpose: after its exec the forked bash stub is gone, so
+// `taskkill /T` (live parent links) never reaches it — a native child would
+// die under taskkill alone and prove nothing about the job object.
+const isWin = process.platform === "win32";
+const sleepTag = () => "600." + String(Math.floor(Math.random() * 1e9)).padStart(9, "0");
+async function taggedSleeps(tag: string): Promise<number[]> {
+  const ps = Bun.spawn(["powershell", "-NoProfile", "-Command",
+    `(Get-CimInstance Win32_Process -Filter "Name='sleep.exe' AND CommandLine LIKE '%${tag}%'").ProcessId`],
+    { stdout: "pipe", stderr: "pipe" });
+  const text = await new Response(ps.stdout).text();
+  await ps.exited;
+  return text.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).map(Number);
+}
+async function killTagged(tag: string): Promise<void> {
+  for (const pid of await taggedSleeps(tag)) await Bun.spawn(["taskkill", "/F", "/PID", String(pid)], { stdout: "ignore", stderr: "ignore" }).exited;
+}
+/** poll (≤ms) until no tagged sleep is alive; returns the survivors */
+async function survivors(tag: string, ms: number): Promise<number[]> {
+  const deadline = Date.now() + ms;
+  let alive = await taggedSleeps(tag);
+  while (alive.length > 0 && Date.now() < deadline) { await sleep(150); alive = await taggedSleeps(tag); }
+  return alive;
+}
+/** the child must be RUNNING before the abort — a kill landing before the fork would pass vacuously */
+async function untilRunning(tag: string): Promise<void> {
+  const t0 = Date.now();
+  let n = 0;
+  while ((n = (await taggedSleeps(tag)).length) === 0 && Date.now() - t0 < 8000) await sleep(50);
+  expect(n).toBeGreaterThan(0);
+}
 
 const allowAll = [{ action: "*", resource: "*", effect: "allow" as const }];
 
@@ -161,20 +198,25 @@ test("abort mid-SSE-stream kills the REAL fetch: run settles <500ms, server sees
 
 // ---------- mid-bash: the subprocess dies, its later side effects never land ----------
 
-test("abort mid-bash kills the shell: pending side effects never happen, run ends stopped, history wire-well-formed", async () => {
+test("abort mid-bash kills the shell AND the child it waits on: pending side effects never happen, the tagged sleep is gone (Windows), run ends stopped, history wire-well-formed", async () => {
   const dir = mkdtempSync(join(tmpdir(), "aion-abort-bash-"));
+  const tag = sleepTag();
   try {
     const store = new SessionStore(dir, randomUUID());
     const reg = new ToolRegistry();
     reg.register(bashTool);
     const startTxt = join(dir, "start.txt");
     const doneTxt = join(dir, "done.txt");
+    // Windows: a 600s msys sleep — the grandchild `taskkill /T` alone never
+    // reached (critic HIGH-1: it survived and held stdout). POSIX: sleep 2, so
+    // a SURVIVING shell would write done.txt inside the window checked below.
+    const hold = isWin ? `sleep ${tag}` : "sleep 2";
     // signal-DEAF scripted stream: if the loop kept going after the abort it
     // would fetch turn 2 ("late") and end "done" — the "stopped" assert below
     // also kills a deleted top-of-turn abort check.
     const stream = mockStream({
       turns: [
-        toolTurn([{ id: "b1", tool: "bash", args: { command: `echo started > "${startTxt}"; sleep 2; echo done > "${doneTxt}"` } }]),
+        toolTurn([{ id: "b1", tool: "bash", args: { command: `echo started > "${startTxt}"; ${hold}; echo done > "${doneTxt}"` } }]),
         textTurn("late"),
       ],
     });
@@ -188,14 +230,22 @@ test("abort mid-bash kills the shell: pending side effects never happen, run end
     const t0 = Date.now();
     while (!existsSync(startTxt) && Date.now() - t0 < 4000) await sleep(20);
     expect(existsSync(startTxt)).toBe(true);
+    if (isWin) await untilRunning(tag);
     const tAbort = Date.now();
     ac.abort();
     const evs = await done;
     expect(Date.now() - tAbort).toBeLessThan(1500); // kill + bounded 250ms grace + settle
     expect(runEnd(evs)?.status).toBe("stopped");
-    // the killed shell never reached its second side effect — wait past the
-    // point where a SURVIVING shell would have written it (sleep 2 from start)
-    await sleep(Math.max(0, tAbort + 2600 - Date.now()));
+    if (isWin) {
+      // the TREE died, not just the shell: the sleep the shell was waiting on
+      // is gone (a shell-only kill leaves it running for 600s)
+      expect(await survivors(tag, 3000)).toEqual([]);
+    } else {
+      // wait past the point where a SURVIVING shell would have written done.txt
+      await sleep(Math.max(0, tAbort + 2600 - Date.now()));
+    }
+    // the killed shell never reached its second side effect (a shell that
+    // outlived a killed sleep would have written it immediately)
     expect(existsSync(doneTxt)).toBe(false);
     // the issued call has an answer in the store (real killed-exit output or
     // the synthesized one) and the wire shape carries no orphans
@@ -206,9 +256,80 @@ test("abort mid-bash kills the shell: pending side effects never happen, run end
     else throw new Error("expected tool_result part");
     expect(orphanCallIds(store.messages())).toEqual([]);
   } finally {
+    if (isWin) await killTagged(tag);
     rmSync(dir, { recursive: true, force: true });
   }
-}, 15_000);
+}, 20_000);
+
+// ---------- MED-2: an aborted sequential batch never starts its queued calls ----------
+
+test("abort mid-batch (sequential [bash, prompt-gated tool]): the queued call is never started or prompted for; it persists as the aborted synthesis", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-abort-batch-"));
+  const tag = sleepTag();
+  try {
+    const store = new SessionStore(dir, randomUUID());
+    const reg = new ToolRegistry();
+    reg.register(bashTool);
+    const secondTxt = join(dir, "second.txt");
+    let executed = 0;
+    const mark: Tool = {
+      schema: { name: "mark", description: "writes a marker file", args: { type: "object" } },
+      kind: "custom", async execute() { executed++; writeFileSync(secondTxt, "ran"); return { ok: true, output: "wrote" }; },
+    };
+    reg.register(mark);
+    // bash is allowed outright; the queued call needs a human. A post-abort
+    // prompt for it IS the detached-work bug — mutation target: the
+    // ctx.signal.aborted check in dispatchBatch's sequential loop (without it
+    // the approver is asked for b1 after the run has ended; the dispatch-level
+    // re-check would still stop the execution, so `prompts` is the discriminator)
+    const rules: PermissionRule[] = [
+      { action: "shell.exec", resource: "*", effect: "allow" },
+      { action: "tool.mark", resource: "*", effect: "prompt" },
+    ];
+    let prompts = 0;
+    const approval = async () => { prompts++; return "once" as const; };
+    const startTxt = join(dir, "start.txt");
+    const hold = isWin ? `sleep ${tag}` : "sleep 2";
+    const stream = mockStream({
+      turns: [
+        toolTurn([
+          { id: "a1", tool: "bash", args: { command: `echo started > "${startTxt}"; ${hold}` } },
+          { id: "b1", tool: "mark", args: {} },
+        ]),
+        textTurn("late"),
+      ],
+    });
+    const ac = new AbortController();
+    const done = collect(agentLoop(baseDef, "go", {}, cfg({ permissionRules: rules, approval }), {
+      stream, registry: reg, store, cwd: dir, signal: ac.signal,
+    }, new SteeringQueue()));
+    const t0 = Date.now();
+    while (!existsSync(startTxt) && Date.now() - t0 < 4000) await sleep(20);
+    expect(existsSync(startTxt)).toBe(true);
+    ac.abort();
+    const evs = await done;
+    expect(runEnd(evs)?.status).toBe("stopped");
+    // give a wrongly-started b1 every chance to land: the killed bash settles
+    // inside the runner's 500ms grace while the loop returns after 250ms
+    await sleep(800);
+    expect(prompts).toBe(0);
+    expect(executed).toBe(0);
+    expect(existsSync(secondTxt)).toBe(false);
+    expect(evs.some((e) => e.type === "tool_execution_start" && e.callId === "b1")).toBe(false);
+    const results = new Map<string, { ok: boolean; output: string }>();
+    for (const m of store.messages()) {
+      if (m.role !== "tool") continue;
+      for (const p of m.parts) if (p.kind === "tool_result") results.set(p.callId, { ok: p.ok, output: p.output });
+    }
+    expect(results.get("a1")?.ok).toBe(false);
+    expect(results.get("b1")).toEqual({ ok: false, output: ABORTED_TOOL_RESULT });
+    expect(TOOLS_ABORTED_RESULT).toBe(ABORTED_TOOL_RESULT); // one text, two owners until loop.ts re-exports tools.ts's
+    expect(orphanCallIds(store.messages())).toEqual([]);
+  } finally {
+    if (isWin) await killTagged(tag);
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 20_000);
 
 // ---------- consumer .return() mid-batch: synthesized results, no orphans ----------
 

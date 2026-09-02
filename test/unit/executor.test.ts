@@ -9,7 +9,12 @@
  *  seam instead of degrading (G7). The tool-level spawn-failure pin (G8)
  *  lives with bashTool in hashline.test.ts. Probe/rung tests use fake
  *  runners ONLY — a real wsl.exe/docker spawn is machine-state-dependent
- *  and can hold pipes open long past a kill. */
+ *  and can hold pipes open long past a kill.
+ *
+ *  Port #21 HIGH-1 (tail section): a Windows abort kills the whole process
+ *  TREE via a Job Object, not just what `taskkill /T` can walk to, and the
+ *  runner promise settles inside ABORT_GRACE_MS even when an orphan holds a
+ *  pipe end. Those tests spawn real msys `sleep` children on purpose. */
 
 import { test, expect, afterEach } from "bun:test";
 import {
@@ -23,10 +28,13 @@ import {
   RungUnavailableError,
   DEFAULT_DOCKER_IMAGE,
   PROBE_TIMEOUT_MS,
+  ABORT_GRACE_MS,
+  ABORT_TRUNCATED_MARKER,
   bunRunner,
   type SpawnRunner,
   type RawResult,
 } from "../../src/core/executor.ts";
+import { overrideWinJobs, winJobsAvailable } from "../../src/core/win-job.ts";
 import { bashTool } from "../../src/coding/hashline.ts";
 import type { PermissionDecision } from "../../src/core/types.ts";
 import { existsSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
@@ -370,3 +378,127 @@ test("direct rung parity: ABSOLUTE bytes pinned per case, and bashTool emits exi
 
 // G8 (tool-level spawn failure through the seam) is pinned in
 // test/unit/hashline.test.ts, next to bashTool's other behavior tests.
+
+// ---------- port #21 HIGH-1: a Windows abort kills the TREE, and the runner settles ----------
+// Real spawns on purpose — the finding is about msys2 process topology. The
+// long-lived child is msys `sleep` (Cygwin runtime: after its exec the forked
+// stub is gone, so taskkill /T cannot reach it; a native child such as bun.exe
+// stays reachable and would NOT discriminate the job object from taskkill),
+// tagged with a unique fractional duration so Win32_Process can find it.
+// Every wait is bounded by a REF'D timer race; every test kills its own
+// survivors so a red run leaves no stray sleep.exe behind.
+
+const isWin = process.platform === "win32";
+const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+const sleepTag = () => "600." + String(Math.floor(Math.random() * 1e9)).padStart(9, "0");
+
+/** pids of live msys sleep.exe processes carrying `tag` on their command line */
+async function taggedSleeps(tag: string): Promise<number[]> {
+  const ps = Bun.spawn(["powershell", "-NoProfile", "-Command",
+    `(Get-CimInstance Win32_Process -Filter "Name='sleep.exe' AND CommandLine LIKE '%${tag}%'").ProcessId`],
+    { stdout: "pipe", stderr: "pipe" });
+  const text = await new Response(ps.stdout).text();
+  await ps.exited;
+  return text.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).map(Number);
+}
+async function killTagged(tag: string): Promise<void> {
+  for (const pid of await taggedSleeps(tag)) await Bun.spawn(["taskkill", "/F", "/PID", String(pid)], { stdout: "ignore", stderr: "ignore" }).exited;
+}
+/** poll (≤ms) until no tagged sleep is alive; returns the survivors */
+async function survivors(tag: string, ms: number): Promise<number[]> {
+  const deadline = Date.now() + ms;
+  let alive = await taggedSleeps(tag);
+  while (alive.length > 0 && Date.now() < deadline) { await wait(150); alive = await taggedSleeps(tag); }
+  return alive;
+}
+/** the child must be RUNNING before the abort — a kill landing before the fork would pass vacuously */
+async function untilRunning(tag: string): Promise<void> {
+  const t0 = Date.now();
+  let n = 0;
+  while ((n = (await taggedSleeps(tag)).length) === 0 && Date.now() - t0 < 8000) await wait(50);
+  expect(n).toBeGreaterThan(0);
+}
+const DEADLINE = Symbol("deadline");
+async function within<T>(p: Promise<T>, ms: number): Promise<T | typeof DEADLINE> {
+  let t: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([p, new Promise<typeof DEADLINE>((r) => { t = setTimeout(() => r(DEADLINE), ms); })]);
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+const treeShapes: [shape: string, mk: (hold: string, dir: string) => string][] = [
+  ["compound+redirect", (hold, dir) => `echo x > "${dir}/f1"; ${hold}; echo y > "${dir}/f2"`],
+  ["nested bash -c", (hold) => `bash -c '${hold}'`],
+  ["background &+wait", (hold) => `${hold} & ${hold} & wait`],
+];
+for (const [shape, mk] of treeShapes) {
+  test.skipIf(!isWin)(`Windows abort kills the whole tree (${shape}): the msys sleep is gone ≤3s, the runner settled ≤1s, nothing truncated`, async () => {
+    const tag = sleepTag();
+    const dir = mkdtempSync(join(tmpdir(), "aion-tree-"));
+    try {
+      const ac = new AbortController();
+      const run = bunRunner([CANON_BASH, "-c", mk(`sleep ${tag}`, dir.replace(/\\/g, "/"))], { cwd: dir, signal: ac.signal });
+      await untilRunning(tag);
+      const tAbort = Date.now();
+      ac.abort();
+      const r = await within(run, 3000);
+      if (r === DEADLINE) throw new Error("runner did not settle within 3s of abort");
+      expect(Date.now() - tAbort).toBeLessThan(1000);
+      expect(r.treeKill).toBe("job");
+      expect(r.code).toBe(143);
+      // the pipes closed because EVERY holder died. Mutations: skip
+      // AssignProcessToJobObject or TerminateJobObject → the orphaned sleep
+      // keeps stdout open past the grace → the marker appears AND it survives
+      expect(r.stderr).not.toContain(ABORT_TRUNCATED_MARKER);
+      expect(await survivors(tag, 3000)).toEqual([]);
+    } finally {
+      await killTagged(tag);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 20_000);
+}
+
+test.skipIf(!isWin)("fail-safe without job objects: the abort still SETTLES inside the grace — bytes so far + truncation marker, code 143, treeKill taskkill-only", async () => {
+  expect(winJobsAvailable()).toBe(true); // the seam below is the ONLY reason the job is missing here
+  overrideWinJobs(false);
+  const tag = sleepTag();
+  try {
+    const ac = new AbortController();
+    const run = bunRunner([CANON_BASH, "-c", `echo first; sleep ${tag}; echo never`], { signal: ac.signal });
+    await untilRunning(tag);
+    const tAbort = Date.now();
+    ac.abort();
+    // taskkill /T /F kills bash + its stub; the sleep (dead parent) survives and
+    // holds stdout — the shape that hung the runner forever before the bounded read
+    const r = await within(run, 3000);
+    if (r === DEADLINE) throw new Error("runner did not settle within 3s of abort: an unbounded read waits for the orphan to release stdout");
+    expect(Date.now() - tAbort).toBeLessThan(ABORT_GRACE_MS + 1000);
+    expect(r.treeKill).toBe("taskkill-only");
+    expect(r.code).toBe(143);
+    expect(r.stdout).toBe("first\n"); // collected before the kill, kept
+    expect(r.stderr).toContain(ABORT_TRUNCATED_MARKER);
+  } finally {
+    overrideWinJobs(null);
+    await killTagged(tag); // the orphan the fallback cannot reach — the very leak the job object closes
+  }
+}, 20_000);
+
+test.skipIf(!isWin)("a command that completes on its own keeps a child it deliberately left behind: the job is released, not killed, at a normal settle", async () => {
+  const tag = sleepTag();
+  try {
+    const r = await within(bunRunner([CANON_BASH, "-c", `sleep ${tag} > /dev/null 2>&1 & echo started`], { signal: new AbortController().signal }), 5000);
+    if (r === DEADLINE) throw new Error("runner did not settle: the backgrounded child kept a pipe end open");
+    expect(r).toMatchObject({ code: 0, stdout: "started\n", treeKill: "job" });
+    await wait(300);
+    expect((await taggedSleeps(tag)).length).toBe(1); // KILL_ON_JOB_CLOSE cleared before CloseHandle (mutation: close without clearing → 0)
+  } finally {
+    await killTagged(tag);
+  }
+}, 20_000);
+
+test("abort grace pinned at 500ms (ref'd timer); truncation marker text pinned", () => {
+  expect(ABORT_GRACE_MS).toBe(500);
+  expect(ABORT_TRUNCATED_MARKER).toBe("[output truncated: process tree terminated on abort]");
+});

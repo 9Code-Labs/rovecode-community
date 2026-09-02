@@ -14,6 +14,12 @@ export interface ExtensionHooks {
   onToolResult?: (tool: string, args: unknown, out: ToolOutput) => Promise<void>;
 }
 
+/** Output of a tool_call that never executed because the run aborted (port
+ *  #21): a queued sibling in an aborted batch, or an approval answered after
+ *  the abort. Same text loop.ts synthesizes for calls a batch never delivered
+ *  (opencode session/processor.ts:587; codex normalize.rs:51-67). */
+export const ABORTED_TOOL_RESULT = "Tool execution aborted";
+
 /** Deny-by-default wildcard rules, last match wins (opencode permission.ts:126). */
 export function evaluatePermissions(rules: PermissionRule[], action: string, resource: string): PermissionDecision {
   let decision: PermissionDecision = { effect: "deny", reason: `no rule allows ${action}` };
@@ -102,6 +108,14 @@ export class ToolRegistry {
       }
     }
 
+    // 3b. abort re-check (port #21 LOW-1): the approver may answer long after
+    // the run aborted — the loop has already synthesized ABORTED for this call
+    // and returned, so executing now would run the tool detached from any run.
+    // Nothing above touches the workspace; this is the last gate before the
+    // tool's side effect. (An "always" verdict is still cached: it is the
+    // user's decision about the tool+args, not about this run.)
+    if (ctx.signal.aborted) return { ok: false, output: ABORTED_TOOL_RESULT };
+
     // 4. execute with typed error capture; ctx.onUpdate is wired here so a
     // tool's progress notes (MCP onprogress, LSP/checkpoint updates) become
     // real tool_execution_update events for ALL tools (port #3 LOW-6)
@@ -139,7 +153,14 @@ export class ToolRegistry {
     const results = new Map<string, ToolOutput>();
     const run = async (c: ToolCallPart) => { results.set(c.id, await this.dispatch(c, ctx, hooks, rules, approve, emit, guard)); };
     if (!parallelEnabled || calls.some((c) => this.tools.get(c.tool)?.sequential !== false)) {
-      for (const c of calls) await run(c);
+      for (const c of calls) {
+        // port #21 MED-2: an abort that landed during the previous call must not
+        // START the next one — nor prompt for it. It gets the aborted synthesis
+        // HERE: the loop's batch-finally only synthesizes for a batch that never
+        // settled, and a killed bash settles well inside the loop's grace.
+        if (ctx.signal.aborted) { results.set(c.id, { ok: false, output: ABORTED_TOOL_RESULT }); continue; }
+        await run(c);
+      }
     } else {
       await Promise.all(calls.map(run));
     }
