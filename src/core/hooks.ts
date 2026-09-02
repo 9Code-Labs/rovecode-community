@@ -43,7 +43,8 @@
  *  processes). Opening a checkout that ships a hostile .aion/hooks.ts runs it; a project-trust
  *  prompt (pi's project_trust event) is a documented follow-up, not in scope here.
  *
- *  Sources (pattern references, no code copied; both MIT, credited in THIRD_PARTY_NOTICES.md):
+ *  Sources (pattern references, no code copied; both MIT — covered by the generic MIT credit in the
+ *  THIRD_PARTY_NOTICES.md preamble, no per-port entry as MIT sources are credited in module headers):
  *  - pi @ 853a80d packages/coding-agent/src/core/extensions — loader.ts:498-510 imports the
  *    extension module (jiti there) and reads its default export; runner.ts:851-884 emit() runs
  *    handlers in registration order with a per-handler try/catch → emitError (isolation);

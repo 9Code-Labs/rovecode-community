@@ -33,6 +33,21 @@ Source: https://github.com/openai/codex, © 2025 OpenAI. Snapshot
   (`bwrap.rs`), hard errors for unprovidable requested tiers (SandboxTransformError). Codex's
   silent downgrade (`unwrap_or(None)`) is intentionally NOT ported. The docker rung follows the
   OpenHands runtime-boundary pattern; OpenHands is not snapshotted — recorded as a provenance gap.
+- **mid-turn cancellation (port #21)** — `src/core/loop.ts` and `src/core/tools.ts` follow AT
+  PATTERN LEVEL (no code copied) codex's turn-abort and history-normalization semantics: one
+  abortable active turn per session (`codex-rs/core/src/tasks/mod.rs:546-591`
+  abort_turn_if_active) and synthesized outputs for tool calls left without a result so the next
+  request is wire-well-formed (`codex-rs/core/src/context_manager/normalize.rs:51-67`, the
+  "aborted" FunctionCallOutput). The per-run AbortSignal threading follows opencode (MIT,
+  credited in the module header); the Windows Job-Object tree kill (`src/core/win-job.ts`) is
+  aion's own.
+- **sandbox rung config (port #27)** — `src/core/sandbox-config.ts` follows AT PATTERN LEVEL (no
+  code copied) codex's sandbox-mode selection: the tier as a config choice layered file <
+  override (`codex-rs/app-server/tests/common/config.rs:140` `sandbox_mode`;
+  `codex-rs/utils/cli/src/shared_options.rs:40-41` `--sandbox`;
+  `codex-rs/utils/cli/src/sandbox_mode_cli_arg.rs:14-25`), and an explicitly requested but
+  unprovidable tier as a hard error (`codex-rs/sandboxing/src/manager.rs:203-222`
+  SandboxTransformError). Here `.aion/sandbox.json` < `AION_SANDBOX`; rungs direct/wsl/docker only.
 
 ## cline (Apache-2.0)
 
@@ -55,10 +70,18 @@ Source: https://github.com/cline/cline. Snapshot `research/source_snapshots/clin
   formatModeSwitchNotice (near-verbatim from `sdk/packages/shared/src/prompt/format.ts:41-80`),
   the ACT_MODE_CONTINUATION_PROMPT string (`apps/vscode/src/sdk/sdk-user-message-mapping.ts:9`),
   and the plan-mode prompt section adapted from `sdk/packages/shared/src/prompt/cline.ts:34-59`.
+- **image input (port #34)** — `src/core/images.ts` and `src/providers/wire-messages.ts` follow
+  AT PATTERN LEVEL (no code copied) cline's image handling: the supported media-type set and
+  5 MiB cap (`sdk/packages/shared/src/llms/media.ts:73-78, :80`), the request-time placeholder
+  for models without vision while the stored history keeps the real image (`media.ts:6-12`;
+  aion's wording is its own), the media-type mismatch rule, and the base64 source ↔
+  `data:<mime>;base64,<data>` URL mapping (`apps/vscode/src/shared/messages/content.ts:140-153`).
+  Sniffing, header dimensions and the sidecar store follow opencode (MIT, module header).
+  Snapshot `cline-cline` @ 8eb5f3d.
 
 ## Aider (Apache-2.0)
 
-Source: https://github.com/Aider-AI/aider. Snapshot `research/source_snapshots/Aider-AI-aider`.
+Source: https://github.com/Aider-AI/aider. Snapshot `research/source_snapshots/Aider-AI-aider` @ 5dc9490.
 
 - **repo-map (port #12)** — `src/coding/repomap.ts` ports aider's `aider/repomap.py` algorithm:
   Tag shape + mtime-keyed tags cache (L29, L233-264), def/ref classification (L318-336),
@@ -137,6 +160,23 @@ a time" rule :120-126), translated into aion's ok/error result shape with ids an
 added; the "Cleared todo list" wording (:52, :68) is gemini's. Snapshot
 `research/source_snapshots/google-gemini-gemini-cli` @ 0bd1d43. Tool contract (whole-list replace,
 content/status/priority) and when-to-use guidance follow opencode (MIT, module header).
+
+### Port #30 — custom slash commands
+`src/tui/commands.ts` follows AT PATTERN LEVEL (no code copied) gemini-cli's file-command loader:
+user directory first, project directory second with "last wins" conflict resolution
+(`packages/cli/src/services/FileCommandLoader.ts:85-90`, `:204-228`), a single scan when the
+project dir is the user's home (`:221-228`), and invalid command files skipped with a report,
+never fatal (`:277-298`). Snapshot `research/source_snapshots/google-gemini-gemini-cli` @ 0bd1d43.
+Discovery, frontmatter/template split, precedence and `$ARGUMENTS`/`$N` templating follow
+opencode (MIT, credited in the module header).
+
+### Port #33 — ask_user tool
+`src/tools/ask-user.ts` follows AT PATTERN LEVEL (no code copied) gemini-cli's headless rule for
+user-facing questions: with no human present the ask-user tool is excluded and ASK_USER decisions
+translate to DENY (`packages/cli/src/config/config.ts:794-803`); aion keeps the tool registered on
+every surface and fails closed at execute time instead. Snapshot
+`research/source_snapshots/google-gemini-gemini-cli` @ 0bd1d43. The tool contract (option labels,
+typed answer, dismissed question = error) follows opencode (MIT, credited in the module header).
 
 ## Zed Industries — agent-client-protocol (Apache-2.0)
 
