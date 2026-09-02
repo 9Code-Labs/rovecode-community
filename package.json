@@ -27,6 +27,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@opencode-ai/models": "^0.0.61",
     "@zed-industries/agent-client-protocol": "^0.4.5",
+    "diff": "^9.0.0",
     "get-east-asian-width": "1.6.0",
     "gpt-tokenizer": "^4.0.0",
     "marked": "18.0.5",

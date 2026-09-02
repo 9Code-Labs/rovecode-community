@@ -52,20 +52,21 @@ export type EditFailure =
   | { kind: "out-of-range"; path: string; line: number; lineCount: number };
 
 export type EditResult = { ok: true; newTag: string } | { ok: false; failure: EditFailure };
+export type ApplyResult = { ok: true; content: string; newTag: string } | { ok: false; failure: EditFailure };
 
-/** Applies edits reverse-order (later lines first) so earlier anchors stay valid (phi hashline.go). */
-export function applyEdits(absPath: string, edits: EditOp[]): EditResult {
-  if (!existsSync(absPath)) return { ok: false, failure: { kind: "out-of-range", path: absPath, line: 0, lineCount: 0 } };
-  const content = readFileSync(absPath, "utf8");
+/** Pure core of applyEdits over in-memory content: tag check, reverse-order anchored splices
+ *  (later lines first so earlier anchors stay valid — phi hashline.go), nearest-match
+ *  diagnostics. Port #24 previews the exact post-edit content through this without writing. */
+export function applyEditsToContent(content: string, edits: EditOp[], path: string): ApplyResult {
   const tag = fileTag(content);
   const stale = edits.find((e) => e.tag !== tag);
-  if (stale) return { ok: false, failure: { kind: "tag-mismatch", path: absPath, expected: stale.tag, actual: tag } };
+  if (stale) return { ok: false, failure: { kind: "tag-mismatch", path, expected: stale.tag, actual: tag } };
 
   const lines = content.split("\n");
   const sorted = [...edits].sort((a, b) => b.anchorLine - a.anchorLine);
   for (const e of sorted) {
     if (e.anchorLine < 1 || e.anchorLine > lines.length) {
-      return { ok: false, failure: { kind: "out-of-range", path: absPath, line: e.anchorLine, lineCount: lines.length } };
+      return { ok: false, failure: { kind: "out-of-range", path, line: e.anchorLine, lineCount: lines.length } };
     }
     const actual = lineHash(lines[e.anchorLine - 1]!);
     if (actual !== e.anchorHash) {
@@ -74,13 +75,21 @@ export function applyEdits(absPath: string, edits: EditOp[]): EditResult {
       const nearest = idx >= 0
         ? `line ${idx + 1} currently holds that hash: ${lines[idx]!.slice(0, 80)}`
         : `no line matches; line ${e.anchorLine} is now: ${lines[e.anchorLine - 1]!.slice(0, 80)}`;
-      return { ok: false, failure: { kind: "hash-mismatch", path: absPath, line: e.anchorLine, expected: e.anchorHash, actual, nearest } };
+      return { ok: false, failure: { kind: "hash-mismatch", path, line: e.anchorLine, expected: e.anchorHash, actual, nearest } };
     }
     lines.splice(e.anchorLine - 1, 1, ...e.newLines);
   }
   const next = lines.join("\n");
-  writeFileSync(absPath, next);
-  return { ok: true, newTag: fileTag(next) };
+  return { ok: true, content: next, newTag: fileTag(next) };
+}
+
+/** Applies edits to the file on disk (applyEditsToContent + write); a missing file is out-of-range. */
+export function applyEdits(absPath: string, edits: EditOp[]): EditResult {
+  if (!existsSync(absPath)) return { ok: false, failure: { kind: "out-of-range", path: absPath, line: 0, lineCount: 0 } };
+  const r = applyEditsToContent(readFileSync(absPath, "utf8"), edits, absPath);
+  if (!r.ok) return r;
+  writeFileSync(absPath, r.content);
+  return { ok: true, newTag: r.newTag };
 }
 
 // ---------- Tools ----------

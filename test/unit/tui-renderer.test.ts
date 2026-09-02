@@ -194,6 +194,28 @@ describe("PiTuiRenderer", () => {
 		await expect(pending).resolves.toBe("deny");
 	});
 
+	it("askApproval renders a diff detail inside the overlay, clipped to the terminal with a folded marker (port #24)", async () => {
+		const { renderer, term } = boot();
+		// what app.ts passes for a long change: previewDiff's 40-line cap plus its own marker
+		const diff = ["--- a/big.txt", "+++ b/big.txt", "@@ -1,200 +1,200 @@", ...Array.from({ length: 37 }, (_, i) => `-line-${i + 1}`), "… +363 more lines"];
+		const pending = renderer.askApproval("write", "{…}", diff.join("\n"));
+		const screen = await view(term);
+		expect(screen).toContain("approval needed: write");
+		expect(screen).toContain("--- a/big.txt");
+		expect(screen).toContain("@@ -1,200 +1,200 @@");
+		expect(screen).toContain("-line-9");            // 24 rows → 12 diff rows: 3 headers + line-1..9
+		expect(screen).not.toContain("-line-10");       // clipped by the renderer's physical bound
+		// 29 rows hidden, one of them previewDiff's marker standing for 363 more → one folded marker
+		expect(screen).toContain("… +391 more lines");
+		expect(screen).not.toContain("+363");
+		expect(screen).toContain("allow once");         // verdicts stay on screen below the diff
+		term.sendInput("\x1b[B");                       // keys reach the list through the card
+		term.sendInput("\x1b[B");
+		term.sendInput("\r");                           // third item: deny
+		await expect(pending).resolves.toBe("deny");
+		expect(await view(term)).not.toContain("-line-1"); // overlay gone
+	});
+
 	it("askApproval resolves 'always' via arrow-down then Enter", async () => {
 		const { renderer, term } = boot();
 		const pending = renderer.askApproval("write_file", "out.txt");

@@ -46,8 +46,9 @@ export interface Renderer {
   toolStart(callId: string, tool: string, argsPreview: string): void;
   toolUpdate(callId: string, note: string): void;
   toolEnd(callId: string, ok: boolean, outputPreview: string, durationMs: number): void;
-  /** modal approval; resolves deny on cancel/escape */
-  askApproval(tool: string, argsPreview: string): Promise<ApprovalAnswer>;
+  /** modal approval; resolves deny on cancel/escape. `detail` (port #24): pre-rendered
+   *  unified diff of a pending edit/write, shown inside the overlay above the verdicts */
+  askApproval(tool: string, argsPreview: string, detail?: string): Promise<ApprovalAnswer>;
   /** modal picker (session/turn navigators); resolves null on cancel/escape/stop */
   pickOne(items: PickItem[], title?: string): Promise<string | null>;
   /** remove all transcript items (history replay after rewind/resume) */

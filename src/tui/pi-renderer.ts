@@ -24,8 +24,10 @@ import {
 	type Terminal,
 	Text,
 	TruncatedText,
+	truncateToWidth,
 	type TUI,
 	TuiMainScreen,
+	visibleWidth,
 } from "../../vendor/pi-tui/src/index.ts";
 import type {
 	ApprovalAnswer,
@@ -49,6 +51,40 @@ interface ToolCard {
 	line: Text;
 	tool: string;
 	base: string;
+}
+
+/** Port #24: body of an edit/write approval overlay — title, the bounded unified diff
+ *  (+ green, - red, headers/@@ dim), a spacer, then the verdict list. Keys go straight
+ *  to the list, so verdicts and bindings are identical to the plain approval overlay. */
+const MORE_RE = /^… \+(\d+) more line/;
+class ApprovalCard implements Component {
+	constructor(
+		private readonly title: string,
+		private readonly diff: string[],
+		private readonly list: SelectList,
+		private readonly rows: () => number,
+	) {}
+	handleInput(data: string): void { this.list.handleInput(data); }
+	invalidate(): void { this.list.invalidate(); }
+	render(width: number): string[] {
+		// physical bound: title, list and some transcript must stay visible. previewDiff already
+		// clipped logically — fold its marker's count into ours rather than stacking two markers.
+		const max = Math.max(4, this.rows() - 12);
+		let lines = this.diff;
+		if (lines.length > max) {
+			const tail = MORE_RE.exec(lines[lines.length - 1]!);
+			const hidden = lines.length - max + (tail ? Number(tail[1]) - 1 : 0);
+			lines = [...lines.slice(0, max), `… +${hidden} more line${hidden === 1 ? "" : "s"}`];
+		}
+		const fit = (s: string): string => { const t = truncateToWidth(s, width - 2, "…"); return ` ${t}${" ".repeat(Math.max(0, width - 1 - visibleWidth(t)))}`; };
+		return [fit(pal.warn(this.title)), ...lines.map((l, i) => fit(paintDiff(l, i))), " ".repeat(width), ...this.list.render(width)];
+	}
+}
+
+function paintDiff(line: string, idx: number): string {
+	if ((idx === 0 && line.startsWith("--- ")) || (idx === 1 && line.startsWith("+++ "))) return st.dim(line);
+	const c = line[0];
+	return c === "+" ? pal.ok(line) : c === "-" ? pal.err(line) : c === " " ? line : st.dim(line);
 }
 
 export interface PiTuiRendererOptions {
@@ -226,18 +262,14 @@ export class PiTuiRenderer implements Renderer {
 		this.tui?.requestRender();
 	}
 
-	pickOne(items: PickItem[], title?: string): Promise<string | null> {
+	/** Show `component` as a centered overlay whose keys route to `list`; settles on select,
+	 *  cancel, or stop() (a stopped UI cannot answer — pendingPickers drains it to null). */
+	private pickWith(component: Component, list: SelectList, width: number): Promise<string | null> {
 		const tui = this.tui;
 		const editor = this.editor;
-		if (!tui || !editor || items.length === 0) return Promise.resolve(null);
-		if (title) this.addSystemNote(title);
+		if (!tui || !editor) return Promise.resolve(null);
 		return new Promise<string | null>((resolve) => {
-			const list = new SelectList(
-				items.map((i) => ({ value: i.value, label: i.label, description: i.description })),
-				Math.min(items.length, 8),
-				aionSelectListTheme,
-			);
-			const handle = tui.showOverlay(list, { width: 64, anchor: "center" });
+			const handle = tui.showOverlay(component, { width, anchor: "center" });
 			let settled = false;
 			const finish = (answer: string | null): void => {
 				if (settled) return;
@@ -254,13 +286,31 @@ export class PiTuiRenderer implements Renderer {
 		});
 	}
 
-	async askApproval(tool: string, argsPreview: string): Promise<ApprovalAnswer> {
+	pickOne(items: PickItem[], title?: string): Promise<string | null> {
+		if (!this.tui || items.length === 0) return Promise.resolve(null);
+		if (title) this.addSystemNote(title);
+		const list = new SelectList(
+			items.map((i) => ({ value: i.value, label: i.label, description: i.description })),
+			Math.min(items.length, 8),
+			aionSelectListTheme,
+		);
+		return this.pickWith(list, list, 64);
+	}
+
+	async askApproval(tool: string, argsPreview: string, detail?: string): Promise<ApprovalAnswer> {
 		this.addSystemNote(`approval needed: ${tool} ${argsPreview}`, "warn");
-		const picked = await this.pickOne([
+		const items: PickItem[] = [
 			{ value: "once", label: "allow once", description: "run this call only" },
 			{ value: "always", label: "always", description: "allow this tool for the session" },
 			{ value: "deny", label: "deny", description: "reject this call" },
-		]);
+		];
+		let picked: string | null;
+		if (detail) {
+			// port #24: the diff rides inside the overlay; same list, same keys as the plain path
+			const list = new SelectList(items, items.length, aionSelectListTheme);
+			const card = new ApprovalCard(`approval needed: ${tool}`, detail.split("\n"), list, () => this.terminal.rows);
+			picked = await this.pickWith(card, list, Math.max(40, Math.min(this.terminal.columns - 4, 100)));
+		} else picked = await this.pickOne(items);
 		return picked === "once" || picked === "always" ? picked : "deny"; // null/cancel/stop → deny
 	}
 

@@ -13,6 +13,7 @@ import { cmdCheckpoints, cmdRestore, type CheckpointCmdCtx } from "./checkpoints
 import { cmdRewind, cmdSessions, cmdNew, type SessionCmdCtx } from "./session-cmd.ts";
 import { buildCostNote } from "./cost.ts";
 import { exportSession } from "../cli/export.ts";
+import { previewDiff } from "../coding/diff.ts";
 import type { Renderer, AssistantView, StatusInfo } from "./renderer.ts";
 import { PiTuiRenderer } from "./pi-renderer.ts";
 import type { RunEvent, StreamFn } from "../core/types.ts";
@@ -286,8 +287,15 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     state.busy = true;
     renderer.setBusy(true, "thinking…");
     pushStatus();
-    const cfg = rt.buildCfg(state.yolo, state.yolo ? undefined : async (req) =>
-      renderer.askApproval(req.tool, JSON.stringify(req.revisedArgs).slice(0, 140)));
+    const cfg = rt.buildCfg(state.yolo, state.yolo ? undefined : async (req) => {
+      // port #24: edit/write approvals carry a bounded unified diff of the pending change
+      // (in-memory preview; any failure degrades to the plain overlay, never blocks the ask)
+      let detail: string | undefined;
+      if (req.tool === "edit" || req.tool === "write") {
+        try { detail = previewDiff(req.tool, req.revisedArgs, rt.cwd).text || undefined; } catch { detail = undefined; }
+      }
+      return renderer.askApproval(req.tool, JSON.stringify(req.revisedArgs).slice(0, 140), detail);
+    });
     // port #20: per-mode model resolution + plan-mode rule/prompt enforcement
     const cur = modes.modelFor();
     const def = rt.buildDef({ provider: cur.provider, model: cur.model });

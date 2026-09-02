@@ -12,6 +12,7 @@ import { PiTuiRenderer } from "../../src/tui/pi-renderer.ts";
 import { runTui, buildCostNote } from "../../src/tui/app.ts";
 import { anthropicStream, mockStream, textTurn, toolTurn } from "../../src/providers/stream.ts";
 import { ModelCatalog } from "../../src/providers/catalog.ts";
+import { fileTag, lineHash } from "../../src/coding/hashline.ts";
 import type { Message, TokenUsage } from "../../src/core/types.ts";
 
 async function until(term: VirtualTerminal, pred: (screen: string) => boolean, ms = 8000): Promise<string> {
@@ -350,3 +351,91 @@ test("/export writes <short>.md, --json copies the JSONL byte-verbatim, a spaced
   await app;
   rmSync(cwd, { recursive: true, force: true });
 }, 30_000);
+
+// ---------- port #24: diff preview in the approval overlay ----------
+
+/** gated TUI whose first scripted turn is an anchored edit of notes.txt (old-line → new-line).
+ *  Absolute tool path, like every scripted call in this file: the TUI's LoopDeps carry no cwd,
+ *  so tools resolve RELATIVE paths against process.cwd() (loop.ts:261) while the preview uses
+ *  rt.cwd — identical under `aion chat`, different under a test's temp cwd. */
+function gatedEditApp(cwd: string, term: VirtualTerminal, finalText: string) {
+  const target = join(cwd, "notes.txt");
+  const content = "keep-1\nold-line\nkeep-2\n";
+  writeFileSync(target, content);
+  const renderer = new PiTuiRenderer({ terminal: term, cwd });
+  const edit = { path: target, edits: [{ tag: fileTag(content), anchorLine: 2, anchorHash: lineHash("old-line"), newLines: ["new-line"] }] };
+  const stream = mockStream({ turns: [toolTurn([{ id: "t1", tool: "edit", args: edit }]), textTurn(finalText)] });
+  const app = runTui({ renderer, stream, cwd, yolo: false, exitOnClose: false, model: "scripted" });
+  term.sendInput("edit it"); term.sendInput("\r");
+  return { app, target, content };
+}
+
+test("gated edit: the overlay shows the unified diff before consent; Escape denies and the file is untouched", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const term = new VirtualTerminal(80, 24);
+  const { app, target, content } = gatedEditApp(cwd, term, "after denial.");
+
+  const card = await until(term, (s) => s.includes("+new-line"));
+  expect(card).toContain("approval needed: edit");
+  expect(card).toContain("--- a/notes.txt");            // file headers
+  expect(card).toContain("+++ b/notes.txt");
+  expect(card).toContain("@@ -1,3 +1,3 @@");            // hunk header
+  expect(card).toContain("-old-line");
+  expect(card).toContain("+new-line");
+  expect(card).toContain(" keep-1");                    // context line
+  expect(card).toContain("allow once");                 // verdict list sits below the diff
+  expect(card).toContain("deny");
+  expect(readFileSync(target, "utf8")).toBe(content);   // nothing applied before consent
+
+  term.sendInput("\x1b");                               // Escape → deny (deny path unchanged)
+  const after = await until(term, (s) => s.includes("after denial."));
+  expect(after).not.toContain("+new-line");             // overlay gone
+  expect(after).not.toContain("allow once");
+  expect(readFileSync(target, "utf8")).toBe(content);   // denied → file unchanged
+
+  term.sendInput("\x03");
+  await app;
+  rmSync(cwd, { recursive: true, force: true });
+}, 20_000);
+
+test("gated edit: allow once applies exactly the previewed change", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const term = new VirtualTerminal(80, 24);
+  const { app, target } = gatedEditApp(cwd, term, "applied.");
+  await until(term, (s) => s.includes("+new-line"));
+  term.sendInput("\r");                                 // first item: allow once
+  const done = await until(term, (s) => s.includes("applied."));
+  expect(done).toContain("applied.");
+  expect(readFileSync(target, "utf8")).toBe("keep-1\nnew-line\nkeep-2\n");
+  term.sendInput("\x03");
+  await app;
+  rmSync(cwd, { recursive: true, force: true });
+}, 20_000);
+
+test("gated write of a new file: the overlay shows an all-adds diff against /dev/null", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const term = new VirtualTerminal(80, 24);
+  const renderer = new PiTuiRenderer({ terminal: term, cwd });
+  const probe = join(cwd, "fresh.txt");
+  const stream = mockStream({
+    turns: [toolTurn([{ id: "t1", tool: "write", args: { path: probe, content: "alpha\nbeta\n" } }]), textTurn("created.")],
+  });
+  const app = runTui({ renderer, stream, cwd, yolo: false, exitOnClose: false, model: "scripted" });
+  term.sendInput("make it"); term.sendInput("\r");
+
+  const card = await until(term, (s) => s.includes("+beta"));
+  expect(card).toContain("--- /dev/null");
+  expect(card).toContain("+++ b/fresh.txt");
+  expect(card).toContain("@@ -0,0 +1,2 @@");
+  expect(card).toContain("+alpha");
+  expect(card).toContain("+beta");
+  expect(card).not.toContain("-alpha");                 // create = adds only
+  expect(existsSync(probe)).toBe(false);                // not written before consent
+
+  term.sendInput("\r");                                 // allow once
+  await until(term, (s) => s.includes("created."));
+  expect(readFileSync(probe, "utf8")).toBe("alpha\nbeta\n");
+  term.sendInput("\x03");
+  await app;
+  rmSync(cwd, { recursive: true, force: true });
+}, 20_000);

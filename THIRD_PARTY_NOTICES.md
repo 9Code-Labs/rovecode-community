@@ -103,8 +103,53 @@ as the delay source, and 499 not retried. Snapshot
 `research/source_snapshots/google-gemini-gemini-cli` @ 0bd1d43. Classification is shared with
 the port #14 router (`classifyStreamError`).
 
+### Port #24 — approval diff preview
+`src/coding/diff.ts` follows AT PATTERN LEVEL (no code copied) the confirmation-diff shaping of
+`packages/core/src/tools/diffOptions.ts:10-18` (structuredPatch, small context) and the
+CR-tolerant line comparison of `diff-utils.ts:22`. Snapshot
+`research/source_snapshots/google-gemini-gemini-cli` @ 0bd1d43.
+
 ## Zed Industries — agent-client-protocol (Apache-2.0)
 
 - **ACP endpoint (port #15)** — `src/acp/server.ts` speaks ACP v1 via the official SDK
   dependency `@zed-industries/agent-client-protocol@0.4.5` (Apache-2.0, © Zed Industries).
   The SDK is consumed as a package dependency; no SDK code is vendored or modified.
+
+## jsdiff — `diff` npm package (BSD-3-Clause)
+
+Source: https://github.com/kpdecker/jsdiff. Consumed unmodified as the package dependency
+`diff@9.0.0` by `src/coding/diff.ts` (port #24, approval-overlay diff preview). The compiled
+single binary (scripts/build.ts) bundles it; per BSD-3-Clause clause 2 the notice below is
+reproduced verbatim for binary redistribution.
+
+```
+BSD 3-Clause License
+
+Copyright (c) 2009-2015, Kevin Decker <kpdecker@gmail.com>
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its
+   contributors may be used to endorse or promote products derived from
+   this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
