@@ -10,13 +10,13 @@ import { ModelCatalog } from "../providers/catalog.ts";
 import { ModeManager, loadModesConfig, modeFromEntries, type AgentMode } from "../core/modes.ts";
 import { togglePlanAct, applyModeToRun, flushModeSwitch, replayLabel } from "./modes-cmd.ts";
 import { cmdCheckpoints, cmdRestore, type CheckpointCmdCtx } from "./checkpoints-cmd.ts";
+import { cmdRewind, cmdSessions, cmdNew, type SessionCmdCtx } from "./session-cmd.ts";
 import { buildCostNote } from "./cost.ts";
 import { exportSession } from "../cli/export.ts";
 import type { Renderer, AssistantView, StatusInfo } from "./renderer.ts";
 import { PiTuiRenderer } from "./pi-renderer.ts";
 import type { RunEvent, StreamFn } from "../core/types.ts";
 import { join } from "node:path";
-import { randomUUID } from "node:crypto";
 
 export { buildCostNote } from "./cost.ts"; // moved for the ADR-002 cap; re-exported for tests
 
@@ -179,58 +179,16 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     replayAndRefresh: () => { replayHistory(); refreshUsage(); pushStatus(); },
   };
 
-  const cmdRewind = async () => {
-    if (state.busy) { renderer.addSystemNote("finish or interrupt the run first (Esc)", "warn"); return; }
-    const points = store.turnPoints();
-    if (points.length === 0) { renderer.addSystemNote("nothing to rewind — no turns yet"); return; }
-    const items = [...points].reverse().map((p) => ({
-      value: p.entryId,
-      label: `#${p.index} ${p.text}`,
-      description: p.branches > 0 ? `◆ ${p.branches} other branch${p.branches > 1 ? "es" : ""}` : undefined,
-    }));
-    const picked = await renderer.pickOne(items, "rewind to a turn (Enter = edit & resubmit, Esc = cancel)");
-    if (!picked) { replayHistory(); return; } // cancel: clear the overlay title note
-    const point = points.find((p) => p.entryId === picked);
-    if (!point) return;
-    if (point.parentId === null) {
-      // pi resets the leaf to an empty conversation (sessions.md:116); root reset would need
-      // core support — v1 approximates it with a fresh session, old one untouched
-      switchSession(randomUUID(), false);
-      renderer.addSystemNote("rewound to the start — fresh session, previous one kept");
-    } else {
-      if (!store.branch(point.parentId)) { renderer.addSystemNote("rewind failed: turn not found", "error"); return; }
-      replayHistory();
-      renderer.addSystemNote(`rewound to before turn #${point.index} — edit and resubmit (branch kept)`);
-    }
-    renderer.prefillEditor(point.fullText); // FULL text, never the ≤80-char overlay label
-    pushStatus();
-  };
-
-  const cmdSessions = async (directId?: string) => {
-    if (state.busy) { renderer.addSystemNote("finish or interrupt the run first (Esc)", "warn"); return; }
-    const all = listSessions(sessionsDir);
-    if (directId) {
-      // exact id wins outright; a prefix must match exactly ONE session — resolving an
-      // ambiguous prefix silently to the first hit resumed the wrong session
-      const exact = all.find((s) => s.id === directId);
-      const matches = exact ? [exact] : all.filter((s) => s.id.startsWith(directId));
-      if (matches.length === 1) switchSession(matches[0]!.id);
-      else if (matches.length > 1) renderer.addSystemNote(
-        `"${directId}" matches ${matches.length} sessions: ${matches.slice(0, 4).map((s) => s.id.slice(0, 8)).join(", ")}${matches.length > 4 ? ", …" : ""} — be more specific`,
-        "warn",
-      );
-      else renderer.addSystemNote(`no session matching "${directId}"`, "warn");
-      return;
-    }
-    const items = all.slice(0, 20).map((s) => ({
-      value: s.id,
-      label: s.preview || "(empty session)",
-      description: `${new Date(s.updatedAt).toLocaleString()} · ${s.entryCount} entries · ${s.id.slice(0, 8)}${s.id === store.id ? " · current" : ""}`,
-    }));
-    if (items.length === 0) { renderer.addSystemNote("no sessions found"); return; }
-    const picked = await renderer.pickOne(items, "resume a session (Esc = cancel)");
-    if (picked && picked !== store.id) switchSession(picked);
-    else if (!picked) replayHistory(); // cancel: clear the overlay title note
+  // port #2: session navigation context (store read live via closure — /sessions and a root /rewind swap it)
+  const sessCtx: SessionCmdCtx = {
+    renderer,
+    sessionsDir,
+    busy: () => state.busy,
+    store: () => store,
+    switchSession,
+    replayHistory,
+    refreshUsage,
+    pushStatus,
   };
 
   const handleSlash = (text: string): boolean => {
@@ -292,19 +250,11 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
       case "memory":
         renderer.addSystemNote(blocks.renderForPrompt() || "(empty)");
         return true;
-      case "new":
-        // busy gate (same as /rewind //sessions): moving the leaf mid-run would make the
-        // run's next append chain off a moved leaf while its parentId points elsewhere
-        if (state.busy) { renderer.addSystemNote("finish or interrupt the run first (Esc)", "warn"); return true; }
-        if (store.branch(store.messages()[0]?.id ?? "")) {
-          replayHistory(); refreshUsage(); pushStatus();
-          renderer.addSystemNote("branched to session start");
-        } else renderer.addSystemNote("nothing to branch — no turns yet");
-        return true;
-      case "rewind": case "tree": void cmdRewind(); return true;
-      case "sessions": void cmdSessions(); return true;
+      case "new": cmdNew(sessCtx); return true;
+      case "rewind": case "tree": void cmdRewind(sessCtx); return true;
+      case "sessions": void cmdSessions(sessCtx); return true;
       case "resume":
-        if (arg) void cmdSessions(arg); else void cmdSessions();
+        if (arg) void cmdSessions(sessCtx, arg); else void cmdSessions(sessCtx);
         return true;
       case "export": {
         // port #38: write THIS session as markdown (raw JSONL with --json), local only.
