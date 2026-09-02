@@ -59,15 +59,45 @@ export type SpawnRunner = (
 
 /** Default runner: Bun.spawn, stdout/stderr piped. A spawn failure (missing
  *  binary) is returned as code -1 with the message in stderr, so probes can
- *  report "not installed" instead of crashing. */
+ *  report "not installed" instead of crashing.
+ *
+ *  Windows abort = TREE kill (port #21). Bun's own signal handling
+ *  TerminateProcess-es only the DIRECT child, and git-bash `bash.exe -c` runs
+ *  the script in a re-spawned msys child — measured on this box: abort at
+ *  300ms, exit 143 at 317ms, and the command's `echo done > file` STILL landed
+ *  2s later (the orphaned interpreter kept going). Worse, killing the parent
+ *  first orphans the tree so a follow-up `taskkill /T` cannot traverse to it.
+ *  So on Windows the signal is NOT handed to Bun.spawn at all: abort fires
+ *  `taskkill /T /F` while the tree is intact (sole killer; measured: side
+ *  effect never lands, exit ~120ms after the kill). POSIX keeps the signal
+ *  passthrough: the shell dies with the signal and never reaches the script's
+ *  next command. */
 export const bunRunner: SpawnRunner = async (argv, opts) => {
+  const treeKill = process.platform === "win32" && opts.signal !== undefined;
+  let onAbort: (() => void) | undefined;
+  const signal = opts.signal;
+  // pre-aborted (G4 pin): never spawn at all — a taskkill would race a fast
+  // command and lose; 143 matches the killed-at-spawn shape the pin measured
+  if (treeKill && signal?.aborted) return { code: 143, stdout: "", stderr: "aborted before spawn" };
   try {
-    const proc = Bun.spawn([...argv], { cwd: opts.cwd, signal: opts.signal, stdout: "pipe", stderr: "pipe" });
+    const proc = Bun.spawn([...argv], { cwd: opts.cwd, signal: treeKill ? undefined : signal, stdout: "pipe", stderr: "pipe" });
+    if (treeKill && signal) {
+      onAbort = () => {
+        try { Bun.spawn(["taskkill", "/T", "/F", "/PID", String(proc.pid)], { stdout: "ignore", stderr: "ignore" }); } catch { /* best-effort */ }
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      // once the process is gone, a late abort must NOT taskkill a reused pid
+      void proc.exited.then(() => { if (onAbort) signal.removeEventListener("abort", onAbort); }, () => {});
+    }
     const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
     const code = await proc.exited;
     return { code, stdout, stderr };
   } catch (e) {
     return { code: -1, stdout: "", stderr: `spawn failed: ${e instanceof Error ? e.message : String(e)}` };
+  } finally {
+    // the signal is the RUN's (long-lived): drop this spawn's listener or a
+    // multi-bash run accumulates one dead closure per command
+    if (onAbort) signal?.removeEventListener("abort", onAbort);
   }
 };
 

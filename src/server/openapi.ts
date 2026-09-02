@@ -38,7 +38,8 @@ export function buildOpenApiDoc(serverUrl: string): Record<string, unknown> {
       version: "0.1.0",
       description:
         "Headless HTTP surface over the one aion agent loop (ADR-003). " +
-        "Four routes: create a session, prompt it (SSE stream of typed run events), " +
+        "Four routes: create a session, prompt it (SSE stream of typed run events; " +
+        "DELETE the same path cancels the in-flight run mid-turn), " +
         "list sessions, and this document. " + APPROVALS_NOTE,
     },
     servers: [{ url: serverUrl }],
@@ -105,6 +106,34 @@ export function buildOpenApiDoc(serverUrl: string): Record<string, unknown> {
             "404": errorResponse("Unknown session id"),
             "409": errorResponse("A run is already in progress for this session"),
             "503": errorResponse("No provider configured (set AION_BASE_URL/AION_API_KEY or a named provider key)"),
+          },
+        },
+        delete: {
+          operationId: "session.cancel",
+          summary: "Cancel the in-flight run on a session",
+          description:
+            "Aborts the running prompt's AbortController: the in-flight provider fetch and " +
+            "tool subprocesses are killed mid-turn, and the run's SSE stream ends with a " +
+            "run_end event of status \"stopped\". The session stays busy (409 on new prompts) " +
+            "until that stream has actually settled. Idempotent: cancelling an idle session " +
+            "returns cancelled: false.",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" }, description: "Session id from POST /session" },
+          ],
+          responses: {
+            "200": {
+              description: "Cancellation signalled (cancelled: true) or nothing was running (cancelled: false)",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    required: ["cancelled"],
+                    properties: { cancelled: { type: "boolean" } },
+                  },
+                },
+              },
+            },
+            "404": errorResponse("Unknown session id"),
           },
         },
       },

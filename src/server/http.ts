@@ -60,14 +60,20 @@ export interface AionServer {
   port: number;
   hostname: string;
   url: string;
-  /** closes the listener and in-flight SSE sockets, then closes every session
-   *  runtime's MCP children. Returns while in-flight runs may still be
-   *  executing to their next turn/batch boundary (cooperative cancellation —
-   *  the loop has no mid-turn suspension point). */
+  /** closes the listener and in-flight SSE sockets, aborts every in-flight
+   *  run's controller (port #21: the in-flight provider fetch and tool
+   *  subprocesses die mid-turn), then closes every session runtime's MCP
+   *  children. Returns without awaiting the aborted generators' final settle. */
   stop(): Promise<void>;
 }
 
-interface SessionEntry { runtime: Runtime; running: boolean }
+interface SessionEntry {
+  runtime: Runtime;
+  running: boolean;
+  /** the in-flight run's controller (port #21) — DELETE /session/:id/prompt and
+   *  stop() abort it; null when idle. Cleared by the pump's settle, like `running`. */
+  abort: AbortController | null;
+}
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -82,13 +88,13 @@ function frame(ev: RunEvent): string {
 }
 
 /** Pump loop events into an SSE response; the stream closes on run_end.
- *  Client disconnects REQUEST generator cancellation; it lands at the next
- *  turn/batch-event boundary (the loop has no mid-turn suspension point — an
- *  in-flight provider turn or tool keeps running until then), where the loop's
- *  finally aborts the tool batch. `running` is cleared ONLY from the pump's
- *  finally — when the generator has actually released the session — so the
- *  409 one-run-per-session invariant holds across disconnects (MED-F1). */
-function sseResponse(run: AsyncGenerator<RunEvent>, onSettled: () => void): Response {
+ *  Client disconnects abort the run's controller (port #21): the in-flight
+ *  provider fetch dies and tool subprocesses are killed mid-turn, then the
+ *  generator settles at its next suspension point. `running` is cleared ONLY
+ *  from the pump's finally — when the generator has actually released the
+ *  session — so the 409 one-run-per-session invariant holds across
+ *  disconnects (MED-F1). */
+function sseResponse(run: AsyncGenerator<RunEvent>, onSettled: () => void, abort: () => void): Response {
   const enc = new TextEncoder();
   let settled = false;
   const settle = () => { if (!settled) { settled = true; onSettled(); } };
@@ -109,10 +115,12 @@ function sseResponse(run: AsyncGenerator<RunEvent>, onSettled: () => void): Resp
       }
     },
     cancel() {
-      // client hung up mid-run: ask the generator to stop (cooperative — lands
-      // at the next turn/batch boundary). Do NOT settle here: the pump's
-      // finally settles truthfully once the generator finishes; an eager
-      // settle let a second run share this session's store (MED-F1).
+      // client hung up mid-run: abort the run's controller (kills the in-flight
+      // fetch / tool subprocesses — port #21), then close the generator as the
+      // follow-through. Do NOT settle here: the pump's finally settles
+      // truthfully once the generator finishes; an eager settle let a second
+      // run share this session's store (MED-F1).
+      abort();
       void Promise.resolve(run.return(undefined)).catch(() => {});
     },
   });
@@ -154,7 +162,7 @@ export function startServer(opts: ServerOptions = {}): AionServer {
     // Reuse the ONE runtime construction every surface uses (cli/runtime.ts):
     // same stores, same tools, same provider resolution. Injectable stream for tests.
     const runtime = createRuntime({ cwd, sessionId: id, stream: opts.stream });
-    sessions.set(id, { runtime, running: false });
+    sessions.set(id, { runtime, running: false, abort: null });
     return json({ id }, 201);
   };
 
@@ -180,13 +188,31 @@ export function startServer(opts: ServerOptions = {}): AionServer {
     // allow-listed argv auto-runs, forbidden is denied, prompt-classified fails closed
     // as tool_call_failed/permission_denied (core/tools.ts:87-93)
     const cfg = rt.buildCfg(yolo, undefined);
+    const ac = new AbortController(); // port #21: one controller per run
     const run = agentLoop(def, text, {}, cfg, {
       stream, registry: rt.registry, store: rt.store,
       tools: rt.registry.list().map((t) => t.schema), guard: rt.guard,
       cwd: rt.cwd, // session cwd reaches ToolContext (same gap as ACP HIGH-G1)
+      signal: ac.signal, // port #21: DELETE / disconnect / stop() kill in-flight work
     }, new SteeringQueue());
     entry.running = true;
-    return sseResponse(run, () => { entry.running = false; });
+    entry.abort = ac;
+    return sseResponse(run, () => { entry.running = false; entry.abort = null; }, () => ac.abort());
+  };
+
+  /** DELETE /session/:id/prompt — cancel the in-flight run (port #21). Aborting
+   *  the controller kills the provider fetch / tool subprocesses; the run's own
+   *  SSE stream then ends with run_end status "stopped". `running` still clears
+   *  only from the pump's settle, so the 409 invariant is untouched: the session
+   *  frees when the generator has actually released it. opencode exposes the
+   *  same operation as POST /session/:sessionID/abort → SessionPrompt.cancel
+   *  (routes/instance/httpapi/groups/session.ts:91,253; handlers/session.ts:232). */
+  const cancelPrompt = (id: string): Response => {
+    const entry = sessions.get(id);
+    if (!entry) return json({ error: `unknown session ${id}` }, 404);
+    const live = entry.abort !== null;
+    entry.abort?.abort();
+    return json({ cancelled: live });
   };
 
   const route = async (req: Request): Promise<Response> => {
@@ -194,6 +220,7 @@ export function startServer(opts: ServerOptions = {}): AionServer {
     if (req.method === "POST" && path === "/session") return createSession();
     const m = /^\/session\/([^/]+)\/prompt$/.exec(path);
     if (req.method === "POST" && m) return prompt(m[1]!, req);
+    if (req.method === "DELETE" && m) return cancelPrompt(m[1]!);
     if (req.method === "GET" && path === "/sessions") return json(listSessions(sessionsRoot));
     if (req.method === "GET" && path === "/doc") return json(buildOpenApiDoc(api.url));
     return json({ error: `no route for ${req.method} ${path}` }, 404);
@@ -219,6 +246,9 @@ export function startServer(opts: ServerOptions = {}): AionServer {
     url: `http://${hostname}:${server.port}`,
     async stop() {
       await server.stop(true);
+      // port #21: abort every in-flight run — the provider fetch and tool
+      // subprocesses die now instead of running on after the sockets closed.
+      for (const entry of sessions.values()) entry.abort?.abort();
       // MED-F3: reap MCP children — every POST /session spawns one set via
       // createRuntime; without this an unauthenticated loopback port is an
       // unbounded local spawn primitive that outlives the server.

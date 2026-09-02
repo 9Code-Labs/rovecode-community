@@ -101,7 +101,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     mode: modes.mode,
     turns: 0, tokensIn: 0, tokensOut: 0, busy: false,
   };
-  let run: AsyncGenerator<RunEvent> | null = null;
+  let run: AsyncGenerator<RunEvent> | null = null; let runAbort: AbortController | null = null; // port #21: one controller per run
   let closed = false;
   let resolveClosed: () => void = () => {};
   const closedP = new Promise<void>((r) => { resolveClosed = r; });
@@ -117,7 +117,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     closed = true;
     // port #20 MED-2: /plan then quit resumes in plan (append is sync — lands pre-exit)
     flushModeSwitch(modes, store);
-    void run?.return(undefined as never);
+    runAbort?.abort(); void run?.return(undefined as never); // abort kills in-flight fetch/tools; return settles the generator
     void rt.mcp?.close().catch(() => {}); // stop MCP child processes/connections
     renderer.stop();
     resolveClosed();
@@ -301,15 +301,10 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
           renderer.addSystemNote("branched to session start");
         } else renderer.addSystemNote("nothing to branch — no turns yet");
         return true;
-      case "rewind": case "tree":
-        void cmdRewind();
-        return true;
-      case "sessions":
-        void cmdSessions();
-        return true;
+      case "rewind": case "tree": void cmdRewind(); return true;
+      case "sessions": void cmdSessions(); return true;
       case "resume":
-        if (arg) void cmdSessions(arg);
-        else void cmdSessions();
+        if (arg) void cmdSessions(arg); else void cmdSessions();
         return true;
       case "export": {
         // port #38: write THIS session as markdown (raw JSONL with --json), local only.
@@ -349,10 +344,11 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     applyModeToRun(modes, cfg, def);
     const views = new Map<string, AssistantView>();
     let lastView: AssistantView | null = null;
+    runAbort = new AbortController();
     run = agentLoop(def, goal, {}, cfg, {
       stream, registry: rt.registry, store,
       tools: rt.registry.list().map((t) => t.schema),
-      guard: rt.guard,
+      guard: rt.guard, signal: runAbort.signal, // port #21: Esc aborts this run's controller
     }, steering);
     try {
       for await (const ev of run) {
@@ -384,7 +380,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
         }
       }
     } finally {
-      run = null;
+      run = null; runAbort = null;
       state.busy = false;
       refreshUsage();
       // port #14: surface any fallback-chain advances the router made during the run
@@ -405,7 +401,8 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
       if (state.busy) { steering.push(text); renderer.addSystemNote("queued as steering (applies before the next model turn)"); return; }
       void startRun(text);
     },
-    onInterrupt: () => { void run?.return(undefined as never); renderer.addSystemNote("run interrupted", "warn"); },
+    // port #21: abort FIRST (kills in-flight fetch/subprocesses), then return() settles the generator
+    onInterrupt: () => { runAbort?.abort(); void run?.return(undefined as never); renderer.addSystemNote("run interrupted", "warn"); },
     onExit: close,
   });
   // resumed boot: restore the transcript and usage counters (a bare session open left both blank)

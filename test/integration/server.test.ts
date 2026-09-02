@@ -184,6 +184,7 @@ test("GET /doc: parseable OpenAPI 3.1 with exactly the four routes + honesty not
   expect(Object.keys(doc.paths).sort()).toEqual(["/doc", "/session", "/session/{id}/prompt", "/sessions"]);
   expect(doc.paths["/session"]!.post).toBeDefined();
   expect(doc.paths["/session/{id}/prompt"]!.post).toBeDefined();
+  expect(doc.paths["/session/{id}/prompt"]!.delete).toBeDefined(); // port #21: cancel is documented
   expect(doc.paths["/sessions"]!.get).toBeDefined();
   expect(doc.paths["/doc"]!.get).toBeDefined();
   expect(doc.servers[0]!.url).toBe(base); // doc reflects the actually-bound URL
@@ -389,6 +390,81 @@ test("LOW-MED-F4: oversized request body → 413; server stays healthy", async (
   // a normal-size prompt on the SAME session still round-trips
   const { frames } = await promptSse(id, "small after big");
   expect(frames[frames.length - 1]!.data.type).toBe("run_end");
+});
+
+// ---------- port #21: DELETE /session/:id/prompt cancels the in-flight run ----------
+
+/** Bounded await: bun's per-test timeout only fires when something wakes the
+ *  event loop — a test parked on a promise with no timer pending hangs the
+ *  runner indefinitely (measured here: default, explicit arg and --timeout all
+ *  hang). This timer is what bounds a hang-shaped mutant: the deadline rejects
+ *  (below bun's 5s so the message is ours), the finally still runs. */
+function deadline<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  let t: ReturnType<typeof setTimeout> | undefined;
+  const bomb = new Promise<never>((_, rej) => { t = setTimeout(() => rej(new Error(`${what}: not settled within ${ms}ms`)), ms); });
+  return Promise.race([p, bomb]).finally(() => clearTimeout(t));
+}
+
+/** Parks the FIRST provider turn until its own options.signal aborts — only a
+ *  real controller abort releases it (a bare generator .return() cannot: the
+ *  loop is suspended inside the provider await). Later calls answer at once. */
+function abortAwareStream(): { stream: StreamFn; seen: Promise<AbortSignal>; reached: Promise<void> } {
+  let seenR!: (s: AbortSignal) => void;
+  const seen = new Promise<AbortSignal>((r) => { seenR = r; });
+  let reachedR!: () => void;
+  const reached = new Promise<void>((r) => { reachedR = r; });
+  let calls = 0;
+  const stream: StreamFn = async function* (_m: ModelRef, _msgs: Message[], opts?: StreamOptions): AsyncGenerator<StreamEvent> {
+    if (++calls > 1) {
+      yield { type: "turn", turn: { parts: [{ kind: "text", text: "resumed" }], stopReason: "end_turn", usage: { input: 0, output: 1 } } };
+      return;
+    }
+    const sig = opts!.signal!;
+    seenR(sig); reachedR();
+    if (!sig.aborted) await new Promise<void>((r) => sig.addEventListener("abort", () => r(), { once: true }));
+    yield { type: "turn", turn: { parts: [], stopReason: "aborted", usage: { input: 0, output: 0 } } };
+  };
+  return { stream, seen, reached };
+}
+
+test("port #21: DELETE aborts the in-flight run — SSE ends with run_end stopped, 409 clears on settle, idle DELETE is idempotent", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-srv-del-"));
+  const { stream, seen, reached } = abortAwareStream();
+  const s = startServer({ port: 0, cwd: dir, stream });
+  try {
+    const id = await createSession(s.url);
+    const res = await promptReq(s.url, id, "park me");
+    expect(res.status).toBe(200);
+    await reached;                    // the run is inside the provider turn
+    const del = await fetch(`${s.url}/session/${id}/prompt`, { method: "DELETE" });
+    expect(del.status).toBe(200);
+    expect(await del.json()).toEqual({ cancelled: true });
+    // the run's own stream ends promptly with run_end "stopped" — without the
+    // abort (mutation: drop entry.abort?.abort()) the parked turn never
+    // releases and this res.text() would hang; the deadline makes that a red
+    const frames = parseFrames(await deadline(res.text(), 4_000, "SSE body after DELETE"));
+    const last = frames[frames.length - 1]!.data;
+    expect(last.type).toBe("run_end");
+    if (last.type === "run_end") expect(last.status).toBe("stopped");
+    expect((await seen).aborted).toBe(true); // the controller REALLY fired
+    // the session frees once the generator settled — next prompt round-trips
+    let status = 0;
+    for (let i = 0; i < 100 && status !== 200; i++) {
+      const r = await promptReq(s.url, id, "again");
+      status = r.status;
+      await r.text();
+      if (status !== 200) await new Promise((rr) => setTimeout(rr, 20));
+    }
+    expect(status).toBe(200);
+    // idle cancel: idempotent no-op; unknown session: 404
+    const idle = await fetch(`${s.url}/session/${id}/prompt`, { method: "DELETE" });
+    expect(idle.status).toBe(200);
+    expect(await idle.json()).toEqual({ cancelled: false });
+    expect((await fetch(`${s.url}/session/nope/prompt`, { method: "DELETE" })).status).toBe(404);
+  } finally {
+    await s.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("prompt route id refuses multi-segment / traversal ids (pin against ([^/]+) → (.+) loosening)", async () => {

@@ -225,7 +225,10 @@ export const bashTool: Tool = {
     // rungs, probed not assumed). Direct rung is byte-compatible with the old
     // inline runOnce; a missing bash now returns exit=-1 instead of throwing.
     let r = await getExecutor().run(cmd, ctx.cwd, ctx.signal);
-    if (r.code !== 0) r = await getExecutor().run(cmd, ctx.cwd, ctx.signal); // single self-contained retry
+    // single self-contained retry — but NEVER after an abort (port #21): the kill
+    // makes the exit non-zero, and a blind retry would respawn the cancelled
+    // command as a detached subprocess that outlives the run
+    if (r.code !== 0 && !ctx.signal.aborted) r = await getExecutor().run(cmd, ctx.cwd, ctx.signal);
     return { ok: r.code === 0, output: `exit=${r.code}\n${r.text}` };
   },
 };

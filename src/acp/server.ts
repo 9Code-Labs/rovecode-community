@@ -14,7 +14,10 @@
  *    run_end error         → JSON-RPC error response (RequestError is the ACP error
  *                            channel — the SDK converts it to a wire-level response,
  *                            so the never-throw seam ends at this boundary by design)
- *    session/cancel        → cooperative stop at the next event boundary → "cancelled"
+ *    session/cancel        → aborts the run's AbortController (kills the in-flight
+ *                            provider fetch and tool subprocesses mid-turn — port #21),
+ *                            races any outstanding permission ask to deny, then closes
+ *                            the generator → "cancelled"
  */
 
 import {
@@ -48,6 +51,9 @@ interface AcpSessionState {
   active: {
     gen: AsyncGenerator<RunEvent>;
     cancelled: boolean;
+    /** per-run controller (port #21): session/cancel aborts it, killing the
+     *  in-flight provider fetch and every ToolContext.signal consumer */
+    abort: AbortController;
     /** resolves null when session/cancel lands — raced against an outstanding
      *  request_permission so a hung client cannot wedge the session (HIGH-G2) */
     onCancel: Promise<null>;
@@ -179,16 +185,18 @@ export class AionAcpAgent implements Agent {
     const model = { provider: s.rt.provider?.id ?? "mock", model: s.rt.defaultModel || "default" };
     const def = s.rt.buildDef(model);
     const cfg = s.rt.buildCfg(this.opts.yolo ?? false, this.approvalFor(params.sessionId, s));
+    const abort = new AbortController(); // port #21: one controller per run
     const deps = {
       stream, registry: s.rt.registry, store: s.rt.store,
       tools: s.rt.registry.list().map((t) => t.schema), guard: s.rt.guard,
       cwd: s.rt.cwd, // HIGH-G1: the client's authoritative session cwd reaches ToolContext
+      signal: abort.signal, // port #21: session/cancel kills in-flight fetch/tools mid-turn
     };
 
     const gen = agentLoop(def, goal, {}, cfg, deps, s.steering);
     let fireCancel: () => void = () => {};
     const onCancel = new Promise<null>((resolve) => { fireCancel = () => resolve(null); });
-    const active = { gen, cancelled: false, onCancel, fireCancel };
+    const active = { gen, cancelled: false, abort, onCancel, fireCancel };
     s.active = active;
     let end: { status: RunStatus; summary: string } | null = null;
     try {
@@ -215,12 +223,16 @@ export class AionAcpAgent implements Agent {
     const active = this.sessions.get(params.sessionId)?.active;
     if (!active) return;
     active.cancelled = true;
+    // port #21: abort the run's controller FIRST — the in-flight provider fetch
+    // dies and tool subprocesses are killed mid-turn, so the generator below
+    // reaches a settle point quickly instead of finishing the turn.
+    active.abort.abort();
     // HIGH-G2: unblock an outstanding request_permission (→ deny) — without
     // this a crashed client / closed popup leaves the run suspended inside the
     // approval await forever and the session permanently "already running".
     active.fireCancel();
-    // close the generator: runs the loop's finally blocks (aborts in-flight tools).
-    // Queues behind any pending next(), so the stop is cooperative (SHOULD per spec).
+    // close the generator as the follow-through: runs the loop's finally blocks.
+    // Queues behind any pending next(), so the settle stays cooperative.
     await active.gen.return(undefined as never).then(() => undefined, () => undefined);
   }
 

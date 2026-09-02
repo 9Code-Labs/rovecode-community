@@ -1,6 +1,8 @@
 /** The agent loop (ADR-003): one loop, generator-based, event-streaming.
  *  Steering drained between tool batches; follow-ups drained at stop.
- *  Errors cross the provider seam as stopReasons, never exceptions. */
+ *  Errors cross the provider seam as stopReasons, never exceptions.
+ *  Cancellation (port #21): ONE AbortController per run — its signal reaches
+ *  the provider fetch, ToolContext.signal, and (by identity) child processes. */
 
 import { randomUUID } from "node:crypto";
 import type {
@@ -28,7 +30,22 @@ export interface LoopDeps {
   /** ToolContext cwd for this run — surfaces with a session cwd (ACP, server)
    *  pass it here; default is the agent process dir */
   cwd?: string;
+  /** mid-turn cancellation (port #21): when this aborts, the run's OWN
+   *  controller aborts — the in-flight provider fetch dies, every
+   *  ToolContext.signal consumer (bash subprocess trees, MCP calls) is
+   *  cancelled, and the run ends with run_end status "stopped". Same seam as
+   *  `cwd`: every surface already constructs LoopDeps, so one optional field
+   *  keeps tui/repl/acp/serve uniform. The loop still owns the per-run
+   *  controller so bare consumers that only .return() the generator
+   *  (orchestrator children, cmdRun, gauntlet) keep in-flight-tool
+   *  cancellation without constructing anything. */
+  signal?: AbortSignal;
 }
+
+/** Synthesized output for a tool_call the abort left unanswered (opencode
+ *  session/processor.ts:587 marks them "Tool execution aborted"; codex inserts
+ *  a synthetic "aborted" function_call_output — context_manager/normalize.rs:51-67). */
+export const ABORTED_TOOL_RESULT = "Tool execution aborted";
 
 export class SteeringQueue {
   private queue: string[] = [];
@@ -44,6 +61,15 @@ export function extractToolCalls(parts: MessagePart[], stopReason: string): { ca
   return { calls, truncated: stopReason === "length" };
 }
 
+/** One controller per run (port #21 bar). agentLoop is a thin wrapper so the
+ *  controller's lifetime is EXACTLY the generator's: it follows deps.signal
+ *  while the run lives, and the finally aborts it on ANY settle — a returned/
+ *  thrown/finished run owns nothing that may keep running (fetch, tools,
+ *  subprocesses all hang off this one signal).
+ *  Upstream shape: opencode threads one AbortSignal per task into every model
+ *  call and tool (session/llm.ts:51,136,321; session/prompt.ts:323,329 with
+ *  onInterrupt → taskAbort.abort()); codex aborts the active turn task from
+ *  its Op loop (core/src/tasks/mod.rs:546-591 abort_turn_if_active). */
 export async function* agentLoop(
   def: AgentDefinition,
   goal: string,
@@ -53,6 +79,31 @@ export async function* agentLoop(
   steering: SteeringQueue,
   depth = 0,
   followUps?: SteeringQueue,
+): AsyncGenerator<RunEvent> {
+  const runAc = new AbortController();
+  const follow = () => runAc.abort();
+  if (deps.signal?.aborted) runAc.abort();
+  else deps.signal?.addEventListener("abort", follow, { once: true });
+  try {
+    yield* runLoop(def, goal, vars, cfg, deps, steering, depth, followUps, runAc);
+  } finally {
+    deps.signal?.removeEventListener("abort", follow);
+    runAc.abort();
+  }
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+async function* runLoop(
+  def: AgentDefinition,
+  goal: string,
+  vars: AgentVars,
+  cfg: RunConfig,
+  deps: LoopDeps,
+  steering: SteeringQueue,
+  depth: number,
+  followUps: SteeringQueue | undefined,
+  runAc: AbortController,
 ): AsyncGenerator<RunEvent> {
   const runId = randomUUID();
   yield { type: "run_start", runId, sessionId: deps.store.id, goal };
@@ -77,6 +128,10 @@ export async function* agentLoop(
   deps.guard?.onTurn();
 
   for (let turn = 1; turn <= cfg.maxTurns; turn++) {
+    // --- abort check: an abort that landed during the previous batch (or before
+    // turn 1) must not consume steering or touch the provider again
+    if (runAc.signal.aborted) { yield { type: "run_end", status: "stopped", summary: "run aborted" }; return; }
+
     // --- steering drain point: before the model call ---
     for (const s of steering.drainAll()) {
       const sm: Message = { id: randomUUID(), role: "user", parts: [{ kind: "text", text: s }], parentId: history.at(-1)?.id ?? null, createdAt: Date.now() };
@@ -124,6 +179,8 @@ export async function* agentLoop(
     const promptText = promptChunks.map((c) => c.text).join("\n\n");
 
     // --- provider turn (never throws; errors are stopReasons) ---
+    // the run signal rides into the StreamFn options: both wire adapters hand it
+    // to fetch, so an abort kills the in-flight request itself (≤500ms bar)
     const msgId = randomUUID();
     let turnResult: TurnOutcome;
     const sysMsg: Message = { id: "sys", role: "system", parts: [{ kind: "text", text: promptText }], parentId: null, createdAt: 0 };
@@ -133,21 +190,35 @@ export async function* agentLoop(
         systemKept ? [sysMsg, ...history] : history,
         (delta) => { events.push({ type: "message_update", messageId: msgId, delta }); },
         deps.tools,
+        runAc.signal,
       );
     } catch (e) {
       turnResult = { parts: [], stopReason: "error", usage: { input: 0, output: 0 }, error: e instanceof Error ? e.message : String(e) };
     }
     yield* flush();
     const { parts, stopReason, usage } = turnResult;
+    // --- abort landed during the provider turn: the fetch is already dead (or the
+    // stream reported "aborted" itself). Keep any partial text the adapter salvaged,
+    // but a tool_call in an aborted turn will never execute — append a synthesized
+    // failed result for each so the NEXT request carries no orphan tool_calls
+    // (codex context_manager/normalize.rs:51-67; opencode message-v2.ts:349-360
+    // "Anthropic/Claude APIs require every tool_use to have a corresponding tool_result").
+    const aborted = runAc.signal.aborted || stopReason === "aborted";
     const assistant: Message = {
       id: msgId, role: "assistant", parts, parentId: history.at(-1)?.id ?? null,
       // origin = the model that SERVED the turn (router fallback may differ from the one
       // asked for; /cost prices per-message via origin — port #14 HIGH-2), else the request
       createdAt: Date.now(), origin: turnResult.origin ?? model, usage,
     };
-    deps.store.append(assistant);
-    history.push(assistant);
-    yield { type: "turn_end", turn, stopReason };
+    if (!aborted || parts.length > 0) { deps.store.append(assistant); history.push(assistant); }
+    yield { type: "turn_end", turn, stopReason: aborted ? "aborted" : stopReason };
+    if (aborted) {
+      for (const p of parts) {
+        if (p.kind === "tool_call") appendToolResult(deps.store, history, p.id, { ok: false, output: ABORTED_TOOL_RESULT });
+      }
+      yield { type: "run_end", status: "stopped", summary: "run aborted" };
+      return;
+    }
 
     // --- error stops: the run ends in 'error', never a fake 'done' ---
     if (stopReason === "error") {
@@ -164,12 +235,7 @@ export async function* agentLoop(
       const detail = "response hit length limit; tool calls not executed";
       for (const c of calls) {
         yield { type: "tool_call_failed", callId: c.id, reason: "truncated", detail };
-        const rm: Message = {
-          id: randomUUID(), role: "tool",
-          parts: [{ kind: "tool_result", callId: c.id, ok: false, output: detail }],
-          parentId: history.at(-1)?.id ?? null, createdAt: Date.now(),
-        };
-        deps.store.append(rm); history.push(rm);
+        appendToolResult(deps.store, history, c.id, { ok: false, output: detail });
       }
       continue;
     }
@@ -189,10 +255,10 @@ export async function* agentLoop(
       return;
     }
 
-    // --- tool execution with steering preserved via abort signals ---
-    const ac = new AbortController();
+    // --- tool execution: ctx.signal IS the run controller's signal, so the ONE
+    // per-run controller reaches child processes by identity (executor G4 seam)
     const ctx: ToolContext = {
-      sessionId: deps.store.id, cwd: deps.cwd ?? process.cwd(), signal: ac.signal,
+      sessionId: deps.store.id, cwd: deps.cwd ?? process.cwd(), signal: runAc.signal,
       spawn: undefined, permissions: { effect: "allow" },
     };
     const runChild = deps.childRunner;
@@ -203,35 +269,48 @@ export async function* agentLoop(
       };
     }
     let results = new Map<string, ToolOutput>();
+    let batchSettled = false;
     try {
       const batch = deps.registry.dispatchBatch(calls, ctx, deps.hooks, cfg.permissionRules, cfg.approval, emit, cfg.parallelTools, deps.guard);
       // stream batch events while tools run; each yield is also a suspension
-      // point where a consumer .return()/.throw() lands and triggers the abort
+      // point where a consumer .return()/.throw() lands. A mid-batch abort
+      // breaks the pump so the run settles even if a tool ignores its signal.
       let settled = false;
       void batch.then(() => { settled = true; }, () => { settled = true; });
-      while (!settled) {
-        await Promise.race([batch, new Promise<void>((r) => setTimeout(r, 5))]);
+      while (!settled && !runAc.signal.aborted) {
+        await Promise.race([batch, sleep(5)]);
         if (events.length > 0) yield* flush();
       }
-      results = await batch;
-      yield* flush();
+      // aborted mid-batch: give the killed tools one bounded beat to report their
+      // real (error) outputs before results are synthesized — opencode waits the
+      // same way (session/processor.ts:571-575, 250ms) before marking calls interrupted
+      if (!settled && runAc.signal.aborted) await Promise.race([batch, sleep(250)]);
+      if (settled) { results = await batch; batchSettled = true; }
+      if (events.length > 0) yield* flush();
     } finally {
-      // cooperative abort: any exit from the batch region (normal completion,
-      // consumer .return()/.throw()) cancels in-flight tools via the signal.
-      // Consumer cancellation lands at the next turn/batch-event boundary — there is no mid-turn suspension point (house-wide granularity).
-      ac.abort();
+      // Every exit — normal completion, consumer .return()/.throw() at a pump
+      // yield, or a mid-batch abort — leaves the store WIRE-WELL-FORMED: the
+      // assistant message carrying these tool_calls is already appended, so each
+      // call gets a tool_result here. Ones the batch never delivered are
+      // synthesized as failed (upstream policy: codex normalize.rs:51-67,
+      // opencode message-v2.ts:349-360 + processor.ts:576-593).
+      if (!batchSettled) runAc.abort(); // consumer left mid-batch: kill in-flight tools + subprocess trees
+      for (const c of calls) {
+        appendToolResult(deps.store, history, c.id, results.get(c.id) ?? { ok: false, output: batchSettled ? "missing result" : ABORTED_TOOL_RESULT });
+      }
     }
-    for (const c of calls) {
-      const out = results.get(c.id) ?? { ok: false, output: "missing result" };
-      const rm: Message = {
-        id: randomUUID(), role: "tool",
-        parts: [{ kind: "tool_result", callId: c.id, ok: out.ok, output: out.output }],
-        parentId: history.at(-1)?.id ?? null, createdAt: Date.now(),
-      };
-      deps.store.append(rm); history.push(rm);
-    }
+    if (runAc.signal.aborted) { yield { type: "run_end", status: "stopped", summary: "run aborted" }; return; }
   }
   yield { type: "run_end", status: "budget", summary: `max turns (${cfg.maxTurns}) reached` };
+}
+
+function appendToolResult(store: SessionStore, history: Message[], callId: string, out: { ok: boolean; output: string }): void {
+  const rm: Message = {
+    id: randomUUID(), role: "tool",
+    parts: [{ kind: "tool_result", callId, ok: out.ok, output: out.output }],
+    parentId: history.at(-1)?.id ?? null, createdAt: Date.now(),
+  };
+  store.append(rm); history.push(rm);
 }
 
 export interface TurnOutcome {
@@ -240,9 +319,9 @@ export interface TurnOutcome {
   origin?: ModelRef;
 }
 
-async function collectTurn(stream: StreamFn, model: ModelRef, messages: Message[], onText?: (delta: string) => void, tools?: ToolSchema[]): Promise<TurnOutcome> {
+async function collectTurn(stream: StreamFn, model: ModelRef, messages: Message[], onText?: (delta: string) => void, tools?: ToolSchema[], signal?: AbortSignal): Promise<TurnOutcome> {
   let outcome: TurnOutcome = { parts: [], stopReason: "end_turn", usage: { input: 0, output: 0 } };
-  for await (const ev of stream(model, messages, { tools })) {
+  for await (const ev of stream(model, messages, { tools, signal })) {
     if (ev.type === "text_delta") onText?.(ev.text);
     else if (ev.type === "turn") { outcome = { parts: ev.turn.parts, stopReason: ev.turn.stopReason, usage: ev.turn.usage, error: ev.turn.error, origin: servedBy(ev.turn) }; }
   }

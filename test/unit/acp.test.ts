@@ -363,6 +363,47 @@ test("session/cancel mid-run → stopReason cancelled; nothing forwarded after c
   } finally { release(); rmSync(cwd, { recursive: true, force: true }); }
 });
 
+/** Bounded await: bun's per-test timeout only fires when something wakes the
+ *  event loop — a test parked on a promise with no timer pending hangs the
+ *  runner indefinitely (measured here: default, explicit arg and --timeout all
+ *  hang). This timer is what bounds a hang-shaped mutant (below bun's 5s so
+ *  the failure message is ours). */
+function deadline<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  let t: ReturnType<typeof setTimeout> | undefined;
+  const bomb = new Promise<never>((_, rej) => { t = setTimeout(() => rej(new Error(`${what}: not settled within ${ms}ms`)), ms); });
+  return Promise.race([p, bomb]).finally(() => clearTimeout(t));
+}
+
+test("port #21: session/cancel ABORTS the in-flight provider turn (the stream's signal fires) → cancelled", async () => {
+  const cwd = tmpCwd();
+  try {
+    // parks until ITS OWN options.signal aborts — gen.return() alone cannot
+    // release it (the generator is suspended inside the provider await), so
+    // deleting the cancel-side abort() would make `await p` hang — the deadline
+    // below turns that into a red instead
+    let seenR!: (s: AbortSignal) => void;
+    const seen = new Promise<AbortSignal>((r) => { seenR = r; });
+    let calls = 0;
+    const stream: StreamFn = async function* (_m, _msgs, options): AsyncGenerator<StreamEvent> {
+      if (++calls > 1) { yield { type: "turn", turn: textTurn("resumed") }; return; }
+      const sig = options!.signal!;
+      seenR(sig);
+      if (!sig.aborted) await new Promise<void>((r) => sig.addEventListener("abort", () => r(), { once: true }));
+      yield { type: "turn", turn: { parts: [], stopReason: "aborted", usage: { input: 0, output: 0 } } };
+    };
+    const { conn } = connect({ stream });
+    const sessionId = await handshake(conn, cwd);
+    const p = conn.prompt(textPrompt(sessionId, "park"));
+    const sig = await seen;                    // the provider turn is in flight
+    await conn.cancel({ sessionId });
+    expect((await deadline(p, 4_000, "session/prompt after cancel")).stopReason).toBe("cancelled");
+    expect(sig.aborted).toBe(true);            // the run controller REALLY aborted mid-turn
+    // session usable again after the mid-turn abort (post-abort next-turn OK)
+    const again = await conn.prompt(textPrompt(sessionId, "carry on"));
+    expect(again.stopReason).toBe("end_turn");
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
 test("HIGH-G1: session cwd reaches tools — bash pwd runs in the SESSION cwd, not the agent process dir", async () => {
   const cwd = tmpCwd();
   try {

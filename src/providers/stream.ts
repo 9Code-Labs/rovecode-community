@@ -53,6 +53,13 @@ function authHeaders(cfg: ProviderConfig): Record<string, string> {
     : { authorization: `Bearer ${cfg.apiKey}` };
 }
 
+/** Turn for a thrown fetch/stream error. options.signal abort (port #21) → honest "aborted" keeping SSE text already
+ *  streamed (tool-call fragments dropped — truncated JSON); other errors keep parts empty (a router re-drive would dup). */
+function failedTurn(e: unknown, signal: AbortSignal | undefined, salvaged = ""): AssistantTurn {
+  if (signal?.aborted) return { parts: salvaged ? [{ kind: "text", text: salvaged }] : [], stopReason: "aborted", usage: { input: 0, output: 0 } };
+  return { parts: [], stopReason: "error", usage: { input: 0, output: 0 }, error: e instanceof Error ? e.message : String(e) };
+}
+
 // ---------- factories ----------
 
 export function providerStream(cfg: ProviderConfig): StreamFn {
@@ -81,7 +88,7 @@ export function openaiCompatStream(opts: { baseUrl: string; apiKey: string }): S
         turn = parseOpenAiResponse(await res.json());
       }
     } catch (e) {
-      turn = { parts: [], stopReason: "error", usage: { input: 0, output: 0 }, error: e instanceof Error ? e.message : String(e) };
+      turn = failedTurn(e, options?.signal);
     }
     yield { type: "turn", turn };
   };
@@ -147,7 +154,7 @@ export function openaiCompatStreaming(opts: { baseUrl: string; apiKey: string })
       }
       turn = { parts, stopReason: finish, usage };
     } catch (e) {
-      turn = { parts: [], stopReason: "error", usage: { input: 0, output: 0 }, error: e instanceof Error ? e.message : String(e) };
+      turn = failedTurn(e, options?.signal, buffer); // mid-stream abort: the deltas already streamed survive as the turn's text
     }
     yield { type: "turn", turn };
   };
@@ -181,7 +188,7 @@ export function anthropicStream(opts: { baseUrl: string; apiKey: string }): Stre
         turn = parseAnthropicResponse(await res.json());
       }
     } catch (e) {
-      turn = { parts: [], stopReason: "error", usage: { input: 0, output: 0 }, error: e instanceof Error ? e.message : String(e) };
+      turn = failedTurn(e, options?.signal);
     }
     yield { type: "turn", turn };
   };

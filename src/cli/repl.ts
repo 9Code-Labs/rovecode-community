@@ -5,7 +5,7 @@ import readline from "node:readline";
 import { agentLoop, SteeringQueue } from "../core/loop.ts";
 import { resetTurnFailureCount } from "../memory/tools.ts";
 import { providerStream } from "../providers/stream.ts";
-import type { ApprovalFn } from "../core/types.ts";
+import type { ApprovalFn, RunEvent } from "../core/types.ts";
 import { createRuntime } from "./runtime.ts";
 
 export interface ReplState {
@@ -65,6 +65,15 @@ export async function runRepl( /* eslint-disable-line complexity */
 
   rl.prompt();
 
+  // port #21: one AbortController per run — Ctrl+C mid-run aborts the in-flight
+  // fetch/tools for real (abort first, then return() settles the generator); idle
+  // Ctrl+C keeps its old meaning (close the repl)
+  let running: { ac: AbortController; gen: AsyncGenerator<RunEvent> } | null = null;
+  rl.on("SIGINT", () => {
+    if (running) { running.ac.abort(); void running.gen.return(undefined as never); console.log("\n  [interrupted]"); }
+    else rl.close();
+  });
+
   rl.on("line", async (line) => {
     const text = line.trim();
     if (!text) { rl.prompt(); return; }
@@ -80,9 +89,12 @@ export async function runRepl( /* eslint-disable-line complexity */
 
     const def = rt.buildDef({ provider: state.provider, model: state.model });
 
+    const ac = new AbortController();
+    const gen = agentLoop(def, text, {}, rt.buildCfg(state.yolo, approval), { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, signal: ac.signal }, new SteeringQueue());
+    running = { ac, gen };
     try {
       let live = "";
-      for await (const ev of agentLoop(def, text, {}, rt.buildCfg(state.yolo, approval), { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard }, new SteeringQueue())) {
+      for await (const ev of gen) {
         if (ev.type === "turn_start") { resetTurnFailureCount(); state.turns++; }
         if (ev.type === "message_update") { process.stdout.write(ev.delta); live += ev.delta; }
         if (ev.type === "tool_execution_start") { console.log(`\n  → ${ev.tool} ${JSON.stringify(ev.args).slice(0, 120)}`); }
@@ -97,6 +109,8 @@ export async function runRepl( /* eslint-disable-line complexity */
       for (const m of rt.store.messages()) if (m.usage) { state.tokensIn += m.usage.input; state.tokensOut += m.usage.output; }
     } catch (e) {
       console.log(`error: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      running = null;
     }
     rl.prompt();
   });
