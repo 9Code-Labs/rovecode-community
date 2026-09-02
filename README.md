@@ -6,12 +6,15 @@ oh-my-pi, hermes-agent, senpi, prime-agent, OpenHands) — every port traces to 
 snapshotted source and lands only after an independent fresh-context critic verifies it against a
 pre-written bar (ledger: `PORTS.md` at the workspace root).
 
-## Status (2026-09-01, post wave 2)
+## Status (2026-09-02, post wave 3)
 
-- **All 20 BLUEPRINT §3 ports landed** (P1 8/8 · P2 6/6 · P3 4/4 · P4 2/2)
-- **Tests**: 650 pass / 0 fail (53 files, unit + integration)
+- **All 20 BLUEPRINT §3 ports landed** (P1 8/8 · P2 6/6 · P3 4/4 · P4 2/2) **+ all 19 Wave-3 parity ports (#21–#39)** landed
+  through the gauntlet-loop (builder → fresh-context critic → fix wave → re-verify; ledger: `PORTS.md`)
+- **Tests**: 1499 pass / 0 fail / 1 skip (104 files, unit + integration; run in ≤4-file chunks)
 - **Gauntlet**: 10/10 (basic, coding, failure-recovery, adversarial: loop-guard, huge-output, permission-bypass)
 - **Typecheck**: 0 errors · TUI render smoke: PASS
+- **Wave 4 in progress**: the sextant surface (`src/sextant/*`, a new default TUI ported from the user's prototype) — core,
+  model/panels and pet landed; renderer integration building; the current pi-tui surface stays available as `--classic`
 
 ## Install
 
