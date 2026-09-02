@@ -103,6 +103,11 @@ file in `.aion/commands/` (project) or `~/.aion/commands/` (user scope).
   `{status, summary, sessionId, model, origin, usage, costUsd, toolCalls, durationMs, exitCode}` on stdout;
   `ndjson` = every RunEvent as a JSON line then a final `{type:"result"}` line; stdout is JSON-only
   (progress → stderr); exit 0 done · 1 error/budget · 2 usage/startup error · 130 aborted.
+- **Reflection** (#28, aider pattern) — a failed `edit`/`write` (or one that introduces LSP diagnostics)
+  gets ONE `reflection: …` nudge on the next turn with the error in context, capped at 2 per run
+  (`AION_REFLECTION_MAX`; `AION_REFLECTION=0` disables); identical repeat failures are not re-nudged and
+  the loop guard still fires. Failed edits now report the anchor line's current text and hash, the lines
+  that do match, and the read-then-retry remedy; `write` into a missing directory says so.
 - Also landed: first-class `glob`/`grep`/`ls` tools (#22), same-model retry with backoff (#23), diff
   previews in approval overlays (#24), compaction strategies (#25), per-project sandbox rung (#27),
   `aion export` (#38), `aion auth` credential onboarding (#37), packaging (#36).

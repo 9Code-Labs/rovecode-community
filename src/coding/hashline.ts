@@ -1,10 +1,16 @@
 /** Hashline-anchored edits (ADR-006): read emits path#TAG + N#hash|content;
  *  edit requires LINE#HASH anchors to match, applies in reverse order,
- *  failures return nearest-match diagnostics (aider did-you-mean). */
+ *  failures return nearest-match diagnostics (aider did-you-mean).
+ *  Port #28: a rejected edit/write is an ACTIONABLE message (describeEditFailure) — expected vs
+ *  what the file holds NOW (the anchor line's current text + hash, the lines whose hash IS the
+ *  anchor), the line count for out-of-range, the missing directory for write — plus the remedy,
+ *  bounded to MAX_EDIT_MESSAGE_CHARS with the remedy always surviving the clip. Pattern: aider
+ *  @ 5dc9490 aider/coders/editblock_coder.py:84-124 (failed-block report → "Did you mean to match
+ *  some of these actual lines", "The SEARCH section must exactly match…"); no code copied. */
 
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import type { Tool, ToolContext, ToolOutput } from "../core/types.ts";
 import { getExecutor } from "../core/executor.ts";
 
@@ -46,9 +52,13 @@ export interface EditOp {
   newLines: string[];          // replacement content (empty = delete line)
 }
 
+/** lines listed as "carry your anchor's hash" in a hash-mismatch failure */
+const MAX_ANCHOR_MATCHES = 3;
+
 export type EditFailure =
   | { kind: "tag-mismatch"; path: string; expected: string; actual: string }
-  | { kind: "hash-mismatch"; path: string; line: number; expected: string; actual: string; nearest: string }
+  /** text = the anchor line's CURRENT content (clipped); matches = line numbers whose hash is the anchor (≤ MAX_ANCHOR_MATCHES) */
+  | { kind: "hash-mismatch"; path: string; line: number; expected: string; actual: string; nearest: string; text: string; matches: number[] }
   | { kind: "out-of-range"; path: string; line: number; lineCount: number };
 
 export type EditResult = { ok: true; newTag: string } | { ok: false; failure: EditFailure };
@@ -68,14 +78,16 @@ export function applyEditsToContent(content: string, edits: EditOp[], path: stri
     if (e.anchorLine < 1 || e.anchorLine > lines.length) {
       return { ok: false, failure: { kind: "out-of-range", path, line: e.anchorLine, lineCount: lines.length } };
     }
-    const actual = lineHash(lines[e.anchorLine - 1]!);
+    const text = lines[e.anchorLine - 1]!;
+    const actual = lineHash(text);
     if (actual !== e.anchorHash) {
-      // nearest-match diagnostic (aider find_similar_lines): show the closest line by hash-distance of text
-      const idx = lines.findIndex((l) => lineHash(l) === e.anchorHash);
-      const nearest = idx >= 0
-        ? `line ${idx + 1} currently holds that hash: ${lines[idx]!.slice(0, 80)}`
-        : `no line matches; line ${e.anchorLine} is now: ${lines[e.anchorLine - 1]!.slice(0, 80)}`;
-      return { ok: false, failure: { kind: "hash-mismatch", path, line: e.anchorLine, expected: e.anchorHash, actual, nearest } };
+      // nearest-match diagnostic (aider find_similar_lines): the lines that DO carry the anchor's hash
+      const matches: number[] = [];
+      for (let i = 0; i < lines.length && matches.length < MAX_ANCHOR_MATCHES; i++) if (lineHash(lines[i]!) === e.anchorHash) matches.push(i + 1);
+      const nearest = matches.length > 0
+        ? `line ${matches[0]} currently holds that hash: ${lines[matches[0]! - 1]!.slice(0, 80)}`
+        : `no line matches; line ${e.anchorLine} is now: ${text.slice(0, 80)}`;
+      return { ok: false, failure: { kind: "hash-mismatch", path, line: e.anchorLine, expected: e.anchorHash, actual, nearest, text: text.slice(0, 80), matches } };
     }
     lines.splice(e.anchorLine - 1, 1, ...e.newLines);
   }
@@ -91,6 +103,40 @@ export function applyEdits(absPath: string, edits: EditOp[]): EditResult {
   writeFileSync(absPath, r.content);
   return { ok: true, newTag: r.newTag };
 }
+
+// ---------- port #28: actionable failure text ----------
+
+/** hard bound on every rejection message the model sees (the remedy is never the part clipped) */
+export const MAX_EDIT_MESSAGE_CHARS = 600;
+const EDIT_REMEDY = "Remedy: re-read the file with `read` to get fresh line hashes, then retry the edit.";
+/** lint errors listed in a lint-gate rejection before "… and N more" */
+const MAX_LINT_LINES = 8;
+
+/** What went wrong, what the file holds NOW, and what to do — aider's failed-block report shape
+ *  (editblock_coder.py:84-124: the failing block, "Did you mean to match some of these actual
+ *  lines", the exact-match rule) for hashline anchors. Detail is clipped first; the remedy survives. */
+export function describeEditFailure(f: EditFailure): string {
+  const head = "Edit rejected: ";
+  const room = MAX_EDIT_MESSAGE_CHARS - head.length - EDIT_REMEDY.length - 1;
+  return `${head}${clip(editFailureDetail(f), room)} ${EDIT_REMEDY}`;
+}
+
+function editFailureDetail(f: EditFailure): string {
+  switch (f.kind) {
+    case "tag-mismatch":
+      return `stale read — ${f.path} changed since you read it (file TAG is now ${f.actual}, your edit carries ${f.expected}).`;
+    case "hash-mismatch": {
+      const where = f.matches.length > 0
+        ? `Lines whose hash matches your anchor: ${f.matches.join(", ")} — did you mean one of those?`
+        : "No line in the file has that hash now — the content changed since your read.";
+      return `anchor mismatch at ${f.path}:${f.line} — line ${f.line} now reads ${JSON.stringify(f.text)} (hash ${f.actual}), your anchor expected hash ${f.expected}. ${where}`;
+    }
+    case "out-of-range":
+      return `line ${f.line} is out of range — ${f.path} has ${f.lineCount} lines (valid anchors: 1-${f.lineCount}).`;
+  }
+}
+
+function clip(s: string, max: number): string { return s.length <= max ? s : s.slice(0, Math.max(0, max - 1)) + "…"; }
 
 // ---------- Tools ----------
 
@@ -172,17 +218,13 @@ export const editTool: Tool = {
   execute(args, ctx): Promise<ToolOutput> {
     const a = args as { path: string; edits: EditOp[] };
     const p = resolvePath(ctx.cwd, a.path);
-    const before = existsSync(p) ? readFileSync(p, "utf8") : "";
-    const r = applyEdits(p, a.edits.map((e) => ({ ...e, path: p })));
-    if (!r.ok) {
-      const f = r.failure;
-      const detail = f.kind === "tag-mismatch"
-        ? `stale read: file TAG is now ${f.actual}, you read ${f.expected}. Re-read the file.`
-        : f.kind === "hash-mismatch"
-          ? `line ${f.line} hash is ${f.actual}, expected ${f.expected}. ${f.nearest}`
-          : `line ${f.line} out of range (file has ${f.lineCount} lines)`;
-      return Promise.resolve({ ok: false, output: `Edit rejected: ${detail}` });
+    if (!existsSync(p)) {
+      // port #28: a missing file used to surface as "line 0 out of range (file has 0 lines)"
+      return Promise.resolve({ ok: false, output: clip(`Edit rejected: file not found: ${p} — check the path (relative paths resolve against ${ctx.cwd}) or create the file with \`write\`.`, MAX_EDIT_MESSAGE_CHARS) });
     }
+    const before = readFileSync(p, "utf8");
+    const r = applyEdits(p, a.edits.map((e) => ({ ...e, path: p })));
+    if (!r.ok) return Promise.resolve({ ok: false, output: describeEditFailure(r.failure) });
     // Lint-gate (SWE-agent revert+requery): if the edit introduced NEW lint errors,
     // revert to the pre-edit content and report them so the agent retries.
     if (editLinter) {
@@ -192,9 +234,10 @@ export const editTool: Tool = {
       const newErrors = errorsAfter.filter((e) => !before2.has(e));
       if (newErrors.length > 0) {
         writeFileSync(p, before);
+        const shown = newErrors.slice(0, MAX_LINT_LINES).join("\n") + (newErrors.length > MAX_LINT_LINES ? `\n… and ${newErrors.length - MAX_LINT_LINES} more` : "");
         return Promise.resolve({
           ok: false,
-          output: `Edit applied but lint failed — file reverted to original. New lint errors:\n${newErrors.join("\n")}\nFix these and retry the edit.`,
+          output: `Edit applied but lint failed — file reverted to original. New lint errors:\n${shown}\nFix these and retry the edit.`,
         });
       }
     }
@@ -213,6 +256,11 @@ export const writeTool: Tool = {
   execute(args, ctx): Promise<ToolOutput> {
     const a = args as { path: string; content: string };
     const p = resolvePath(ctx.cwd, a.path);
+    const dir = dirname(p);
+    if (!existsSync(dir)) {
+      // port #28: say WHY instead of leaking the raw ENOENT — the fix is a mkdir, not a different path
+      return Promise.resolve({ ok: false, output: clip(`Write rejected: directory ${dir} does not exist — create it first (bash: mkdir -p ${JSON.stringify(dir)}) or write into an existing directory.`, MAX_EDIT_MESSAGE_CHARS) });
+    }
     writeFileSync(p, a.content);
     return Promise.resolve({ ok: true, output: `wrote ${p} (${a.content.length} bytes, TAG ${fileTag(a.content)})` });
   },

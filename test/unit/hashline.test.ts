@@ -1,5 +1,8 @@
 import { test, expect } from "bun:test";
-import { lineHash, fileTag, applyEdits, readAnchored, renderAnchored, readTool, editTool, bashTool, setEditLinter } from "../../src/coding/hashline.ts";
+import {
+  lineHash, fileTag, applyEdits, applyEditsToContent, readAnchored, renderAnchored, readTool, editTool, writeTool, bashTool, setEditLinter,
+  describeEditFailure, MAX_EDIT_MESSAGE_CHARS,
+} from "../../src/coding/hashline.ts";
 import { configureExecutor, resetExecutor, type SpawnRunner } from "../../src/core/executor.ts";
 import type { PermissionDecision } from "../../src/core/types.ts";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
@@ -221,6 +224,95 @@ test("bashTool surfaces a missing bash as structured exit=-1 spawn failed, not a
     expect(spawns).toBe(2);
   } finally {
     resetExecutor(); // the seam is module-global — never leak the fake runner
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------- port #28: actionable failure text (aider failed-block report semantics) ----------
+
+const REMEDY = "Remedy: re-read the file with `read` to get fresh line hashes, then retry the edit.";
+
+test("editTool hash mismatch: the message shows the anchor line's CURRENT text + hash vs the expected hash, lists the lines that carry the anchor (≤3), and ends with the read-then-retry remedy", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-hl-"));
+  const p = join(dir, "f.txt");
+  writeFileSync(p, "aaa\nbbb\nccc\nbbb\nbbb\nbbb\n");
+  const f = readAnchored(p);
+  try {
+    // the anchor's hash lives elsewhere (lines 2, 4, 5, 6 read "bbb") — capped at three
+    const moved = await editTool.execute({ path: p, edits: [{ tag: f.tag, anchorLine: 1, anchorHash: lineHash("bbb"), newLines: ["x"] }] }, makeCtx(dir));
+    expect(moved.ok).toBe(false);
+    expect(moved.output).toBe(`Edit rejected: anchor mismatch at ${p}:1 — line 1 now reads "aaa" (hash ${lineHash("aaa")}), your anchor expected hash ${lineHash("bbb")}. Lines whose hash matches your anchor: 2, 4, 5 — did you mean one of those? ${REMEDY}`);
+    // no line carries the anchor: the file changed under the model
+    const gone = await editTool.execute({ path: "f.txt", edits: [{ tag: f.tag, anchorLine: 2, anchorHash: "zzz", newLines: ["x"] }] }, makeCtx(dir));
+    expect(gone.ok).toBe(false);
+    expect(gone.output).toBe(`Edit rejected: anchor mismatch at ${p}:2 — line 2 now reads "bbb" (hash ${lineHash("bbb")}), your anchor expected hash zzz. No line in the file has that hash now — the content changed since your read. ${REMEDY}`);
+    expect(gone.output.length).toBeLessThanOrEqual(MAX_EDIT_MESSAGE_CHARS);
+    expect(readFileSync(p, "utf8")).toBe("aaa\nbbb\nccc\nbbb\nbbb\nbbb\n"); // nothing applied
+    // the structured failure carries the same facts (port #24 preview consumer keeps `nearest`)
+    const r = applyEditsToContent("aaa\nbbb\nccc\n", [{ path: p, tag: fileTag("aaa\nbbb\nccc\n"), anchorLine: 1, anchorHash: lineHash("ccc"), newLines: [] }], p);
+    expect(r.ok).toBe(false);
+    if (!r.ok && r.failure.kind === "hash-mismatch") {
+      expect(r.failure.text).toBe("aaa");
+      expect(r.failure.matches).toEqual([3]);
+      expect(r.failure.nearest).toBe("line 3 currently holds that hash: ccc");
+    } else throw new Error("expected hash-mismatch");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("editTool out-of-range / stale tag / missing file each state what the file is NOW and how to recover", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-hl-"));
+  const p = join(dir, "f.txt");
+  writeFileSync(p, "aaa\nbbb\nccc\nddd\n"); // 5 lines (the trailing newline is an empty 5th)
+  const f = readAnchored(p);
+  try {
+    const range = await editTool.execute({ path: p, edits: [{ tag: f.tag, anchorLine: 9, anchorHash: "000", newLines: ["x"] }] }, makeCtx(dir));
+    expect(range.output).toBe(`Edit rejected: line 9 is out of range — ${p} has 5 lines (valid anchors: 1-5). ${REMEDY}`);
+    const stale = await editTool.execute({ path: p, edits: [{ tag: "dead", anchorLine: 1, anchorHash: f.lines[0]!.hash, newLines: ["x"] }] }, makeCtx(dir));
+    expect(stale.output).toBe(`Edit rejected: stale read — ${p} changed since you read it (file TAG is now ${f.tag}, your edit carries dead). ${REMEDY}`);
+    const missing = await editTool.execute({ path: "nope.txt", edits: [{ tag: "0000", anchorLine: 1, anchorHash: "000", newLines: ["x"] }] }, makeCtx(dir));
+    expect(missing.ok).toBe(false);
+    expect(missing.output).toBe(`Edit rejected: file not found: ${join(dir, "nope.txt")} — check the path (relative paths resolve against ${dir}) or create the file with \`write\`.`);
+    expect(missing.output).not.toContain("out of range"); // the old "line 0 out of range (file has 0 lines)" is gone
+    expect(readFileSync(p, "utf8")).toBe("aaa\nbbb\nccc\nddd\n");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("writeTool: a missing parent directory is a 'Write rejected' message naming the directory and the fix, never a raw ENOENT; an existing directory still writes", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-hl-"));
+  try {
+    const target = join(dir, "missing", "deep");
+    const out = await writeTool.execute({ path: "missing/deep/new.txt", content: "x" }, makeCtx(dir));
+    expect(out.ok).toBe(false);
+    expect(out.output).toBe(`Write rejected: directory ${target} does not exist — create it first (bash: mkdir -p ${JSON.stringify(target)}) or write into an existing directory.`);
+    expect(out.output).not.toContain("ENOENT");
+    const fine = await writeTool.execute({ path: "new.txt", content: "hello" }, makeCtx(dir));
+    expect(fine.ok).toBe(true);
+    expect(readFileSync(join(dir, "new.txt"), "utf8")).toBe("hello");
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("failure messages stay bounded (≤600): a very long path and line text clip the DETAIL, the remedy always survives; long lint lists are cut with a count", async () => {
+  const long = describeEditFailure({ kind: "hash-mismatch", path: "/" + "p".repeat(700), line: 1, expected: "aaa", actual: "bbb", nearest: "", text: "t".repeat(80), matches: [] });
+  expect(long.length).toBeLessThanOrEqual(MAX_EDIT_MESSAGE_CHARS);
+  expect(long.startsWith("Edit rejected: anchor mismatch at /ppp")).toBe(true);
+  expect(long.endsWith(`… ${REMEDY}`)).toBe(true);
+  const short = describeEditFailure({ kind: "out-of-range", path: "/w/f.txt", line: 7, lineCount: 3 });
+  expect(short).toBe(`Edit rejected: line 7 is out of range — /w/f.txt has 3 lines (valid anchors: 1-3). ${REMEDY}`);
+  // lint gate: 20 new errors → the first 8 + "… and 12 more", then the retry line
+  const dir = mkdtempSync(join(tmpdir(), "aion-hl-"));
+  const p = join(dir, "f.txt");
+  writeFileSync(p, "aaa\nbbb\n");
+  const f = readAnchored(p);
+  setEditLinter((content) => content.includes("BAD") ? Array.from({ length: 20 }, (_, i) => `${i + 1}:1 lint-${i + 1}`) : []);
+  try {
+    const bad = await editTool.execute({ path: p, edits: [{ tag: f.tag, anchorLine: 2, anchorHash: f.lines[1]!.hash, newLines: ["BAD"] }] }, makeCtx(dir));
+    expect(bad.ok).toBe(false);
+    expect(bad.output).toContain("1:1 lint-1\n");
+    expect(bad.output).toContain("8:1 lint-8\n… and 12 more\nFix these and retry the edit.");
+    expect(bad.output).not.toContain("lint-9");
+    expect(readFileSync(p, "utf8")).toBe("aaa\nbbb\n");
+  } finally {
+    setEditLinter(undefined);
     rmSync(dir, { recursive: true, force: true });
   }
 });

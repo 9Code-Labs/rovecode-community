@@ -17,6 +17,7 @@ import { estimateTokens, type ContextChunk } from "../core/context.ts";
 import { parseCompactionStrategy } from "../core/compaction.ts";
 import { ToolGuard } from "../core/guardrails.ts";
 import { HookRunner } from "../core/hooks.ts";
+import { createReflectionHooks, reflectionEnabled } from "../core/reflection.ts";
 import { loadMcpConfig, McpManager } from "../mcp/client.ts";
 import { createMcpTools } from "../mcp/tools.ts";
 import { readTool, editTool, writeTool, bashTool } from "../coding/hashline.ts";
@@ -340,6 +341,8 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     } : null,
   });
   tasks.attach(steering);
+  // port #28: built-in reflection set (core/reflection.ts) — a failed edit/write (or an LSP-diagnosed one) nudges the model once via steering, capped per run (AION_REFLECTION_MAX); AION_REFLECTION=0 disables
+  if (reflectionEnabled()) hooks.add(createReflectionHooks({ steering }), "reflection");
   registry.register(createTaskTool(tasks, { parentDepth: 0 })); // kind spawn → gated rules prompt, yolo allows
 
   return {

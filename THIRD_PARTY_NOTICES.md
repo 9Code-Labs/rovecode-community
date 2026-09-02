@@ -66,6 +66,13 @@ Source: https://github.com/Aider-AI/aider. Snapshot `research/source_snapshots/A
   (L519-550), ranked file append (L560-574), binary-search token budgeting (L666-706), grouped
   tree rendering (L748-784). Symbol extraction uses @ast-grep/napi (tree-sitter) in place of
   aider's .scm tag queries.
+- **reflection loop (port #28)** — `src/core/reflection.ts` + the rejection text in
+  `src/coding/hashline.ts` follow aider's reflection pattern (no code copied):
+  `aider/coders/base_coder.py` run_one reflection loop with `max_reflections` (L101,
+  L924-944), per-message reset (L864-871), edit-apply / lint / test errors fed back as the
+  next user message (L1596-1623, L2296-2328); the actionable failed-block report shape from
+  `aider/coders/editblock_coder.py` L84-124 ("Did you mean to match some of these actual
+  lines", the exact-match rule). Snapshot SHA 5dc9490.
 
 ## google-gemini/gemini-cli (Apache-2.0)
 

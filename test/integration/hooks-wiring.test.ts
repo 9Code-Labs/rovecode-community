@@ -296,7 +296,7 @@ export default { version: 1, hooks: {
 `);
     writeFileSync(join(home, "hooks.ts"), `const log = globalThis[${JSON.stringify(key)}];\nexport default { version: 1, hooks: { session_open() { log.push("user-open"); } } };\n`);
     const rt = await bootRuntime({ cwd, sessionId: "sess-h", stream: null });
-    expect(rt.hooks.size).toBe(2);
+    expect(rt.hooks.size).toBe(3); // user file + project file + the built-in reflection set (port #28)
     expect(log).toEqual(["user-open", ["open", "sess-h", cwd]]); // user scope first; once each
     // rt.hooks IS the LoopDeps/dispatch seam: the real bash tool is denied by the project hook even under yolo rules
     const events: RunEvent[] = [];
@@ -327,7 +327,7 @@ export default { version: 1, hooks: {
     mkdirSync(join(cwd2, ".aion"), { recursive: true });
     writeFileSync(join(cwd2, ".aion", "hooks.ts"), "export default { version: 1, hooks: {\n");
     const rt = await bootRuntime({ cwd: cwd2, stream: null });
-    expect(rt.hooks.size).toBe(0);
+    expect(rt.hooks.size).toBe(1); // the built-in reflection set only (port #28) — the broken file loaded nothing
     expect(rt.hooks.warnings.length).toBe(1);
     expect(rt.hooks.warnings[0]!.startsWith(`${join(cwd2, ".aion", "hooks.ts")}: failed to load — `)).toBe(true);
     await rt.hooks.close();
