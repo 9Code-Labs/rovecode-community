@@ -154,9 +154,10 @@ export class SessionStore {
 
   /** Replay JSONL → cache; detect corruption instead of crashing (pi reducer pattern).
    *  Restores a persisted leaf (durable branch) when meta.json names an existing entry;
-   *  missing/invalid leaf falls back to the last entry, exactly as before port #2. */
+   *  missing/invalid leaf falls back to the last tree-linked, well-shaped entry (LOW-A below). */
   reload(): Corruption[] {
     this.cache = [];
+    this.leaf = "root"; this.prevHash = ""; // a replay that finds no leaf (no file, only foreign lines) is a fresh root
     const seen = new Set<string>();
     const corrupt: Corruption[] = [];
     let persistedLeaf: string | undefined;
@@ -172,6 +173,13 @@ export class SessionStore {
     if (!existsSync(this.file)) return corrupt;
     const lines = readFileSync(this.file, "utf8").split("\n").filter(Boolean);
     const byLine = new Map<string, Wrapped>(); // ids seen so far (first occurrence wins)
+    // LOW-A (#34): the fallback leaf = the last entry that is BOTH tree-linked (a root, or its parent seen
+    // above it) AND a message/event. As cache.at(-1) it was whatever id-bearing line came last, so a
+    // foreign `{"id":"ghost","parentId":"nope",…}` hijacked the active path (messages() shrank to the
+    // ghost, the next append parented on it) and a bare `{"id":"bare"}` emptied it and re-rooted the next
+    // append — silently: only `aion trace` shows these findings, the constructor discards them. Such
+    // lines stay in the cache for chain/reporting and keep their orphan-entry / unknown-shape findings.
+    let tail: Wrapped | undefined;
     lines.forEach((line, i) => {
       let w: Wrapped;
       try {
@@ -188,9 +196,8 @@ export class SessionStore {
       if (typeof w.id !== "string") { corrupt.push({ kind: "unknown-shape", line: i, detail: "entry line has no string id" }); return; }
       if (seen.has(w.id)) corrupt.push({ kind: "duplicate-id", entryId: w.id, line: i, detail: "duplicate id" });
       seen.add(w.id);
-      if (w.parentId !== null && !seen.has(w.parentId)) {
-        corrupt.push({ kind: "orphan-entry", entryId: w.id, line: i, detail: `parent ${w.parentId} missing` });
-      }
+      const orphan = w.parentId !== null && !seen.has(w.parentId);
+      if (orphan) corrupt.push({ kind: "orphan-entry", entryId: w.id, line: i, detail: `parent ${w.parentId} missing` });
       // chain linkage: prevHash must equal the PARENT's hash ("" for roots). A leaf moved
       // mid-run used to fork the hash chain away from the parent pointer — detect it.
       // Missing parents are skipped here (already reported as orphan-entry above).
@@ -200,10 +207,12 @@ export class SessionStore {
       }
       if (!byLine.has(w.id)) byLine.set(w.id, w);
       // F1: a foreign/corrupt entry (null, a scalar, parts:[null], …) is reported and kept in the tree
-      // for chain/leaf purposes; path()/turnPoints() skip it and hydrateImages leaves it untouched
-      if (entryShape(w.entry) === undefined) corrupt.push({ kind: "unknown-shape", entryId: w.id, line: i, detail: "entry is neither a message nor an event" });
+      // for chain purposes; path()/turnPoints() skip it and hydrateImages leaves it untouched
+      const shape = entryShape(w.entry);
+      if (shape === undefined) corrupt.push({ kind: "unknown-shape", entryId: w.id, line: i, detail: "entry is neither a message nor an event" });
       w.entry = this.hydrateImages(w.entry); // session-relative sidecar paths → absolute (in memory only)
       this.cache.push(w);
+      if (!orphan && shape !== undefined) tail = w;
     });
     // cycle check over ancestry
     const byId = new Map(this.cache.map((w) => [w.id, w]));
@@ -214,8 +223,7 @@ export class SessionStore {
         anc.add(cur.id); cur = byId.get(cur.parentId);
       }
     }
-    const last = this.cache.at(-1);
-    if (last) { this.leaf = last.id; this.prevHash = last.hash; }
+    if (tail) { this.leaf = tail.id; this.prevHash = tail.hash; }
     if (persistedLeaf !== undefined) {
       const w = byId.get(persistedLeaf);
       if (w) { this.leaf = w.id; this.prevHash = w.hash; }

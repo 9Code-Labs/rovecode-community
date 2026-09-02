@@ -32,7 +32,10 @@
  *    usage      { input, output, cacheRead, cacheWrite } summed over the run's assistant messages
  *    costUsd    number, or null when any usage-bearing turn has no catalog pricing (mock, unknown
  *               models) — an honest unknown, never a silent lower bound (core/usage.ts costUsd)
- *    toolCalls  [{ tool, ok, ms? }] in event order; ms absent for calls that never executed
+ *    toolCalls  [{ tool, ok, ms? }] in event order, one entry per ISSUED call — keyed per
+ *               `<turn>:<callId>`, so a call id a provider reuses across turns (the SSE adapter's
+ *               `tc<idx>` fallback, providers/stream.ts) is one entry PER TURN, the telemetry/otel.ts
+ *               aion.tool_calls count (LOW-B, #39); ms absent for calls that never executed
  *               (permission_denied / truncated / not_found → ok:false)
  *    durationMs sink construction → finish
  *    exitCode   the process exit code below
@@ -195,7 +198,8 @@ const installSigint = (handler: () => void): (() => void) => {
   return () => { try { process.off("SIGINT", handler); } catch { /* already gone */ } };
 };
 
-type CallRecord = { tool?: string; ok: boolean; ms?: number };
+/** one issued call; `id` = the provider's call id (the store's tool_call part id — the name fallback) */
+type CallRecord = { id: string; tool?: string; ok: boolean; ms?: number };
 
 export function createOutputSink(mode: OutputMode, opts: OutputSinkOptions): OutputSink {
   const t0 = Date.now();
@@ -207,7 +211,17 @@ export function createOutputSink(mode: OutputMode, opts: OutputSinkOptions): Out
   const uninstall = (opts.onInterrupt ?? installSigint)(() => ac.abort());
   let sessionId: string | null = null;
   let baseline = 0; // store length at run_start — only THIS run's messages are accounted
+  let turn = 0; // the issuing turn: a turn's tool events follow its turn_end (loop.ts:232 → :295)
+  // issued calls by `<turn>:<callId>` in event order (the telemetry/otel.ts toolKey idiom): a call id a
+  // provider reuses across turns is one call PER TURN, never a merge — keyed by callId alone, `same`
+  // issued by 3 turns was ONE toolCall while aion.tool_calls said 3 (LOW-B, #39)
   const calls = new Map<string, CallRecord>();
+  const call = (id: string): CallRecord => {
+    const key = `${turn}:${id}`;
+    const c = calls.get(key) ?? { id, ok: false };
+    calls.set(key, c);
+    return c;
+  };
   // human progress: stdout in text mode (byte-identical to the pre-port console.log lines),
   // stderr in json mode (a terminal user still sees progress; stdout stays the one object),
   // nothing extra in ndjson mode (the event stream IS the progress)
@@ -220,14 +234,15 @@ export function createOutputSink(mode: OutputMode, opts: OutputSinkOptions): Out
     onEvent(ev) {
       if (mode === "ndjson") out.write(`${JSON.stringify(ev)}\n`);
       if (ev.type === "run_start") { sessionId = ev.sessionId; baseline = opts.messages().length; }
+      else if (ev.type === "turn_start") turn = ev.turn;
       else if (ev.type === "tool_execution_start") {
-        calls.set(ev.callId, { tool: ev.tool, ok: false });
+        call(ev.callId).tool = ev.tool;
         human(`→ ${ev.tool} ${String(JSON.stringify(ev.args)).slice(0, 100)}`);
       } else if (ev.type === "tool_execution_end") {
-        calls.set(ev.callId, { ...calls.get(ev.callId), ok: ev.ok, ms: ev.durationMs });
+        Object.assign(call(ev.callId), { ok: ev.ok, ms: ev.durationMs });
         human(`← ${ev.ok ? "ok" : "FAIL"} ${ev.output.slice(0, 200).replace(/\n/g, " ⏎ ")}`);
       } else if (ev.type === "tool_call_failed") {
-        calls.set(ev.callId, { ...calls.get(ev.callId), ok: false });
+        call(ev.callId).ok = false;
       }
     },
     finish(end) {
@@ -239,7 +254,7 @@ export function createOutputSink(mode: OutputMode, opts: OutputSinkOptions): Out
       }
       const result = summarize(
         end ?? { status: "error", summary: "stream ended without run_end" }, exitCode, sessionId, opts.model,
-        opts.messages().slice(baseline), calls, opts.catalog ?? new ModelCatalog(), Date.now() - t0,
+        opts.messages().slice(baseline), [...calls.values()], opts.catalog ?? new ModelCatalog(), Date.now() - t0,
       );
       out.write(`${JSON.stringify(mode === "json" ? result : { type: "result", ...result })}\n`);
       return exitCode;
@@ -260,7 +275,7 @@ export function buildRunDeps(rt: Pick<Runtime, "registry" | "store" | "guard" | 
 
 function summarize(
   end: RunEnd, exitCode: number, sessionId: string | null, model: ModelRef, msgs: Message[],
-  calls: Map<string, CallRecord>, catalog: PricingSource, durationMs: number,
+  calls: CallRecord[], catalog: PricingSource, durationMs: number,
 ): RunResult {
   const assistants = msgs.filter((m) => m.role === "assistant");
   const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -277,16 +292,22 @@ function summarize(
     const c = pricing ? costUsd(n, pricing) : undefined;
     cost = c === undefined ? null : cost + c;
   }
-  // names for calls that never started (denied/truncated/not_found) come from the tool_call parts
-  const names = new Map<string, string>();
-  for (const m of assistants) for (const p of m.parts) if (p.kind === "tool_call") names.set(p.id, p.tool);
+  // names for calls that never started (denied/truncated/not_found) come from the tool_call parts, paired
+  // by OCCURRENCE — the n-th record with a call id ↔ the n-th part carrying it (one part per issued call),
+  // so a reused id names each turn's own call rather than the last part that mentioned the id
+  const names = new Map<string, string[]>();
+  for (const m of assistants) for (const p of m.parts) if (p.kind === "tool_call") names.set(p.id, [...(names.get(p.id) ?? []), p.tool]);
+  const nth = new Map<string, number>();
   const served = assistants.at(-1)?.origin;
   return {
     status: end.status, summary: end.summary, sessionId,
     model: { provider: model.provider, model: model.model },
     origin: served ? { provider: served.provider, model: served.model } : null,
     usage, costUsd: cost,
-    toolCalls: [...calls].map(([id, c]) => ({ tool: c.tool ?? names.get(id) ?? "unknown", ok: c.ok, ...(c.ms !== undefined ? { ms: c.ms } : {}) })),
+    toolCalls: calls.map((c) => {
+      const n = nth.get(c.id) ?? 0; nth.set(c.id, n + 1);
+      return { tool: c.tool ?? names.get(c.id)?.[n] ?? "unknown", ok: c.ok, ...(c.ms !== undefined ? { ms: c.ms } : {}) };
+    }),
     durationMs, exitCode,
   };
 }

@@ -417,3 +417,66 @@ test("F4: id-less object lines — `{\"entry\":null}` and `{\"entry\":{\"role\":
   expect(s3.messages().map(text)).toEqual(["A", "B"]);
   rmSync(dir, { recursive: true, force: true });
 });
+
+// ── final Wave-3 re-verify LOW-A (#34): a FOREIGN id-bearing tail line must not become the fallback leaf ──
+
+/** the two repros: a well-shaped user entry whose parent does not exist, and a bare id */
+const GHOST = JSON.stringify({ id: "ghost", parentId: "nope", createdAt: 1, prevHash: "", hash: "gh", entry: { id: "ghost", role: "user", parts: [{ kind: "text", text: "G" }], parentId: "nope", createdAt: 1 } });
+const BARE = '{"id":"bare"}';
+const textOf = (m: Message) => (m.parts[0] as { text: string }).text;
+
+/** a 2-message session A ← B on disk (legacy meta: no leaf field) + its two good lines */
+function seeded(id: string) {
+  const dir = mkdtempSync(join(tmpdir(), "aion-test-"));
+  const s = new SessionStore(dir, id);
+  const a = msg("A"); s.append(a);
+  const b = amsg("B", a.id); s.append(b);
+  const f = join(dir, id, "entries.jsonl");
+  return { dir, a, b, f, good: readFileSync(f, "utf8").split("\n").filter(Boolean) };
+}
+
+/** the LOW-A bar once `foreign` sits at the tail: the findings are exactly `findings` (kind, id — line 2), the
+ *  active path is still A→B, turnPoints intact, the loop's next parent (history.at(-1)) and appendEvent's parent
+ *  are B, the next append chains onto B's hash, a fresh reload reads 3; the same line mid-file (line 1) → the
+ *  same findings and the same path */
+function stillAB(id: string, foreign: string, findings: [string, string][]) {
+  const { dir, b, f, good } = seeded(id);
+  appendFileSync(f, foreign + "\n");
+  const s2 = new SessionStore(dir, id);                              // must not throw
+  expect(s2.reload().map((c) => [c.kind, c.entryId, c.line])).toEqual(findings.map(([k, e]) => [k, e, 2]));
+  expect(s2.messages().map(textOf)).toEqual(["A", "B"]);
+  expect(s2.turnPoints().map((t) => [t.text, t.parentId, t.branches])).toEqual([["A", null, 0]]);
+  const parent = s2.messages().at(-1)?.id ?? null;                  // loop.ts:125 — the goal message's parentId
+  expect(parent).toBe(b.id);
+  expect(s2.appendEvent({ type: "steer", text: "t" }).parentId).toBe(b.id);
+  s2.append(msg("C", parent));
+  const wc = JSON.parse(readFileSync(f, "utf8").split("\n").filter(Boolean).at(-1)!);
+  expect([wc.parentId, wc.prevHash]).toEqual([b.id, JSON.parse(good[1]!).hash]);
+  expect(new SessionStore(dir, id).messages().map(textOf)).toEqual(["A", "B", "C"]);
+  writeFileSync(f, [good[0], foreign, good[1]].join("\n") + "\n");  // mid-file placement
+  const s3 = new SessionStore(dir, id);
+  expect(s3.reload().map((c) => [c.kind, c.entryId, c.line])).toEqual(findings.map(([k, e]) => [k, e, 1]));
+  expect(s3.messages().map(textOf)).toEqual(["A", "B"]);
+  rmSync(dir, { recursive: true, force: true });
+}
+
+test("LOW-A (#34): a well-shaped ORPHAN tail `{id:ghost,parentId:nope,…}` after A ← B is reported as orphan-entry ONLY and stays in the tree, yet the leaf is B, not the ghost — messages() [A, B] (was [G]: A and B fell off the path), next parent B (was the ghost), chain onto B's hash, reload 3; mid-file → the same finding (mutation: fallback leaf = cache.at(-1))", () => {
+  stillAB("ghost", GHOST, [["orphan-entry", "ghost"]]);
+});
+
+test("LOW-A (#34): a bare `{id:bare}` tail after A ← B is reported as orphan-entry + unknown-shape and stays in the tree, yet the leaf is B — messages() [A, B] (was []), next parent B (was null → a NEW ROOT: the 6947dd6 symptom through an id-bearing line), chain onto B's hash, reload 3; mid-file → the same findings", () => {
+  stillAB("bare", BARE, [["orphan-entry", "bare"], ["unknown-shape", "bare"]]);
+});
+
+test("LOW-A guard: the fallback leaf is the last TREE-LINKED entry, not the last linear one — a legacy file (no meta.leaf) A ← B, A ← C with the sibling branch tip C as the real last line resumes at C: path [A, C], C's turn point counts B as the abandoned branch, zero findings", () => {
+  const { dir, a, f } = seeded("tip");
+  const wa = JSON.parse(readFileSync(f, "utf8").split("\n")[0]!) as { id: string; hash: string };
+  appendFileSync(f, JSON.stringify(wrap(wa, "c", { id: "c", role: "user", parts: [{ kind: "text", text: "C" }], parentId: a.id, createdAt: 1 })) + "\n");
+  expect("leaf" in JSON.parse(readFileSync(join(dir, "tip", "meta.json"), "utf8"))).toBe(false);
+  const s2 = new SessionStore(dir, "tip");
+  expect(s2.reload()).toEqual([]);
+  expect(s2.path().map((e) => e.id)).toEqual([a.id, "c"]);
+  expect(s2.turnPoints().map((t) => [t.text, t.parentId, t.branches])).toEqual([["A", null, 0], ["C", a.id, 1]]);
+  expect(s2.messages().map(textOf)).toEqual(["A", "C"]);
+  rmSync(dir, { recursive: true, force: true });
+});

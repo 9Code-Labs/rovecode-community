@@ -293,6 +293,37 @@ test("aion.tool_calls = ISSUED calls, the `aion run --output json` toolCalls cou
   } finally { await teardown(r); }
 }, T);
 
+test("LOW-B (#39): a call id REUSED across turns on the REAL loop (the critic's repro — three consecutive turns each issue `same`): `aion run --output json` lists 3 toolCalls with their own ok/ms and aion.tool_calls = 3 = toolCalls.length — one tool span per issuing turn (was json 1 vs otel 3)", async () => {
+  const r = rig((rx) => rx.url);
+  try {
+    const turns: AssistantTurn[] = [1, 2, 3].map((n) => toolTurn([{ id: "same", tool: "probe", args: { n } }]));
+    turns.push(textTurn("final"));
+    r.rt = await bootRuntime({ cwd: r.cwd, sessionId: "otel-reuse", stream: mockStream({ turns }) });
+    const rt = r.rt;
+    rt.registry.register(probe);
+    const model: ModelRef = { provider: "mock", model: "default" };
+    const out: string[] = [];
+    const sink = createOutputSink("json", { stdout: { write: (c: string) => out.push(c) }, stderr: { write: () => {} }, model, messages: () => rt.store.messages(), onInterrupt: () => () => {} });
+    let end: Extract<RunEvent, { type: "run_end" }> | undefined;
+    for await (const ev of agentLoop(rt.buildDef(model), "reuse ids", {}, rt.buildCfg(true), {
+      stream: rt.stream!, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, cwd: rt.cwd, hooks: rt.hooks,
+    }, rt.steering)) { sink.onEvent(ev); if (ev.type === "run_end") end = ev; }
+    sink.finish(end);
+    const result = JSON.parse(out.join("")) as RunResult;
+    expect(result.status).toBe("done");
+    expect(result.toolCalls.map((c) => [c.tool, c.ok, typeof c.ms])).toEqual([["probe", true, "number"], ["probe", true, "number"], ["probe", true, "number"]]); // MUTATION TARGET: key by callId alone → one entry
+    await rt.hooks.close();
+    expect(r.rx.got.length).toBe(1);
+    const body = r.rx.got[0]!.body;
+    const spans = body.resourceSpans[0]!.scopeSpans[0]!.spans;
+    expect(attr(runSpanOf(body), "aion.tool_calls")).toBe("3");
+    expect(attr(runSpanOf(body), "aion.tool_calls")).toBe(String(result.toolCalls.length));
+    const turnSpans = spans.filter((s) => s.name === "aion.turn"), tools = spans.filter((s) => s.name === "aion.tool");
+    expect(tools.map((t) => t.parentSpanId)).toEqual(turnSpans.slice(0, 3).map((t) => t.spanId)); // one span per issuing turn
+    expect(tools.map((t) => attr(t, "aion.call_id"))).toEqual(["same", "same", "same"]);
+  } finally { await teardown(r); }
+}, T);
+
 test("unreachable endpoint: the run completes normally (post_run never waits on the POST) and close() surfaces exactly ONE runner warning naming the traces URL; nothing throws", async () => {
   const dead = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("x") });
   const port = dead.port; dead.stop(true); // a just-freed loopback port: connection refused

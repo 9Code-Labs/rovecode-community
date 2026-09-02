@@ -243,6 +243,40 @@ describe("json mode", () => {
   });
 });
 
+// ---------- LOW-B (#39): toolCalls keyed per issuing turn ----------
+
+describe("toolCalls per ISSUED call (LOW-B, #39: the aion.tool_calls equality)", () => {
+  /** turn `n` issues call id `same` (the SSE adapter's `tc<idx>` fallback shape) and executes it */
+  const issue = (n: number, tool: string, ok: boolean, ms: number): RunEvent[] => [
+    { type: "turn_start", turn: n }, { type: "turn_end", turn: n, stopReason: "tool_use" },
+    { type: "tool_execution_start", callId: "same", tool, args: { n } },
+    { type: "tool_execution_end", callId: "same", ok, output: `out${n}`, durationMs: ms },
+  ];
+  /** turn `n` issues `same` and it never dispatches */
+  const refuse = (n: number, reason: "permission_denied" | "not_found"): RunEvent[] => [
+    { type: "turn_start", turn: n }, { type: "turn_end", turn: n, stopReason: "tool_use" },
+    { type: "tool_call_failed", callId: "same", reason, detail: reason },
+  ];
+  const scripted = (...body: RunEvent[][]): RunEvent[] => [
+    { type: "run_start", runId: "r", sessionId: "s", goal: "g" }, ...body.flat(),
+    { type: "turn_start", turn: 9 }, { type: "turn_end", turn: 9, stopReason: "end_turn" },
+    { type: "run_end", status: "done", summary: "done" },
+  ];
+  /** the store's assistant message that issued `same` as `tool` */
+  const part = (tool: string) => msg("assistant", [{ kind: "tool_call", id: "same", tool, args: {} }], { usage: { input: 1, output: 1 } });
+
+  test("a call id REUSED across 3 turns is 3 entries in event order, each with its own tool/ok/ms — never a merge (mutation: key by callId alone → one entry carrying the last call's fields)", () => {
+    const res = single(drive("json", { events: scripted(issue(1, "read", true, 1), issue(2, "bash", false, 2), issue(3, "write", true, 3)), store: [] }).out.text());
+    expect(res.toolCalls).toEqual([{ tool: "read", ok: true, ms: 1 }, { tool: "bash", ok: false, ms: 2 }, { tool: "write", ok: true, ms: 3 }]);
+  });
+
+  test("never-dispatched reuses are their OWN entries on the turn that issued them, named from the store's tool_call parts by OCCURRENCE (the n-th record with an id ↔ the n-th part carrying it): turn 1 denied `rm`, turn 2 ran `read`, turn 3 `nope` not found → [rm ✗ no ms, read ✓ 1ms, nope ✗]; a later failure never flips an earlier entry (mutation: name by the LAST part → 'nope' for turn 1)", () => {
+    const res = single(drive("json", { events: scripted(refuse(1, "permission_denied"), issue(2, "read", true, 1), refuse(3, "not_found")), store: [part("rm"), part("read"), part("nope")] }).out.text());
+    expect(res.toolCalls).toEqual([{ tool: "rm", ok: false }, { tool: "read", ok: true, ms: 1 }, { tool: "nope", ok: false }]);
+    expect("ms" in res.toolCalls[0]! || "ms" in res.toolCalls[2]!).toBe(false);
+  });
+});
+
 // ---------- ndjson mode ----------
 
 describe("ndjson mode", () => {

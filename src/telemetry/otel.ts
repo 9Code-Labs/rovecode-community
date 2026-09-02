@@ -37,7 +37,10 @@
  *  before its flush. Tool spans are keyed per issuing turn, so a call id a provider reuses across
  *  turns (the SSE adapter's `tc<idx>` fallback, providers/stream.ts) is one span PER TURN.
  *  `aion.tool_calls` counts ISSUED calls — dispatched (spans) plus never-dispatched (tool_call_failed
- *  events) — the same count as `aion run --output json` toolCalls (cli/output.ts). A guard-stubbed
+ *  events) — the same count as `aion run --output json` toolCalls (cli/output.ts keys per issuing turn
+ *  too, LOW-B), with ONE residual: a run aborted while a call waited between its pre_tool hook and its
+ *  execution (tools.ts:141 returns without an event) has that call as a span but no toolCalls entry —
+ *  the hook side saw pre_tool, the event side saw nothing. A guard-stubbed
  *  call (tool events without a pre_tool) carries aion.failure_reason=loop_guard. An endpoint that is
  *  not an absolute http(s) URL (`http://`, `host:4318`) disables export with ONE note instead of a
  *  5 s stall per run against host "v1".

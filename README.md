@@ -242,7 +242,9 @@ served model and cost (omitted when unpriced), compaction and never-dispatched c
 and outcomes only (no goal, args, output or headers). Batched once per run, 5 s timeout, a failed export is one
 `hooks:` warning and never blocks a run. Cancelled runs export too (Esc, `session/cancel`, HTTP DELETE or a
 client disconnect → status `stopped`); `aion.tool_calls` counts issued calls, the `--output json` `toolCalls`
-count. Unset = zero cost: the exporter is never constructed; a malformed endpoint is one warning, not a stall.
+count — both per issuing turn, so a call id a provider reuses across turns counts once per turn; the one gap is a
+run aborted while a call awaited approval after its `pre_tool` hook (a span, never an event). Unset = zero cost:
+the exporter is never constructed; a malformed endpoint is one warning, not a stall.
 
 Typed `RunEvent` stream (run/turn/tool/compaction events) persisted with the session tree;
 `aion trace <id>` replays any session with corruption findings. `/cost` and `/status` surface
