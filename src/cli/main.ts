@@ -7,8 +7,7 @@ import { SessionStore } from "../core/session.ts";
 import { readTool, editTool, writeTool, bashTool } from "../coding/hashline.ts";
 import { globTool, grepTool, lsTool } from "../coding/files.ts";
 import { mockStream, textTurn, providerStream, openaiCompatStreaming, resolveProvider, listBuiltinProviders } from "../providers/stream.ts";
-import { saveCredential, removeCredential, listProviders, keyNameFor, credentialsPath } from "../providers/auth.ts";
-import { createInterface } from "node:readline";
+import { saveCredential, removeCredential, listProviders, keyNameFor, credentialsPath, readSecret } from "../providers/auth.ts";
 import { runGauntlet, reportResults, providerPreflight, basicTasks, codingTasks, failureTasks, adversarialTasks } from "../eval/gauntlet.ts";
 import { runTask } from "../eval/gauntlet-runner.ts";
 import { runBenchmarks } from "../eval/bench.ts";
@@ -39,7 +38,7 @@ function resolveStream(): { stream: StreamFn; model: ModelRef; real: boolean; pr
     return { stream, model: { provider: cfg.id, model: process.env.AION_MODEL ?? cfg.defaultModel ?? "gpt-4o-mini" }, real: true, providerId: cfg.id };
   }
   return {
-    stream: mockStream({ turns: [textTurn("Aion mock provider: set AION_BASE_URL and AION_API_KEY (or a named provider env key) for a real model.")] }),
+    stream: mockStream({ turns: [textTurn("Aion mock provider: run `aion auth set <provider>`, or set AION_BASE_URL and AION_API_KEY (or a <NAME>_API_KEY env var), for a real model.")] }),
     model: { provider: "mock", model: "default" }, real: false, providerId: "mock",
   };
 }
@@ -70,7 +69,7 @@ async function cmdRun(prompt: string): Promise<void> {
   const model: ModelRef = rt.provider
     ? { provider: rt.provider.id, model: process.env.AION_MODEL ?? rt.provider.defaultModel ?? "gpt-4o-mini" }
     : { provider: "mock", model: "default" };
-  const stream = rt.stream ?? mockStream({ turns: [textTurn("Aion mock provider: set AION_BASE_URL and AION_API_KEY (or a named provider env key) for a real model.")] });
+  const stream = rt.stream ?? mockStream({ turns: [textTurn("Aion mock provider: run `aion auth set <provider>`, or set AION_BASE_URL and AION_API_KEY (or a <NAME>_API_KEY env var), for a real model.")] });
   const exit = async (code: number): Promise<never> => {
     await rt.mcp?.close().catch(() => {});
     return process.exit(code);
@@ -143,33 +142,6 @@ providers: kaesra openai anthropic deepseek groq openrouter ollama lmstudio
             together mistral cerebras fireworks perplexity xai moondream vllm
             (aion auth set <name>, or set <NAME>_API_KEY — stored creds beat env;
             AION_BASE_URL/AION_API_KEY always wins)`);
-}
-
-/** Read one secret line from stdin, never echoing it back through our own output.
- *  On a TTY the prompt goes to stderr and the terminal's echo of the typed line is
- *  erased immediately after Enter (cursor-up + erase-line) — raw-mode no-echo is
- *  unreliable across Windows terminals under Bun, so we accept one echoed line and
- *  scrub it rather than pretend it was never displayed. Piped stdin (scripts, tests)
- *  reads a single line with no prompt. */
-function readSecret(promptText: string): Promise<string> {
-  const tty = process.stdin.isTTY === true;
-  if (tty) process.stderr.write(promptText);
-  return new Promise((resolve) => {
-    const rl = createInterface({ input: process.stdin });
-    let settled = false; // rl.close() emits "close" SYNCHRONOUSLY — guard the race
-    rl.once("line", (line) => {
-      if (settled) return;
-      settled = true;
-      if (tty) process.stderr.write("\x1b[1A\x1b[2K"); // erase the echoed secret line
-      rl.close();
-      resolve(line.trim());
-    });
-    rl.once("close", () => { // EOF without a line (empty pipe)
-      if (settled) return;
-      settled = true;
-      resolve("");
-    });
-  });
 }
 
 /** port #37: provider credential onboarding (`aion auth set/list/remove`).

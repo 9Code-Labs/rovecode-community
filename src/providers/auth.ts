@@ -13,12 +13,18 @@
  *  `type` values (a future oauth port) round-trip through save/remove unharmed but are
  *  not listed or resolved.
  *
- *  SECRETS ARE NEVER LOGGED from this module: no console output at all, and error
- *  messages never embed the credential value. Rendering (redacted) is the caller's
- *  job via listProviders()/redactSecret().
+ *  Also home to readSecret (the `aion auth set` prompt) so its TTY path is unit-testable
+ *  in-process — main.ts cannot be imported by tests (it dispatches on load).
+ *
+ *  SECRETS ARE NEVER LOGGED from this module: the only terminal output is readSecret's
+ *  prompt text plus cursor-control sequences, error messages never embed the credential
+ *  value, and the store itself prints nothing. Rendering (redacted) is the caller's job
+ *  via listProviders()/redactSecret().
  */
 
 import { readFileSync, writeFileSync, mkdirSync, chmodSync, rmSync } from "node:fs";
+import { createInterface } from "node:readline";
+import { Writable } from "node:stream";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { providers as snapshotProviders } from "@opencode-ai/models/snapshot";
@@ -58,7 +64,8 @@ function readRaw(): Record<string, unknown> {
 function isApiCredential(value: unknown): value is StoredCredential {
   if (typeof value !== "object" || value === null) return false;
   const v = value as { type?: unknown; key?: unknown; keyName?: unknown };
-  if (v.type !== "api" || typeof v.key !== "string" || v.key.length === 0) return false;
+  // whitespace-only counts as empty: a hand-edited `"key": " "` must not shadow a valid env key
+  if (v.type !== "api" || typeof v.key !== "string" || v.key.trim().length === 0) return false;
   return v.keyName === undefined || typeof v.keyName === "string";
 }
 
@@ -94,7 +101,7 @@ function writeStore(data: Record<string, unknown>): void {
 export function saveCredential(provider: string, secret: string, keyName?: string): void {
   const id = provider.trim();
   if (id.length === 0) throw new Error("provider id must not be empty");
-  if (secret.length === 0) throw new Error(`refusing to store an empty secret for ${id}`);
+  if (secret.trim().length === 0) throw new Error(`refusing to store an empty secret for ${id}`);
   const data = readRaw();
   const entry: StoredCredential = { type: "api", key: secret, keyName: keyName ?? keyNameFor(id) };
   data[id] = entry;
@@ -159,4 +166,61 @@ export function keyNameFor(providerId: string): string {
   const env = snapshotProviders[key]?.env;
   if (env !== undefined && env.length > 0 && env[0]) return env[0];
   return providerId.toUpperCase().replace(/[^A-Z0-9]+/g, "_") + "_API_KEY";
+}
+
+// ---------- secret prompt (`aion auth set`) ----------
+
+type SecretInput = NodeJS.ReadableStream & { isTTY?: boolean; isRaw?: boolean };
+type SecretOutput = NodeJS.WritableStream & { columns?: number };
+/** Streams readSecret talks to — injectable so tests can drive a fake TTY in-process. */
+export interface SecretPromptIO { input?: SecretInput; output?: SecretOutput }
+
+/** Cursor-control sequence for the cooked-mode fallback: after Enter the terminal has echoed
+ *  prompt+line and moved to the next row, so erase ONE row per wrapped row the echo occupied
+ *  (cursor-up + erase-line each), then "\r". A single row is not enough — a 33-col prompt plus
+ *  a 108-char Anthropic key wraps on any terminal narrower than 141 columns. Pure: pinned by
+ *  the headless-xterm test at 80 and 120 columns. Unknown/zero width assumes 80. */
+export function echoScrubSequence(promptLen: number, lineLen: number, columns: number): string {
+  const cols = columns > 0 ? Math.floor(columns) : 80;
+  const rows = Math.max(1, Math.ceil((promptLen + lineLen) / cols));
+  return "\x1b[1A\x1b[2K".repeat(rows) + "\r";
+}
+
+/** Read one secret line for `aion auth set`. What is guaranteed:
+ *  - TTY stdin: the prompt goes to stderr and readline runs in terminal mode, which calls
+ *    setRawMode(true): the terminal driver's echo is OFF and readline's own echo goes to a
+ *    sink, so the keystrokes are never written to the terminal at all. Verified on a real
+ *    Windows console under Bun 1.3.14 — the console input mode drops ENABLE_ECHO_INPUT and
+ *    ENABLE_LINE_INPUT, the screen buffer stays clean, and the mode is restored on close.
+ *  - Fallback, only if raw mode did not take (no/failing setRawMode, input.isRaw stays false):
+ *    the driver echoed, so after Enter every row the prompt+echo wrapped onto is erased
+ *    (echoScrubSequence). A terminal that ignores VT cursor sequences keeps that echo.
+ *  - Piped stdin (scripts, tests): one line, no prompt, nothing written to any stream.
+ *  The value is returned trimmed and is never logged or embedded in an error. */
+export function readSecret(promptText: string, io: SecretPromptIO = {}): Promise<string> {
+  const input = io.input ?? process.stdin;
+  const output = io.output ?? process.stderr;
+  const tty = input.isTTY === true;
+  if (tty) output.write(promptText);
+  const rl = tty
+    ? createInterface({ input, output: new Writable({ write: (_c, _e, cb) => cb() }), terminal: true })
+    : createInterface({ input });
+  const raw = tty && input.isRaw === true;
+  return new Promise((resolve) => {
+    let settled = false; // rl.close() emits "close" SYNCHRONOUSLY — guard the race
+    rl.once("line", (line) => {
+      if (settled) return;
+      settled = true;
+      // raw: nothing was echoed, just end the prompt line; not raw: erase the echoed rows
+      if (tty) output.write(raw ? "\n" : echoScrubSequence(promptText.length, line.length, output.columns ?? 80));
+      rl.close();
+      resolve(line.trim());
+    });
+    rl.once("close", () => { // EOF / Ctrl+C / Ctrl+D without a line
+      if (settled) return;
+      settled = true;
+      if (tty) output.write("\n");
+      resolve("");
+    });
+  });
 }

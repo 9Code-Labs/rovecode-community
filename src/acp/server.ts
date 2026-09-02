@@ -167,7 +167,7 @@ export class AionAcpAgent implements Agent {
     const rt = createRuntime({ cwd: params.cwd, stream: this.opts.stream });
     if (!rt.stream) {
       throw RequestError.authRequired({
-        details: "no provider configured: set AION_BASE_URL/AION_API_KEY or a <NAME>_API_KEY",
+        details: "no provider configured: run `aion auth set <provider>`, or set AION_BASE_URL/AION_API_KEY or a <NAME>_API_KEY",
       });
     }
     this.sessions.set(rt.sessionId, { rt, steering: new SteeringQueue(), active: null, permSeq: 0 });

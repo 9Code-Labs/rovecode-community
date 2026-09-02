@@ -42,13 +42,30 @@ aion run "<prompt>" --yolo  # one-shot, all tool approvals granted
 aion gauntlet               # adversarial eval suite (offline, deterministic, 10 tasks)
 aion bench                  # cross-harness micro-benchmarks
 aion tools                  # registered tool listing
+aion auth set <provider>    # store an API key (prompted on the terminal, never echoed); auth list / auth remove
 aion trace <session-id>     # replay a session's JSONL tree
 aion acp                    # Agent Client Protocol v1 over stdio (Zed/JetBrains)
 aion serve                  # headless HTTP + SSE server (AION_PORT, loopback-only)
 ```
 
-Without provider env, one-shot runs use a scripted mock provider (also how the packaging smoke
-works). For a real model set any of:
+Without a provider configured, one-shot runs use a scripted mock provider (also how the packaging
+smoke works). For a real model, store a key once:
+
+```bash
+aion auth set anthropic                  # prompts for ANTHROPIC_API_KEY — never echoed, never logged
+aion auth set kaesra --key MY_PROXY_KEY  # override the key name recorded for a provider
+aion auth list                           # stored providers + key names, values redacted (first 4 chars)
+aion auth remove anthropic
+aion auth set openai < key.txt           # piped stdin: reads one line, no prompt (scripts)
+```
+
+Keys live in `~/.aion/credentials.json` (`AION_HOME` overrides the directory). On POSIX the file is
+written 0600 inside a 0700 directory. On Windows, mode bits are not enforced — the file is protected
+by the NTFS ACL of your user profile (`%USERPROFILE%`, which `~/.aion` inherits), not by permission
+bits. Stored keys beat `<NAME>_API_KEY` env vars; an explicit `AION_BASE_URL`/`AION_API_KEY` pair
+beats both.
+
+Or configure by env:
 
 ```bash
 AION_BASE_URL=... AION_API_KEY=...   # any OpenAI-compatible or Anthropic endpoint (always wins)
@@ -178,4 +195,4 @@ Third-party attributions (Apache-2.0 NOTICE entries + MIT credits): `THIRD_PARTY
 Ports #21–#39: mid-turn cancellation, first-class grep/glob/ls tools, retry-with-backoff,
 approval diff previews, compaction v2, background subagents, sandbox rung config, reflection
 retries, hooks v2, custom slash commands, web fetch, todo/ask_user tools, image input,
-JSON/NDJSON output modes, provider auth store, session export, OTel spans.
+JSON/NDJSON output modes, session export, OTel spans.

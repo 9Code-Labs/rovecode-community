@@ -105,7 +105,7 @@ export function buildOpenApiDoc(serverUrl: string): Record<string, unknown> {
             "400": errorResponse("Body is not JSON or lacks a string `text`"),
             "404": errorResponse("Unknown session id"),
             "409": errorResponse("A run is already in progress for this session"),
-            "503": errorResponse("No provider configured (set AION_BASE_URL/AION_API_KEY or a named provider key)"),
+            "503": errorResponse("No provider configured (run `aion auth set <provider>`, or set AION_BASE_URL/AION_API_KEY or a named provider key)"),
           },
         },
         delete: {

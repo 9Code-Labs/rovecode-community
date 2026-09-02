@@ -181,7 +181,7 @@ export function startServer(opts: ServerOptions = {}): AionServer {
     if (entry.running) return json({ error: "a run is already in progress for this session" }, 409);
     const rt = entry.runtime;
     const stream = rt.stream;
-    if (!stream) return json({ error: "no provider configured (set AION_BASE_URL/AION_API_KEY or a named provider key)" }, 503);
+    if (!stream) return json({ error: "no provider configured (run `aion auth set <provider>`, or set AION_BASE_URL/AION_API_KEY or a named provider key)" }, 503);
     const model: ModelRef = bodyModel(body) ?? { provider: rt.provider?.id ?? "mock", model: rt.defaultModel || "default" };
     const def = rt.buildDef(model);
     // no interactive ApprovalFn — buildCfg installs the port-#9 exec-policy wrapper:

@@ -9,9 +9,10 @@ import { test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir, homedir } from "node:os";
+import { PassThrough, Writable } from "node:stream";
 import {
   credentialsPath, loadCredentials, saveCredential, removeCredential,
-  listProviders, redactSecret, keyNameFor,
+  listProviders, redactSecret, keyNameFor, readSecret, echoScrubSequence,
 } from "../../src/providers/auth.ts";
 import { resolveProvider, listBuiltinProviders } from "../../src/providers/stream.ts";
 
@@ -119,6 +120,17 @@ test("corrupt file reads as empty; malformed entries dropped; unknown types roun
   expect(raw["future"]).toEqual({ type: "oauth", refresh: "r", access: "a" }); // preserved unharmed
 });
 
+test("whitespace-only stored key is dropped on load, so the env key wins; save refuses it too", () => {
+  mkdirSync(home, { recursive: true });
+  writeFileSync(credentialsPath(), JSON.stringify({ deepseek: { type: "api", key: " " } }), "utf8");
+  expect(loadCredentials()).toEqual({});
+  process.env.DEEPSEEK_API_KEY = "env-ds-key-0123456789";
+  const cfg = resolveProvider();
+  expect(cfg?.id).toBe("deepseek");
+  expect(cfg?.apiKey).toBe("env-ds-key-0123456789"); // not the stored " "
+  expect(() => saveCredential("deepseek", " \t ")).toThrow(/empty secret/);
+});
+
 // ---------- models.dev auth map ----------
 
 test("keyNameFor: models.dev snapshot drives key names; fallback rule for off-catalog ids", () => {
@@ -185,6 +197,69 @@ test("precedence: env-only still resolves (regression) and nothing-at-all is nul
   const cfg = resolveProvider();
   expect(cfg?.id).toBe("deepseek");
   expect(cfg?.apiKey).toBe("env-ds-key-0123456789");
+});
+
+// ---------- readSecret: the `aion auth set` prompt, driven in-process ----------
+
+const PROMPT = "ANTHROPIC_API_KEY for anthropic: ";
+type FakeTty = PassThrough & { isTTY: boolean; isRaw: boolean; setRawMode?: (m: boolean) => unknown };
+
+/** A TTY-like stdin: reports isTTY and (optionally) honours setRawMode like tty.ReadStream. */
+function fakeTty(rawModeSupported: boolean): FakeTty {
+  const s = new PassThrough() as FakeTty;
+  s.isTTY = true;
+  s.isRaw = false;
+  if (rawModeSupported) s.setRawMode = function (this: FakeTty, m: boolean) { this.isRaw = m; return this; };
+  return s;
+}
+
+function capture(columns?: number): { out: Writable & { columns?: number }; text: () => string } {
+  let buf = "";
+  const out = new Writable({ write(c, _e, cb) { buf += String(c); cb(); } }) as Writable & { columns?: number };
+  if (columns !== undefined) out.columns = columns;
+  return { out, text: () => buf };
+}
+
+test("readSecret (tty, raw mode): keystrokes never reach the terminal — output is prompt + newline only", async () => {
+  const input = fakeTty(true);
+  const { out, text } = capture(80);
+  const pending = readSecret(PROMPT, { input, output: out });
+  expect(input.isRaw).toBe(true); // readline terminal mode switched the driver's echo off
+  input.write(CANARY);
+  input.write("\r");
+  expect(await pending).toBe(CANARY);
+  expect(text()).toBe(PROMPT + "\n"); // readline's own echo went to the sink, not here
+  expect(text()).not.toContain("CANARY");
+  expect(input.isRaw).toBe(false); // restored on close
+});
+
+test("readSecret (tty, no raw mode available): erases every row the driver's echo wrapped onto", async () => {
+  const input = fakeTty(false); // no setRawMode → the terminal driver echoes prompt+line itself
+  const { out, text } = capture(80);
+  const key = "sk-" + "0123456789".repeat(11).slice(0, 105); // 108 chars, like an Anthropic key
+  const pending = readSecret(PROMPT, { input, output: out });
+  expect(input.isRaw).toBe(false);
+  input.write(key + "\r\n"); // a cooked driver delivers the whole line + CRLF at once
+  expect(await pending).toBe(key);
+  expect(text()).toBe(PROMPT + echoScrubSequence(PROMPT.length, key.length, 80));
+  expect(text()).toContain("\x1b[1A\x1b[2K\x1b[1A\x1b[2K"); // 33 + 108 = 141 cols → 2 rows at 80
+  expect(text()).not.toContain(key.slice(0, 8));
+});
+
+test("readSecret (piped stdin): no prompt, nothing written, trimmed line; EOF without a line → empty", async () => {
+  const input = new PassThrough();
+  const { out, text } = capture();
+  const pending = readSecret(PROMPT, { input, output: out });
+  input.end(`  ${CANARY}  \n`);
+  expect(await pending).toBe(CANARY);
+  expect(text()).toBe("");
+
+  const empty = new PassThrough();
+  const cap2 = capture();
+  const pending2 = readSecret(PROMPT, { input: empty, output: cap2.out });
+  empty.end();
+  expect(await pending2).toBe("");
+  expect(cap2.text()).toBe("");
 });
 
 // ---------- CLI end-to-end (real main.ts subprocess, temp AION_HOME) ----------
