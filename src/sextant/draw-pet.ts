@@ -1,5 +1,5 @@
 /** Port #45 — paints nimbus into its panel: a rounded frame titled `<name>  lv N  <mood>`, the cloud
- *  sprite on a 1.8 s cosine sway, weather (code drizzle while editing, lightning while running/testing,
+ *  sprite on the prototype's 1.8 s step sway (pet.js:196), weather (code drizzle while editing, lightning while running/testing,
  *  sun on success, zzz when sleepy), the storm (dark filled body, furrowed brows, red eyes, rain + bolts,
  *  panel flash, reddened border), sparkles/hearts, and a ≤2-line speech bubble — everything clipped to
  *  the panel rect. Ported from the user's own sextant v0.4.0 prototype `src/pet.js` draw() + `app.js`
@@ -8,7 +8,8 @@
 import { ATTR, type Rect, type ScreenLike, type Seg, type SextantState, type Style, type Theme } from "./types.ts";
 import { CODE_RAIN, FACE, INNER, SPRITE, moodCtxFrom, type Mood, type MoodCtx, type Pet } from "./pet.ts";
 
-/** one full up-down sway (README: "1.8 s salınım, titreme yok") */
+/** the sprite shifts one row every SWAY_MS — pet.js:196 `Math.floor(t / 1800) % 2`, the README's "1.8 s salınım"
+ *  (full period 3.6 s); the prototype's ±1-column drift (pet.js:197) is deliberately not ported: "titreme yok" */
 export const SWAY_MS = 1800;
 /** a double-flicker strike every 2.6 s; the panel flashes for the first 260 ms */
 export const STORM_PERIOD_MS = 2600;
@@ -36,8 +37,8 @@ export function moodColor(m: Mood, theme: Theme): number {
   return theme.muted;
 }
 
-/** vertical sway phase: 0 for the first half of the cosine, 1 for the second — no per-frame jitter */
-export function swayBob(now: number): 0 | 1 { return Math.cos((2 * Math.PI * (now % SWAY_MS)) / SWAY_MS) < 0 ? 1 : 0; }
+/** vertical sway phase: a step that flips every SWAY_MS (frames within one step are identical — no per-frame jitter) */
+export function swayBob(now: number): 0 | 1 { return (Math.floor(now / SWAY_MS) % 2) as 0 | 1; }
 
 /** word wrap to w cells; a single over-long word is left whole (put() clips it) */
 export function wrapText(text: string, w: number): string[] {
@@ -207,7 +208,8 @@ function drawCloud(scr: ScreenLike, B: Rect, pet: Pet, ctx: MoodCtx, m: Mood, th
   const q = P.quip && P.quip.until > t ? P.quip.text : null;
   if (q) {
     const qy = B.y + B.h - 2;
-    const lines = wrapText(q, B.w - 2).slice(0, 2);
+    // B.w - 3: the two quote marks share the line and put() clips at B.w - 1, so a full line keeps its closing ”
+    const lines = wrapText(q, B.w - 3).slice(0, 2);
     lines.forEach((l, i) => {
       if (qy + i < B.y + B.h) scr.put(B.x + 1, qy + i, (i === 0 ? "“" : " ") + l + (i === lines.length - 1 ? "”" : ""), st(theme.fg2, -1, ATTR.ITALIC), B.w - 1);
     });

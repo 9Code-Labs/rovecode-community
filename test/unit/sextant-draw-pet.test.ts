@@ -1,5 +1,5 @@
 /** Port #45 nimbus panel (src/sextant/draw-pet.ts) on a local GridScreen: title (name · lv · mood, degrading
- *  on a narrow panel), the 1.8 s sway (frames at t and t+1800 identical, t+900 differs by one row),
+ *  on a narrow panel), the 1.8 s step sway (frames at t, t+40 and t+3600 identical, t+1800 differs by one row),
  *  determinism at identical clocks, weather per state (drizzle / lightning / sun + sparkles / zzz / thinking
  *  dots / patient ?), the storm (░ body, brows, red eyes, rain, bolts + panel flash + reddened border on strike
  *  frames), hearts after a poke, the ≤2-line clipped speech bubble, nothing outside the rect (also on a short
@@ -73,19 +73,26 @@ test("mood colors: sunny ok · furious err · patient warn · focused/zapping/co
 
 // ---------- motion + determinism ----------
 
-test("sway: frames at t and t+1800 are identical; t+900 differs by a one-row shift of the sprite; no other change", () => {
+test("sway (pet.js:196 floor(t/1800)%2): frames at t and t+3600 identical; t+1800 differs only by a one-row shift; t+40 identical (no per-frame jitter); no sideways wander", () => {
+  expect(SWAY_MS).toBe(1800);
   const s = stateFixture();
   const at = (dt: number) => frame(born(), s, T0 + 1000 + dt);
-  const f0 = at(0), f1 = at(900), f2 = at(SWAY_MS);
-  expect(f2.toText()).toBe(f0.toText());
-  expect(JSON.stringify(f2.cells)).toBe(JSON.stringify(f0.cells));
-  expect(f1.toText()).not.toBe(f0.toText());
-  expect(Math.abs(sprite(f1).top - sprite(f0).top)).toBe(1);
-  expect(sprite(f1).sx).toBe(sprite(f0).sx); // vertical sway only — no horizontal jitter
-  expect(swayBob(T0 + 1000)).not.toBe(swayBob(T0 + 1900));
-  expect(swayBob(T0 + 1000)).toBe(swayBob(T0 + 2800));
+  const f0 = at(0), fHalf = at(SWAY_MS), fFull = at(2 * SWAY_MS), fNext = at(40);
+  expect(JSON.stringify(fFull.cells)).toBe(JSON.stringify(f0.cells)); // full period 3.6 s
+  expect(JSON.stringify(fNext.cells)).toBe(JSON.stringify(f0.cells)); // a frame later within the same half-period
+  expect(fHalf.toText()).not.toBe(f0.toText());
+  const a = sprite(f0), b = sprite(fHalf);
+  expect(Math.abs(b.top - a.top)).toBe(1);
+  expect(b.sx).toBe(a.sx); // vertical only — "titreme yok": the prototype's ±1-column drift (pet.js:197) is not ported
+  const band = (f: GridScreen, top: number) => Array.from({ length: SPRITE.length }, (_, i) => f.row(top + i)).join("\n");
+  expect(band(fHalf, b.top)).toBe(band(f0, a.top)); // the same picture, one row over
   expect(swayBob(0)).toBe(0);
-  expect(swayBob(SWAY_MS / 2)).toBe(1);
+  expect(swayBob(SWAY_MS - 1)).toBe(0);
+  expect(swayBob(SWAY_MS)).toBe(1);
+  expect(swayBob(2 * SWAY_MS - 1)).toBe(1);
+  expect(swayBob(2 * SWAY_MS)).toBe(0);
+  expect(swayBob(T0 + 1000)).toBe(swayBob(T0 + 1040));
+  expect(swayBob(T0 + 1000)).not.toBe(swayBob(T0 + 2800));
 });
 
 test("determinism: same seed + same script → identical cells; redrawing the same pet at the same clock is idempotent", () => {
@@ -134,7 +141,10 @@ test("running/testing: a ╲╱ bolt under the cloud on 'on' half-periods, none 
 });
 
 test("success: ☼ beside the cloud, ◠◠ eyes, mood sunny; sparkles (* +) after a pass event", () => {
-  const pet = born(4);
+  // seed chosen so (a) not all seven hashed sparkle positions fall inside the sprite band at these clocks (seed 4's
+  // did once the sway put the sprite on its low row at T0+1000 — sparkles under the cloud are culled) and (b) the
+  // pass quip keeps "12 passed" on one 23-cell line ("clear skies ☼ 12 passed." wraps after "12")
+  const pet = born(5);
   pet.event("pass", { r: "12 passed" }, T0);
   const f = frame(pet, SUCCESS(), T0 + 1000);
   const { top, sx } = sprite(f);
@@ -262,7 +272,7 @@ test("speech bubble: at most two lines, clipped to the panel width, opening quot
   const pet = born(10);
   const text = { a: "an-extremely-long-agent-name", r: "seventeen files rewritten and every single test passing" };
   pet.event("laneDone", text, T0);
-  expect(wrapText(pet.state.quip!.text, B.w - 2).length).toBeGreaterThan(2);
+  expect(wrapText(pet.state.quip!.text, B.w - 3).length).toBeGreaterThan(2);
   const f = frame(pet, stateFixture(), T0 + 1000);
   const qy = B.y + B.h - 2;
   expect(f.at(B.x + 1, qy)!.ch).toBe("“");
@@ -278,6 +288,29 @@ test("speech bubble: at most two lines, clipped to the panel width, opening quot
   }
   expect(wrapText("a bb ccc", 5)).toEqual(["a bb", "ccc"]);
   expect(wrapText("supercalifragilistic x", 6)).toEqual(["supercalifragilistic", "x"]);
+});
+
+test("speech bubble: a quip that exactly fills the line keeps both quotes — the closing ” lands on the last inner column, never clipped", () => {
+  const qy = B.y + B.h - 2;
+  const full = "a".repeat(11) + " " + "b".repeat(11); // 23 = B.w - 3 chars: the longest single line
+  const pet = born(10);
+  pet.say(full, T0);
+  const f = frame(pet, stateFixture(), T0 + 1000);
+  expect(f.row(qy).slice(B.x + 1, B.x + B.w)).toBe("“" + full + "”");
+  expect(f.at(B.x + B.w - 1, qy)!.ch).toBe("”");
+  expect(f.at(B.x + B.w, qy)!.ch).toBe(" "); // the margin cell stays empty
+  expect(f.at(RECT.x + RECT.w - 1, qy)!.ch).toBe("│");
+  expect(f.row(qy + 1).slice(B.x, B.x + B.w).trim()).toBe("");
+  // one char more (B.w - 2) no longer fits one line with its quotes: it wraps and both quotes survive
+  const over = "a".repeat(12) + " " + "b".repeat(11);
+  const pet2 = born(10);
+  pet2.say(over, T0);
+  const g = frame(pet2, stateFixture(), T0 + 1000);
+  const glyphs = g.cells.flat().map((c) => c.ch);
+  expect(glyphs.filter((ch) => ch === "“").length).toBe(1);
+  expect(glyphs.filter((ch) => ch === "”").length).toBe(1);
+  expect(g.row(qy).slice(B.x + 1, B.x + B.w).trimEnd()).toBe("“" + "a".repeat(12));
+  expect(g.row(qy + 1).slice(B.x + 1, B.x + B.w).trimEnd()).toBe(" " + "b".repeat(11) + "”");
 });
 
 // ---------- clipping, hiding, hits ----------

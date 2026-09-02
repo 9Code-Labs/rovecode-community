@@ -118,7 +118,9 @@ export interface MoodCtx {
   waiting: boolean;
   /** the crew has queued/running tasks → DELEGATING */
   delegating: boolean;
-  /** clock of the last error the state knows about (null = none); arms a storm without an event */
+  /** clock of the last error the state knows about (null = none) — informational: the storm is armed by
+   *  tick() on the state's edge into ERROR, never by comparing this clock (a failed tool the model leaves
+   *  with endedAt null shares one clock across the whole run; one error = one storm must hold per episode) */
   errorAt: number | null;
   tokens: number;
   /** last run activity clock known to the state (0 = none) — keeps the pet awake */
@@ -148,14 +150,16 @@ export interface PetState {
   fx: PetFx[];
   glance: { dir: -1 | 0 | 1; until: number } | null;
   nextObserveAt: number;
-  /** an observation made while an event quip was showing; said once that quip ends */
-  pendingObserve: string | null;
+  /** an observation made while an event quip was showing; said once that quip ends — unless it is older than
+   *  OBSERVE_DEFER_MS by then (dropped: a 2-minute permission quip must not surface it minutes later) */
+  pendingObserve: { text: string; at: number } | null;
   nextSuggestAt: number;
   lastSuggest: string;
   saidLong: boolean;
   stormUntil: number;
-  /** the state-level error clock already folded into a storm (one error = one storm) */
-  stormedErrorAt: number | null;
+  /** the state was ERROR on the previous tick — the storm arms on the edge into ERROR, so a lingering ERROR
+   *  is one storm and a second ERROR episode in the same run is a second storm */
+  wasError: boolean;
   todosDone: number;
 }
 
@@ -172,19 +176,26 @@ export interface Pet {
   event(kind: PetEventKind, data: PetEventData | undefined, now: number): void;
   /** the user is typing; the cloud guesses the command ("/help? sure.") */
   suggest(label: string, now: number): void;
-  /** a click: jump + hearts + a greeting */
+  /** a click: jump + hearts + a greeting; event("poke") is the same call — both count the poke, so the first
+   *  says "hi." and later pokes cycle the pool (the integration may use either) */
   poke(now: number): void;
+  /** an event-tone quip from the surface itself — app.js used pet.say for `/pet <name>` ("<name>? i like it.",
+   *  after setting state.name), /mode and /crew; ms defaults to 4200 and observations defer behind it */
+  say(text: string, now: number, ms?: number): void;
   /** 1 + floor(sqrt(tokens / 1500)) — grows stepwise with tokens */
   level(tokens: number): number;
   mood(ctx: MoodCtx, now: number): Mood;
   /** a quip, an effect or a storm is live (the renderer may want a faster frame) */
   animating(now: number): boolean;
-  /** per-frame housekeeping: expire fx, fold state errors into storms, clear storms on SUCCESS, flush a
-   *  deferred observation, ambient hums / snores / "still going" — drawPet calls it once per frame */
+  /** per-frame housekeeping: expire fx, arm a storm on the state's edge into ERROR, clear storms on SUCCESS,
+   *  flush (or drop, past 10 s) a deferred observation, ambient hums / snores / "still going" — drawPet calls
+   *  it once per frame */
   tick(now: number, ctx?: MoodCtx): void;
 }
 
 export const OBSERVE_GAP_MS = 5500;
+/** a deferred observation older than this is dropped instead of spoken late */
+export const OBSERVE_DEFER_MS = 10_000;
 export const STORM_MIN_MS = 5000;
 export const STORM_MAX_MS = 7000;
 export const SLEEP_AFTER_MS = 45_000;
@@ -241,14 +252,15 @@ export function createPet(opts: { name?: string; seed?: number } = {}): Pet {
     name: (opts.name || "nimbus").slice(0, 14),
     pokes: 0, quip: null, lastQuipAt: 0, lastActiveAt: null, fx: [], glance: null,
     nextObserveAt: 0, pendingObserve: null, nextSuggestAt: 0, lastSuggest: "", saidLong: false,
-    stormUntil: 0, stormedErrorAt: null, todosDone: 0,
+    stormUntil: 0, wasError: false, todosDone: 0,
   };
   const pick = (arr: readonly string[], idx?: number): string => arr[(idx ?? Math.floor(rnd() * 1e6)) % arr.length] ?? "";
   const fmt = (t: string, d?: PetEventData): string =>
     t.replace(/\{(\w+)\}/g, (_m, k: string) => { const v = d?.[k]; return v == null ? "" : String(v); });
   /** first sight = birth (the prototype stamped creation with the wall clock) */
   const wake = (now: number): void => { if (P.lastActiveAt == null) { P.lastActiveAt = now; P.lastQuipAt = now - 5000; } };
-  const say = (text: string, now: number, ms = 4200, kind: QuipTone = "event"): void => { P.quip = { text, until: now + ms, kind }; P.lastQuipAt = now; };
+  /** also the public Pet.say (event tone); wake() is a no-op for the internal callers, which already woke */
+  const say = (text: string, now: number, ms = 4200, kind: QuipTone = "event"): void => { wake(now); P.quip = { text, until: now + ms, kind }; P.lastQuipAt = now; };
   const quipActive = (now: number): boolean => P.quip != null && P.quip.until > now;
   const eventQuipActive = (now: number): boolean => quipActive(now) && P.quip?.kind === "event";
   const glance = (dir: -1 | 0 | 1, now: number, ms: number): void => { P.glance = { dir, until: now + ms }; };
@@ -270,7 +282,7 @@ export function createPet(opts: { name?: string; seed?: number } = {}): Pet {
     if (found == null) return;
     P.nextObserveAt = now + OBSERVE_GAP_MS;
     // an edit's event quip ("raining code on x.ts.") keeps the floor; the observation follows it
-    if (eventQuipActive(now)) P.pendingObserve = found;
+    if (eventQuipActive(now)) P.pendingObserve = { text: found, at: now };
     else say(found, now, 3200, "observe");
   }
 
@@ -303,8 +315,9 @@ export function createPet(opts: { name?: string; seed?: number } = {}): Pet {
       return;
     }
     if (kind === "tool_fail") { say(fmt(pick(QUIPS.error), data), now); fx("shiver", now, 640); storm(now); return; }
+    if (kind === "poke") P.pokes++; // counted here so event("poke") and poke() are the same click
     const pool = QUIPS[kind];
-    const text = kind === "poke" ? pick(pool, Math.max(0, P.pokes - 1)) : pick(pool);
+    const text = kind === "poke" ? pick(pool, P.pokes - 1) : pick(pool);
     say(fmt(text, data), now, kind === "permission" ? PERMISSION_QUIP_MS : kind === "done" || kind === "pass" ? 6000 : 4200);
     if (kind === "pass" || kind === "done") fx("sparkle", now, 3600);
     if (kind === "allowed") fx("hearts", now, 1800);
@@ -316,7 +329,7 @@ export function createPet(opts: { name?: string; seed?: number } = {}): Pet {
     if (kind === "start") { P.saidLong = false; P.lastSuggest = ""; }
   }
 
-  function poke(now: number): void { P.pokes++; event("poke", undefined, now); }
+  function poke(now: number): void { event("poke", undefined, now); }
   const level = (tokens: number): number => 1 + Math.floor(Math.sqrt(Math.max(0, tokens) / 1500));
 
   function mood(ctx: MoodCtx, now: number): Mood {
@@ -338,9 +351,16 @@ export function createPet(opts: { name?: string; seed?: number } = {}): Pet {
     P.fx = P.fx.filter((f) => f.until > now);
     if (P.glance && P.glance.until <= now) P.glance = null;
     if (P.quip && P.quip.until <= now) P.quip = null;
-    if (P.pendingObserve != null && !eventQuipActive(now)) { say(P.pendingObserve, now, 3200, "observe"); P.pendingObserve = null; }
+    if (P.pendingObserve != null) {
+      if (now - P.pendingObserve.at > OBSERVE_DEFER_MS) P.pendingObserve = null; // stale: dropped, never spoken late
+      else if (!eventQuipActive(now)) { say(P.pendingObserve.text, now, 3200, "observe"); P.pendingObserve = null; }
+    }
     if (!ctx) return;
-    if (ctx.errorAt != null && ctx.errorAt !== P.stormedErrorAt) { P.stormedErrorAt = ctx.errorAt; storm(now); }
+    // edge-trigger: the storm arms when the state enters ERROR (one episode = one storm however long it lingers;
+    // a second failed tool in the same run — ERROR → READING → ERROR — storms again even with one error clock)
+    const inError = ctx.state === "ERROR";
+    if (inError && !P.wasError) storm(now);
+    P.wasError = inError;
     if (ctx.state === "SUCCESS") P.stormUntil = 0;
     const sleeping = mood(ctx, now) === "sleepy";
     if (!ctx.running && !ctx.booting && !quipActive(now) && now - P.lastQuipAt > (sleeping ? SLEEP_HUM_MS : IDLE_HUM_MS)) {
@@ -353,5 +373,5 @@ export function createPet(opts: { name?: string; seed?: number } = {}): Pet {
     }
   }
 
-  return { state: P, observe, react, event, suggest, poke, level, mood, animating, tick };
+  return { state: P, observe, react, event, suggest, poke, say, level, mood, animating, tick };
 }

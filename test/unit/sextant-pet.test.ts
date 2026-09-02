@@ -1,14 +1,16 @@
 /** Port #45 nimbus brain (src/sextant/pet.ts): the pinned mood table (direct MoodCtx and moodCtxFrom over
  *  a SextantState fixture), storm on tool_fail within one frame / seeded 5-7 s / cleared by SUCCESS and by
- *  done, observe table + 5.5 s rate limit + deferral behind event quips, react, poke, level steps, todo
- *  counting, ambient hums and snores, "still going", suggest, permission quips, animating, determinism,
- *  petEnabled, and the source pins (no wall clock / timers / Math.random / process in pet.ts, draw-pet.ts). */
+ *  done / edge-triggered on the state's entry into ERROR (two episodes = two storms, a lingering ERROR = one),
+ *  observe table + 5.5 s rate limit + deferral behind event quips (dropped past 10 s), react, poke (event
+ *  "poke" counts too), say, level steps, todo counting, ambient hums and snores, "still going", suggest,
+ *  permission quips, animating, determinism, petEnabled, and the source pins (no wall clock / timers /
+ *  Math.random / process in pet.ts, draw-pet.ts). */
 import { test, expect, describe } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   createPet, moodCtxFrom, petEnabled, seededRandom, QUIPS, OBSERVE, OBSERVE_DEL, MOODS, SPRITE, INNER,
-  OBSERVE_GAP_MS, STORM_MIN_MS, STORM_MAX_MS, SLEEP_AFTER_MS, LONG_RUN_MS, BOOT_MS,
+  OBSERVE_GAP_MS, OBSERVE_DEFER_MS, STORM_MIN_MS, STORM_MAX_MS, SLEEP_AFTER_MS, LONG_RUN_MS, BOOT_MS,
   type MoodCtx, type Mood, type Pet,
 } from "../../src/sextant/pet.ts";
 import type { SextantState } from "../../src/sextant/types.ts";
@@ -156,7 +158,7 @@ describe("storm", () => {
     }
   });
 
-  test("a state-level error (activity ERROR) storms once via tick and outlives the state by 5-7 s", () => {
+  test("a state-level error (activity ERROR) storms once via tick and outlives the state by 5-7 s; while ERROR lingers nothing re-arms", () => {
     const pet = createPet({ seed: 4 });
     const s = stateFixture({ activity: activity("ERROR", T0 - 1000, T0 - 5) });
     pet.tick(T0, moodCtxFrom(s, T0));
@@ -166,10 +168,37 @@ describe("storm", () => {
     const until = pet.state.stormUntil;
     pet.tick(T0 + 100, moodCtxFrom(s, T0 + 100)); // the same error is not re-armed
     expect(pet.state.stormUntil).toBe(until);
+    // a newer error clock while the state never left ERROR is the same episode — the edge, not the clock, arms it
     pet.tick(T0 + 3000, moodCtxFrom(stateFixture({ activity: activity("ERROR", T0 - 1000, T0 + 2900) }), T0 + 3000));
-    expect(pet.state.stormedErrorAt).toBe(T0 + 2900); // a newer error re-arms …
-    expect(pet.state.stormUntil).toBeGreaterThanOrEqual(T0 + 3000 + STORM_MIN_MS); // … and extends the storm
-    expect(pet.state.stormUntil).toBeGreaterThan(until);
+    expect(pet.state.stormUntil).toBe(until);
+    expect(pet.state.wasError).toBe(true);
+  });
+
+  test("edge-trigger (critic probe): ERROR → READING → 9 s → ERROR → READING with one error clock (endedAt null) is two storms", () => {
+    const pet = createPet({ seed: 4 });
+    const running = (state: "ERROR" | "READING", t: number) =>
+      moodCtxFrom(stateFixture({ running: true, activity: activity(state, T0 - 1000) }), t); // endedAt null → errorAt = startedAt both times
+    expect(running("ERROR", T0).errorAt).toBe(running("ERROR", T0 + 9000).errorAt);
+    pet.tick(T0, running("ERROR", T0));
+    const first = pet.state.stormUntil;
+    expect(first).toBeGreaterThanOrEqual(T0 + STORM_MIN_MS);
+    pet.tick(T0 + 40, running("READING", T0 + 40));
+    expect(pet.mood(running("READING", T0 + 40), T0 + 40)).toBe("furious"); // the first storm outlives the state
+    expect(pet.state.wasError).toBe(false);
+    pet.tick(T0 + 9000, running("ERROR", T0 + 9000));
+    expect(pet.state.stormUntil).toBeGreaterThanOrEqual(T0 + 9000 + STORM_MIN_MS); // a second storm, not humming
+    pet.tick(T0 + 9040, running("READING", T0 + 9040));
+    expect(pet.mood(running("READING", T0 + 9040), T0 + 9040)).toBe("furious");
+  });
+
+  test("edge-trigger guard: ERROR lingering for 150 frames arms exactly one storm (stormUntil < T0 + 7 s); THINKING at T0 + 7 s hums", () => {
+    const pet = createPet({ seed: 4 });
+    const err = ctx({ state: "ERROR", running: true, errorAt: T0 - 1000 });
+    for (let i = 0; i < 150; i++) pet.tick(T0 + i * 40, err); // 6 s of ERROR frames
+    expect(pet.state.stormUntil).toBeGreaterThanOrEqual(T0 + STORM_MIN_MS);
+    expect(pet.state.stormUntil).toBeLessThan(T0 + STORM_MAX_MS);
+    expect(pet.mood(err, T0 + 7000)).toBe("furious"); // the state itself still rules while it is ERROR …
+    expect(pet.mood(busy("THINKING"), T0 + 7000)).toBe("humming"); // … but no re-armed storm lingers past it
   });
 
   test("a new error during a storm never shortens it (stormUntil only grows until cleared)", () => {
@@ -253,13 +282,35 @@ describe("observe", () => {
     pet.observe("secure: true", "ins", T0 + 5);
     pet.observe("httpOnly", "ins", T0 + 6);
     expect(pet.state.quip!.text).toBe(edit);
-    expect(pet.state.pendingObserve).toBe("secure cookie ♥");
+    expect(pet.state.pendingObserve).toEqual({ text: "secure cookie ♥", at: T0 + 5 });
     pet.tick(T0 + 4000);
     expect(pet.state.quip!.text).toBe(edit);
     pet.tick(T0 + 4200);
     expect(pet.state.quip!.text).toBe("secure cookie ♥");
     expect(pet.state.pendingObserve).toBeNull();
     expect(pet.state.nextObserveAt).toBe(T0 + 5 + OBSERVE_GAP_MS);
+  });
+
+  test("a deferred observation older than OBSERVE_DEFER_MS (10 s) is dropped, never surfaced minutes later behind a permission quip", () => {
+    expect(OBSERVE_DEFER_MS).toBe(10_000);
+    const pet = born(5);
+    pet.event("permission", undefined, T0); // a 2-minute event quip holds the floor
+    pet.observe("httpOnly", "ins", T0 + 100);
+    expect(pet.state.pendingObserve).toEqual({ text: "httpOnly. good call.", at: T0 + 100 });
+    pet.tick(T0 + 10_100); // exactly 10 s old: still held
+    expect(pet.state.pendingObserve).not.toBeNull();
+    pet.tick(T0 + 10_101); // 10.001 s old: dropped
+    expect(pet.state.pendingObserve).toBeNull();
+    pet.event("allowed", undefined, T0 + 60_000);
+    pet.tick(T0 + 64_200); // the allowed quip ended — nothing stale surfaces
+    expect(pet.state.quip).toBeNull();
+    // behind a short event quip the same observation still speaks when the quip ends (age ≤ 10 s)
+    const quick = born(5);
+    quick.say("hold on.", T0, 9000);
+    quick.observe("httpOnly", "ins", T0 + 100);
+    quick.tick(T0 + 9000);
+    expect(quick.state.quip?.text).toBe("httpOnly. good call.");
+    expect(quick.state.quip?.kind).toBe("observe");
   });
 });
 
@@ -305,6 +356,35 @@ test("poke: bounce + hearts, glance at the user, first poke says hi., later poke
   expect(pet.state.quip!.text).toBe(QUIPS.poke[1]!);
   pet.poke(T0 + 4400);
   expect(pet.state.quip!.text).toBe(QUIPS.poke[2]!);
+});
+
+test("event('poke') is the same click as poke(): it counts, so the greeting advances either way (#44 may call either)", () => {
+  const pet = born(8);
+  pet.event("poke", undefined, T0);
+  expect(pet.state.pokes).toBe(1);
+  expect(pet.state.quip!.text).toBe("hi.");
+  expect(pet.state.fx.map((f) => f.kind).sort()).toEqual(["bounce", "hearts"]);
+  pet.event("poke", undefined, T0 + 100);
+  expect(pet.state.pokes).toBe(2);
+  expect(pet.state.quip!.text).toBe(QUIPS.poke[1]!);
+  pet.poke(T0 + 200);
+  expect(pet.state.pokes).toBe(3);
+  expect(pet.state.quip!.text).toBe(QUIPS.poke[2]!);
+});
+
+test("say: an event-tone quip from the surface (/pet <name> → '<name>? i like it.'), 4.2 s by default, custom ms, holds the floor over observations", () => {
+  const pet = createPet({ seed: 8 });
+  pet.state.name = "stratus";
+  pet.say(`${pet.state.name}? i like it.`, T0);
+  expect(pet.state.quip).toEqual({ text: "stratus? i like it.", until: T0 + 4200, kind: "event" });
+  expect(pet.state.lastActiveAt).toBe(T0); // first sight = birth, like every other entry point
+  expect(pet.animating(T0 + 4199)).toBe(true);
+  expect(pet.animating(T0 + 4200)).toBe(false);
+  pet.observe("httpOnly", "ins", T0 + 10);
+  expect(pet.state.quip!.text).toBe("stratus? i like it."); // the observation defers behind it
+  expect(pet.state.pendingObserve?.text).toBe("httpOnly. good call.");
+  pet.say("solo it is.", T0 + 5000, 1000);
+  expect(pet.state.quip).toEqual({ text: "solo it is.", until: T0 + 6000, kind: "event" });
 });
 
 test("level grows stepwise: 1 + floor(sqrt(tokens / 1500))", () => {
