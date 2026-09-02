@@ -1,5 +1,5 @@
 import { test, expect, beforeAll, afterAll } from "bun:test";
-import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -7,7 +7,10 @@ import {
   type CommitResult, type RollbackResult,
 } from "../../src/skills/versioned.ts";
 
-const root = join(tmpdir(), "aion-versioned-test");
+// A UNIQUE root per process: the old fixed `aion-versioned-test` path was shared by every
+// concurrent `bun test` (several worktrees run suites at once here) and beforeAll's rm -rf wiped
+// another process's ledgers mid-test — the "version-conflict … current version 0" load flake.
+const root = mkdtempSync(join(tmpdir(), "aion-versioned-"));
 let caseId = 0;
 
 /** Fresh target path per test so cases stay independent. */
@@ -24,7 +27,6 @@ function mustOk(r: CommitResult | RollbackResult): asserts r is Extract<typeof r
 }
 
 beforeAll(() => {
-  rmSync(root, { recursive: true, force: true });
   mkdirSync(root, { recursive: true });
 });
 
