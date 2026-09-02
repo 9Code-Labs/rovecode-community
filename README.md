@@ -236,8 +236,11 @@ tokens, cache hits, and catalog-priced spend.
   already handed to another process tree (a container started by the `docker` rung outlives its
   `docker run` client; a WSL-side process may outlive `wsl.exe`; services, COM- or `schtasks`-launched
   programs). A command that completes on its own keeps its deliberately backgrounded daemon
-  (`server > log 2>&1 &`), as before. The runner always settles within ~0.5 s of the abort even if an
-  orphan holds a pipe end: output so far + `[output truncated: process tree terminated on abort]`, exit 143.
+  (`server > log 2>&1 &`), as before. The runner always settles within ~0.5 s of the abort, even one that
+  lands after the launcher already exited while an unredirected child it left behind (`sleep 600 & echo
+  started`) still holds a pipe end — the job kill reaches that child (measured 3 ms; exit 143); an orphan
+  outside the tree that keeps a pipe end open past the kill yields output so far + `[output truncated:
+  process tree terminated on abort]`, exit 143.
 - **Sandbox rungs delegate, they do not isolate.** `wsl`/`docker` (#27) isolate only as well as the
   wrapped runtime does; `direct` (the default) is denylist + cwd lock. The executor seam is process-wide:
   `aion serve`/`aion acp` sessions booted from different project dirs share the most recently booted

@@ -121,16 +121,18 @@ export const bunRunner: SpawnRunner = async (argv, opts) => {
     if (signal) {
       if (treeKill) { job = createWinJob(); if (job && !job.assign(proc.pid)) job = null; } // null → taskkill-only
       onAbort = () => {
-        if (proc.exitCode !== null) return; // already gone: never kill a reused pid
+        // a dead launcher may have left a child holding a pipe end (`sleep N & echo x`): the job
+        // is still armed (the RUNNER has not settled) — terminate regardless; taskkill only a LIVE pid (reuse)
+        const launcherAlive = proc.exitCode === null;
         killed = treeKill;
         if (treeKill) {
           job?.terminate();
-          try { Bun.spawn(["taskkill", "/T", "/F", "/PID", String(proc.pid)], { stdout: "ignore", stderr: "ignore" }); } catch { /* best-effort */ }
+          if (launcherAlive) { try { Bun.spawn(["taskkill", "/T", "/F", "/PID", String(proc.pid)], { stdout: "ignore", stderr: "ignore" }); } catch { /* best-effort */ } }
         }
         graceTimer = setTimeout(graceUp, ABORT_GRACE_MS);
       };
       signal.addEventListener("abort", onAbort, { once: true });
-      void proc.exited.then(() => { if (onAbort) signal.removeEventListener("abort", onAbort); }, () => {});
+      void finished.then(() => { if (onAbort) signal.removeEventListener("abort", onAbort); }, () => {});
     }
     const won = await Promise.race([finished, grace]);
     if (won === "grace") { out.cancel(); err.cancel(); }

@@ -14,7 +14,10 @@
  *  Port #21 HIGH-1 (tail section): a Windows abort kills the whole process
  *  TREE via a Job Object, not just what `taskkill /T` can walk to, and the
  *  runner promise settles inside ABORT_GRACE_MS even when an orphan holds a
- *  pipe end. Those tests spawn real msys `sleep` children on purpose. */
+ *  pipe end. Port #21 MED (last real-spawn test): an abort that lands after
+ *  the LAUNCHER exited, while a child it left behind still holds stdout, still
+ *  kills that child and settles. Those tests spawn real msys `sleep` children
+ *  on purpose. */
 
 import { test, expect, afterEach } from "bun:test";
 import {
@@ -392,15 +395,17 @@ const isWin = process.platform === "win32";
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 const sleepTag = () => "600." + String(Math.floor(Math.random() * 1e9)).padStart(9, "0");
 
-/** pids of live msys sleep.exe processes carrying `tag` on their command line */
-async function taggedSleeps(tag: string): Promise<number[]> {
+/** pids of live processes named `name` carrying `tag` on their command line */
+async function tagged(name: string, tag: string): Promise<number[]> {
   const ps = Bun.spawn(["powershell", "-NoProfile", "-Command",
-    `(Get-CimInstance Win32_Process -Filter "Name='sleep.exe' AND CommandLine LIKE '%${tag}%'").ProcessId`],
+    `(Get-CimInstance Win32_Process -Filter "Name='${name}' AND CommandLine LIKE '%${tag}%'").ProcessId`],
     { stdout: "pipe", stderr: "pipe" });
   const text = await new Response(ps.stdout).text();
   await ps.exited;
   return text.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).map(Number);
 }
+/** live msys sleep.exe processes carrying `tag` */
+const taggedSleeps = (tag: string) => tagged("sleep.exe", tag);
 async function killTagged(tag: string): Promise<void> {
   for (const pid of await taggedSleeps(tag)) await Bun.spawn(["taskkill", "/F", "/PID", String(pid)], { stdout: "ignore", stderr: "ignore" }).exited;
 }
@@ -493,6 +498,35 @@ test.skipIf(!isWin)("a command that completes on its own keeps a child it delibe
     expect(r).toMatchObject({ code: 0, stdout: "started\n", treeKill: "job" });
     await wait(300);
     expect((await taggedSleeps(tag)).length).toBe(1); // KILL_ON_JOB_CLOSE cleared before CloseHandle (mutation: close without clearing → 0)
+  } finally {
+    await killTagged(tag);
+  }
+}, 20_000);
+
+test.skipIf(!isWin)("Windows abort AFTER the launcher exited (`sleep N & echo started`, the child still holds stdout): the job kill reaches the child, the runner settles ≤1s with code 143, the daemon is gone ≤3s", async () => {
+  const tag = sleepTag();
+  try {
+    const ac = new AbortController();
+    const run = bunRunner([CANON_BASH, "-c", `sleep ${tag} & echo started`], { signal: ac.signal });
+    await untilRunning(tag);
+    // the launcher (`bash -c "sleep <tag> & …"`: its -c string carries the tag, as does
+    // its fork stub) must be GONE before the abort — while it lives this is the tree
+    // case above, and the mutation below would pass vacuously
+    const t0 = Date.now();
+    while ((await tagged("bash.exe", tag)).length > 0 && Date.now() - t0 < 8000) await wait(50);
+    expect(await tagged("bash.exe", tag)).toEqual([]);
+    const tAbort = Date.now();
+    ac.abort();
+    // MUTATION: `if (proc.exitCode !== null) return;` at the top of onAbort → the abort is
+    // ignored (no job terminate, no grace timer): the runner promise, both pipe readers and
+    // the still-armed job handle wait on the daemon's stdout end for its whole 600 s, and
+    // the daemon the user pressed Esc on keeps running
+    const r = await within(run, 1000);
+    if (r === DEADLINE) throw new Error("runner did not settle within 1s of abort: a dead launcher turned the abort into a no-op while its child held stdout");
+    expect(Date.now() - tAbort).toBeLessThan(1000);
+    expect(r).toMatchObject({ code: 143, stdout: "started\n", treeKill: "job" });
+    expect(r.stderr).not.toContain(ABORT_TRUNCATED_MARKER); // stdout closed because the job kill reached the child, not because the grace ran out
+    expect(await survivors(tag, 3000)).toEqual([]);
   } finally {
     await killTagged(tag);
   }
