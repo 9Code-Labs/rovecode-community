@@ -229,9 +229,15 @@ if (cmd === "" || cmd === "chat" || cmd === "repl" || (resumeId !== undefined &&
     case "export": (await import("./export.ts")).cmdExport(process.argv); break;
     // dynamic import: smoke pulls in @xterm/headless (a devDependency) — it must
     // not load on ordinary CLI startup, and it is ABSENT from an npm-installed
-    // tree, so a failed import is reported as dev-only instead of a stack trace
+    // tree, so a failed RESOLUTION is reported as dev-only instead of a stack
+    // trace. Resolution only (Bun's ResolveMessage, code ERR_MODULE_NOT_FOUND —
+    // not an Error instance): smoke.ts imports the live TUI modules, so any other
+    // import failure is a real module-init bug and must propagate as itself.
     case "smoke-tui": {
-      const smoke = await import("../tui/smoke.ts").catch(() => null);
+      const smoke = await import("../tui/smoke.ts").catch((e: unknown) => {
+        if ((e as { code?: unknown } | null)?.code === "ERR_MODULE_NOT_FOUND") return null;
+        throw e;
+      });
       if (smoke === null) {
         console.error("smoke-tui is dev-only — run from a source checkout with devDependencies installed");
         process.exit(1);

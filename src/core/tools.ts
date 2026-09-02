@@ -168,6 +168,10 @@ function actionFor(tool: Tool): string {
  *  touch: a missing/empty `path` defaults to ctx.cwd and a relative one
  *  resolves against it (the tools' own resolvePath rule), so neither omitting
  *  nor relativizing the arg can dodge a path-targeted rule (port #22 MED-4).
+ *  Consequently path resources are ALWAYS absolute, so a permission rule's
+ *  pattern must match the full absolute path (matchesGlob anchors it): an
+ *  absolute path/glob or `*` — a cwd-relative pattern such as
+ *  `deny file.write ".env*"` can never match via dispatch.
  *  Command resources and the tool-name fallback are untouched. */
 function describeResource(tool: Tool, args: unknown, cwd: string): string {
   const props = tool.schema.args["properties"];

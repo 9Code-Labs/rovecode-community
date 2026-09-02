@@ -99,6 +99,25 @@ describe("packaging: --version", () => {
   }, 30_000);
 });
 
+/** Simulate the published tree without a second install: src + vendor +
+ *  package.json copied under dist/ (gitignored, and INSIDE the repo so every
+ *  runtime dependency still resolves upward to the real node_modules); `fn` gets
+ *  the copy's root and its main.ts. Always removed afterwards. */
+function withCopiedTree(fn: (pkgDir: string, main: string) => void): void {
+  mkdirSync(join(root, "dist"), { recursive: true });
+  const pkgDir = mkdtempSync(join(root, "dist", "pkg-smoke-"));
+  try {
+    cpSync(join(root, "src"), join(pkgDir, "src"), { recursive: true });
+    cpSync(join(root, "vendor"), join(pkgDir, "vendor"), { recursive: true });
+    cpSync(join(root, "package.json"), join(pkgDir, "package.json"));
+    fn(pkgDir, join(pkgDir, "src", "cli", "main.ts"));
+  } finally {
+    rmSync(pkgDir, { recursive: true, force: true });
+  }
+}
+
+const DEV_ONLY = "smoke-tui is dev-only — run from a source checkout with devDependencies installed";
+
 describe("packaging: smoke-tui is dev-only", () => {
   test("help annotates smoke-tui as (dev-only)", () => {
     const p = cli(["src/cli/main.ts", "help"]);
@@ -107,33 +126,40 @@ describe("packaging: smoke-tui is dev-only", () => {
   }, 30_000);
 
   test("with @xterm/headless unresolvable (the npm-installed tree) `aion smoke-tui` exits 1 with the dev-only message, no crash", () => {
-    // Simulate the published tree without a second install: src + vendor +
-    // package.json copied under dist/ (gitignored, and INSIDE the repo so every
-    // runtime dependency still resolves upward to the real node_modules), plus
-    // a NEARER stub of the devDependency whose empty `exports` map makes it
-    // unresolvable — the same "Cannot find module '@xterm/headless'" a
-    // production install produces. (A `main`-only stub falls through to the
-    // real package; `exports: {}` is a hard stop — probed on bun 1.3.14.) An
-    // uncaught import error ALSO exits 1, so the assertion is on OUR message.
-    mkdirSync(join(root, "dist"), { recursive: true });
-    const pkgDir = mkdtempSync(join(root, "dist", "pkg-smoke-"));
-    try {
-      cpSync(join(root, "src"), join(pkgDir, "src"), { recursive: true });
-      cpSync(join(root, "vendor"), join(pkgDir, "vendor"), { recursive: true });
-      cpSync(join(root, "package.json"), join(pkgDir, "package.json"));
+    // The copied tree plus a NEARER stub of the devDependency whose empty
+    // `exports` map makes it unresolvable — the same "Cannot find module
+    // '@xterm/headless'" a production install produces. (A `main`-only stub falls
+    // through to the real package; `exports: {}` is a hard stop — probed on bun
+    // 1.3.14.) An uncaught import error ALSO exits 1, so the assertion is on OUR message.
+    withCopiedTree((pkgDir, main) => {
       const stub = join(pkgDir, "node_modules", "@xterm", "headless");
       mkdirSync(stub, { recursive: true });
       writeFileSync(join(stub, "package.json"), JSON.stringify({ name: "@xterm/headless", version: "0.0.0", exports: {} }));
-      const main = join(pkgDir, "src", "cli", "main.ts");
       const smoke = cli([main, "smoke-tui"], pkgDir);
       expect(smoke.exitCode).toBe(1);
-      expect(smoke.stderr).toContain("smoke-tui is dev-only — run from a source checkout with devDependencies installed");
+      expect(smoke.stderr).toContain(DEV_ONLY);
       // control: the copied tree itself is healthy — the failure above is the stub, not a broken copy
       const version = cli([main, "--version"], pkgDir);
       expect(version.exitCode).toBe(0);
       expect(version.stdout.trim()).toBe(pkg.version);
-    } finally {
-      rmSync(pkgDir, { recursive: true, force: true });
-    }
+    });
+  }, 60_000);
+
+  test("a NON-resolution import failure (module-init bug in smoke's graph) propagates as itself — exit 1, real error, NOT the dev-only text", () => {
+    // Only a failed RESOLUTION is dev-only (Bun ResolveMessage, code
+    // ERR_MODULE_NOT_FOUND). smoke.ts imports the live TUI modules, so a blanket
+    // catch would relabel a genuine init bug in a dev checkout as "dev-only": the
+    // copy's smoke.ts is made to import a module that resolves fine but THROWS at
+    // top level (a plain Error, no code) — that error must reach stderr unmasked.
+    withCopiedTree((pkgDir, main) => {
+      const smokeTs = join(pkgDir, "src", "tui", "smoke.ts");
+      writeFileSync(join(pkgDir, "src", "tui", "smoke-broken-dep.ts"),
+        'throw new Error("smoke-init-boom: simulated module-init bug");\nexport const broken = true;\n');
+      writeFileSync(smokeTs, 'import "./smoke-broken-dep.ts";\n' + readFileSync(smokeTs, "utf8"));
+      const smoke = cli([main, "smoke-tui"], pkgDir);
+      expect(smoke.exitCode).toBe(1);
+      expect(smoke.stderr).toContain("smoke-init-boom");
+      expect(smoke.stderr).not.toContain(DEV_ONLY);
+    });
   }, 60_000);
 });
