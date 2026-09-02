@@ -1,0 +1,332 @@
+/** Sextant surface (Wave 4, ports #40-#46) — the shared type contract every `src/sextant/*`
+ *  module builds against. Ported from the user's own sextant v0.4.0 prototype (term.js cell
+ *  buffer, app.js state `S`, layout(), themes); the mock scenario/fixture fields are gone and
+ *  every panel is fed by real aion seams (RunEvent stream, SessionStore, TaskManager, todos.json,
+ *  approval + ask_user seams, model catalog).
+ *
+ *  Rules for the whole directory (ADR-001/002/003 + the Bun test hazards):
+ *  - structural interfaces (ScreenLike) so panels, input and the pet compile and test before the
+ *    core renderer lands; only screen.ts implements ScreenLike for real;
+ *  - pure modules (model, the draw modules, pet, layout, engine, frame) take `now` as a
+ *    parameter — no Date.now(), no timers, no process access; the ONE interval lives in
+ *    sextant-renderer.ts;
+ *  - one cell per code point unless screen.ts measures otherwise; -1 means "unset" for colors;
+ *  - this file is types + tiny constants only: no I/O, no imports beyond aion type modules. */
+
+import type { RunEvent } from "../core/types.ts";
+import type { TaskInfo } from "../core/tasks.ts";
+import type { TodoItem } from "../tools/todo.ts";
+import type { QuestionPrompt } from "../tools/ask-user.ts";
+
+// ------------------------------------------------------------------ styling
+
+/** attribute bits (term.js `A`) */
+export const ATTR = { BOLD: 1, DIM: 2, ITALIC: 4, UNDERLINE: 8, INVERSE: 16, STRIKE: 32 } as const;
+
+/** packed 0xRRGGBB colors; -1 = unset (inherit the cell's current value) */
+export interface Style { fg: number; bg: number; a: number }
+/** a text run: [string, style]; an undefined style means "unstyled" */
+export type Seg = readonly [string, Style | undefined];
+
+export interface Rect { x: number; y: number; w: number; h: number }
+
+/** The cell-buffer surface every draw function paints on (term.js Screen, minus I/O).
+ *  Coordinates are 0-based cells; writes outside the buffer are clipped, never thrown. */
+export interface ScreenLike {
+  readonly w: number;
+  readonly h: number;
+  /** write a string at (x,y); returns the x after the last cell written */
+  put(x: number, y: number, str: string, st?: Style, maxW?: number): number;
+  /** write segments clipped to maxW; returns the x after the last cell */
+  text(x: number, y: number, segs: readonly Seg[], maxW?: number): number;
+  /** clipped text with a trailing ellipsis when it does not fit */
+  clip(x: number, y: number, str: string, st: Style | undefined, maxW: number): number;
+  fill(x: number, y: number, w: number, h: number, ch: string, st?: Style): void;
+  /** recolor a rectangle's background only */
+  tint(x: number, y: number, w: number, h: number, bg: number): void;
+  hline(x: number, y: number, w: number, st?: Style, ch?: string): void;
+  vline(x: number, y: number, h: number, st?: Style, ch?: string): void;
+  /** rounded box (╭╮╰╯); bgFill paints the interior first when given */
+  box(x: number, y: number, w: number, h: number, st?: Style, bgFill?: number): void;
+}
+
+// ------------------------------------------------------------------ themes
+
+export type ThemeName = "night" | "ember" | "contrast";
+export const THEME_ORDER: readonly ThemeName[] = ["night", "ember", "contrast"];
+
+/** buildTheme() output: the palette (app.js THEMES) plus derived mixes, all packed ints */
+export interface Theme {
+  name: ThemeName;
+  label: string;
+  bg: number; bg2: number; fg: number; fg2: number; muted: number; dim: number;
+  rule: number; rule2: number; accent: number; accent2: number;
+  ok: number; err: number; warn: number; info: number; str: number; ty: number;
+  /** derived: mix(bg, accent, .12) / mix(bg, ok, .15) / mix(bg, err, .15) / mix(bg, fg, .08) */
+  hlBg: number; addBg: number; delBg: number; selBg: number;
+  /** derived: mix(bg, accent, .45) / mix(bg, ok, .55) / mix(bg, fg2, .55) */
+  accentDim: number; okDim: number; mixDim: number;
+  /** derived frame colors: mix(bg, fg, .28) and .17 */
+  frame: number; frameDim: number;
+}
+
+// ------------------------------------------------------------------ input
+
+export interface KeyEvent {
+  type: "key";
+  /** "up" "down" "left" "right" "home" "end" "pageup" "pagedown" "insert" "delete" "enter" "tab"
+   *  "shift-tab" "backspace" "escape" "space" "f1".."f12", a single character, or "unknown" */
+  name: string;
+  /** the printable character for plain keys (and the letter for alt+letter) */
+  ch?: string;
+  ctrl?: boolean;
+  alt?: boolean;
+  shift?: boolean;
+}
+/** SGR mouse report: b = button bits (0 left, 1 middle, 2 right, 32 = motion/drag, 64/65 = wheel
+ *  up/down), 0-based cell coordinates, press = "M" (press/motion) vs release "m" */
+export interface MouseEvent { type: "mouse"; b: number; x: number; y: number; press: boolean }
+/** bracketed paste (CSI 200~ … 201~) delivered as ONE event so multi-line pastes never submit */
+export interface PasteEvent { type: "paste"; text: string }
+export type InputEvent = KeyEvent | MouseEvent | PasteEvent;
+
+// ------------------------------------------------------------------ layout
+
+/** layout(w, h, opts) → panel rectangles. Breakpoints (app.js layout()): files column at
+ *  w ≥ 140 (30 wide at ≥150, else 26); right column (plan + usage) at w ≥ 110 (34 / 28);
+ *  messages = max(8, round(contentH · 0.34)) rows; usage 5 rows; pet 14 rows when contentH ≥ 36
+ *  (under files when present, else under plan); null = hidden at this size. */
+export interface Layout {
+  w: number;
+  h: number;
+  /** outer frame (title in the top border, key hints in the bottom border) */
+  frame: Rect;
+  files: Rect | null;
+  code: Rect;
+  messages: Rect;
+  plan: Rect | null;
+  usage: Rect | null;
+  pet: Rect | null;
+}
+export interface LayoutOptions { pet: boolean }
+
+// ------------------------------------------------------------------ model (state)
+
+/** git porcelain classes shown next to a file: M modified · A added/untracked · D deleted */
+export type FileStatus = "M" | "A" | "D";
+
+/** one row of the flattened tree (drawFiles consumes rows, not the tree) */
+export interface TreeRow {
+  /** cwd-relative posix path ("src/auth/callback.ts" or "src/auth" for a dir) */
+  path: string;
+  name: string;
+  depth: number;
+  dir: boolean;
+  expanded?: boolean;
+  status?: FileStatus;
+  /** a collapsed dir containing changed files shows "·" */
+  hasChanges?: boolean;
+  /** the agent touched this file (read/edit/write) — diamond spinner until this clock */
+  touchedUntil?: number;
+}
+
+export interface FilesState {
+  /** all cwd-relative posix file paths (gitListFiles, or a bounded walk when git is absent) */
+  paths: string[];
+  statuses: Map<string, FileStatus>;
+  expanded: Set<string>;
+  touched: Map<string, number>;
+  cursor: number;
+  scroll: number;
+}
+
+export interface RepoInfo { name: string; branch: string | null; modified: number }
+
+/** activity shown in the frame header (with the run timer) and driving the pet's mood */
+export type ActivityState =
+  | "IDLE" | "THINKING" | "WRITING" | "READING" | "EDITING" | "RUNNING" | "TESTING"
+  | "WAITING" | "DELEGATING" | "SUCCESS" | "ERROR";
+
+export interface ActivityInfo {
+  state: ActivityState;
+  /** e.g. "editing callback.ts", "running tests", "waiting for you" */
+  label: string;
+  runId: string | null;
+  startedAt: number | null;
+  endedAt: number | null;
+}
+
+export type CodeMode = "code" | "diff" | "run" | "agents" | "search";
+
+export interface DiffHunk {
+  /** rendered rows: prefix " " | "+" | "-" plus the line text */
+  rows: { op: " " | "+" | "-"; text: string }[];
+  oldStart: number;
+  newStart: number;
+}
+
+export interface CodeState {
+  mode: CodeMode;
+  /** file shown in code/diff mode (cwd-relative) */
+  file: string | null;
+  /** current file contents (disk) or null when unreadable */
+  content: string | null;
+  /** [fromLine, toLine] 1-based highlight (the anchor range of the last edit / read) */
+  hl: [number, number] | null;
+  scroll: number;
+  /** last glob/grep result lines */
+  search: { query: string; lines: string[] } | null;
+  /** last bash call: command, output lines (10k-char tool bound applies), verdict */
+  run: { cmd: string; lines: string[]; status: "running" | "ok" | "fail" } | null;
+  /** pre-approval preview or post-edit HEAD-vs-disk hunks */
+  diff: { file: string; hunks: DiffHunk[]; add: number; del: number } | null;
+  /** agents board selection */
+  lane: number;
+  laneOpen: boolean;
+}
+
+/** compact tool row in the messages panel: `· read x` `~ edit x +a −b` `+ write x` `− remove x`
+ *  `$ run cmd … last line` — verb/glyph derived from the tool name */
+export interface ToolRow {
+  kind: "tool";
+  callId: string;
+  tool: string;
+  /** "read" | "edit" | "write" | "remove" | "run" | "search" | "fetch" | "task" | "other" */
+  verb: string;
+  /** what the row names: basename, command head, url host… */
+  label: string;
+  running: boolean;
+  ok?: boolean;
+  /** trailing summary: "18 passed", "+21 −4", "N lines", first output line… */
+  detail?: string;
+  add?: number;
+  del?: number;
+  ms?: number;
+}
+
+export type MessageRow =
+  | { kind: "user"; text: string; /** image chips `[image: name]` */ images?: string[] }
+  | { kind: "assistant"; text: string; streaming: boolean }
+  | ToolRow
+  | { kind: "system"; text: string; tone: "info" | "warn" | "error" }
+  /** a steering note that reached the run (task completion, reflection nudge) */
+  | { kind: "steer"; text: string }
+  | { kind: "compaction"; text: string };
+
+/** the modal card rendered inside the messages panel (ONE at a time) */
+export type CardState =
+  | {
+      kind: "approval";
+      tool: string;
+      argsPreview: string;
+      /** port #24 unified diff preview when the tool is edit/write */
+      detail?: string;
+      /** 0 allow(once) · 1 always · 2 deny */
+      selected: 0 | 1 | 2;
+      resolve: (answer: "once" | "always" | "deny") => void;
+    }
+  | {
+      kind: "question";
+      prompt: QuestionPrompt;
+      /** option index; options.length = the free-text row when allowed; +1 = "skip" */
+      selected: number;
+      freeText: string;
+      resolve: (answer: { kind: "option"; index: number } | { kind: "text"; text: string } | null) => void;
+    };
+
+export interface UsageState {
+  provider: string;
+  model: string;
+  turns: number;
+  tokensIn: number;
+  tokensOut: number;
+  /** 0..100 estimated context fill, null when the window is unknown */
+  contextPct: number | null;
+  /** null = unpriced */
+  costUsd: number | null;
+}
+
+export interface PlanState {
+  todos: TodoItem[];
+  /** loader note (corrupt todos.json) */
+  note?: string;
+}
+
+export interface InputState {
+  text: string;
+  cur: number;
+  history: string[];
+  histIdx: number;
+  /** selected row in the suggestion box */
+  sgSel: number;
+}
+
+export type Focus = "messages" | "code" | "files";
+
+export interface Toast { text: string; until: number; tone: "info" | "warn" | "error" }
+
+export interface PaletteState {
+  query: string;
+  sel: number;
+  /** flat items: label + what pressing enter does (a slash line or a renderer-local action) */
+  items: { label: string; group: string; action: string }[];
+}
+
+/** the whole surface state — owned by model.ts (pure `applyEvent`) and mutated by keys.ts */
+export interface SextantState {
+  cwd: string;
+  repo: RepoInfo;
+  files: FilesState;
+  activity: ActivityInfo;
+  code: CodeState;
+  messages: MessageRow[];
+  /** messages scroll offset; stick = follow the tail */
+  msgScroll: number;
+  stick: boolean;
+  card: CardState | null;
+  plan: PlanState;
+  crew: TaskInfo[];
+  usage: UsageState;
+  input: InputState;
+  focus: Focus;
+  palette: PaletteState | null;
+  help: boolean;
+  toasts: Toast[];
+  /** first Esc while busy arms "again to stop" until this clock */
+  escUntil: number;
+  running: boolean;
+  mode: "plan" | "act";
+  yolo: boolean;
+  theme: ThemeName;
+  /** boot clock for the staggered panel reveal (90 ms steps) */
+  bootAt: number;
+  /** slash commands known to the prompt/palette (built-ins + custom) */
+  commands: { name: string; description: string }[];
+  version: string;
+}
+
+// ------------------------------------------------------------------ seams
+
+/** what the renderer receives from the ONE controller (app.ts runTui) beyond the Renderer
+ *  interface: raw RunEvents (paths, diffs, outputs) and the runtime handles the panels read */
+export interface SextantAttach {
+  cwd: string;
+  sessionsDir: string;
+  /** the ACTIVE session store (changes on /sessions /resume /new) */
+  store(): { id: string };
+  tasks: { list(): TaskInfo[]; subscribe(fn: (t: TaskInfo) => void): () => void };
+  model(): { provider: string; model: string };
+  /** context window for the usage bar; undefined when the catalog does not know the model */
+  contextWindow(): number | undefined;
+}
+
+/** pure reducer contract (model.ts): (state, event, now) → same state object, mutated in place */
+export type ApplyEvent = (s: SextantState, ev: RunEvent, now: number) => void;
+
+/** headless frame dump (frame.ts): deterministic at a fixed clock — the golden-test seam */
+export type DumpFrame = (s: SextantState, cols: number, rows: number, now: number, theme: Theme) => string;
+
+export const SEXTANT_MIN_COLS = 100;
+export const SEXTANT_MIN_ROWS = 30;
+/** the four spinner glyphs (SPIN in app.js) */
+export const SPIN: readonly string[] = ["◇", "◈", "◆", "◈"];
