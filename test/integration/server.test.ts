@@ -52,6 +52,11 @@ const scripted: StreamFn = async function* (
     yield { type: "turn", turn: { parts: [{ kind: "tool_call", id: "gated-1", tool: "bash", args: { command: "git push" } }], stopReason: "tool_use", usage: { input: 0, output: 1 } } };
     return;
   }
+  if (goal.includes("BACKGROUND")) {
+    // port #26: launch a background child (its goal "CHILD ping" answers PONG below)
+    yield { type: "turn", turn: { parts: [{ kind: "tool_call", id: "bg-1", tool: "task", args: { action: "start", goal: "CHILD ping", label: "ping" } }], stopReason: "tool_use", usage: { input: 0, output: 1 } } };
+    return;
+  }
   yield { type: "text_delta", text: "PONG" };
   yield { type: "turn", turn: { parts: [{ kind: "text", text: "PONG" }], stopReason: "end_turn", usage: { input: 1, output: 1 } } };
 };
@@ -169,7 +174,7 @@ test("GET /sessions lists created sessions with previews", async () => {
   expect(mine!.updatedAt).toBeGreaterThanOrEqual(mine!.createdAt);
 });
 
-test("GET /doc: parseable OpenAPI 3.1 with exactly the four routes + honesty note", async () => {
+test("GET /doc: parseable OpenAPI 3.1 with exactly the five routes + honesty note", async () => {
   const res = await fetch(`${base}/doc`);
   expect(res.status).toBe(200);
   expect(res.headers.get("content-type")).toBe("application/json");
@@ -178,13 +183,15 @@ test("GET /doc: parseable OpenAPI 3.1 with exactly the four routes + honesty not
     info: { description: string };
     servers: { url: string }[];
     paths: Record<string, Record<string, { description?: string }>>;
-    components: { schemas: { RunEvent: { properties: { type: { enum: string[] } } } } };
+    components: { schemas: { RunEvent: { properties: { type: { enum: string[] } } }; TaskInfo?: { properties: { status: { enum: string[] } } } } };
   };
   expect(doc.openapi).toStartWith("3.1");
-  expect(Object.keys(doc.paths).sort()).toEqual(["/doc", "/session", "/session/{id}/prompt", "/sessions"]);
+  expect(Object.keys(doc.paths).sort()).toEqual(["/doc", "/session", "/session/{id}/prompt", "/session/{id}/tasks", "/sessions"]);
   expect(doc.paths["/session"]!.post).toBeDefined();
   expect(doc.paths["/session/{id}/prompt"]!.post).toBeDefined();
   expect(doc.paths["/session/{id}/prompt"]!.delete).toBeDefined(); // port #21: cancel is documented
+  expect(doc.paths["/session/{id}/tasks"]!.get).toBeDefined();     // port #26: background tasks are documented
+  expect(doc.components.schemas.TaskInfo?.properties.status.enum).toEqual(["queued", "running", "done", "failed", "cancelled"]);
   expect(doc.paths["/sessions"]!.get).toBeDefined();
   expect(doc.paths["/doc"]!.get).toBeDefined();
   expect(doc.servers[0]!.url).toBe(base); // doc reflects the actually-bound URL
@@ -501,6 +508,100 @@ test("session cwd reaches tools over HTTP: bash pwd lands in the server cwd, not
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ---------- port #26: GET /session/:id/tasks + completion steer across prompts ----------
+
+test("port #26: GET /session/:id/tasks lists the session's background tasks; unknown session 404; wrong method 404", async () => {
+  const id = await createSession();
+  const empty = await fetch(`${base}/session/${id}/tasks`);
+  expect(empty.status).toBe(200);
+  expect(empty.headers.get("content-type")).toBe("application/json");
+  expect(await empty.json()).toEqual([]);
+  expect((await fetch(`${base}/session/nope/tasks`)).status).toBe(404);
+  expect((await fetch(`${base}/session/${id}/tasks`, { method: "POST" })).status).toBe(404);
+  expect((await fetch(`${base}/session/${id}/tasks/t1`)).status).toBe(404); // no sub-routes
+});
+
+test("port #26: a yolo prompt that starts a background task shows it in GET /tasks (running → done), and the NEXT prompt on the session receives the completion steer", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-srv-tasks-"));
+  const s = startServer({ port: 0, cwd: dir, stream: scripted, yolo: true });
+  try {
+    const id = await createSession(s.url);
+    const { frames } = await promptSse(id, "BACKGROUND go", s.url);
+    const started = frames.find((f) => f.data.type === "tool_execution_end");
+    expect(started).toBeDefined();
+    if (started && started.data.type === "tool_execution_end") {
+      expect(started.data.ok).toBe(true);
+      expect(started.data.output).toContain("task t1 (ping) started");
+    }
+    // the child is a REAL child session running through runChild; poll the route until done
+    let tasks: { id: string; status: string; summary?: string; depth: number }[] = [];
+    for (let i = 0; i < 200; i++) {
+      const r = await fetch(`${s.url}/session/${id}/tasks`);
+      expect(r.status).toBe(200);
+      tasks = (await r.json()) as typeof tasks;
+      if (tasks[0]?.status === "done") break;
+      await new Promise((rr) => setTimeout(rr, 25));
+    }
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0]).toMatchObject({ id: "t1", status: "done", depth: 1, summary: "PONG" });
+    // the completion note waits in the SESSION's steering queue (rt.steering, the one the
+    // prompt route hands to agentLoop) and is drained by the next prompt — mutation target:
+    // prompt() passing a fresh SteeringQueue → no steer frame here
+    const next = await promptSse(id, "after the background work", s.url);
+    const steer = next.frames.find((f) => f.data.type === "steer");
+    expect(steer).toBeDefined();
+    if (steer && steer.data.type === "steer") expect(steer.data.text).toContain("task t1 (ping) finished: PONG");
+    // another session on the same server has its own (empty) task list
+    const other = await createSession(s.url);
+    expect(await (await fetch(`${s.url}/session/${other}/tasks`)).json()).toEqual([]);
+  } finally {
+    await s.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 20_000);
+
+test("port #26: DELETE /session/:id/prompt also cancels the background tasks that run started (bindRun on the run's controller)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-srv-tasks-del-"));
+  const parked: string[] = [];
+  const stream: StreamFn = async function* (_m: ModelRef, messages: Message[], opts?: StreamOptions): AsyncGenerator<StreamEvent> {
+    const goal = lastUserText(messages);
+    if (goal.includes("BACKGROUND-HOLD") && !messages.some((m) => m.role === "tool")) {
+      yield { type: "turn", turn: { parts: [{ kind: "tool_call", id: "bgh-1", tool: "task", args: { action: "start", goal: "CHILD HOLD", label: "held" } }], stopReason: "tool_use", usage: { input: 0, output: 1 } } };
+      return;
+    }
+    // parent's second turn AND the child: park until the run's own signal aborts
+    parked.push(goal);
+    const sig = opts!.signal!;
+    if (!sig.aborted) await new Promise<void>((r) => sig.addEventListener("abort", () => r(), { once: true }));
+    yield { type: "turn", turn: { parts: [], stopReason: "aborted", usage: { input: 0, output: 0 } } };
+  };
+  const s = startServer({ port: 0, cwd: dir, stream, yolo: true });
+  try {
+    const id = await createSession(s.url);
+    const res = await promptReq(s.url, id, "BACKGROUND-HOLD");
+    expect(res.status).toBe(200);
+    for (let i = 0; i < 200 && !(parked.includes("CHILD HOLD") && parked.includes("BACKGROUND-HOLD")); i++) await new Promise((r) => setTimeout(r, 25));
+    expect(parked).toContain("CHILD HOLD"); // the child is a live run parked in its provider turn
+    let tasks = (await (await fetch(`${s.url}/session/${id}/tasks`)).json()) as { id: string; status: string }[];
+    expect(tasks).toEqual([expect.objectContaining({ id: "t1", status: "running" })]);
+    const del = await fetch(`${s.url}/session/${id}/prompt`, { method: "DELETE" });
+    expect(await del.json()).toEqual({ cancelled: true });
+    const frames = parseFrames(await deadline(res.text(), 4_000, "SSE body after DELETE"));
+    expect(frames[frames.length - 1]!.data).toMatchObject({ type: "run_end", status: "stopped" });
+    // the run's background task was cancelled too (mutation target: drop rt.tasks.bindRun in prompt())
+    for (let i = 0; i < 160; i++) {
+      tasks = (await (await fetch(`${s.url}/session/${id}/tasks`)).json()) as typeof tasks;
+      if (tasks[0]?.status === "cancelled" && (tasks[0] as { finishedAt?: number }).finishedAt !== undefined) break;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    expect(tasks[0]).toMatchObject({ id: "t1", status: "cancelled" });
+    expect((tasks[0] as { finishedAt?: number }).finishedAt).toBeDefined();
+  } finally {
+    await s.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 20_000);
 
 test("stream: null server refuses prompts with 503, still serves /doc", async () => {
   const noStream = startServer({ port: 0, cwd, stream: null });

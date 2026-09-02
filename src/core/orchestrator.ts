@@ -52,7 +52,9 @@ export async function createIsolation(rootDir: string, opts: { prefer: "worktree
     if (git(["worktree", "add", "-b", `aion/task/${id}`, dir], rootDir).code === 0) {
       return {
         dir, kind: "worktree",
-        diff: async () => git(["diff", "HEAD"], dir).out,
+        // intent-to-add first: `git diff HEAD` never shows UNTRACKED files, so a child's
+        // new files would silently miss the merge-back (port #26 isolation fix)
+        diff: async () => { git(["add", "-A", "-N"], dir); return git(["diff", "HEAD"], dir).out; },
         cleanup: async () => { git(["worktree", "remove", "--force", dir], rootDir); },
       };
     }
@@ -71,27 +73,48 @@ export async function createIsolation(rootDir: string, opts: { prefer: "worktree
   return {
     dir: join(dir, "work"), kind: "copy",
     // git diff --no-index (POSIX `diff -ru` doesn't exist on Windows and isn't a git patch);
-    // strip the baseline//work/ path roots so the patch applies at repo-relative paths
+    // strip the baseline//work/ path roots so the patch applies at repo-relative paths.
+    // The header names EITHER root on either side (modify: a/baseline b/work; create:
+    // a/work b/work; delete: a/baseline b/baseline) — strip both, or `git apply` rejects
+    // creations with "inconsistent new filename" (port #26 isolation fix).
     diff: async () => {
       const d = git(["diff", "--no-index", "baseline", "work"], dir);
-      return d.code <= 1 ? d.out.replace(/^([-+]{3} [ab]\/)(baseline|work)\//gm, "$1").replace(/^(diff --git a\/)baseline(\/\S+ b\/)work(\/\S+)/gm, "$1$2$3") : "";
+      return d.code <= 1 ? d.out.replace(/^([-+]{3} [ab]\/)(baseline|work)\//gm, "$1").replace(/^(diff --git a\/)(?:baseline|work)\/(\S+ b\/)(?:baseline|work)\/(\S+)/gm, "$1$2$3") : "";
     },
     cleanup: async () => { rmSync(dir, { recursive: true, force: true }); },
   };
 }
 
+/** Per-child context handed to registryFactory (port #26): a child's registry can
+ *  bind nested tools (the `task` tool) to THIS child's depth, its own steering
+ *  queue (nested completion notes land in the child's next turn, not the root's)
+ *  and its run signal. `taskId` is set by TaskManager when the child IS a
+ *  background task (enables slot lending); plain runChild callers leave it unset. */
+export interface ChildContext {
+  depth: number;
+  steering: SteeringQueue;
+  signal?: AbortSignal;
+  taskId?: string;
+}
+
 export interface ChildRunnerDeps {
   defs: Map<string, AgentDefinition>;
   stream: StreamFn;
-  registryFactory: (def: AgentDefinition, cwd: string) => ToolRegistry;
+  registryFactory: (def: AgentDefinition, cwd: string, child?: ChildContext) => ToolRegistry;
   rootDir: string;
   sessionsDir: string;
   baseConfig: RunConfig;
 }
 
 /** Runs a child agent in its own session (+ optional isolation), returns summary + patch.
- *  `depth` = this child's depth (root spawn = 0); grandchildren receive depth + 1 via agentLoop. */
-export async function runChild(deps: ChildRunnerDeps, req: SpawnRequest, depth = 0): Promise<SpawnResult> {
+ *  `depth` = this child's depth (root spawn = 0); grandchildren receive depth + 1 via agentLoop.
+ *  `signal` (port #26): aborting it cancels the child's run — agentLoop's own controller
+ *  follows deps.signal (port #21), so the in-flight fetch and tool subprocesses die.
+ *  ok = the child's run ended "done"; error/budget/stopped runs return ok:false with
+ *  the run_end summary (a background job needs a truthful failed status). An isolated
+ *  child's patch is merged back ONLY when ok — a cancelled or errored child's
+ *  half-done edits never land in the parent tree (the patch is still returned). */
+export async function runChild(deps: ChildRunnerDeps, req: SpawnRequest, depth = 0, signal?: AbortSignal): Promise<SpawnResult> {
   const fail = (summary: string): SpawnResult => ({ agent: req.agent, ok: false, summary, usage: { input: 0, output: 0 } });
   const def = deps.defs.get(req.agent);
   if (!def) return fail(`unknown agent '${req.agent}'`);
@@ -101,27 +124,35 @@ export async function runChild(deps: ChildRunnerDeps, req: SpawnRequest, depth =
   const iso = req.isolated ? await createIsolation(deps.rootDir, { prefer: "worktree" }) : await createIsolation(deps.rootDir, { prefer: "none" });
   try {
     const store = new SessionStore(deps.sessionsDir, randomUUID());
-    const registry = deps.registryFactory(def, iso.dir);
     const steering = new SteeringQueue();
+    const registry = deps.registryFactory(def, iso.dir, { depth, steering, signal });
     const cfg: RunConfig = {
       ...deps.baseConfig,
       // children get their own permission set derived from parent policy (opencode task.ts:160)
       permissionRules: deriveChildRules(deps.baseConfig.permissionRules, iso.dir, iso.kind !== "none"),
     };
+    let end: { status: string; summary: string } | undefined;
     for await (const ev of agentLoop(def, req.goal, req.vars ?? {}, cfg, {
       // port #4: children get their own loop guard — subagents loop too
       stream: deps.stream, registry, store, guard: new ToolGuard(),
+      // tools resolve relative paths / run shells in the ISOLATION dir, not the process cwd
+      cwd: iso.dir,
+      signal,
     }, steering, depth + 1)) {
-      void ev;
+      if (ev.type === "run_end") end = { status: ev.status, summary: ev.summary };
     }
     let input = 0, output = 0;
     for (const m of store.messages()) {
       if (m.usage) { input += m.usage.input; output += m.usage.output; }
     }
     const patch = iso.kind === "none" ? undefined : await iso.diff();
-    let summary = lastText(store) || "(no output)";
-    if (patch && !applyPatch(patch, deps.rootDir)) summary += `\npatch-apply-failed`;
-    return { agent: req.agent, ok: true, summary: summary.slice(0, 4_000), usage: { input, output }, patch };
+    const ok = end?.status === "done";
+    const text = lastText(store);
+    let summary = ok
+      ? (text || "(no output)")
+      : `${end?.summary ?? "child run ended without run_end"}${text ? `\nlast output: ${text}` : ""}`;
+    if (ok && patch && !applyPatch(patch, deps.rootDir)) summary += `\npatch-apply-failed`;
+    return { agent: req.agent, ok, summary: summary.slice(0, 4_000), usage: { input, output }, patch };
   } finally {
     await iso.cleanup();
   }

@@ -33,6 +33,10 @@ import { recallTool } from "../memory/recall.ts";
 import { configureExecutor, type SpawnRunner } from "../core/executor.ts";
 import { loadSandboxConfig, unavailableRungError, type SandboxConfig } from "../core/sandbox-config.ts";
 import { todoTools } from "../tools/todo.ts";
+import { SteeringQueue } from "../core/loop.ts";
+import { TaskManager } from "../core/tasks.ts";
+import { createTaskTool } from "../tools/task.ts";
+import type { ChildContext, ChildRunnerDeps } from "../core/orchestrator.ts";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -103,6 +107,12 @@ export interface Runtime {
    *  call this, so the tool fails closed for them. setBlockStore idiom: registered once,
    *  dependency rebound late. */
   setAskUser(fn: AskFn | undefined): void;
+  /** port #26: the ONE steering queue for this runtime's runs — hand it to agentLoop
+   *  (in place of a fresh SteeringQueue) so background-task completion notes reach the
+   *  parent's next turn. Surfaces with their own queue: rt.tasks.attach(queue). */
+  steering: SteeringQueue;
+  /** port #26: background subagents (bounded FIFO jobs over orchestrator runChild) */
+  tasks: TaskManager;
 }
 
 export function createRuntime(opts: RuntimeOptions = {}): Runtime {
@@ -249,6 +259,75 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     return `You are Aion, an interactive coding agent in ${cwd}. Use read/edit/write/bash tools. Edits require line hashes from read output. Be concise.${skillsIndex ? "\n\n# Skills\n" + skillsIndex : ""}${memoryIndex ? "\n\n# Memory\n" + memoryIndex : ""}`;
   };
 
+  const buildDef = (model: ModelRef): AgentDefinition => {
+    activeModel = model; // port #26: children run the model of the run that started them
+    // models the catalog knows CANNOT do native tool calling get the senpi-format
+    // prompt block (port #7); unknown models attempt native first. Force: AION_TOOL_MIDDLEWARE=1
+    const info = catalog.lookup(model.provider, model.model);
+    const nonNative = info?.supportsTools === false || process.env.AION_TOOL_MIDDLEWARE === "1";
+    const base = systemPrompt();
+    return {
+      name: "main", model, tools: ["*"],
+      systemPrompt: nonNative
+        ? `${base}\n\n# Tool calling\n${toolPromptBlock(registry.list().map((t) => t.schema))}`
+        : base,
+      ...(extraChunks().length > 0 ? { contextChunks: extraChunks() } : {}),
+    };
+  };
+  const buildCfg = (yolo: boolean, approval?: ApprovalFn): RunConfig => (activeCfg = {
+    maxTurns: 60, contextBudgetTokens: 200_000, compactionThreshold: 0.8,
+    compactionStrategy: parseCompactionStrategy(process.env.AION_COMPACTION) ?? "head-summarize", // port #25: AION_COMPACTION=head-summarize|keep-window|provider-native
+    parallelTools: true,
+    permissionRules: yolo
+      ? [{ action: "*", resource: "*", effect: "allow" }]
+      : [
+          { action: "file.read", resource: "*", effect: "allow" },
+          { action: "memory.write", resource: "*", effect: "allow" },
+          { action: "tool.skill_view", resource: "*", effect: "allow" },
+          { action: "tool.skills_list", resource: "*", effect: "allow" },
+          // mcp_list is kind:"read" → action "file.read"; the allow above already covers it
+          { action: "file.write", resource: "*", effect: "prompt" },
+          { action: "shell.exec", resource: "*", effect: "prompt" },
+          { action: "spawn", resource: "*", effect: "prompt" },
+          { action: "tool.mcp_call", resource: "*", effect: "prompt" },
+          { action: "net.fetch", resource: "*", effect: "prompt" }, // port #31: resource = host; `allow net.fetch <host>` auto-runs
+        ],
+    // port #9: execpolicy refines the PROMPT branch only (allow-listed argv →
+    // "once", forbidden → deny before any human); rules above stay the outer gate.
+    // The wrap is UNCONDITIONAL on gated configs (R2 #9 LOW-3): headless surfaces
+    // (run/serve pass no approver) get allow-list auto-run + forbidden hard-stop,
+    // and prompt-classified argv fails closed instead of "no approver connected".
+    // yolo stays approver-free — its allow-all rules never reach the prompt branch.
+    approval: yolo ? undefined : execPolicyApprover(approval),
+  });
+
+  // port #26: background subagents. Children run through orchestrator runChild (the ONE
+  // agentLoop) with deps resolved at each start: the def/config of the run that STARTED
+  // the task (buildDef/buildCfg record them — every surface calls both right before its
+  // agentLoop, so a child inherits its parent's model and policy; deriveChildRules turns
+  // prompt→deny). ONE SteeringQueue per runtime: surfaces hand it to agentLoop and
+  // completion notes land in the parent's next turn (loop.ts:136). Children get the core
+  // coding/search/skill tools (no MCP/memory/eval-cell/checkpoints in v1) plus a nested
+  // `task` tool bound to THEIR depth + steering queue, so the depth cap governs nesting.
+  let activeCfg: RunConfig | null = null;
+  let activeModel: ModelRef | null = null;
+  const steering = new SteeringQueue();
+  const childRegistry = (_def: AgentDefinition, _cwd: string, child?: ChildContext): ToolRegistry => {
+    const reg = new ToolRegistry();
+    reg.register(readTool, editTool, writeTool, bashTool, globTool, grepTool, lsTool, ...createSkillTools(skillStore), recallTool(sessionsDir));
+    if (child) reg.register(createTaskTool(tasks, { parentDepth: child.depth, notify: child.steering, caller: child.taskId, owner: child.signal }));
+    return reg;
+  };
+  const tasks = new TaskManager({
+    deps: (): ChildRunnerDeps | null => stream ? {
+      defs: new Map([["main", buildDef(activeModel ?? fallbackRef)]]),
+      stream, registryFactory: childRegistry, rootDir: cwd, sessionsDir,
+      baseConfig: activeCfg ?? buildCfg(false),
+    } : null,
+  });
+  tasks.attach(steering);
+  registry.register(createTaskTool(tasks, { parentDepth: 0 })); // kind spawn → gated rules prompt, yolo allows
+
   return {
     cwd, sessionId, store, registry, skillStore,
     get blockStore() { return blocks; },
@@ -260,46 +339,8 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     sandbox,
     setAskUser(fn: AskFn | undefined) { askUser = fn; },
     provider, stream, defaultModel, systemPrompt,
-    buildDef: (model: ModelRef): AgentDefinition => {
-      // models the catalog knows CANNOT do native tool calling get the senpi-format
-      // prompt block (port #7); unknown models attempt native first. Force: AION_TOOL_MIDDLEWARE=1
-      const info = catalog.lookup(model.provider, model.model);
-      const nonNative = info?.supportsTools === false || process.env.AION_TOOL_MIDDLEWARE === "1";
-      const base = systemPrompt();
-      return {
-        name: "main", model, tools: ["*"],
-        systemPrompt: nonNative
-          ? `${base}\n\n# Tool calling\n${toolPromptBlock(registry.list().map((t) => t.schema))}`
-          : base,
-        ...(extraChunks().length > 0 ? { contextChunks: extraChunks() } : {}),
-      };
-    },
-    buildCfg: (yolo: boolean, approval?: ApprovalFn): RunConfig => ({
-      maxTurns: 60, contextBudgetTokens: 200_000, compactionThreshold: 0.8,
-      compactionStrategy: parseCompactionStrategy(process.env.AION_COMPACTION) ?? "head-summarize", // port #25: AION_COMPACTION=head-summarize|keep-window|provider-native
-      parallelTools: true,
-      permissionRules: yolo
-        ? [{ action: "*", resource: "*", effect: "allow" }]
-        : [
-            { action: "file.read", resource: "*", effect: "allow" },
-            { action: "memory.write", resource: "*", effect: "allow" },
-            { action: "tool.skill_view", resource: "*", effect: "allow" },
-            { action: "tool.skills_list", resource: "*", effect: "allow" },
-            // mcp_list is kind:"read" → action "file.read"; the allow above already covers it
-            { action: "file.write", resource: "*", effect: "prompt" },
-            { action: "shell.exec", resource: "*", effect: "prompt" },
-            { action: "spawn", resource: "*", effect: "prompt" },
-            { action: "tool.mcp_call", resource: "*", effect: "prompt" },
-            { action: "net.fetch", resource: "*", effect: "prompt" }, // port #31: resource = host; `allow net.fetch <host>` auto-runs
-          ],
-      // port #9: execpolicy refines the PROMPT branch only (allow-listed argv →
-      // "once", forbidden → deny before any human); rules above stay the outer gate.
-      // The wrap is UNCONDITIONAL on gated configs (R2 #9 LOW-3): headless surfaces
-      // (run/serve pass no approver) get allow-list auto-run + forbidden hard-stop,
-      // and prompt-classified argv fails closed instead of "no approver connected".
-      // yolo stays approver-free — its allow-all rules never reach the prompt branch.
-      approval: yolo ? undefined : execPolicyApprover(approval),
-    }),
+    buildDef, buildCfg,
+    steering, tasks,
   };
 }
 

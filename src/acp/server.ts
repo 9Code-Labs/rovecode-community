@@ -183,7 +183,7 @@ export class AionAcpAgent implements Agent {
         details: "no provider configured: run `aion auth set <provider>`, or set AION_BASE_URL/AION_API_KEY or a <NAME>_API_KEY",
       });
     }
-    this.sessions.set(rt.sessionId, { rt, steering: new SteeringQueue(), active: null, permSeq: 0 });
+    this.sessions.set(rt.sessionId, { rt, steering: rt.steering, active: null, permSeq: 0 }); // port #26: runtime queue → task notes reach the next prompt
     return { sessionId: rt.sessionId };
   }
 
@@ -199,6 +199,7 @@ export class AionAcpAgent implements Agent {
     const def = s.rt.buildDef(model);
     const cfg = s.rt.buildCfg(this.opts.yolo ?? false, this.approvalFor(params.sessionId, s));
     const abort = new AbortController(); // port #21: one controller per run
+    s.rt.tasks.bindRun(abort.signal); // port #26: session/cancel also cancels the run's background tasks
     const deps = {
       stream, registry: s.rt.registry, store: s.rt.store,
       tools: s.rt.registry.list().map((t) => t.schema), guard: s.rt.guard,

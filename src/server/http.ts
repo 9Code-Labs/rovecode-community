@@ -198,12 +198,13 @@ export function startServer(opts: ServerOptions = {}): AionServer {
     // as tool_call_failed/permission_denied (core/tools.ts:87-93)
     const cfg = rt.buildCfg(yolo, undefined);
     const ac = new AbortController(); // port #21: one controller per run
+    rt.tasks.bindRun(ac.signal); // port #26: DELETE / disconnect / stop() also cancel the run's background tasks
     const run = agentLoop(def, text, {}, cfg, {
       stream, registry: rt.registry, store: rt.store,
       tools: rt.registry.list().map((t) => t.schema), guard: rt.guard,
       cwd: rt.cwd, // session cwd reaches ToolContext (same gap as ACP HIGH-G1)
       signal: ac.signal, // port #21: DELETE / disconnect / stop() kill in-flight work
-    }, new SteeringQueue());
+    }, rt.steering); // port #26: the session's queue — background-task notes land on the next prompt
     entry.running = true;
     entry.abort = ac;
     return sseResponse(run, () => { entry.running = false; entry.abort = null; }, () => ac.abort());
@@ -224,12 +225,23 @@ export function startServer(opts: ServerOptions = {}): AionServer {
     return json({ cancelled: live });
   };
 
+  /** GET /session/:id/tasks — background-task status (port #26): the session runtime's
+   *  TaskManager snapshot (TaskInfo[], oldest first). opencode exposes the same registry
+   *  through its job service (packages/core/src/background-job.ts list/get). */
+  const listTasks = (id: string): Response => {
+    const entry = sessions.get(id);
+    if (!entry) return json({ error: `unknown session ${id}` }, 404);
+    return json(entry.runtime.tasks.list());
+  };
+
   const route = async (req: Request): Promise<Response> => {
     const path = new URL(req.url).pathname;
     if (req.method === "POST" && path === "/session") return createSession();
     const m = /^\/session\/([^/]+)\/prompt$/.exec(path);
     if (req.method === "POST" && m) return prompt(m[1]!, req);
     if (req.method === "DELETE" && m) return cancelPrompt(m[1]!);
+    const t = /^\/session\/([^/]+)\/tasks$/.exec(path);
+    if (req.method === "GET" && t) return listTasks(t[1]!);
     if (req.method === "GET" && path === "/sessions") return json(listSessions(sessionsRoot));
     if (req.method === "GET" && path === "/doc") return json(buildOpenApiDoc(api.url));
     return json({ error: `no route for ${req.method} ${path}` }, 404);

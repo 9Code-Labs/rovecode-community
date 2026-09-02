@@ -82,7 +82,7 @@ async function cmdRun(prompt: string): Promise<void> {
     await rt.mcp?.close().catch(() => {});
     return process.exit(code);
   };
-  for await (const ev of agentLoop(rt.buildDef(model), prompt, {}, rt.buildCfg(yolo), { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard }, new SteeringQueue())) {
+  for await (const ev of agentLoop(rt.buildDef(model), prompt, {}, rt.buildCfg(yolo), { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard }, rt.steering)) { // port #26: runtime queue → task notes reach the run
     if (ev.type === "turn_start") resetTurnFailureCount();
     if (ev.type === "tool_execution_start") console.log(`→ ${ev.tool}`, JSON.stringify(ev.args).slice(0, 100));
     if (ev.type === "tool_execution_end") console.log(`← ${ev.ok ? "ok" : "FAIL"} ${ev.output.slice(0, 200).replace(/\n/g, " ⏎ ")}`);

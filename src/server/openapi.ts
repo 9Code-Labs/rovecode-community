@@ -3,7 +3,7 @@
  *  instance/httpapi/server.ts:190 (route) + :188 (lazy OpenApi.fromApi(PublicApi))
  *  — and generates its client SDK from that spec (packages/sdk/js, @hey-api/openapi-ts).
  *  Their spec is derived from Effect httpapi endpoint schemas; ADR-001 rejects Effect
- *  idioms, and this surface is four routes, so the object is written by hand — no
+ *  idioms, and this surface is five routes, so the object is written by hand — no
  *  codegen dependency, the doc IS the source of truth for what the server exposes. */
 
 /** Honesty note (bar requirement): served verbatim in the doc so HTTP clients know
@@ -38,9 +38,9 @@ export function buildOpenApiDoc(serverUrl: string): Record<string, unknown> {
       version: "0.1.0",
       description:
         "Headless HTTP surface over the one aion agent loop (ADR-003). " +
-        "Four routes: create a session, prompt it (SSE stream of typed run events; " +
+        "Five routes: create a session, prompt it (SSE stream of typed run events; " +
         "DELETE the same path cancels the in-flight run mid-turn), " +
-        "list sessions, and this document. " + APPROVALS_NOTE,
+        "list its background tasks, list sessions, and this document. " + APPROVALS_NOTE,
     },
     servers: [{ url: serverUrl }],
     paths: {
@@ -137,6 +137,31 @@ export function buildOpenApiDoc(serverUrl: string): Record<string, unknown> {
           },
         },
       },
+      "/session/{id}/tasks": {
+        get: {
+          operationId: "session.tasks",
+          summary: "List the session's background subagent tasks",
+          description:
+            "Snapshot of the session's background tasks (port #26): child agent sessions started by " +
+            "the `task` tool, oldest first, with status queued|running|done|failed|cancelled, timing, " +
+            "the child's final text (done) or error (failed). Tasks are process-local and not durable " +
+            "across server restarts. Completion notes reach the model as steering on the session's next prompt.",
+          parameters: [
+            { name: "id", in: "path", required: true, schema: { type: "string" }, description: "Session id from POST /session" },
+          ],
+          responses: {
+            "200": {
+              description: "Task snapshots",
+              content: {
+                "application/json": {
+                  schema: { type: "array", items: { $ref: "#/components/schemas/TaskInfo" } },
+                },
+              },
+            },
+            "404": errorResponse("Unknown session id"),
+          },
+        },
+      },
       "/sessions": {
         get: {
           operationId: "session.list",
@@ -193,6 +218,27 @@ export function buildOpenApiDoc(serverUrl: string): Record<string, unknown> {
             type: { type: "string", enum: [...RUN_EVENT_TYPES] },
           },
           additionalProperties: true,
+        },
+        TaskInfo: {
+          type: "object",
+          description: "Background subagent task snapshot (src/core/tasks.ts TaskInfo).",
+          required: ["id", "label", "agent", "goal", "isolated", "depth", "status", "createdAt"],
+          properties: {
+            id: { type: "string", description: "Task id (t1, t2, …; scoped to the session)" },
+            label: { type: "string" },
+            agent: { type: "string", description: "Agent definition the child runs" },
+            goal: { type: "string", description: "Bounded preview of the child's goal (≤200 chars)" },
+            isolated: { type: "boolean", description: "Ran in a worktree copy; file changes merge back as a patch on success" },
+            depth: { type: "number", description: "Child depth (root-started tasks run at 1)" },
+            status: { type: "string", enum: ["queued", "running", "done", "failed", "cancelled"] },
+            createdAt: { type: "number" },
+            startedAt: { type: "number" },
+            finishedAt: { type: "number" },
+            summary: { type: "string", description: "The child's final text (status done), ≤4000 chars" },
+            error: { type: "string", description: "Failure reason (status failed) or \"cancelled\"" },
+            usage: { type: "object", properties: { input: { type: "number" }, output: { type: "number" } } },
+            patchLines: { type: "number", description: "Isolated children: line count of the merged-back patch" },
+          },
         },
       },
     },
