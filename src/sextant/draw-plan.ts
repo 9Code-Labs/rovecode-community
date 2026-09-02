@@ -1,0 +1,132 @@
+/** Sextant plan + usage painters (port #41). Ported from the user's sextant v0.4.0 app.js:675-744
+ *  (drawPlan steps/crew/next, drawUsage tokens/context bar/cost); the scenario phases are gone — the
+ *  steps ARE the session's todos (tools/todo.ts loadTodos), the crew rows are TaskManager TaskInfo,
+ *  usage comes from the run's real token/cost accounting. Pure: `now` only drives the crew spinner. */
+
+import { ATTR, SPIN } from "./types.ts";
+import type { Rect, ScreenLike, Seg, SextantState, Theme } from "./types.ts";
+import type { TaskInfo } from "../core/tasks.ts";
+import type { TodoItem } from "../tools/todo.ts";
+import { fmtK, planCounts } from "./model.ts";
+import { panel, st } from "./draw-frame.ts";
+
+const CREW_MAX = 5;
+export const STEP_GLYPH: Record<TodoItem["status"], string> = { completed: "◆", in_progress: "◈", pending: "◇" };
+
+const oneLine = (text: string): string => text.replace(/\s+/g, " ").trim();
+/** greedy word wrap (app.js wrap) — long words are split at the width */
+export function wrapText(text: string, width: number): string[] {
+  const out: string[] = [];
+  if (width <= 0) return out;
+  for (const para of oneLine(text).split("\n")) {
+    let line = "";
+    for (const w of para.split(" ")) {
+      if (!line) { line = w; continue; }
+      if ([...line].length + 1 + [...w].length <= width) line += " " + w; else { out.push(line); line = w; }
+    }
+    while ([...line].length > width) { const cps = [...line]; out.push(cps.slice(0, width).join("")); line = cps.slice(width).join(""); }
+    out.push(line);
+  }
+  return out;
+}
+
+/** `next` = the in_progress item, then the first pending one */
+export function nextSteps(todos: readonly TodoItem[]): TodoItem[] {
+  const out: TodoItem[] = [];
+  const cur = todos.find((t) => t.status === "in_progress"); if (cur) out.push(cur);
+  const pend = todos.find((t) => t.status === "pending"); if (pend) out.push(pend);
+  return out;
+}
+/** non-terminal tasks = "working" (queued + running) */
+export const crewWorking = (crew: readonly TaskInfo[]): number => crew.filter((t) => t.status === "queued" || t.status === "running").length;
+export function crewGlyph(t: TaskInfo, theme: Theme, now: number): [string, number] {
+  switch (t.status) {
+    case "running": return [SPIN[Math.floor(Math.max(0, now) / 200) % SPIN.length] ?? "◆", theme.accent];
+    case "done": return ["◆", theme.ok];
+    case "failed": return ["◆", theme.err];
+    default: return ["◇", theme.dim];
+  }
+}
+export const crewStatus = (t: TaskInfo): string => (t.status === "running" ? "working" : t.status);
+
+/** Plan panel: `plan  done/total` title, todo steps (◆ done · ◈ in_progress · ◇ pending, priority hint
+ *  at the right), then — anchored to the bottom — `crew  k working` (when any) and `next`. */
+export function drawPlan(scr: ScreenLike, R: Rect, s: SextantState, theme: Theme, now = 0): void {
+  const todos = s.plan.todos, c = planCounts(s);
+  const B = panel(scr, R, "plan", false, todos.length ? [[`${c.completed}/${c.total}`, st(theme.muted)]] : [], theme);
+  const yEnd = B.y + B.h;
+  let y = B.y;
+  if (s.plan.note) for (const line of wrapText(s.plan.note, B.w).slice(0, 2)) if (y < yEnd) scr.put(B.x, y++, line, st(theme.warn), B.w);
+  const next = nextSteps(todos), crew = s.crew.slice(-CREW_MAX);
+  let nextRows = next.length ? next.length + 1 : 0, crewRows = crew.length ? crew.length + 1 : 0;
+  let nextY = yEnd - nextRows;
+  let crewY = (nextRows ? nextY - 1 : yEnd) - crewRows;
+  const minY = y + 2; // keep the steps header + one row above the anchored blocks
+  if (crewRows && crewY < minY) { crewRows = 0; crewY = yEnd; }
+  if (nextRows && nextY < minY) { nextRows = 0; nextY = yEnd; }
+  const stepsEnd = crewRows ? crewY - 1 : nextRows ? nextY - 1 : yEnd;
+  scr.text(B.x, y++, [["steps", st(theme.muted)], [todos.length ? `  ${c.completed}/${c.total}` : "", st(theme.dim)]], B.w);
+  if (!todos.length && y < stepsEnd) scr.put(B.x, y++, "no plan yet", st(theme.dim), B.w);
+  let shown = 0;
+  for (const t of todos) {
+    if (y >= stepsEnd) break;
+    const cur = t.status === "in_progress", done = t.status === "completed";
+    const pr = t.priority === "high" ? "high" : t.priority === "low" ? "low" : "";
+    scr.put(B.x, y, STEP_GLYPH[t.status], st(done ? theme.okDim : cur ? theme.accent : theme.dim));
+    scr.clip(B.x + 3, y, oneLine(t.content), st(done ? theme.fg2 : cur ? theme.fg : theme.muted, -1, cur ? ATTR.BOLD : 0), B.w - 3 - (pr ? pr.length + 1 : 0));
+    if (pr) scr.put(B.x + B.w - pr.length, y, pr, st(t.priority === "high" ? theme.warn : theme.dim));
+    y++; shown++;
+  }
+  if (shown < todos.length && shown > 0) { y--; scr.fill(B.x, y, B.w, 1, " "); scr.put(B.x, y, `  +${todos.length - shown + 1} more`, st(theme.dim), B.w); }
+  if (crewRows) {
+    let cy = crewY;
+    const working = crewWorking(s.crew), done = s.crew.filter((t) => t.status === "done").length;
+    scr.text(B.x, cy++, [["crew", st(theme.muted)], [working ? `  ${working} working` : `  ${done}/${s.crew.length} done`, st(theme.dim)]], B.w);
+    for (const t of crew) {
+      const [g, gc] = crewGlyph(t, theme, now), status = crewStatus(t);
+      scr.text(B.x, cy, [[g + " ", st(gc)], [t.label, st(t.status === "done" ? theme.fg2 : t.status === "failed" ? theme.err : theme.fg)]], B.w - status.length - 1);
+      scr.put(B.x + B.w - status.length, cy, status, st(t.status === "failed" ? theme.err : theme.dim));
+      cy++;
+    }
+  }
+  if (nextRows) {
+    let ny = nextY;
+    scr.put(B.x, ny++, "next", st(theme.muted));
+    for (const t of next) {
+      const cur = t.status === "in_progress";
+      scr.text(B.x, ny++, [[STEP_GLYPH[t.status] + " ", st(cur ? theme.accent : theme.dim)], [oneLine(t.content), st(cur ? theme.fg : theme.muted)]], B.w);
+    }
+  }
+}
+
+/** filled cells of a `width`-wide context bar at `pct` (0..100) */
+export const barFilled = (pct: number, width: number): number => Math.round((Math.max(0, Math.min(100, pct)) / 100) * width);
+/** the first candidate that fits `width` cells, else the last one clipped with an ellipsis */
+export function fitText(candidates: readonly string[], width: number): string {
+  for (const c of candidates) if ([...c].length <= width) return c;
+  const last = candidates[candidates.length - 1];
+  if (last === undefined || width <= 0) return "";
+  return width === 1 ? "…" : [...last].slice(0, width - 1).join("") + "…";
+}
+
+/** Usage panel (3 inner rows): `tokens 4.2k` (+ in/out split when it fits), `context ━━──── 12%`
+ *  (or `context ?` when the window is unknown), `cost $0.030` (or `cost —` when unpriced) +
+ *  provider/model (model alone, then clipped, when narrow). */
+export function drawUsage(scr: ScreenLike, R: Rect, s: SextantState, theme: Theme): void {
+  const B = panel(scr, R, "usage", false, [], theme);
+  const u = s.usage;
+  const label = (t: string): Seg => [t.padEnd(10), st(theme.muted)];
+  const total = fmtK(u.tokensIn + u.tokensOut);
+  const split = fitText([`  ${fmtK(u.tokensIn)} in · ${fmtK(u.tokensOut)} out`, `  ${fmtK(u.tokensIn)}/${fmtK(u.tokensOut)}`, ""], B.w - 10 - total.length);
+  scr.text(B.x, B.y, [label("tokens"), [total, st(theme.fg)], [split, st(theme.dim)]], B.w);
+  scr.text(B.x, B.y + 1, [label("context")]);
+  if (u.contextPct === null) scr.put(B.x + 10, B.y + 1, "?", st(theme.dim));
+  else {
+    const barW = Math.max(6, B.w - 10 - 7), filled = barFilled(u.contextPct, barW);
+    for (let i = 0; i < barW; i++) scr.put(B.x + 10 + i, B.y + 1, i < filled ? "━" : "─", st(i < filled ? theme.accent : theme.rule2));
+    scr.put(B.x + 10 + barW + 2, B.y + 1, `${Math.round(u.contextPct)}%`.padStart(4), st(u.contextPct > 80 ? theme.warn : theme.fg));
+  }
+  const cost = u.costUsd === null ? "—" : `$${u.costUsd.toFixed(3)}`;
+  const model = u.model ? fitText([u.provider ? `  ${u.provider}/${u.model}` : `  ${u.model}`, `  ${u.model}`], B.w - 10 - cost.length) : "";
+  scr.text(B.x, B.y + 2, [label("cost"), [cost, st(theme.fg)], [model, st(theme.dim)]], B.w);
+}
