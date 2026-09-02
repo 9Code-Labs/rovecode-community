@@ -62,7 +62,11 @@ export interface StartOptions {
   owner?: AbortSignal;
 }
 
-export type StartResult = { ok: true; id: TaskId } | { ok: false; reason: string };
+/** `childPolicy` (fix-wave MED-2): how the child's rules derive from the starting run's —
+ *  "gated" when that config carries a prompt rule (children turn prompt→deny, orchestrator
+ *  deriveChildRules: read-only unless allow rules cover an action), "open" otherwise (yolo).
+ *  The `task` tool's start output says so, for the approver and the model. */
+export type StartResult = { ok: true; id: TaskId; childPolicy: "gated" | "open" } | { ok: false; reason: string };
 
 export interface WaitOptions {
   /** max wait in ms; undefined = until settled (hold an abort signal); 0 = snapshot now */
@@ -118,8 +122,8 @@ function brief(text: string | undefined, max = 200): string {
  *  <task state> block; ours is one line the model can act on). */
 export function taskNote(t: TaskInfo): string {
   const head = `task ${t.id} (${t.label})`;
-  if (t.status === "done") return `${head} finished: ${brief(t.summary)} — call task result ${t.id} for details`;
-  if (t.status === "failed") return `${head} failed: ${brief(t.error)} — call task result ${t.id} for details`;
+  if (t.status === "done") return `${head} finished: ${brief(t.summary)} — call task_status result ${t.id} for details`;
+  if (t.status === "failed") return `${head} failed: ${brief(t.error)} — call task_status result ${t.id} for details`;
   return `${head} cancelled`;
 }
 
@@ -149,7 +153,10 @@ export class TaskManager {
 
   constructor(private readonly opts: TaskManagerOptions) {
     this.maxConcurrent = Math.max(1, Math.floor(opts.maxConcurrent ?? tasksMaxFromEnv()));
-    this.maxDepth = opts.maxDepth ?? DEFAULT_MAX_DEPTH;
+    // fix-wave L4: runChild re-preflights against the orchestrator's DEFAULT_MAX_DEPTH, so a
+    // LARGER manager cap would launch a child only to fail it there — clamp, and every depth
+    // refusal is start() data. Smaller caps are honored as given.
+    this.maxDepth = Math.min(opts.maxDepth ?? DEFAULT_MAX_DEPTH, DEFAULT_MAX_DEPTH);
     this.run = opts.run ?? runChild;
   }
 
@@ -177,6 +184,7 @@ export class TaskManager {
     const depth = (opts.parentDepth ?? 0) + 1;
     const gate = preflightSpawn(def, { depth, maxDepth: this.maxDepth, parentSessionId: opts.caller ?? "" });
     if (!gate.ok) return { ok: false, reason: gate.reason ?? "spawn refused" };
+    const childPolicy = deps.baseConfig.permissionRules.some((r) => r.effect === "prompt") ? "gated" : "open";
     const id: TaskId = `t${++this.seq}`;
     let resolveDone: () => void = () => {};
     const done = new Promise<void>((r) => { resolveDone = r; });
@@ -199,7 +207,7 @@ export class TaskManager {
     this.queue.push(id);
     this.emit(rec);
     this.pump();
-    return { ok: true, id };
+    return { ok: true, id, childPolicy };
   }
 
   status(id: TaskId): TaskInfo | undefined {

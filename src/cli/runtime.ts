@@ -38,7 +38,7 @@ import { loadSandboxConfig, unavailableRungError, type SandboxConfig } from "../
 import { todoTools } from "../tools/todo.ts";
 import { SteeringQueue } from "../core/loop.ts";
 import { TaskManager } from "../core/tasks.ts";
-import { createTaskTool } from "../tools/task.ts";
+import { createTaskTool, createTaskStatusTool } from "../tools/task.ts";
 import type { ChildContext, ChildRunnerDeps } from "../core/orchestrator.ts";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -329,15 +329,17 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   // agentLoop, so a child inherits its parent's model and policy; deriveChildRules turns
   // prompt→deny). ONE SteeringQueue per runtime: surfaces hand it to agentLoop and
   // completion notes land in the parent's next turn (loop.ts:136). Children get the core
-  // coding/search/skill tools (no MCP/memory/eval-cell/checkpoints in v1) plus a nested
-  // `task` tool bound to THEIR depth + steering queue, so the depth cap governs nesting.
+  // coding/search/skill tools (no MCP/memory/eval-cell/checkpoints in v1) plus nested
+  // `task` (kind spawn, bound to THEIR depth + steering queue, so the depth cap governs
+  // nesting) and `task_status` (kind read: a child collects ITS children's results without
+  // a prompt nobody could answer — MED-2 split, tools/task.ts header).
   let activeCfg: RunConfig | null = null;
   let activeModel: ModelRef | null = null;
   const steering = new SteeringQueue();
   const childRegistry = (_def: AgentDefinition, _cwd: string, child?: ChildContext): ToolRegistry => {
     const reg = new ToolRegistry();
     reg.register(readTool, editTool, writeTool, bashTool, globTool, grepTool, lsTool, ...createSkillTools(skillStore), recallTool(sessionsDir));
-    if (child) reg.register(createTaskTool(tasks, { parentDepth: child.depth, notify: child.steering, caller: child.taskId, owner: child.signal }));
+    if (child) reg.register(createTaskTool(tasks, { parentDepth: child.depth, notify: child.steering, caller: child.taskId, owner: child.signal }), createTaskStatusTool(tasks, { caller: child.taskId }));
     return reg;
   };
   const tasks = new TaskManager({
@@ -351,7 +353,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   tasks.attach(steering);
   // port #28: built-in reflection set (core/reflection.ts) — a failed edit/write (or an LSP-diagnosed one) nudges the model once via steering, capped per run (AION_REFLECTION_MAX); AION_REFLECTION=0 disables
   if (reflectionEnabled()) hooks.add(createReflectionHooks({ steering }), "reflection");
-  registry.register(createTaskTool(tasks, { parentDepth: 0 })); // kind spawn → gated rules prompt, yolo allows
+  registry.register(createTaskTool(tasks, { parentDepth: 0 }), createTaskStatusTool(tasks)); // task: kind spawn → gated rules prompt once per start, yolo allows; task_status: kind read → allowed everywhere
 
   return {
     cwd, sessionId, store, registry, skillStore,

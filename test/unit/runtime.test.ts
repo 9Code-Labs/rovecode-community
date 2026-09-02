@@ -26,9 +26,12 @@ test("createRuntime registers the full CLI tool set", () => {
   const cwd = tmpCwd();
   const rt = createRuntime({ cwd, stream: null });
   const names = rt.registry.list().map((t) => t.schema.name).sort();
-  // ports #17 recall, #22 glob/grep/ls, #26 task, #31 web_fetch, #32 todo_read/todo_write, #33 ask_user (every surface; headless fail closed at execute);
-  // eval_cell must stay ABSENT while AION_EVAL_CELL is unset (port #18 flag door)
-  expect(names).toEqual(["ask_user", "bash", "edit", "glob", "grep", "ls", "memory_edit", "read", "recall", "skill_view", "skills_list", "task", "todo_read", "todo_write", "web_fetch", "write"]);
+  // ports #17 recall, #22 glob/grep/ls, #26 task (spawn) + task_status (read — MED-2 split), #31 web_fetch, #32 todo_read/todo_write,
+  // #33 ask_user (every surface; headless fail closed at execute); eval_cell must stay ABSENT while AION_EVAL_CELL is unset (port #18 flag door)
+  expect(names).toEqual(["ask_user", "bash", "edit", "glob", "grep", "ls", "memory_edit", "read", "recall", "skill_view", "skills_list", "task", "task_status", "todo_read", "todo_write", "web_fetch", "write"]);
+  const kinds = Object.fromEntries(rt.registry.list().map((t) => [t.schema.name, t.kind]));
+  expect(kinds["task"]).toBe("spawn");        // gated rules prompt once per start
+  expect(kinds["task_status"]).toBe("read");  // gated rules allow: never prompts, headless-safe
   rmSync(cwd, { recursive: true, force: true });
 });
 

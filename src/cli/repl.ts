@@ -2,7 +2,7 @@
  *  output, y/n/a approvals, slash commands. Bare `aion` drops here. */
 
 import readline from "node:readline";
-import { agentLoop, SteeringQueue } from "../core/loop.ts";
+import { agentLoop } from "../core/loop.ts";
 import { resetTurnFailureCount } from "../memory/tools.ts";
 import { providerStream } from "../providers/stream.ts";
 import type { ApprovalFn, RunEvent } from "../core/types.ts";
@@ -119,7 +119,8 @@ export async function runRepl( /* eslint-disable-line complexity */
     const def = rt.buildDef({ provider: state.provider, model: state.model });
 
     const ac = new AbortController();
-    const gen = agentLoop(def, text, {}, rt.buildCfg(state.yolo, approval), { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, cwd: rt.cwd, signal: ac.signal }, new SteeringQueue());
+    rt.tasks.bindRun(ac.signal); // port #26: Ctrl-C (ac.abort above) also cancels the background tasks this run started
+    const gen = agentLoop(def, text, {}, rt.buildCfg(state.yolo, approval), { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, cwd: rt.cwd, signal: ac.signal }, rt.steering); // port #26: the runtime's queue — task completion notes reach the next turn
     running = { ac, gen };
     try {
       let live = "";
@@ -145,8 +146,14 @@ export async function runRepl( /* eslint-disable-line complexity */
   });
 
   rl.on("close", () => {
-    void rt.mcp?.close().catch(() => {}); // kill MCP child processes (TUI does the same in app.ts)
-    console.log(`\nbye — session ${rt.sessionId.slice(0, 8)} saved (${state.turns} turns, ${state.tokensIn}in/${state.tokensOut}out tokens)`);
-    process.exit(0);
+    void (async () => {
+      // port #26: quitting leaves no background children — their runs (and subprocess trees) die
+      // now and settle, bounded, before the process goes (same policy as cmdRun's exit())
+      rt.tasks.cancelAll();
+      await rt.tasks.drain(2_000);
+      void rt.mcp?.close().catch(() => {}); // kill MCP child processes (TUI does the same in app.ts)
+      console.log(`\nbye — session ${rt.sessionId.slice(0, 8)} saved (${state.turns} turns, ${state.tokensIn}in/${state.tokensOut}out tokens)`);
+      process.exit(0);
+    })();
   });
 }

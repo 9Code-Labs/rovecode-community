@@ -9,6 +9,8 @@ import { globTool, grepTool, lsTool } from "../coding/files.ts";
 import { webFetchTool } from "../tools/webfetch.ts";
 import { todoTools } from "../tools/todo.ts";
 import { askUserTool } from "../tools/ask-user.ts";
+import { TaskManager } from "../core/tasks.ts";
+import { createTaskTool, createTaskStatusTool } from "../tools/task.ts";
 import { mockStream, textTurn, providerStream, openaiCompatStreaming, resolveProvider, listBuiltinProviders } from "../providers/stream.ts";
 import { saveCredential, removeCredential, listProviders, keyNameFor, credentialsPath, readSecret } from "../providers/auth.ts";
 import { runGauntlet, reportResults, providerPreflight, basicTasks, codingTasks, failureTasks, adversarialTasks } from "../eval/gauntlet.ts";
@@ -87,6 +89,11 @@ async function cmdRun(prompt: string): Promise<void> {
   const stream = rt.stream ?? mockStream({ turns: [textTurn("Aion mock provider: run `aion auth set <provider>`, or set AION_BASE_URL and AION_API_KEY (or a <NAME>_API_KEY env var), for a real model.")] });
   rt.hooks.onWarning((w) => console.error(`hooks: ${w}`)); // port #29: load + runtime hook notes → stderr (stdout stays the transcript)
   const exit = async (code: number): Promise<never> => {
+    // port #26 (fix-wave MED-1): a one-shot run does not outlive its process — cancel the children
+    // still running (their in-flight fetch + subprocess trees die through the run signal) and wait,
+    // bounded, for their runs to settle; process.exit alone orphaned live task trees mid-command
+    rt.tasks.cancelAll();
+    await rt.tasks.drain(2_000);
     await rt.hooks.close(); // port #29: session_close, after in-flight on_event taps settle
     await rt.mcp?.close().catch(() => {});
     return process.exit(code);
@@ -125,6 +132,7 @@ function cmdTools(): void {
   registry.register(webFetchTool); // port #31
   registry.register(...todoTools(join(process.cwd(), ".aion", "sessions"))); // port #32: listing only — the root is never touched here
   registry.register(askUserTool(() => undefined)); // port #33: listing only — no asker is bound here
+  const tasks = new TaskManager({ deps: () => null }); registry.register(createTaskTool(tasks), createTaskStatusTool(tasks)); // port #26: listing only — no provider, nothing can start
   for (const t of registry.list()) {
     console.log(`${t.schema.name.padEnd(8)} ${t.kind.padEnd(8)} sequential=${t.sequential !== false}`);
     console.log(`         ${t.schema.description}`);

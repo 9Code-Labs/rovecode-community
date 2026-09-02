@@ -9,12 +9,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { TaskManager, taskNote, formatTaskList, tasksMaxFromEnv, DEFAULT_TASKS_MAX, type TaskManagerOptions, type TaskStatus } from "../../src/core/tasks.ts";
+import { createTaskStatusTool, DEFAULT_WAIT_MS } from "../../src/tools/task.ts";
 import { SteeringQueue } from "../../src/core/loop.ts";
 import { ToolRegistry } from "../../src/core/tools.ts";
 import { writeTool } from "../../src/coding/hashline.ts";
 import { textTurn, toolTurn } from "../../src/providers/stream.ts";
 import type { ChildRunnerDeps } from "../../src/core/orchestrator.ts";
-import type { AgentDefinition, Message, ModelRef, RunConfig, StreamEvent, StreamFn, StreamOptions } from "../../src/core/types.ts";
+import type { AgentDefinition, Message, ModelRef, RunConfig, StreamEvent, StreamFn, StreamOptions, ToolContext } from "../../src/core/types.ts";
 
 const allowAll = [{ action: "*", resource: "*", effect: "allow" as const }];
 const cfg: RunConfig = { maxTurns: 6, contextBudgetTokens: 100_000, compactionThreshold: 0.8, parallelTools: false, permissionRules: allowAll };
@@ -68,14 +69,14 @@ function gatedChildren() {
   return { stream, started, untilStarted, release: (goal: string) => gate(goal).release(), releaseAll: () => { for (const g of gates.values()) g.release(); }, signalOf: (goal: string) => signals.get(goal) };
 }
 
-function makeManager(stream: StreamFn, over: Partial<ChildRunnerDeps> = {}, opts: { max?: number; run?: TaskManagerOptions["run"] } = {}) {
+function makeManager(stream: StreamFn, over: Partial<ChildRunnerDeps> = {}, opts: { max?: number; run?: TaskManagerOptions["run"]; maxDepth?: number } = {}) {
   const root = mkdtempSync(join(tmpdir(), "aion-tasks-root-"));
   const sessions = mkdtempSync(join(tmpdir(), "aion-tasks-sess-"));
   const deps: ChildRunnerDeps = {
     defs: new Map([["worker", worker]]), stream, registryFactory: () => new ToolRegistry(),
     rootDir: root, sessionsDir: sessions, baseConfig: cfg, ...over,
   };
-  const tasks = new TaskManager({ deps: () => deps, maxConcurrent: opts.max ?? 3, ...(opts.run ? { run: opts.run } : {}) });
+  const tasks = new TaskManager({ deps: () => deps, maxConcurrent: opts.max ?? 3, ...(opts.run ? { run: opts.run } : {}), ...(opts.maxDepth !== undefined ? { maxDepth: opts.maxDepth } : {}) });
   const cleanup = async () => {
     tasks.cancelAll();
     await tasks.drain(3_000);
@@ -244,6 +245,43 @@ test("depth cap: a start whose child would sit at the cap is refused with the or
   }
 }, 15_000);
 
+test("maxDepth ABOVE the orchestrator cap is clamped to it: a child at the cap is refused at start() as data, never launched-then-failed (fix-wave L4)", async () => {
+  const kids = gatedChildren();
+  // pre-fix: the manager accepted depth 3 (its own cap 5), launched the child, and runChild's
+  // preflight (hard-coded DEFAULT_MAX_DEPTH) failed it — a "failed" task instead of a refusal
+  const { tasks, cleanup } = makeManager(kids.stream, {}, { maxDepth: 5 });
+  try {
+    expect(tasks.maxDepth).toBe(3); // mutation target: the Math.min clamp in the constructor
+    const r = tasks.start({ agent: "worker", goal: "at the cap" }, { parentDepth: 2 });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe("depth cap 3 reached (current 3)");
+    expect(tasks.list()).toHaveLength(0);
+    expect(kids.started).toEqual([]); // nothing reached the provider
+    // below the cap the larger option changes nothing
+    const ok = tasks.start({ agent: "worker", goal: "fine" }, { parentDepth: 1 });
+    expect(ok.ok).toBe(true);
+    if (ok.ok) expect((await deadline(tasks.result(ok.id, { timeoutMs: 5_000 }), 6_000, "depth-2 child"))?.status).toBe("done");
+  } finally {
+    await cleanup();
+  }
+}, 15_000);
+
+test("start() reports the child's policy class for the tool's output: 'gated' when the starting config has a prompt rule, 'open' under allow-all (fix-wave MED-2)", async () => {
+  const kids = gatedChildren();
+  const gatedCfg: RunConfig = { ...cfg, permissionRules: [{ action: "file.read", resource: "*", effect: "allow" }, { action: "spawn", resource: "*", effect: "prompt" }] };
+  const g = makeManager(kids.stream, { baseConfig: gatedCfg });
+  const o = makeManager(kids.stream);
+  try {
+    const r = g.tasks.start({ agent: "worker", goal: "policy gated" });
+    expect(r.ok && r.childPolicy).toBe("gated"); // mutation target: the prompt-rule test in start()
+    const r2 = o.tasks.start({ agent: "worker", goal: "policy open" });
+    expect(r2.ok && r2.childPolicy).toBe("open");
+  } finally {
+    await g.cleanup();
+    await o.cleanup();
+  }
+}, 15_000);
+
 test("spawn policy 'none', unknown agent and no provider are refused as data (never throws)", () => {
   const kids = gatedChildren();
   const none: AgentDefinition = { ...worker, name: "hermit", spawns: "none" };
@@ -279,7 +317,7 @@ test("completion note lands in the attached SteeringQueue with id + label; a per
     const note = parent.drainAll()[0]!;
     expect(note).toContain(`task ${id} (notes job) finished`);
     expect(note).toContain("done: note me");
-    expect(note).toContain(`call task result ${id}`);
+    expect(note).toContain(`call task_status result ${id}`); // the read tool, not the spawn tool (MED-2 split)
     // nested-style override: the note goes to the given queue, not the attached sink
     const own = new SteeringQueue();
     const nested = startOk(tasks, "nested", { notify: own, parentDepth: 1 });
@@ -449,6 +487,7 @@ function tempGitRepo(): string {
   Bun.spawnSync(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "init"], { cwd: dir });
   return dir;
 }
+const gitOut = (args: string[], cwd: string): string => Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" }).stdout.toString().trim();
 
 test("isolated task in a git repo (worktree isolation): a NEW file the child creates reaches the merged-back patch", async () => {
   const { stream, fileFor } = isoChildren();
@@ -466,6 +505,11 @@ test("isolated task in a git repo (worktree isolation): a NEW file the child cre
     expect(existsSync(join(root, file))).toBe(true);
     expect(existsSync(join(process.cwd(), file))).toBe(false);
     expect(existsSync(join(root, ".aion", "worktrees"))).toBe(true); // it WAS the worktree path
+    // fix-wave L3: the isolation worktree is a DETACHED checkout — `worktree remove` leaves no
+    // `aion/task/<id>` branch behind in the root repo (mutation: `-b aion/task/${id}` → one stray
+    // branch per isolated task), and the root is the only worktree left
+    expect(gitOut(["branch", "--list", "aion/task/*"], root)).toBe("");
+    expect(gitOut(["worktree", "list", "--porcelain"], root).split("\n").filter((l) => l.startsWith("worktree ")).length).toBe(1);
   } finally {
     rmSync(join(process.cwd(), file), { force: true });
     await cleanup();
@@ -530,6 +574,44 @@ test("result(): timeout 0 snapshots at once, an aborted signal returns promptly,
     expect(r?.status).toBe("running");
     const pre = new AbortController(); pre.abort();
     expect((await deadline(tasks.result(id, { signal: pre.signal }), 2_000, "pre-aborted wait"))?.status).toBe("running");
+  } finally {
+    kids.releaseAll();
+    await cleanup();
+  }
+}, 15_000);
+
+// ---------- tool surface (src/tools/task.ts): task_status result waits ----------
+
+const toolCtx = (): ToolContext => ({ sessionId: "s", cwd: process.cwd(), signal: new AbortController().signal, permissions: { effect: "allow" } });
+
+test("task_status result: a numeric-string timeout_ms is honored; garbage is a clear error, never the 60s default (fix-wave L6)", async () => {
+  const kids = gatedChildren();
+  const { tasks, cleanup } = makeManager(kids.stream);
+  const status = createTaskStatusTool(tasks);
+  try {
+    const id = startOk(tasks, "HOLD wait-str");
+    await deadline(kids.untilStarted("HOLD wait-str"), 5_000, "child starts");
+    const t0 = Date.now();
+    // mutation target: parseTimeout treating strings as absent → the 60_000 default → the 3s deadline trips
+    const r = await deadline(status.execute({ action: "result", id, timeout_ms: "300" }, toolCtx()), 3_000, "string timeout_ms wait");
+    expect(r.ok).toBe(true);
+    expect(r.output).toContain("still running after 0s");
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(250);
+    for (const bad of ["soon", "", true, {}]) {
+      const e = await status.execute({ action: "result", id, timeout_ms: bad }, toolCtx());
+      expect(e.ok).toBe(false);
+      expect(e.output).toContain("timeout_ms");
+      expect(e.output).toContain("milliseconds");
+    }
+    // absent → the (pinned) default; 0 → snapshot at once; negative → clamped to 0
+    expect(DEFAULT_WAIT_MS).toBe(60_000);
+    expect((await status.execute({ action: "result", id, timeout_ms: 0 }, toolCtx())).output).toContain("still running after 0s");
+    expect((await deadline(status.execute({ action: "result", id, timeout_ms: -5 }, toolCtx()), 2_000, "negative timeout")).output).toContain("still running after 0s");
+    // status/list are plain reads; an unknown id is data
+    expect((await status.execute({ action: "status", id }, toolCtx())).output).toMatch(/^task t1 \(HOLD wait-str\) running/);
+    expect((await status.execute({ action: "list" }, toolCtx())).output).toContain("t1   running");
+    expect((await status.execute({ action: "result", id: "nope" }, toolCtx())).output).toBe("Error: unknown task 'nope'");
+    expect((await status.execute({ action: "start", goal: "x" }, toolCtx())).output).toContain("start|cancel live on task");
   } finally {
     kids.releaseAll();
     await cleanup();

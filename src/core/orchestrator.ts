@@ -49,7 +49,10 @@ export async function createIsolation(rootDir: string, opts: { prefer: "worktree
   const id = randomUUID().slice(0, 8);
   if (opts.prefer === "worktree") {
     const dir = join(rootDir, ".aion", "worktrees", id);
-    if (git(["worktree", "add", "-b", `aion/task/${id}`, dir], rootDir).code === 0) {
+    // --detach (fix-wave L3): `-b aion/task/<id>` left one branch per isolated task behind in
+    // the root repo after `worktree remove`; a detached checkout at HEAD leaves only the
+    // worktree, which cleanup removes
+    if (git(["worktree", "add", "--detach", dir], rootDir).code === 0) {
       return {
         dir, kind: "worktree",
         // intent-to-add first: `git diff HEAD` never shows UNTRACKED files, so a child's
