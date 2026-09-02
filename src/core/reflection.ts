@@ -25,6 +25,15 @@
  *    the queue at the run boundary (post_run, and pre_run of the next run) so it cannot open the
  *    next run's first turn; other steering messages (port #26 task notes) are preserved
  *  - AION_REFLECTION=0 → the set is not registered (cli/runtime.ts door)
+ *  - ownership (fix-wave 4, #26 MED-A): ONE set serves ONE queue, so it acts only on runs it OWNS
+ *    (opts.owns; cli/runtime.ts binds it to `ctx.sessionId === the ACTIVE session store's id`, which
+ *    TUI session switches keep current via setSessionStore). Background-task children (port #26) run
+ *    under the runtime's hooks since 0cf2992 with their OWN store ids: before this, a child's failed
+ *    edit nudged the PARENT's next turn about an edit it never made, and a child's run boundary
+ *    swept the parent's own pending nudge. Trade-off: children get NO reflection (a child's queue is
+ *    unreachable from a hook — HookCtx carries no queue handle on purpose, hooks.ts header); their
+ *    loop guard still bounds identical repeats and their failure text reaches the parent through the
+ *    task note / `task_status result`.
  *
  *  Source (pattern only, no code copied; Apache-2.0, credited in THIRD_PARTY_NOTICES.md): aider
  *  @ 5dc9490 aider/coders/base_coder.py — run_one :924-944 (`while message: self.reflected_message
@@ -65,6 +74,9 @@ export interface ReflectionOptions {
   tools?: Iterable<string>;
   /** observer for every nudge pushed (tests, surfaces) */
   onNudge?: (text: string) => void;
+  /** which runs this set serves — false → pre_run / post_run / post_tool return at once (no nudge, no
+   *  sweep, no per-run state). Default: every run. cli/runtime.ts: the active session store's runs. */
+  owns?: (ctx: HookCtx) => boolean;
 }
 
 /** AION_REFLECTION=0 disables the built-in set; anything else (incl. unset) enables it. */
@@ -84,6 +96,7 @@ interface RunState { nudges: number; lastKey: string | null }
 
 export function createReflectionHooks(opts: ReflectionOptions): HookSet {
   const max = opts.max ?? reflectionMax();
+  const owns = opts.owns ?? ((): boolean => true);
   const watched = new Set(opts.tools ?? DEFAULT_REFLECTION_TOOLS);
   const runs = new Map<string, RunState>(); // runId → state; bounded (bare dispatch has no runId → "")
   const pending = new Set<string>(); // nudges pushed this run that the loop may not have drained yet
@@ -106,10 +119,10 @@ export function createReflectionHooks(opts: ReflectionOptions): HookSet {
     pending.clear();
   };
   return {
-    pre_run(ctx) { sweep(); runs.set(keyOf(ctx), fresh()); },
-    post_run(ctx) { sweep(); runs.delete(keyOf(ctx)); },
+    pre_run(ctx) { if (!owns(ctx)) return; sweep(); runs.set(keyOf(ctx), fresh()); },
+    post_run(ctx) { if (!owns(ctx)) return; sweep(); runs.delete(keyOf(ctx)); },
     post_tool(ctx, call, result) {
-      if (!watched.has(call.tool)) return;
+      if (!owns(ctx) || !watched.has(call.tool)) return;
       const st = stateFor(ctx);
       const core = result.output.replace(GUARD_NOTE, "");
       const diag = result.ok ? diagnosticsOf(core) : null;

@@ -163,6 +163,28 @@ describe("output modes: stdout guard over the real fd 1", () => {
     expect(n.stderr).toContain("STRAY-LOG\n");
     expect(n.stderr).toContain("STRAY-WRITE\n");
   }, T);
+
+  test("MED-C: a session_open hook that prints DURING BOOT (before the sink exists): json stdout is still exactly ONE object, ndjson every line parses — both leaks land on stderr; text mode is untouched (mutation: guard installed by the sink after bootRuntime → 3 stdout lines, whole-stdout JSON.parse throws)", async () => {
+    const cwd = fresh();
+    mkdirSync(join(cwd, ".aion"));
+    writeFileSync(join(cwd, ".aion", "hooks.ts"), 'export default { version: 1, hooks: {\n  session_open() { console.log("BOOT-LEAK-LOG"); process.stdout.write("BOOT-LEAK-WRITE\\n"); },\n} };\n');
+    const j = await cli(["run", "say hi", "--output", "json"], {}, cwd);
+    expect(j.code).toBe(0);
+    expect(() => JSON.parse(j.stdout)).not.toThrow();
+    expect(single(j.stdout).status).toBe("done");
+    expect(j.stderr).toContain("BOOT-LEAK-LOG\n");
+    expect(j.stderr).toContain("BOOT-LEAK-WRITE\n");
+    const n = await cli(["run", "say hi", "--output", "ndjson"], {}, cwd);
+    expect(n.code).toBe(0);
+    const lines = ndjson(n.stdout);
+    expect(lines[0]!["type"]).toBe("run_start"); // line 1 is the loop's first event, not the leak
+    expect(lines.at(-1)).toMatchObject({ type: "result", status: "done", exitCode: 0 });
+    expect(n.stderr).toContain("BOOT-LEAK-LOG\n");
+    expect(n.stderr).toContain("BOOT-LEAK-WRITE\n");
+    const t = await cli(["run", "say hi"], {}, cwd);
+    expect(t.code).toBe(0);
+    expect(t.stdout).toContain("BOOT-LEAK-LOG\n"); // text mode installs no guard: the transcript is stdout
+  }, T);
 });
 
 // ---------- loopback provider: a real tool call ----------

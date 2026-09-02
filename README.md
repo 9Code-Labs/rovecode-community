@@ -102,12 +102,15 @@ file in `.aion/commands/` (project) or `~/.aion/commands/` (user scope).
 - **Output modes** (#35) — `aion run --output text|json|ndjson`: `json` = exactly ONE result object
   `{status, summary, sessionId, model, origin, usage, costUsd, toolCalls, durationMs, exitCode}` on stdout;
   `ndjson` = every RunEvent as a JSON line then a final `{type:"result"}` line; stdout is JSON-only
-  (progress → stderr); `--output=<mode>` also accepted; exit 0 done · 1 error/budget · 2 usage/startup
+  (progress → stderr; the guard is up before the runtime boots, so even a `session_open` hook's prints land
+  on stderr); `--output=<mode>` also accepted; exit 0 done · 1 error/budget · 2 usage/startup
   error (one stderr line, nothing on stdout — validated before the runtime boots) · 130 aborted.
 - **Reflection** (#28, aider pattern) — a failed `edit`/`write` (or one that introduces LSP diagnostics)
   gets ONE `reflection: …` nudge on the next turn with the error in context, capped at 2 per run
   (`AION_REFLECTION_MAX`; `AION_REFLECTION=0` disables); identical repeat failures are not re-nudged and
-  the loop guard still fires. Failed edits now report the anchor line's current text and hash, the lines
+  the loop guard still fires. Nudges serve the active session's runs only — a background-task child gets
+  none (its loop guard still bounds repeats; its failure text reaches the parent through the task note).
+  Failed edits now report the anchor line's current text and hash, the lines
   that do match, and the read-then-retry remedy; `write` into a missing directory says so.
 - Also landed: first-class `glob`/`grep`/`ls` tools (#22), same-model retry with backoff (#23), diff
   previews in approval overlays (#24), compaction strategies (#25), per-project sandbox rung (#27),
@@ -234,7 +237,9 @@ active rung. Use a container/microVM for untrusted work.
 OTLP/HTTP JSON — `aion.run` ⊃ `aion.turn` (one per model step) ⊃ `aion.tool`, with per-span tokens, latency,
 served model and cost (omitted when unpriced), compaction and never-dispatched calls as span events; ids, sizes
 and outcomes only (no goal, args, output or headers). Batched once per run, 5 s timeout, a failed export is one
-`hooks:` warning and never blocks a run. Unset = zero cost: the exporter is never constructed.
+`hooks:` warning and never blocks a run. Cancelled runs export too (Esc, `session/cancel`, HTTP DELETE or a
+client disconnect → status `stopped`); `aion.tool_calls` counts issued calls, the `--output json` `toolCalls`
+count. Unset = zero cost: the exporter is never constructed; a malformed endpoint is one warning, not a stall.
 
 Typed `RunEvent` stream (run/turn/tool/compaction events) persisted with the session tree;
 `aion trace <id>` replays any session with corruption findings. `/cost` and `/status` surface
@@ -282,7 +287,8 @@ tokens, cache hits, and catalog-priced spend.
 - **Provider**: implement `StreamFn` — must not throw; failures become `{stopReason: "error"}`.
 - **Hooks** (`core/hooks.ts`, port #29): drop a `.aion/hooks.ts` (or `.js`; user scope `~/.aion/hooks.*`)
   exporting `{ version: 1, hooks: {…} }` — plain `import`, no build step. Nine typed hooks, all optional,
-  sync or async: `pre_run`, `post_run`, `pre_tool` (return `{deny: reason}` to block), `post_tool` (return
+  sync or async: `pre_run`, `post_run` (also fired, as `stopped`, when the consumer cancels a run mid-way),
+  `pre_tool` (return `{deny: reason}` to block), `post_tool` (return
   `{output}` to annotate what the model sees, growth-bounded), `approval` (return `"allow"`/`"deny"` to
   pre-answer a prompt), `compaction`, `session_open`, `session_close`, `on_event` (every RunEvent, not
   awaited). Every call is timeout-bounded (`AION_HOOK_TIMEOUT_MS`, default 5000) and isolated — a throwing

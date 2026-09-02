@@ -184,6 +184,36 @@ test("unfixable (identical failure): ONE nudge (identical repeats are deduped); 
   }
 });
 
+test("consumer-closed run (#39 MED-1 seam): the consumer .return()s the generator right after the failing edit (TUI Esc / ACP cancel / serve disconnect shape) — the undrained nudge is swept by the teardown's post_run; the next run's first turn is clean", async () => {
+  const r = rig();
+  const rt = createRuntime({ cwd: r.cwd, stream: null });
+  try {
+    await rt.hooks.ready;
+    const stream: StreamFn = async function* () { yield turn(editCall("x1", r.file, r.tag, "zzz")); };
+    const def = rt.buildDef({ provider: "mock", model: "default" });
+    const deps = { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, cwd: rt.cwd, hooks: rt.hooks };
+    const gen = agentLoop(def, "close me", {}, { ...rt.buildCfg(true), maxTurns: 4 }, deps, rt.steering);
+    let sawEnd = false;
+    for await (const ev of gen) {
+      if (ev.type === "run_end") sawEnd = true;
+      if (ev.type === "tool_execution_end") { expect(ev.ok).toBe(false); expect(rt.steering.size).toBe(1); break; } // the nudge is queued; the consumer leaves
+    }
+    expect(sawEnd).toBe(false); // no run_end was ever yielded — the boundary reached the hooks through the teardown alone
+    expect(rt.steering.size).toBe(0); // MUTATION TARGET: drop `await obs.close()` in agentLoop's finally → 1 (a nudge for a run that is gone)
+    const requests: Message[][] = [];
+    const quiet: StreamFn = async function* (_m, messages) { requests.push([...messages]); yield turn(textTurn("fresh start")); };
+    const next = await drive(rt, quiet, "next prompt", 2);
+    expect(next.at(-1)).toMatchObject({ type: "run_end", status: "done", summary: "fresh start" });
+    expect(reflections(next)).toEqual([]);
+    expect(requests[0]!.some((m) => m.role === "user" && text(m).startsWith(REFLECTION_PREFIX))).toBe(false);
+    expect(rt.hooks.warnings).toEqual([]);
+  } finally {
+    await rt.hooks.close();
+    await rt.mcp?.close();
+    r.done();
+  }
+});
+
 test("a nudge the loop never drained (maxTurns hit right after the failing edit) is swept at run end and does not open the next run on the same runtime", async () => {
   const r = rig();
   const rt = createRuntime({ cwd: r.cwd, stream: null });

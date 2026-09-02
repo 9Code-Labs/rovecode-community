@@ -99,6 +99,12 @@ export async function* agentLoop(
   } finally {
     deps.signal?.removeEventListener("abort", follow);
     runAc.abort();
+    // fix-wave 4 (#39 MED-1): the CONSUMER closed the generator before run_end (serve disconnect,
+    // ACP session/cancel, TUI Esc all .return() it) — the run is over, nobody is listening, and the
+    // run-level hooks would never learn it (no OTel export, no reflection sweep). This same loop's
+    // teardown tells the observer once; it fires post_run with the abort shape and yields nothing
+    // (ADR-003: no second loop, no fabricated event — a yielded run_end makes close() a no-op).
+    if (obs) await obs.close();
   }
 }
 

@@ -84,7 +84,8 @@ type Hook<A extends unknown[], R = void> = (ctx: HookCtx, ...args: A) => Promise
 export interface HookSet {
   /** run start, after run_start is produced (ctx.runId set) and before the first model turn */
   pre_run?: Hook<[]>;
-  /** run end, awaited BEFORE run_end reaches the consumer (so it lands before a cmdRun exit) */
+  /** run end, awaited BEFORE run_end reaches the consumer (so it lands before a cmdRun exit); a run whose
+   *  CONSUMER closed the generator first (serve disconnect, ACP cancel, TUI Esc) gets it once as {stopped, "run aborted"} */
   post_run?: Hook<[result: RunResult]>;
   /** before a tool executes, after policy allowed it; {deny} fails the call with this reason */
   pre_tool?: Hook<[call: HookToolCall], { deny: string }>;
@@ -180,7 +181,8 @@ export function hookTimeoutMs(env: Record<string, string | undefined> = process.
 
 // ---------- runner ----------
 
-export interface RunObserver { observe(ev: RunEvent): Promise<void> }
+/** the loop's per-run view; close() = the run ended WITHOUT a run_end (consumer-closed generator) */
+export interface RunObserver { observe(ev: RunEvent): Promise<void>; close(): Promise<void> }
 export interface HookRunnerOptions { timeoutMs?: number; onWarning?: (note: string) => void }
 
 /** Holds the hook sets of one runtime and runs them: sets in attach order, per call a ref'd timeout
@@ -260,17 +262,25 @@ export class HookRunner {
     );
   }
 
-  /** per-run view for the loop: maps the event stream onto pre_run / compaction / post_run
-   *  (awaited, in order) and taps on_event for every event (fire-and-forget). */
+  /** per-run view for the loop: maps the event stream onto pre_run / compaction / post_run (awaited, in
+   *  order) and taps on_event for every event (fire-and-forget). close() is the loop's teardown seam
+   *  (fix-wave 4, #39 MED-1): a consumer that .return()s the generator before run_end still ended the
+   *  run, so post_run fires ONCE with the abort shape — after a pre_run only, never after a yielded
+   *  run_end — while on_event gets nothing synthesized (it mirrors the consumer's stream exactly). */
   observer(base: { cwd: string; sessionId: string }): RunObserver {
     let ctx: HookCtx = { cwd: base.cwd, sessionId: base.sessionId };
+    let ended = false;
     return {
       observe: async (ev) => {
         if (ev.type === "run_start") ctx = { ...ctx, runId: ev.runId };
         this.tap(ctx, ev);
         if (ev.type === "run_start") await this.run("pre_run", ctx);
         else if (ev.type === "compaction") await this.run("compaction", ctx, ev);
-        else if (ev.type === "run_end") await this.run("post_run", ctx, { status: ev.status, summary: ev.summary });
+        else if (ev.type === "run_end") { ended = true; await this.run("post_run", ctx, { status: ev.status, summary: ev.summary }); }
+      },
+      close: async () => {
+        if (ended || ctx.runId === undefined) return;
+        ended = true; await this.run("post_run", ctx, { status: "stopped", summary: "run aborted" });
       },
     };
   }

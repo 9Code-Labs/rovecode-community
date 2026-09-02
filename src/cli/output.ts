@@ -11,7 +11,10 @@
  *    is redirected to stderr and only the raw writer bound BEFORE the takeover reaches fd 1
  *    (installed for every appMode !== "interactive", main.ts:633-636). guardStdout below is that
  *    guard; Bun's console.log does not route through process.stdout.write, so console.log/info/
- *    debug are redirected too. stdout purity is structural, not a discipline.
+ *    debug are redirected too. stdout purity is structural, not a discipline. cmdRun installs it
+ *    right after parseOutputMode — BEFORE bootRuntime, whose session_open hooks may print — and
+ *    hands the sink the raw writer it bound first (fix-wave 4 MED-C); the sink's own install below
+ *    serves embedders that pass process.stdout itself.
  *  - print-mode.ts:139-156 — text mode prints only the final assistant text; error/aborted →
  *    message on stderr, exit 1 (:145-147); signals exit 128+n (:57-61: 143 SIGTERM, 129 SIGHUP).
  *    aion keeps its text mode byte-identical to the pre-port cmdRun (progress lines + summary on

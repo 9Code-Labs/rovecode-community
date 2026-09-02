@@ -351,8 +351,9 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     } : null,
   });
   tasks.attach(steering);
-  // port #28: built-in reflection set (core/reflection.ts) — a failed edit/write (or an LSP-diagnosed one) nudges the model once via steering, capped per run (AION_REFLECTION_MAX); AION_REFLECTION=0 disables
-  if (reflectionEnabled()) hooks.add(createReflectionHooks({ steering }), "reflection");
+  // port #28: built-in reflection set (core/reflection.ts) — a failed edit/write (or an LSP-diagnosed one) nudges the model once via steering, capped per run (AION_REFLECTION_MAX); AION_REFLECTION=0 disables.
+  // owns: the ACTIVE session's runs only — a task child (own store id, same hooks) must neither nudge nor sweep this queue (#26 MED-A)
+  if (reflectionEnabled()) hooks.add(createReflectionHooks({ steering, owns: (c) => c.sessionId === activeStore.id }), "reflection");
   registry.register(createTaskTool(tasks, { parentDepth: 0 }), createTaskStatusTool(tasks)); // task: kind spawn → gated rules prompt once per start, yolo allows; task_status: kind read → allowed everywhere
 
   return {

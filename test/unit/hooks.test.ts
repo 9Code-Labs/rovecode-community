@@ -371,6 +371,33 @@ test("hookTimeoutMs: AION_HOOK_TIMEOUT_MS parses; blank/invalid/zero fall back t
   expect(new HookRunner(ctx, { timeoutMs: 7 }).timeoutMs).toBe(7);
 });
 
+test("observer.close() (the loop's consumer-closed teardown, #39 MED-1): after run_start it fires post_run ONCE with {stopped, run aborted} and synthesizes NO on_event; a second close() is a no-op; after a yielded run_end it is a no-op; before any run_start it does nothing", async () => {
+  const log: unknown[] = [];
+  const runner = new HookRunner(ctx);
+  runner.add({
+    pre_run: (c) => { log.push(["pre_run", c.runId]); },
+    post_run: (c, r) => { log.push(["post_run", c.runId, r]); },
+    on_event: (_c, ev) => { log.push(["ev", ev.type]); },
+  });
+  const a = runner.observer({ cwd: "/w", sessionId: "s1" });
+  await a.close(); // nothing started: no post_run
+  await a.observe({ type: "run_start", runId: "A", sessionId: "s1", goal: "g" });
+  await a.observe({ type: "turn_start", turn: 1 });
+  await a.close(); // the consumer .return()ed the generator (MUTATION TARGET: drop the post_run → no boundary)
+  await a.close(); // idempotent (mutation: drop `ended` → a second post_run)
+  await runner.settle();
+  expect(log).toEqual([["ev", "run_start"], ["pre_run", "A"], ["ev", "turn_start"], ["post_run", "A", { status: "stopped", summary: "run aborted" }]]);
+  log.length = 0;
+  const b = runner.observer({ cwd: "/w", sessionId: "s1" });
+  await b.observe({ type: "run_start", runId: "B", sessionId: "s1", goal: "g" });
+  await b.observe({ type: "run_end", status: "done", summary: "ok" });
+  await b.close(); // a yielded run_end already fired post_run: nothing more
+  await runner.settle();
+  expect(log.filter((e) => (e as unknown[])[0] === "post_run")).toEqual([["post_run", "B", { status: "done", summary: "ok" }]]);
+  expect(log.filter((e) => (e as unknown[])[0] === "ev").length).toBe(2); // run_start + run_end only — never a synthesized event
+  expect(runner.warnings).toEqual([]);
+});
+
 test("observer: run_start → pre_run (runId captured), compaction → compaction hook, run_end → post_run; on_event taps every event in order", async () => {
   const log: unknown[] = [];
   const runner = new HookRunner(ctx);

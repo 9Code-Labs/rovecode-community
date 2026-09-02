@@ -30,6 +30,18 @@
  *  no set is attached and the runner's tap short-circuits (hooks.ts:272). otelDebug.constructed is the
  *  spy the off-path test pins ("exporter never constructed").
  *
+ *  Run boundaries (fix-wave 4, #39): post_run is the export trigger, and core/loop.ts fires it for a
+ *  run whose CONSUMER closed the generator (serve disconnect, ACP cancel, TUI Esc: hooks.ts
+ *  observer.close) with status "stopped" — cancelled runs export and release their RunState;
+ *  session_close still drains a leftover state (a generator dropped without .return()) as "stopped"
+ *  before its flush. Tool spans are keyed per issuing turn, so a call id a provider reuses across
+ *  turns (the SSE adapter's `tc<idx>` fallback, providers/stream.ts) is one span PER TURN.
+ *  `aion.tool_calls` counts ISSUED calls — dispatched (spans) plus never-dispatched (tool_call_failed
+ *  events) — the same count as `aion run --output json` toolCalls (cli/output.ts). A guard-stubbed
+ *  call (tool events without a pre_tool) carries aion.failure_reason=loop_guard. An endpoint that is
+ *  not an absolute http(s) URL (`http://`, `host:4318`) disables export with ONE note instead of a
+ *  5 s stall per run against host "v1".
+ *
  *  Sources (pi @ 853a80d, MIT — naming/shape reference, no code copied; header credit only):
  *  - packages/agent/src/harness/telemetry.ts:235-256 `pi.harness.run` (outcome attribute; status error
  *    when the run fails), :327-352 `pi.harness.turn` ("one assistant response and its tool batch",
@@ -44,11 +56,14 @@
  *  (memory.ts:203-218); aion ships the OTLP/HTTP exporter and wall-clock ns times. */
 
 import { randomBytes } from "node:crypto";
-import pkg from "../../package.json";
 import type { HookCtx, HookSet, HookToolCall, RunResult } from "../core/hooks.ts";
 import type { Message, RunEvent, ToolOutput } from "../core/types.ts";
 import { costUsd, type PricingRow } from "../core/usage.ts";
 import { ModelCatalog } from "../providers/catalog.ts";
+import { bool, dbl, encodeTraceRequest, int, str, type OtelSpan, type OtlpValue } from "./otlp.ts";
+
+// wire types + encoder live in otlp.ts (pure); re-exported so this stays the module consumers import
+export { encodeTraceRequest, unixNano, type OtelSpan, type OtlpKeyValue, type OtlpSpan, type OtlpTraceRequest, type OtlpValue } from "./otlp.ts";
 
 export const DEFAULT_EXPORT_TIMEOUT_MS = 5000;
 export const OTLP_TRACES_PATH = "/v1/traces";
@@ -75,44 +90,24 @@ export interface OtelOptions {
   /** export failures for direct consumers; absent → raised through the runner (header) */
   onWarning?: (note: string) => void;
 }
-export interface OtelHooks extends HookSet { flush(): Promise<void> }
-
-// ---------- wire types (OTLP/HTTP JSON, ExportTraceServiceRequest) ----------
-
-export type OtlpValue = { stringValue: string } | { intValue: string } | { doubleValue: number } | { boolValue: boolean };
-export interface OtlpKeyValue { key: string; value: OtlpValue }
-export interface OtlpSpan {
-  traceId: string; spanId: string; parentSpanId?: string; name: string; kind: number;
-  startTimeUnixNano: string; endTimeUnixNano: string;
-  attributes: OtlpKeyValue[];
-  events?: { name: string; timeUnixNano: string; attributes: OtlpKeyValue[] }[];
-  status: { code: number; message?: string };
-}
-export interface OtlpTraceRequest {
-  resourceSpans: {
-    resource: { attributes: OtlpKeyValue[] };
-    scopeSpans: { scope: { name: string; version?: string }; spans: OtlpSpan[] }[];
-  }[];
+export interface OtelHooks extends HookSet {
+  flush(): Promise<void>;
+  /** runs recorded but not yet exported — 0 once every run reached post_run (diagnostic seam) */
+  openRuns(): number;
 }
 
-/** one recorded span; mutable until its run is exported (events arrive out of order — header) */
-export interface OtelSpan {
-  traceId: string; spanId: string; parentSpanId?: string; name: string;
-  start: number; end?: number;
-  attrs: Map<string, OtlpValue>;
-  events: { name: string; time: number; attrs: Map<string, OtlpValue> }[];
-  status: { code: 0 | 1 | 2; message?: string };
-}
+// ---------- per-run state ----------
+
 interface RunState {
-  run: OtelSpan; spans: OtelSpan[]; turn?: OtelSpan; lastTurn?: OtelSpan; tools: Map<string, OtelSpan>;
+  run: OtelSpan; spans: OtelSpan[]; turn?: OtelSpan; lastTurn?: OtelSpan;
+  /** tool spans by `<issuing turn spanId>:<callId>` — a reused id is a new span in a new turn */
+  tools: Map<string, OtelSpan>;
+  /** issued calls: dispatched (spans) + never-dispatched (tool_call_failed events) */
+  calls: number;
   /** store length at pre_run (run totals) and at the last turn_end (per-turn usage) */
   baseline: number; seen: number;
 }
 
-const str = (v: string): OtlpValue => ({ stringValue: v });
-const int = (v: number): OtlpValue => ({ intValue: String(Math.trunc(v)) });
-const dbl = (v: number): OtlpValue => ({ doubleValue: v });
-const bool = (v: boolean): OtlpValue => ({ boolValue: v });
 const OK: OtelSpan["status"] = { code: 1 };
 const ERROR = (message: string): OtelSpan["status"] => ({ code: 2, message });
 
@@ -143,6 +138,12 @@ export function normalizeEndpoint(endpoint: string): string {
   return base.endsWith(OTLP_TRACES_PATH) ? base : base + OTLP_TRACES_PATH;
 }
 
+/** an absolute http(s) URL with a host — `http://` does not parse and `host:4318` parses host-less,
+ *  and both would normalize to `http:/v1/traces` (host "v1") and stall every export to the timeout */
+export function validEndpoint(endpoint: string): boolean {
+  try { const u = new URL(endpoint.trim()); return (u.protocol === "http:" || u.protocol === "https:") && u.hostname !== ""; } catch { return false; }
+}
+
 // ---------- the hook set ----------
 
 export function createOtelHooks(opts: OtelOptions): OtelHooks {
@@ -166,14 +167,20 @@ export function createOtelHooks(opts: OtelOptions): OtelHooks {
   };
   const end = (s: OtelSpan, status: OtelSpan["status"]): void => { if (s.end === undefined) { s.end = now(); s.status = status; } };
   const event = (s: OtelSpan, name: string, attrs: [string, OtlpValue][]): void => { s.events.push({ name, time: now(), attrs: new Map(attrs) }); };
-  /** the tool span for a call — opened by whichever of pre_tool / tool_execution_start arrives first
-   *  (the loop-guard stub path emits the events without ever reaching pre_tool) */
-  const openTool = (st: RunState, callId: string, tool?: string): OtelSpan => {
-    let s = st.tools.get(callId);
+  /** a call's parent = the turn that issued it (turn_end precedes the turn's tool events — header) */
+  const issuer = (st: RunState): OtelSpan => st.lastTurn ?? st.run;
+  const toolKey = (st: RunState, callId: string): string => `${issuer(st).spanId}:${callId}`;
+  /** the tool span for a call — opened by whichever of pre_tool / tool_execution_start arrives first;
+   *  a span the START event has to open never saw pre_tool: the loop-guard stub path (tools.ts:88-93) */
+  const openTool = (st: RunState, callId: string, tool?: string, fromStart = false): OtelSpan => {
+    const key = toolKey(st, callId);
+    let s = st.tools.get(key);
     if (!s) {
-      s = attach(st, "aion.tool", st.lastTurn ?? st.run);
+      s = attach(st, "aion.tool", issuer(st));
       s.attrs.set("aion.call_id", str(callId));
-      st.tools.set(callId, s);
+      if (fromStart) s.attrs.set("aion.failure_reason", str("loop_guard"));
+      st.tools.set(key, s);
+      st.calls++;
     }
     if (tool !== undefined && !s.attrs.has("aion.tool")) s.attrs.set("aion.tool", str(tool));
     return s;
@@ -207,11 +214,13 @@ export function createOtelHooks(opts: OtelOptions): OtelHooks {
   };
 
   // --- export ---
-  const fail = (reason: string): void => {
-    const note = `OTLP export to ${url} failed: ${reason}`;
+  const warn = (note: string): void => {
     if (opts.onWarning) { opts.onWarning(note); return; }
     failed++; lastFailure = note;
   };
+  const fail = (reason: string): void => warn(`OTLP export to ${url} failed: ${reason}`);
+  const usable = validEndpoint(opts.endpoint); // ONE note at construction (raised by the first lifecycle hook), then no POSTs
+  if (!usable) warn(`AION_OTEL_ENDPOINT ${JSON.stringify(opts.endpoint)} is not an absolute http(s) URL — OTel export disabled`);
   /** deferred failure → thrown from a lifecycle hook → one runner warning (header); no-op with onWarning */
   const raise = (): void => {
     if (failed === 0) return;
@@ -219,6 +228,7 @@ export function createOtelHooks(opts: OtelOptions): OtelHooks {
     throw new Error(n === 1 ? lastFailure : `${lastFailure} (${n} exports failed)`);
   };
   const post = async (body: string): Promise<void> => {
+    if (!usable) return;
     const ac = new AbortController();
     try {
       const res = await withTimeout(fetchFn(url, { method: "POST", headers, body, signal: ac.signal }), timeoutMs, ac);
@@ -229,15 +239,29 @@ export function createOtelHooks(opts: OtelOptions): OtelHooks {
   };
   const track = (p: Promise<void>): void => { pending.add(p); void p.then(() => { pending.delete(p); }); };
   const flush = async (): Promise<void> => { while (pending.size > 0) await Promise.all([...pending]); };
+  /** the run's end: open turn/tool spans close here (status UNSET), totals + status land on the run
+   *  span, ONE POST — from post_run, or from session_close for a state no post_run ever released */
+  const finish = (st: RunState, status: RunResult["status"]): void => {
+    const t = now();
+    for (const s of st.spans) if (s.end === undefined && s !== st.run) s.end = t;
+    st.run.attrs.set("aion.status", str(status));
+    st.run.attrs.set("aion.turns", int(st.spans.filter((s) => s.name === "aion.turn").length));
+    st.run.attrs.set("aion.tool_calls", int(st.calls));
+    account(st.run, opts.messages().slice(st.baseline).filter((m) => m.role === "assistant"));
+    st.run.end = t;
+    st.run.status = status === "done" || status === "stopped" ? OK : ERROR(status); // budget/error did not complete
+    track(post(JSON.stringify(encodeTraceRequest(service, st.spans))));
+  };
 
   return {
     flush,
+    openRuns: () => runs.size,
     pre_run(ctx) {
       if (ctx.runId === undefined) return;
       const run: OtelSpan = { traceId: hex(16), spanId: hex(8), name: "aion.run", start: now(), attrs: new Map(), events: [], status: { code: 0 } };
       run.attrs.set("aion.session_id", str(ctx.sessionId)); run.attrs.set("aion.run_id", str(ctx.runId));
       const len = opts.messages().length;
-      runs.set(ctx.runId, { run, spans: [run], tools: new Map(), baseline: len, seen: len });
+      runs.set(ctx.runId, { run, spans: [run], tools: new Map(), calls: 0, baseline: len, seen: len });
       raise();
     },
     on_event(ctx, ev: RunEvent) {
@@ -261,7 +285,7 @@ export function createOtelHooks(opts: OtelOptions): OtelHooks {
           st.turn = undefined;
           break;
         }
-        case "tool_execution_start": openTool(st, ev.callId, ev.tool); break;
+        case "tool_execution_start": openTool(st, ev.callId, ev.tool, true); break;
         case "tool_execution_end": {
           const s = openTool(st, ev.callId);
           s.attrs.set("aion.duration_ms", int(ev.durationMs)); // the dispatcher's own measure (tools.ts:170)
@@ -269,9 +293,9 @@ export function createOtelHooks(opts: OtelOptions): OtelHooks {
           break;
         }
         case "tool_call_failed": {
-          const s = st.tools.get(ev.callId);
+          const s = st.tools.get(toolKey(st, ev.callId));
           if (s) { s.attrs.set("aion.ok", bool(false)); s.attrs.set("aion.failure_reason", str(ev.reason)); end(s, ERROR(ev.reason)); }
-          else event(st.turn ?? st.lastTurn ?? st.run, "aion.tool_call_failed", [["aion.call_id", str(ev.callId)], ["aion.failure_reason", str(ev.reason)]]);
+          else { st.calls++; event(st.turn ?? st.lastTurn ?? st.run, "aion.tool_call_failed", [["aion.call_id", str(ev.callId)], ["aion.failure_reason", str(ev.reason)]]); }
           break;
         }
         case "compaction":
@@ -289,47 +313,15 @@ export function createOtelHooks(opts: OtelOptions): OtelHooks {
       const st = stateOf(ctx);
       if (!st) return;
       runs.delete(ctx.runId!);
-      const t = now();
-      for (const s of st.spans) if (s.end === undefined && s !== st.run) s.end = t; // unfinished turn/tool: closed here, status UNSET
-      st.run.attrs.set("aion.status", str(result.status));
-      st.run.attrs.set("aion.turns", int(st.spans.filter((s) => s.name === "aion.turn").length));
-      st.run.attrs.set("aion.tool_calls", int(st.tools.size));
-      account(st.run, opts.messages().slice(st.baseline).filter((m) => m.role === "assistant"));
-      st.run.end = t;
-      st.run.status = result.status === "done" || result.status === "stopped" ? OK : ERROR(result.status); // budget/error did not complete
-      track(post(JSON.stringify(encodeTraceRequest(service, st.spans))));
+      finish(st, result.status);
     },
-    async session_close() { await flush(); raise(); },
+    async session_close() {
+      // belt and braces (#39 MED-1): a run whose generator was dropped without .return() never reached
+      // post_run — export what it recorded as "stopped" (open spans close UNSET) instead of leaking it
+      for (const [id, st] of runs) { runs.delete(id); finish(st, "stopped"); }
+      await flush(); raise();
+    },
   };
-}
-
-// ---------- encoding ----------
-
-/** OTLP/JSON: ids hex (already), fixed64 times + int64 attrs as decimal strings, enums as integers */
-export function encodeTraceRequest(serviceName: string, spans: readonly OtelSpan[]): OtlpTraceRequest {
-  const kv = (m: Iterable<[string, OtlpValue]>): OtlpKeyValue[] => [...m].map(([key, value]) => ({ key, value }));
-  return {
-    resourceSpans: [{
-      resource: { attributes: kv([["service.name", str(serviceName)], ["service.version", str(pkg.version)]]) },
-      scopeSpans: [{
-        scope: { name: "aion", version: pkg.version },
-        spans: spans.map((s) => ({
-          traceId: s.traceId, spanId: s.spanId, ...(s.parentSpanId ? { parentSpanId: s.parentSpanId } : {}),
-          name: s.name, kind: 1, // SPAN_KIND_INTERNAL
-          startTimeUnixNano: unixNano(s.start), endTimeUnixNano: unixNano(s.end ?? s.start),
-          attributes: kv(s.attrs),
-          ...(s.events.length > 0 ? { events: s.events.map((e) => ({ name: e.name, timeUnixNano: unixNano(e.time), attributes: kv(e.attrs) })) } : {}),
-          status: s.status.message !== undefined ? { code: s.status.code, message: s.status.message } : { code: s.status.code },
-        })),
-      }],
-    }],
-  };
-}
-
-/** ms since epoch (fractions allowed) → exact unix-nano decimal string (no float rounding at 1e18) */
-export function unixNano(ms: number): string {
-  const whole = Math.floor(ms);
-  return (BigInt(whole) * 1_000_000n + BigInt(Math.round((ms - whole) * 1e6))).toString();
 }
 
 // ---------- helpers ----------

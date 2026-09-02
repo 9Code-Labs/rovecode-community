@@ -302,7 +302,7 @@ export class TaskManager {
     t.info.status = "running"; t.info.startedAt = Date.now();
     this.running++;
     this.emit(t);
-    // the child's registry learns its task id (ChildContext) so a nested `task result`
+    // the child's registry learns its task id (ChildContext) so a nested `task_status result`
     // can identify its caller for slot lending
     const deps: ChildRunnerDeps = {
       ...t.deps,

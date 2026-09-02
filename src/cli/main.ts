@@ -24,7 +24,7 @@ import { runRepl } from "./repl.ts";
 import { runTui } from "../tui/app.ts";
 import { expandSlashPrompt } from "../tui/commands.ts";
 import { parseCli } from "./dispatch.ts";
-import { buildRunDeps, createOutputSink, parseOutputMode, runPromptWords } from "./output.ts";
+import { buildRunDeps, createOutputSink, guardStdout, parseOutputMode, runPromptWords } from "./output.ts";
 import { join } from "node:path";
 import pkg from "../../package.json";
 
@@ -69,6 +69,12 @@ async function cmdRun(prompt: string): Promise<void> {
   // + meta.json + memory dir, skills scan, sandbox probe, MCP children) and a usage error is a bare
   // process.exit(2) — parsing after the boot left a stray session dir behind every `--output xml`.
   const mode = parseOutputMode(process.argv);
+  // port #35 (fix-wave 4 MED-C): json/ndjson stdout is guarded from HERE, before bootRuntime — its
+  // session_open hooks (and MCP/sandbox startup) may print, and a guard installed by the sink after
+  // the boot left those lines on fd 1. The raw writer is bound FIRST and handed to the sink as its
+  // stdout: not process.stdout, so the sink installs no second guard; this one holds until exit
+  const rawOut = { write: process.stdout.write.bind(process.stdout) };
+  if (mode !== "text") guardStdout(process.stderr);
   const yolo = process.argv.includes("--yolo") || process.env.AION_YOLO === "1";
   // One-shot runs build the SAME agent as repl/tui (createRuntime: tools incl.
   // MCP/recall/eval-cell, guardrails, config chunk, execpolicy approver seam).
@@ -99,9 +105,10 @@ async function cmdRun(prompt: string): Promise<void> {
     return process.exit(code);
   };
   // port #35: --output text|json|ndjson — the sink owns every stdout byte of the run (text mode is
-  // byte-identical to the pre-port console.log lines; json/ndjson guard stdout and send human
-  // progress to stderr) and its signal aborts on SIGINT, so Ctrl-C ends the run "stopped" (exit 130)
-  const sink = createOutputSink(mode, { stdout: process.stdout, stderr: process.stderr, model, messages: () => rt.store.messages() });
+  // byte-identical to the pre-port console.log lines; json/ndjson write through the raw writer bound
+  // above the guard and send human progress to stderr) and its signal aborts on SIGINT, so Ctrl-C
+  // ends the run "stopped" (exit 130)
+  const sink = createOutputSink(mode, { stdout: mode === "text" ? process.stdout : rawOut, stderr: process.stderr, model, messages: () => rt.store.messages() });
   for await (const ev of agentLoop(rt.buildDef(model), prompt, {}, rt.buildCfg(yolo), buildRunDeps(rt, stream, sink), rt.steering)) { // port #26: runtime queue -> task notes reach the run; cwd threaded like every other surface
     if (ev.type === "turn_start") resetTurnFailureCount();
     sink.onEvent(ev);

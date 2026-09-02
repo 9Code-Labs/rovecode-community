@@ -6,7 +6,7 @@
 
 import { test, expect } from "bun:test";
 import {
-  createOtelHooks, otelOptionsFromEnv, parseOtelHeaders, normalizeEndpoint, unixNano, otelDebug, DEFAULT_EXPORT_TIMEOUT_MS,
+  createOtelHooks, otelOptionsFromEnv, parseOtelHeaders, normalizeEndpoint, validEndpoint, unixNano, otelDebug, DEFAULT_EXPORT_TIMEOUT_MS,
   type OtelHooks, type OtlpTraceRequest, type OtlpSpan, type PricingSource,
 } from "../../src/telemetry/otel.ts";
 import { HookRunner, type HookCtx } from "../../src/core/hooks.ts";
@@ -168,7 +168,7 @@ test("attributes: run = status/session_id/run_id/turns/tool_calls/tokens summed 
   expect(tool.events).toBeUndefined(); // no events → field omitted
 });
 
-test("outcomes: a failed tool → ERROR + ok false; a hook-denied call (tool_call_failed after pre_tool) → ERROR with the reason; a call that never reached pre_tool → an aion.tool_call_failed EVENT on the issuing turn; compaction → an aion.compaction event; an 'error' turn and an 'error'/'budget' run are ERROR, 'stopped' is OK; a guard-stubbed call (events only) still gets a span", async () => {
+test("outcomes: a failed tool → ERROR + ok false; a hook-denied call (tool_call_failed after pre_tool) → ERROR with the reason; a call that never reached pre_tool → an aion.tool_call_failed EVENT on the issuing turn; compaction → an aion.compaction event; an 'error' turn and an 'error'/'budget' run are ERROR, 'stopped' is OK; a guard-stubbed call (events only) still gets a span, tagged loop_guard; aion.tool_calls counts ISSUED calls (3 spans + the never-dispatched c3)", async () => {
   const { set, ff, msgs } = make();
   const c = ctx("r1");
   await set.pre_run!(c);
@@ -197,6 +197,8 @@ test("outcomes: a failed tool → ERROR + ok false; a hook-denied call (tool_cal
   expect(c2.status).toEqual({ code: 2, message: "permission_denied" });
   expect(attr(c2, "aion.ok")).toBe(false); expect(attr(c2, "aion.failure_reason")).toBe("permission_denied"); expect(attr(c2, "aion.tool")).toBe("bash");
   expect(c4.parentSpanId).toBe(t1.spanId); expect(attr(c4, "aion.tool")).toBe("probe"); expect(attr(c4, "aion.ok")).toBe(false); expect(attr(c4, "aion.duration_ms")).toBe("0");
+  expect(attr(c4, "aion.failure_reason")).toBe("loop_guard"); // opened by tool_execution_start with no pre_tool: the stub path (mutation: drop the tag → undefined)
+  expect(attr(c1, "aion.failure_reason")).toBeUndefined(); // a dispatched call (pre_tool opened it) is never tagged
   for (const s of [c1, c2, c4]) expect(s.parentSpanId).toBe(t1.spanId);
   expect(t1.events!.map((e) => e.name)).toEqual(["aion.compaction", "aion.tool_call_failed"]);
   expect(t1.events![0]!.attributes).toEqual([
@@ -207,7 +209,8 @@ test("outcomes: a failed tool → ERROR + ok false; a hook-denied call (tool_cal
   for (const e of t1.events!) expect(e.timeUnixNano).toMatch(/^\d{19}$/);
   expect(t2.status).toEqual({ code: 2, message: "error" });
   expect(run.status).toEqual({ code: 2, message: "error" });
-  expect(attr(run, "aion.status")).toBe("error"); expect(attr(run, "aion.tool_calls")).toBe("3"); expect(attr(run, "aion.turns")).toBe("2");
+  expect(attr(run, "aion.status")).toBe("error"); expect(attr(run, "aion.turns")).toBe("2");
+  expect(attr(run, "aion.tool_calls")).toBe("4"); // c1 + c2 + c4 (spans) + c3 (never dispatched: event) — the cli/output.ts toolCalls count (mutation: spans only → "3")
   // run-level status mapping: done/stopped → OK, budget → ERROR
   const m2 = make();
   await minimalRun(m2.set, ctx("a"), "stopped"); await minimalRun(m2.set, ctx("b"), "budget"); await minimalRun(m2.set, ctx("d"), "done");
@@ -428,9 +431,116 @@ test("through a HookRunner without onWarning: an export failure is raised from t
   expect(runner2.warnings.length).toBe(1);
 });
 
-test("otelDebug.constructed counts constructions (the off-path spy); the set exposes exactly the hooks it needs plus flush", () => {
+test("otelDebug.constructed counts constructions (the off-path spy); the set exposes exactly the hooks it needs plus flush/openRuns", () => {
   const before = otelDebug.constructed;
   const { set } = make();
   expect(otelDebug.constructed).toBe(before + 1);
-  expect(Object.keys(set).sort()).toEqual(["flush", "on_event", "post_run", "post_tool", "pre_run", "pre_tool", "session_close"]);
+  expect(Object.keys(set).sort()).toEqual(["flush", "on_event", "openRuns", "post_run", "post_tool", "pre_run", "pre_tool", "session_close"]);
+});
+
+// ---------- fix-wave 4 (#39): cancelled runs, leftover drain, reused call ids, endpoint validation ----------
+
+test("consumer-closed run (observer.close — the loop's teardown seam): post_run fires ONCE as stopped → exactly one export, aion.status stopped, the open turn closed UNSET, no RunState left; a second close() is a no-op; after a yielded run_end close() adds nothing; before any run_start it does nothing", async () => {
+  const { set, ff, warnings } = make();
+  const runner = new HookRunner({ cwd: "/w", sessionId: "s1" }, { timeoutMs: 2000 });
+  runner.add(set, "otel");
+  const a = runner.observer({ cwd: "/w", sessionId: "s1" });
+  await a.observe({ type: "run_start", runId: "X", sessionId: "s1", goal: "g" });
+  await a.observe({ type: "turn_start", turn: 1 });
+  expect(set.openRuns()).toBe(1);
+  await a.close(); // the consumer .return()ed the generator mid-turn (TUI Esc / ACP cancel / serve disconnect)
+  await a.close(); // idempotent
+  await set.flush();
+  expect(ff.posts.length).toBe(1); // MUTATION TARGET: drop the post_run in close() → 0 (the trace is never exported)
+  const [run, turn] = spansOf(ff.posts[0]!.body) as [OtlpSpan, OtlpSpan];
+  expect(attr(run, "aion.run_id")).toBe("X");
+  expect(attr(run, "aion.status")).toBe("stopped"); expect(run.status).toEqual({ code: 1 });
+  expect(turn.status).toEqual({ code: 0 }); expect(turn.endTimeUnixNano).toBe(run.endTimeUnixNano);
+  expect(set.openRuns()).toBe(0); // the RunState was released (mutation: leave the state → 1)
+  const b = runner.observer({ cwd: "/w", sessionId: "s1" });
+  await b.observe({ type: "run_start", runId: "Y", sessionId: "s1", goal: "g" });
+  await b.observe({ type: "run_end", status: "done", summary: "ok" });
+  await b.close(); // a yielded run_end already fired post_run
+  await set.flush();
+  expect(ff.posts.length).toBe(2);
+  expect(attr(spansOf(ff.posts[1]!.body)[0]!, "aion.status")).toBe("done");
+  const c = runner.observer({ cwd: "/w", sessionId: "s1" });
+  await c.close(); // never started: no pre_run → no post_run
+  await set.flush();
+  expect(ff.posts.length).toBe(2);
+  expect(set.openRuns()).toBe(0);
+  expect(warnings).toEqual([]); expect(runner.warnings).toEqual([]);
+});
+
+test("leftover state at session_close (a generator dropped without .return()): the run is exported as stopped with its open spans closed UNSET, then flushed; openRuns returns to 0; a completed run leaves nothing to drain", async () => {
+  const { set, ff, msgs } = make();
+  const c = ctx("leak");
+  await set.pre_run!(c);
+  await set.on_event!(c, { type: "turn_start", turn: 1 });
+  await set.pre_tool!(c, call);
+  expect(set.openRuns()).toBe(1);
+  await set.session_close!(c);
+  expect(set.openRuns()).toBe(0); // MUTATION TARGET: drop the drain → 1 and no POST
+  expect(ff.posts.length).toBe(1);
+  const [run, turn, tool] = spansOf(ff.posts[0]!.body) as [OtlpSpan, OtlpSpan, OtlpSpan];
+  expect(attr(run, "aion.run_id")).toBe("leak");
+  expect(attr(run, "aion.status")).toBe("stopped"); expect(run.status).toEqual({ code: 1 });
+  expect(attr(run, "aion.tool_calls")).toBe("1");
+  for (const s of [turn, tool]) { expect(s.status).toEqual({ code: 0 }); expect(s.endTimeUnixNano).toBe(run.endTimeUnixNano); }
+  await standardRun(set, ctx("fine"), msgs);
+  expect(set.openRuns()).toBe(0);
+  await set.session_close!(ctx("fine"));
+  await set.flush();
+  expect(ff.posts.length).toBe(2); // the completed run exported once at post_run; the drain added nothing
+});
+
+test("a call id reused across turns (the SSE adapter's `tc<idx>` fallback) is one tool span PER TURN under its issuing turn, never a merge; a tool_call_failed for the reused id lands on the CURRENT turn's span; tool_calls counts every issue", async () => {
+  const { set, ff, msgs } = make();
+  const c = ctx("reuse");
+  await set.pre_run!(c);
+  for (let t = 1; t <= 3; t++) {
+    await set.on_event!(c, { type: "turn_start", turn: t });
+    msgs.push(assistant({ input: 1, output: 1 }, PM));
+    await set.on_event!(c, { type: "turn_end", turn: t, stopReason: "tool_use" });
+    await set.pre_tool!(c, { id: "same", tool: "probe", args: {} });
+    await set.post_tool!(c, { id: "same", tool: "probe", args: {} }, { ok: true, output: `t${t}` });
+    await set.on_event!(c, { type: "tool_execution_start", callId: "same", tool: "probe", args: {} });
+    await set.on_event!(c, { type: "tool_execution_end", callId: "same", ok: true, output: `t${t}`, durationMs: t });
+  }
+  await set.on_event!(c, { type: "turn_start", turn: 4 }); // turn 4 reuses the id and a hook denies it after pre_tool
+  await set.on_event!(c, { type: "turn_end", turn: 4, stopReason: "tool_use" });
+  await set.pre_tool!(c, { id: "same", tool: "probe", args: {} });
+  await set.on_event!(c, { type: "tool_call_failed", callId: "same", reason: "permission_denied", detail: "no" });
+  await set.post_run!(c, { status: "done", summary: "" });
+  await set.flush();
+  const spans = spansOf(ff.posts[0]!.body);
+  const turns = named(spans, "aion.turn"), tools = named(spans, "aion.tool");
+  expect(tools.length).toBe(4); // MUTATION TARGET: key by callId alone → 1 span carrying turn 1's data
+  expect(tools.map((s) => s.parentSpanId)).toEqual(turns.map((t) => t.spanId));
+  expect(tools.map((s) => attr(s, "aion.call_id"))).toEqual(["same", "same", "same", "same"]);
+  expect(tools.slice(0, 3).map((s) => attr(s, "aion.duration_ms"))).toEqual(["1", "2", "3"]);
+  for (const s of tools.slice(0, 3)) { expect(s.status).toEqual({ code: 1 }); expect(attr(s, "aion.failure_reason")).toBeUndefined(); }
+  expect(tools[3]!.status).toEqual({ code: 2, message: "permission_denied" }); // turn 4's span, not turn 1's
+  expect(attr(spans[0]!, "aion.tool_calls")).toBe("4");
+});
+
+test("endpoint validation: `http://` (unparseable) and `host:4318` (no scheme → no host) disable export with ONE note at construction — no POST is ever attempted (no 5 s stall against host `v1`); through a HookRunner the note is raised by the first lifecycle hook, once; valid shapes stay valid", async () => {
+  for (const good of ["http://h:4318", " https://otlp.example.com/api/otlp ", "http://127.0.0.1:4318/v1/traces"]) expect(validEndpoint(good)).toBe(true);
+  for (const bad of ["http://", "localhost:4318", "4318", "ftp://h:1", "//h:1", ""]) expect(validEndpoint(bad)).toBe(false);
+  const direct = make({ endpoint: "http://" });
+  expect(direct.warnings).toEqual(['AION_OTEL_ENDPOINT "http://" is not an absolute http(s) URL — OTel export disabled']);
+  const t0 = Date.now();
+  await minimalRun(direct.set, ctx("r1")); await minimalRun(direct.set, ctx("r2"));
+  await direct.set.flush();
+  expect(Date.now() - t0).toBeLessThan(1000);
+  expect(direct.ff.posts.length).toBe(0); // MUTATION TARGET: drop the `usable` gate in post() → 2 POSTs to http:/v1/traces
+  expect(direct.warnings.length).toBe(1); // once, not per run
+  const ff = fakeFetch();
+  const runner = new HookRunner({ cwd: "/w", sessionId: "s" }, { timeoutMs: 2000 });
+  runner.add(createOtelHooks({ endpoint: "localhost:4318", fetch: ff.fn, messages: () => [] }), "otel");
+  await runner.run("pre_run", ctx("a")); await runner.run("post_run", ctx("a"), { status: "done", summary: "" });
+  await runner.run("pre_run", ctx("b")); await runner.run("post_run", ctx("b"), { status: "done", summary: "" });
+  await runner.close();
+  expect(runner.warnings).toEqual(['otel: pre_run hook threw: AION_OTEL_ENDPOINT "localhost:4318" is not an absolute http(s) URL — OTel export disabled — ignored, run continues']);
+  expect(ff.posts.length).toBe(0);
 });

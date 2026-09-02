@@ -9,6 +9,8 @@ import { test, expect } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+import { SessionStore } from "../../src/core/session.ts";
 import {
   createReflectionHooks, reflectionEnabled, reflectionMax, diagnosticsOf,
   DEFAULT_REFLECTION_MAX, REFLECTION_PREFIX, REFLECTION_ERROR_CHARS, REFLECTION_DIAG_CHARS,
@@ -159,6 +161,64 @@ test("pre_run resets the per-run counter (and a fresh runId starts fresh); post_
   // no runId (bare dispatch) still works
   r.post("edit", fail("Edit rejected: E"), { cwd: "/w", sessionId: "s1" });
   expect(r.nudges.length).toBe(6);
+});
+
+test("ownership (#26 MED-A): with `owns`, a run the set does not own gets no nudge and its pre_run/post_run sweep nothing (the owner's pending nudge survives a foreign run boundary); owned runs behave as before and keep their own cap", () => {
+  const steering = new SteeringQueue();
+  const nudges: string[] = [];
+  const set = createReflectionHooks({ steering, onNudge: (t) => nudges.push(t), owns: (c) => c.sessionId === "parent" });
+  const child: HookCtx = { cwd: "/w", sessionId: "child-store", runId: "child-run" };
+  const parent: HookCtx = { cwd: "/w", sessionId: "parent", runId: "parent-run" };
+  set.pre_run!(child);
+  set.post_tool!(child, call("edit"), fail("Edit rejected: file not found: /w/does-not-exist.txt — check the path"));
+  expect(nudges).toEqual([]); expect(steering.size).toBe(0); // MUTATION TARGET: drop the owns check in post_tool → 1
+  set.post_tool!(parent, call("edit"), fail(REJECTED));
+  expect(nudges.length).toBe(1); expect(steering.size).toBe(1);
+  set.post_run!(child, { status: "done", summary: "" }); // a child's run boundary must not sweep the parent's pending nudge
+  set.pre_run!({ ...child, runId: "child-run-2" });
+  expect(steering.size).toBe(1); // MUTATION TARGET: drop the owns check in post_run / pre_run → 0
+  set.post_run!(parent, { status: "budget", summary: "" });
+  expect(steering.size).toBe(0); // the owner's own boundary still sweeps
+  set.pre_run!({ ...parent, runId: "p2" });
+  for (const t of ["A", "B", "C"]) set.post_tool!({ ...parent, runId: "p2" }, call("edit"), fail(`Edit rejected: ${t}`));
+  expect(nudges.length).toBe(3); // the cap (2) applies per owned run; the child's failures consumed nothing
+  const dflt = createReflectionHooks({ steering: new SteeringQueue(), onNudge: (t) => nudges.push(t) }); // no owns: every run is served
+  dflt.post_tool!(child, call("edit"), fail("Edit rejected: x"));
+  expect(nudges.length).toBe(4);
+});
+
+test("runtime door (#26 MED-A): the built-in set owns the ACTIVE session store's runs only — a child-shaped ctx (another store id, the same hooks) lands nothing and sweeps nothing; setSessionStore re-points ownership (TUI session switch)", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "aion-refl-own-"));
+  const home = mkdtempSync(join(tmpdir(), "aion-refl-ownhome-"));
+  const savedHome = process.env.AION_HOME, savedRefl = process.env.AION_REFLECTION;
+  process.env.AION_HOME = home;
+  delete process.env.AION_REFLECTION;
+  try {
+    const rt = createRuntime({ cwd, stream: null });
+    await rt.hooks.ready;
+    await rt.hooks.run("post_tool", { cwd, sessionId: `child-${randomUUID()}`, runId: "c1" }, call("edit"), fail(REJECTED));
+    expect(rt.steering.size).toBe(0); // MUTATION TARGET: `owns` not wired in runtime.ts → 1
+    await rt.hooks.run("post_tool", { cwd, sessionId: rt.sessionId, runId: "r1" }, call("edit"), fail(REJECTED));
+    expect(rt.steering.size).toBe(1);
+    await rt.hooks.run("post_run", { cwd, sessionId: `child-${randomUUID()}`, runId: "c1" }, { status: "done", summary: "" });
+    expect(rt.steering.size).toBe(1); // a child's boundary sweeps nothing
+    await rt.hooks.run("post_run", { cwd, sessionId: rt.sessionId, runId: "r1" }, { status: "budget", summary: "" });
+    expect(rt.steering.size).toBe(0);
+    const other = new SessionStore(join(cwd, ".aion", "sessions"), randomUUID());
+    rt.setSessionStore(other);
+    await rt.hooks.run("post_tool", { cwd, sessionId: other.id, runId: "r2" }, call("edit"), fail(REJECTED));
+    expect(rt.steering.size).toBe(1); // the switched-to session owns the queue now…
+    await rt.hooks.run("post_tool", { cwd, sessionId: rt.sessionId, runId: "r3" }, call("edit"), fail("Edit rejected: other"));
+    expect(rt.steering.size).toBe(1); // …and the boot session no longer does
+    expect(rt.hooks.warnings).toEqual([]);
+    await rt.hooks.close();
+    await rt.mcp?.close();
+  } finally {
+    if (savedHome === undefined) delete process.env.AION_HOME; else process.env.AION_HOME = savedHome;
+    if (savedRefl === undefined) delete process.env.AION_REFLECTION; else process.env.AION_REFLECTION = savedRefl;
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test("through a HookRunner: the set runs as a post_tool hook with no decision and no warnings; pre_run/post_run are void", async () => {

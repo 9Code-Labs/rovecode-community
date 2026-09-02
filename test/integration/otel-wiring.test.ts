@@ -11,7 +11,9 @@ import { mockStream, textTurn, toolTurn } from "../../src/providers/stream.ts";
 import { ModelCatalog } from "../../src/providers/catalog.ts";
 import { costUsd } from "../../src/core/usage.ts";
 import { otelDebug, type OtlpSpan, type OtlpTraceRequest } from "../../src/telemetry/otel.ts";
-import type { ModelRef, RunEvent, Tool } from "../../src/core/types.ts";
+import { startServer } from "../../src/server/http.ts";
+import { createOutputSink, type RunResult } from "../../src/cli/output.ts";
+import type { AssistantTurn, Message, ModelRef, RunEvent, StreamEvent, StreamFn, StreamOptions, Tool } from "../../src/core/types.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -74,6 +76,21 @@ async function scriptedRun(rt: Runtime, model: ModelRef): Promise<RunEvent[]> {
   return events;
 }
 const attr = (s: OtlpSpan, key: string): unknown => { const a = s.attributes.find((x) => x.key === key); return a ? Object.values(a.value)[0] : undefined; };
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+async function until(pred: () => boolean, ms: number, what: string): Promise<void> {
+  const t0 = Date.now();
+  while (!pred()) { if (Date.now() - t0 > ms) throw new Error(`${what}: not true within ${ms}ms`); await sleep(15); }
+}
+const runSpanOf = (body: OtlpTraceRequest): OtlpSpan => body.resourceSpans[0]!.scopeSpans[0]!.spans.find((s) => s.name === "aion.run")!;
+/** parks until ITS OWN ctx.signal aborts — a consumer that merely .return()s the generator releases it through the loop-owned controller */
+const parked: Tool = {
+  schema: { name: "parked", description: "parks until aborted", args: { type: "object" } }, kind: "custom",
+  async execute(_a, ctx) { await new Promise<void>((r) => { if (ctx.signal.aborted) r(); else ctx.signal.addEventListener("abort", () => r(), { once: true }); }); return { ok: true, output: "released" }; },
+};
+/** every run: turn 1 calls `parked`, the turn after a tool result is text (goal-agnostic, so runs never share a script cursor) */
+const parkedScript: StreamFn = async function* (_m: ModelRef, messages: Message[]): AsyncGenerator<StreamEvent> {
+  yield { type: "turn", turn: messages.at(-1)?.role === "tool" ? textTurn("late") : toolTurn([{ id: `p${messages.length}`, tool: "parked", args: {} }]) };
+};
 
 test("ON: AION_OTEL_ENDPOINT set → the runtime constructs the exporter once and taps on_event; a real run with a tool call reaches the receiver as ONE request (headers ride along) whose tree matches the run (1 run, N turns, 1 tool), token attrs equal the store's sums, cost matches costUsd() for the priced origin; close() flushes; no warnings", async () => {
   const r = rig((rx) => `${rx.url}/`, "authorization=Bearer x=y, x-team=aion");
@@ -156,6 +173,123 @@ test("OFF: AION_OTEL_ENDPOINT unset → the exporter is never constructed (modul
     expect(r.rx.got.length).toBe(0);
     expect(otelDebug.constructed).toBe(before);
     expect(r.rt.hooks.warnings).toEqual([]);
+  } finally { await teardown(r); }
+}, T);
+
+// ---------- fix-wave 4 (#39 MED-1): cancelled runs export; RunState is released ----------
+
+test("cancelled runs export (real runtime + agentLoop): (1) abort + gen.return() at the tool (ACP cancel / TUI Esc shape) → ONE trace, status stopped; (2) abort-only (cmdRun) → ONE trace, unchanged; (3) a bare .return() with no abort → ONE trace, stopped; close() drains nothing more — three runs, three traces", async () => {
+  const r = rig((rx) => rx.url);
+  try {
+    r.rt = await bootRuntime({ cwd: r.cwd, sessionId: "otel-cancel", stream: parkedScript });
+    r.rt.registry.register(parked);
+    const rt = r.rt;
+    const def = rt.buildDef({ provider: "mock", model: "default" }), cfg = rt.buildCfg(true);
+    const deps = (signal?: AbortSignal) => ({ stream: rt.stream!, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, cwd: rt.cwd, hooks: rt.hooks, ...(signal ? { signal } : {}) });
+    const ids: string[] = [];
+    // (1) the surface aborts its controller, then closes the generator — no run_end is ever yielded
+    const ac1 = new AbortController();
+    const gen1 = agentLoop(def, "cancel-1", {}, cfg, deps(ac1.signal), rt.steering);
+    const seen1: string[] = [];
+    for await (const ev of gen1) {
+      seen1.push(ev.type);
+      if (ev.type === "run_start") ids.push(ev.runId);
+      if (ev.type === "tool_execution_start") { ac1.abort(); await gen1.return(undefined as never); }
+    }
+    expect(seen1).not.toContain("run_end");
+    await until(() => r.rx.got.length >= 1, 6_000, "trace of the consumer-closed run"); // MUTATION TARGET: drop `await obs.close()` in agentLoop's finally → never exported
+    expect(attr(runSpanOf(r.rx.got[0]!.body), "aion.run_id")).toBe(ids[0]);
+    expect(attr(runSpanOf(r.rx.got[0]!.body), "aion.status")).toBe("stopped");
+    // (2) abort only: the loop yields run_end stopped itself (cmdRun's SIGINT path) — exactly one trace, as before
+    const ac2 = new AbortController();
+    const seen2: RunEvent[] = [];
+    for await (const ev of agentLoop(def, "cancel-2", {}, cfg, deps(ac2.signal), rt.steering)) { seen2.push(ev); if (ev.type === "run_start") ids.push(ev.runId); if (ev.type === "tool_execution_start") ac2.abort(); }
+    expect(seen2.at(-1)).toMatchObject({ type: "run_end", status: "stopped" });
+    await until(() => r.rx.got.length >= 2, 6_000, "trace of the aborted run");
+    expect(attr(runSpanOf(r.rx.got[1]!.body), "aion.run_id")).toBe(ids[1]);
+    expect(attr(runSpanOf(r.rx.got[1]!.body), "aion.status")).toBe("stopped");
+    // (3) a consumer that just leaves (break → .return()) with no controller of its own
+    const gen3 = agentLoop(def, "cancel-3", {}, cfg, deps(), rt.steering);
+    for await (const ev of gen3) { if (ev.type === "run_start") ids.push(ev.runId); if (ev.type === "tool_execution_start") break; }
+    await until(() => r.rx.got.length >= 3, 6_000, "trace of the bare-return run");
+    expect(attr(runSpanOf(r.rx.got[2]!.body), "aion.run_id")).toBe(ids[2]);
+    expect(attr(runSpanOf(r.rx.got[2]!.body), "aion.status")).toBe("stopped");
+    await rt.hooks.close(); // session_close: nothing left to drain — no fourth POST
+    expect(r.rx.got.length).toBe(3);
+    expect(new Set(r.rx.got.map((g) => attr(runSpanOf(g.body), "aion.run_id"))).size).toBe(3);
+    expect(rt.hooks.warnings).toEqual([]);
+  } finally { await teardown(r); }
+}, T);
+
+test("serve: a client that disconnects mid-run and a DELETE-cancelled run each export ONE trace with status stopped (real startServer, parked provider turn); stop() adds no duplicate", async () => {
+  let parkedTurns = 0;
+  const parkedProvider: StreamFn = async function* (_m: ModelRef, _msgs: Message[], opts?: StreamOptions): AsyncGenerator<StreamEvent> {
+    const sig = opts?.signal;
+    parkedTurns++;
+    if (sig && !sig.aborted) await new Promise<void>((res) => sig.addEventListener("abort", () => res(), { once: true }));
+    yield { type: "turn", turn: { parts: [], stopReason: "aborted", usage: { input: 0, output: 0 } } };
+  };
+  const r = rig((rx) => rx.url);
+  const srv = startServer({ port: 0, cwd: r.cwd, stream: parkedProvider });
+  try {
+    const session = async (): Promise<string> => ((await (await fetch(`${srv.url}/session`, { method: "POST" })).json()) as { id: string }).id;
+    const prompt = (id: string, signal?: AbortSignal) => fetch(`${srv.url}/session/${id}/prompt`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: "park" }), ...(signal ? { signal } : {}) });
+    // client disconnect: sseResponse.cancel() aborts the run and .return()s its generator — before this fix, no trace at all
+    const idA = await session();
+    const ac = new AbortController();
+    const resA = await prompt(idA, ac.signal);
+    expect(resA.status).toBe(200);
+    await until(() => parkedTurns >= 1, 4_000, "run A inside its provider turn");
+    ac.abort();
+    await until(() => r.rx.got.length >= 1, 6_000, "trace of the disconnected run"); // MUTATION TARGET: drop the teardown seam → 0 traces for this session
+    expect(attr(runSpanOf(r.rx.got[0]!.body), "aion.session_id")).toBe(idA);
+    expect(attr(runSpanOf(r.rx.got[0]!.body), "aion.status")).toBe("stopped");
+    // DELETE-cancel: the loop yields run_end stopped itself — still exactly one trace
+    const idB = await session();
+    const resB = await prompt(idB);
+    await until(() => parkedTurns >= 2, 4_000, "run B inside its provider turn");
+    expect(await (await fetch(`${srv.url}/session/${idB}/prompt`, { method: "DELETE" })).json()).toEqual({ cancelled: true });
+    expect(await resB.text()).toContain('"status":"stopped"');
+    await until(() => r.rx.got.length >= 2, 6_000, "trace of the DELETE-cancelled run");
+    expect(attr(runSpanOf(r.rx.got[1]!.body), "aion.session_id")).toBe(idB);
+    expect(attr(runSpanOf(r.rx.got[1]!.body), "aion.status")).toBe("stopped");
+    await srv.stop(); // session_close per runtime: flush, nothing to drain
+    expect(r.rx.got.length).toBe(2);
+  } finally {
+    await srv.stop().catch(() => {});
+    await teardown(r);
+  }
+}, T);
+
+test("aion.tool_calls = ISSUED calls, the `aion run --output json` toolCalls count on the SAME run: a dispatched call, an unknown tool (not_found, never dispatched) and a truncated turn's call (never dispatched) → 3 on both sides; only the dispatched one is a span", async () => {
+  const r = rig((rx) => rx.url);
+  try {
+    const turns: AssistantTurn[] = [
+      toolTurn([{ id: "c1", tool: "probe", args: {} }, { id: "c2", tool: "nope", args: {} }]),
+      { parts: [{ kind: "tool_call", id: "c3", tool: "probe", args: {} }], stopReason: "length", usage: { input: 0, output: 1 } }, // truncated: failed unexecuted
+      textTurn("final"),
+    ];
+    r.rt = await bootRuntime({ cwd: r.cwd, sessionId: "otel-count", stream: mockStream({ turns }) });
+    const rt = r.rt;
+    rt.registry.register(probe);
+    const model: ModelRef = { provider: "mock", model: "default" };
+    const out: string[] = [];
+    const sink = createOutputSink("json", { stdout: { write: (c: string) => out.push(c) }, stderr: { write: () => {} }, model, messages: () => rt.store.messages(), onInterrupt: () => () => {} });
+    let end: Extract<RunEvent, { type: "run_end" }> | undefined;
+    for await (const ev of agentLoop(rt.buildDef(model), "count calls", {}, rt.buildCfg(true), {
+      stream: rt.stream!, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, cwd: rt.cwd, hooks: rt.hooks,
+    }, rt.steering)) { sink.onEvent(ev); if (ev.type === "run_end") end = ev; }
+    sink.finish(end);
+    const result = JSON.parse(out.join("")) as RunResult;
+    expect(result.status).toBe("done");
+    expect(result.toolCalls.map((c) => [c.tool, c.ok])).toEqual([["probe", true], ["nope", false], ["probe", false]]);
+    await rt.hooks.close();
+    expect(r.rx.got.length).toBe(1);
+    const spans = r.rx.got[0]!.body.resourceSpans[0]!.scopeSpans[0]!.spans;
+    expect(attr(runSpanOf(r.rx.got[0]!.body), "aion.tool_calls")).toBe(String(result.toolCalls.length)); // MUTATION TARGET: count spans only → "1"
+    expect(spans.filter((s) => s.name === "aion.tool").length).toBe(1);
+    const failedEvents = spans.filter((s) => s.name === "aion.turn").flatMap((t) => (t.events ?? []).filter((e) => e.name === "aion.tool_call_failed"));
+    expect(failedEvents.map((e) => e.attributes.find((a) => a.key === "aion.failure_reason")?.value)).toEqual([{ stringValue: "not_found" }, { stringValue: "truncated" }]);
   } finally { await teardown(r); }
 }, T);
 
