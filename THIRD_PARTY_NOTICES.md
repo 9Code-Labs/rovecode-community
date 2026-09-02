@@ -122,6 +122,15 @@ Snapshot `research/source_snapshots/google-gemini-gemini-cli` @ 0bd1d43. Tool co
 gate, default timeout and html/passthrough split follow opencode (MIT, credited in the module
 header); html-to-text/htmlparser2/turndown are replaced by `src/tools/html-text.ts`.
 
+### Port #32 — todo/plan tool
+`src/tools/todo.ts` ports the todo-list validation contract from gemini-cli
+`packages/core/src/tools/write-todos.ts:100-129` (validateToolParamValues: array check, per-item
+object / non-empty description / status-enum checks, and the "only one task can be in_progress at
+a time" rule :120-126), translated into aion's ok/error result shape with ids and size bounds
+added; the "Cleared todo list" wording (:52, :68) is gemini's. Snapshot
+`research/source_snapshots/google-gemini-gemini-cli` @ 0bd1d43. Tool contract (whole-list replace,
+content/status/priority) and when-to-use guidance follow opencode (MIT, module header).
+
 ## Zed Industries — agent-client-protocol (Apache-2.0)
 
 - **ACP endpoint (port #15)** — `src/acp/server.ts` speaks ACP v1 via the official SDK

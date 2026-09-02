@@ -30,6 +30,7 @@ import { execPolicyApprover } from "../core/execpolicy.ts";
 import { recallTool } from "../memory/recall.ts";
 import { configureExecutor, type SpawnRunner } from "../core/executor.ts";
 import { loadSandboxConfig, unavailableRungError, type SandboxConfig } from "../core/sandbox-config.ts";
+import { todoTools } from "../tools/todo.ts";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -159,6 +160,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   if (evalCell) registry.register(withCheckpoint(evalCell));
   // port #17: cross-session recall (kind read → file.read gate; pure transcript search)
   registry.register(recallTool(sessionsDir));
+  registry.register(...todoTools(sessionsDir)); // port #32: per-session todo list at <session>/todos.json (todo_write kind memory → memory.write allow; todo_read kind read)
   const guard = new ToolGuard(); // port #4: loop signatures + duplicate-result stubs
 
   // port #3: MCP servers from .aion/mcp.json + harvested .mcp.json; two lazy tools only.
