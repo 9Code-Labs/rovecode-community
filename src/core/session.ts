@@ -4,18 +4,21 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync, renameSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
-import type { ImagePart, Message, MessagePart, RunEvent, TextPart } from "./types.ts";
-import { imageExt } from "./images.ts";
+import { join } from "node:path";
+import type { ImagePart, Message, RunEvent, TextPart } from "./types.ts";
+import { hydrateImageParts, sidecarImageParts } from "./session-images.ts";
 
 export type Entry = Message | ({ id: string; kind: "event"; parentId: string | null; createdAt: number; event: RunEvent });
 
-/** Port #34 image sidecars: `<session>/attachments/<sha256>.<ext>`, content-addressed (the same
- *  image attached twice is one file). Persisted parts reference them by a session-relative,
- *  forward-slash path; in memory the path is absolute so adapters can read it anywhere.
+/** Port #34 image sidecars (session-images.ts): `<session>/attachments/<sha256>.<ext>`. The store's
+ *  sidecar writer references them from entries.jsonl in ONE form, the session-relative
+ *  `attachments/<file>`, resolved to an absolute path in memory only. Any other persisted path —
+ *  whatever wrote it — never resolves to a readable file: a non-canonical relative path stays
+ *  relative (F2) and an absolute path is dropped at load (F3), so the part lowers to a "file
+ *  unavailable" placeholder and no line in entries.jsonl can point a hydrated part at a file
+ *  outside `<session>/attachments/`.
  *  `aion export --json` copies entries.jsonl ALONE — the attachments directory travels with the
  *  session directory, not with the export (the JSONL stays a small, verbatim-copyable record). */
-const ATTACHMENTS_DIR = "attachments";
 
 export type CorruptionKind =
   | "orphan-entry"        // parentId points at nothing
@@ -63,17 +66,6 @@ export function entryShape(e: unknown): "message" | "event" | undefined {
 
 /** Event entry (kind "event") vs message — tolerant of foreign/corrupt entry shapes. */
 function isEventWrapped(w: Wrapped): boolean { return entryShape(w.entry) === "event"; }
-
-/** F2 (port #34 hardening): the only persisted sidecar form is `attachments/<file>` — one segment,
- *  no separators, not `.`/`..`. Anything else stays unhydrated (relative): imageData() declines a
- *  relative path, so the part lowers to a "file unavailable" placeholder instead of a read outside
- *  the session dir (`../outside.png` used to hydrate to <sessions>/outside.png). */
-function sidecarFile(persisted: string): string | undefined {
-  const prefix = `${ATTACHMENTS_DIR}/`;
-  if (!persisted.startsWith(prefix)) return undefined;
-  const file = persisted.slice(prefix.length);
-  return file !== "" && file !== "." && file !== ".." && !/[\\/]/.test(file) ? file : undefined;
-}
 
 /** Single-line preview of a message's text parts; ≤80 chars, "" when no text. */
 function previewText(m: Message): string {
@@ -190,6 +182,10 @@ export class SessionStore {
       }
       // F1: a line that parses but is not an entry object (null, a number, a string) is reported, never dereferenced
       if (!w || typeof w !== "object") { corrupt.push({ kind: "unknown-shape", line: i, detail: "line is not an entry object" }); return; }
+      // F4: an object line with no string id (`{"entry":null}`) is not a tree node either — reported and
+      // skipped; cached, it became the leaf (cache.at(-1)) with id undefined, emptied messages() and
+      // re-rooted the next append (the loop parents on history.at(-1) ?? null)
+      if (typeof w.id !== "string") { corrupt.push({ kind: "unknown-shape", line: i, detail: "entry line has no string id" }); return; }
       if (seen.has(w.id)) corrupt.push({ kind: "duplicate-id", entryId: w.id, line: i, detail: "duplicate id" });
       seen.add(w.id);
       if (w.parentId !== null && !seen.has(w.parentId)) {
@@ -267,43 +263,21 @@ export class SessionStore {
 
   get stagedAttachments(): readonly ImagePart[] { return this.staged; }
 
-  /** The on-disk form: every inline image (`bytes`) becomes a sidecar file and the part keeps a
-   *  session-relative `path` instead — the hash chain covers the path, the content-addressed
-   *  filename covers the bytes. A sidecar that cannot be written (read-only dir, disk full)
-   *  keeps its bytes inline, so nothing is ever dropped. Returns the same object when there is
-   *  nothing to do. */
+  /** The on-disk form (session-images.ts sidecarImageParts): inline image bytes → sidecar files +
+   *  session-relative paths. Same object when there is nothing to do or the shape is foreign (F1). */
   private sidecarImages(entry: Entry): Entry {
-    if (entryShape(entry) !== "message" || !("role" in entry) || !entry.parts.some((p) => p.kind === "image" && p.bytes !== undefined)) return entry;
-    const parts = entry.parts.map((p) => {
-      if (p.kind !== "image" || p.bytes === undefined) return p;
-      const buf = Buffer.from(p.bytes, "base64");
-      const file = `${createHash("sha256").update(buf).digest("hex")}.${imageExt(p.mime)}`;
-      try {
-        mkdirSync(join(this.dir, ATTACHMENTS_DIR), { recursive: true });
-        const abs = join(this.dir, ATTACHMENTS_DIR, file);
-        if (!existsSync(abs)) writeFileSync(abs, buf);
-      } catch {
-        return p; // inline fallback
-      }
-      const out: ImagePart = { kind: "image", mime: p.mime, path: `${ATTACHMENTS_DIR}/${file}` };
-      if (p.width !== undefined) out.width = p.width;
-      if (p.height !== undefined) out.height = p.height;
-      if (p.name !== undefined) out.name = p.name;
-      return out;
-    });
-    return { ...entry, parts };
+    if (entryShape(entry) !== "message" || !("role" in entry)) return entry;
+    const parts = sidecarImageParts(this.dir, entry.parts);
+    return parts === undefined ? entry : { ...entry, parts };
   }
 
-  /** In-memory form: session-relative sidecar paths → absolute under this session's dir, so
-   *  core/images.ts imageData() can read them without knowing the session. Same object when
-   *  there is nothing to resolve. Only the canonical `attachments/<file>` form resolves (F2,
-   *  sidecarFile); a foreign/corrupt entry shape passes through untouched (F1, entryShape). */
+  /** The in-memory form (session-images.ts hydrateImageParts): canonical sidecar paths → absolute
+   *  under this session's dir; a persisted absolute path is dropped (F3), any other relative one
+   *  stays put (F2). Same object when there is nothing to do or the shape is foreign (F1). */
   private hydrateImages(entry: Entry): Entry {
     if (entryShape(entry) !== "message" || !("role" in entry)) return entry;
-    const file = (p: MessagePart): string | undefined => (p.kind === "image" && p.path !== undefined && !isAbsolute(p.path) ? sidecarFile(p.path) : undefined);
-    if (!entry.parts.some((p) => file(p) !== undefined)) return entry;
-    const parts = entry.parts.map((p) => { const f = file(p); return f === undefined ? p : { ...p, path: join(this.dir, ATTACHMENTS_DIR, f) }; });
-    return { ...entry, parts };
+    const parts = hydrateImageParts(this.dir, entry.parts);
+    return parts === undefined ? entry : { ...entry, parts };
   }
 
   /** Persist a RunEvent as an ANNOTATION of the current leaf (port #25: the loop's compaction

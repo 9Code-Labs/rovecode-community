@@ -4,6 +4,7 @@
  *  sends, so "the image reached the model" is checked on the wire-side history, not on notes.
  *  (a) attach → [text, image] parts, sidecar JSONL, chip shown, stage consumed
  *  (a2) image-only Enter sends nothing (text required — attach note + /help say so)
+ *  (a3) a custom command rendering to "" reaches submit("") — no run, warn note, stage kept
  *  (b) a text file → error note, nothing staged   (c) the 9th image is refused; /attach clear
  *  (d) vision notes: no-image-input model warns, unknown model informs
  *  (e) attach while busy → the queued steer carries the image when the loop drains it
@@ -162,6 +163,44 @@ test("(a2) image-only submit is not a thing: Enter on an empty editor with a sta
   expect(help).toContain("/attach — Attach an image to your next message (text required)");
   term.sendInput("\x03"); await app;
   rmSync(cwd, { recursive: true, force: true });
+}, 20_000);
+
+test("(a3) a custom command that renders to \"\" (`/ask` on a bare `$ARGUMENTS`) reaches submit(\"\"): with a staged image it starts no run, warns that text is required and keeps the stage — the next real /ask carries the image; with nothing staged it starts no run either (empty text never runs)", async () => {
+  const cwd = cwdWithImage();
+  const home = mkdtempSync(join(tmpdir(), "aion-attach-home-"));
+  const savedHome = process.env.AION_HOME;
+  process.env.AION_HOME = home;                          // hermetic user scope
+  mkdirSync(join(cwd, ".aion", "commands"), { recursive: true });
+  writeFileSync(join(cwd, ".aion", "commands", "ask.md"), "$ARGUMENTS\n", "utf8");
+  try {
+    const fake = new FakeRenderer();
+    const { stream, seen } = capturing([textTurn("x")]);
+    const app = runTui({ renderer: fake, stream, cwd, yolo: true, exitOnClose: false, model: "scripted" });
+    fake.hooks.onSubmit("/ask");                         // renders "" — nothing staged
+    await waitFor(() => fake.has("nothing to send"), 8000, "empty note");
+    expect(fake.texts("warn")).toEqual(["nothing to send — the message is empty"]);
+    fake.hooks.onSubmit("/attach dot.png");
+    await waitFor(() => fake.has("attached dot.png"), 8000, "attach note");
+    fake.hooks.onSubmit("/ask");                         // renders "" — one image staged
+    await waitFor(() => fake.has("type a message to send with the attached image"), 8000, "text-required note");
+    expect(fake.texts("warn").at(-1)).toBe("type a message to send with the attached image");
+    await new Promise((r) => setTimeout(r, 200));
+    expect(seen.length).toBe(0);                         // neither empty submit started a run
+    expect(fake.users).toEqual([]);                      // no empty user echo
+    expect(fake.busyFlags).toEqual([]);                  // never went busy
+    fake.hooks.onSubmit("/attach");
+    await waitFor(() => fake.has("attached (1/8):"), 8000, "listing"); // still staged
+    fake.hooks.onSubmit("/ask what is this?");           // renders "what is this?" — this run carries the image
+    await waitFor(() => fake.assistants.includes("x") && fake.busyFlags.at(-1) === false, 10_000, "run end");
+    expect(seen.length).toBe(1);
+    expect(lastUser(seen[0]!).parts).toEqual([{ kind: "text", text: "what is this?" }, IMAGE_PART]);
+    expect(fake.users).toEqual(["what is this?\n[image: dot.png]"]);
+    fake.hooks.onExit(); await app;
+  } finally {
+    if (savedHome === undefined) delete process.env.AION_HOME; else process.env.AION_HOME = savedHome;
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
 }, 20_000);
 
 // ---------- (b) (c) (d): refusals and notes through the seam ----------

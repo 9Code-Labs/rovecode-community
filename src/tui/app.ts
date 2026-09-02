@@ -338,6 +338,15 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
 
   /** A plain user turn — also the path custom commands submit their rendered prompt through (port #30). */
   const submit = (text: string): Promise<void> => {
+    // port #34: text is required. The editor drops an empty Enter before onSubmit (pi-renderer.ts),
+    // but a custom command whose template renders to "" (`/ask` on a bare `$ARGUMENTS`) lands here:
+    // an empty goal never starts a run, is never queued as a steer, and leaves the stage (and any
+    // pending mode switch) for the next real message
+    if (!text.trim()) {
+      const n = store.stagedAttachments.length;
+      renderer.addSystemNote(n === 0 ? "nothing to send — the message is empty" : `type a message to send with the attached image${n === 1 ? "" : "s"}`, "warn");
+      return Promise.resolve();
+    }
     renderer.addUser(userTurnLine(text, store.stagedAttachments)); // port #34: image chips under the text — the stage folds into this message
     // port #20: a pending mode switch becomes a durable session entry on the next
     // submit (round-trip cancellation: toggling back before submitting records nothing)

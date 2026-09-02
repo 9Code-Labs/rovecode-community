@@ -345,3 +345,75 @@ test("F2: a persisted image path hydrates ONLY as attachments/<file> — `../out
   expect(toAnthropicMessages([badMsg!])[0]!.content).toEqual(bad.map((_, i) => ({ type: "text", text: `[image: b${i}.png — file unavailable]` })));
   rmSync(dir, { recursive: true, force: true });
 });
+
+// ── port #34 wiring re-verify: F3 persisted ABSOLUTE sidecar paths, F4 id-less entry lines ──
+
+import { isAbsolute } from "node:path";
+import { describeImage } from "../../src/core/images.ts";
+import { toOpenAiMessages } from "../../src/providers/wire-messages.ts";
+
+test("F3: a persisted ABSOLUTE image path is foreign — the store writes only `attachments/<file>` — so hydration DROPS it (native and forward-slash forms of a real PNG in another directory, and even the session's OWN sidecar named absolutely): imageData declines, describeImage leaks no size, both wires send `file unavailable`; the canonical part beside them and the store's own round-trip still read; the JSONL line itself is untouched", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-test-"));
+  const elsewhere = mkdtempSync(join(tmpdir(), "aion-elsewhere-"));
+  writeFileSync(join(elsewhere, "secret.png"), PNG_1x1);            // a readable PNG in an unrelated directory
+  const s = new SessionStore(dir, "f3");
+  s.append(imsg("ok", dot()));                                      // the store's own round-trip: relative on disk, absolute in memory
+  const f = join(dir, "f3", "entries.jsonl");
+  const first = JSON.parse(readFileSync(f, "utf8").trim()) as { id: string; hash: string };
+  const own = join(dir, "f3", "attachments", `${PNG_SHA}.png`);
+  const abs = [join(elsewhere, "secret.png"), join(elsewhere, "secret.png").replace(/\\/g, "/"), own];
+  expect(abs.every(isAbsolute)).toBe(true);
+  const parts = [{ kind: "text", text: "see" }, ...abs.map((path, i) => ({ kind: "image", mime: "image/png", path, width: 1, height: 1, name: `abs${i}.png` })), { kind: "image", mime: "image/png", path: `attachments/${PNG_SHA}.png`, name: "canon.png" }];
+  appendFileSync(f, JSON.stringify(wrap(first, "f3-abs", { id: "f3-abs", role: "user", parts, parentId: first.id, createdAt: 1 })) + "\n");
+
+  const s2 = new SessionStore(dir, "f3");
+  expect(s2.reload()).toEqual([]);                                   // well-formed lines: the PATHS are the problem, not the shape
+  const [okMsg, absMsg] = s2.messages();
+  expect((okMsg!.parts[1] as ImagePart).path).toBe(own);
+  expect(imageData(okMsg!.parts[1] as ImagePart)).toBe(PNG_1x1_B64); // the store's own hydration (relative → absolute) still reads
+  const imgs = absMsg!.parts.filter((p): p is ImagePart => p.kind === "image");
+  expect(imgs.length).toBe(4);
+  for (const p of imgs.slice(0, 3)) {
+    expect("path" in p).toBe(false);                                 // dropped, not rewritten
+    expect(imageData(p)).toBeUndefined();                            // secret.png EXISTS and is not read
+    expect(describeImage(p)).toBe(`${p.name}, 1x1`);                 // no byte size: nothing was stat'ed either
+  }
+  expect(imgs[3]!.path).toBe(own);                                   // the canonical part beside them resolves
+  const placeholders = [0, 1, 2].map((i) => ({ type: "text", text: `[image: abs${i}.png, 1x1 — file unavailable]` }));
+  expect(toAnthropicMessages([absMsg!])[0]!.content).toEqual([{ type: "text", text: "see" }, ...placeholders, { type: "image", source: { type: "base64", media_type: "image/png", data: PNG_1x1_B64 } }]);
+  expect(toOpenAiMessages([absMsg!])[0]!.content).toEqual([{ type: "text", text: "see" }, ...placeholders, { type: "image_url", image_url: { url: `data:image/png;base64,${PNG_1x1_B64}`, detail: "auto" } }]);
+  expect(readFileSync(f, "utf8")).toContain(JSON.stringify(abs[0]));  // in memory only: the persisted line keeps its path (and its hash)
+  rmSync(dir, { recursive: true, force: true }); rmSync(elsewhere, { recursive: true, force: true });
+});
+
+test("F4: id-less object lines — `{\"entry\":null}` and `{\"entry\":{\"role\":\"user\",\"parts\":[null,5]}}` — appended after a 2-message session are reported as unknown-shape only (no spurious duplicate-id/cycle) and never become the leaf: messages() keeps both, turnPoints intact, the loop's next parent (history.at(-1)) is the real leaf, appendEvent hangs off it and the next append chains onto it; the same two lines mid-file report the same two findings and nothing else", () => {
+  const IDLESS = ['{"entry":null}', '{"entry":{"role":"user","parts":[null,5]}}'];
+  const text = (m: Message) => (m.parts[0] as { text: string }).text;
+  const dir = mkdtempSync(join(tmpdir(), "aion-test-"));
+  const s = new SessionStore(dir, "idless");
+  const a = msg("A"); s.append(a);
+  const b = amsg("B", a.id); s.append(b);
+  const f = join(dir, "idless", "entries.jsonl");
+  const good = readFileSync(f, "utf8").split("\n").filter(Boolean);
+  appendFileSync(f, IDLESS.join("\n") + "\n");
+
+  const s2 = new SessionStore(dir, "idless");                       // must not throw
+  expect(s2.reload().map((c) => [c.kind, c.entryId, c.line, c.detail])).toEqual([
+    ["unknown-shape", undefined, 2, "entry line has no string id"], ["unknown-shape", undefined, 3, "entry line has no string id"],
+  ]);
+  expect(s2.messages().map(text)).toEqual(["A", "B"]);
+  expect(s2.turnPoints().map((t) => [t.text, t.parentId, t.branches])).toEqual([["A", null, 0]]);
+  const parent = s2.messages().at(-1)?.id ?? null;                  // loop.ts:125 — the goal message's parentId
+  expect(parent).toBe(b.id);                                        // (was null → a NEW ROOT; the conversation fell off the active path)
+  expect(s2.appendEvent({ type: "steer", text: "t" }).parentId).toBe(b.id); // the leaf itself, not an id-less ghost
+  const c = msg("C", parent); s2.append(c);
+  const wc = JSON.parse(readFileSync(f, "utf8").split("\n").filter(Boolean).at(-1)!);
+  expect([wc.parentId, wc.prevHash]).toEqual([b.id, JSON.parse(good[1]!).hash]);
+  expect(new SessionStore(dir, "idless").messages().map(text)).toEqual(["A", "B", "C"]);
+  // mid-file: the same two findings and nothing else (no duplicate-id for a second undefined id, no cycle through it)
+  writeFileSync(f, [good[0], ...IDLESS, good[1]].join("\n") + "\n");
+  const s3 = new SessionStore(dir, "idless");
+  expect(s3.reload().map((c) => [c.kind, c.line])).toEqual([["unknown-shape", 1], ["unknown-shape", 2]]);
+  expect(s3.messages().map(text)).toEqual(["A", "B"]);
+  rmSync(dir, { recursive: true, force: true });
+});
