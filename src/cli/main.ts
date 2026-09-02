@@ -207,12 +207,12 @@ async function cmdTrace(sessionId: string): Promise<void> {
 }
 
 const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "auth", "trace", "help", "chat", "repl", "smoke-tui", "acp", "serve", "export"]);
-// --resume <id>: TUI-only value flag, parsed here (parseCli flags are boolean-only);
-// its value must not be mistaken for a one-shot prompt
+// --resume <id>: TUI-only value flag, parsed here (parseCli skips its value when locating the
+// command but returns no flag values); its value must not be mistaken for a one-shot prompt
 const rIx = process.argv.indexOf("--resume");
 const rArg = rIx !== -1 ? process.argv[rIx + 1] : undefined;
 const resumeId = rArg !== undefined && !rArg.startsWith("-") ? rArg : undefined;
-if (cmd === "" || cmd === "chat" || cmd === "repl" || (resumeId !== undefined && cmd === resumeId)) {
+if (cmd === "" || cmd === "chat" || cmd === "repl") {
   // default surface is the pi-tui chat (port #1); --plain keeps the readline REPL
   if (cli.plain) await runRepl({ yolo: cli.yolo });
   else await runTui({ yolo: cli.yolo, sessionId: resumeId });
