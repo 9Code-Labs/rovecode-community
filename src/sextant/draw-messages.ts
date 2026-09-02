@@ -1,0 +1,271 @@
+/** Sextant surface (port #42) — the MESSAGES panel: user / assistant / tool / steer / compaction /
+ *  system rows, the ONE modal card (approval or ask_user question) pinned above the ╌ rule, and the
+ *  prompt line with its cursor cell. Ported from the user's own sextant v0.4.0 prototype,
+ *  src/app.js:561-672 (toolRow, buildRows, drawMessages); the mock welcome/"try" rows, permission
+ *  items and click hit-boxes are gone — rows come from SextantState.messages, the card from
+ *  SextantState.card, the agent label reads "aion". Pure painter: no clock, no timers, no state
+ *  mutation; the prototype's msgScroll write-back became the `messagesScroll` seam. */
+
+import type { CardState, Rect, ScreenLike, Seg, SextantState, Theme, ToolRow } from "./types.ts";
+import { ATTR } from "./types.ts";
+import { moreMarker } from "../coding/diff.ts";
+import { inner, panel, spinner, st, wrap } from "./draw-util.ts";
+
+export interface Row { segs: Seg[]; indent?: number }
+
+/** prompt placeholder when the input is empty */
+export const PLACEHOLDER = "ask aion — e.g. fix the failing test";
+export const VERDICTS: readonly string[] = ["allow", "always", "deny"];
+export const FREE_TEXT_HINT = "type an answer…";
+export const SKIP_LABEL = "skip this question";
+/** the longest question shown in the card (wrapped rows) before it is elided */
+const MAX_QUESTION_ROWS = 6;
+
+const VERB_GLYPH: Record<string, string> = { read: "·", edit: "~", write: "+", remove: "−", run: "$", search: "⌕", fetch: "↗", task: "»" };
+
+/** `<glyph> <verb> <label>` with the detail right-aligned: `· read x … N lines`, `~ edit x +a −b`,
+ *  `$ run cmd … last line`; the spinner replaces the glyph while the call runs (app.js:561-571) */
+export function toolRow(t: ToolRow, w: number, theme: Theme, now: number): Seg[] {
+  const failed = !t.running && t.ok === false;
+  const g = t.running ? spinner(now) : VERB_GLYPH[t.verb] ?? "·";
+  const gc = t.running ? theme.accent : failed ? theme.err : "~+−".includes(g) ? theme.fg2 : theme.dim;
+  const verb = (t.verb === "other" ? t.tool : t.verb).padEnd(7);
+  const detail: Seg[] = [];
+  if (t.verb === "edit" && (t.add !== undefined || t.del !== undefined)) {
+    if (t.add) detail.push([`+${t.add}`, st(theme.ok)]);
+    if (t.del) detail.push([`${t.add ? " " : ""}−${t.del}`, st(theme.err)]);
+  } else if (t.detail) detail.push([(t.verb === "edit" ? "" : "… ") + t.detail, st(failed ? theme.err : theme.muted)]);
+  const dw = detail.reduce((n, [s]) => n + s.length, 0);
+  let label = t.label;
+  let labelMax = w - 2 - verb.length;
+  if (dw) {
+    if (labelMax - dw - 2 >= 8) labelMax -= dw + 2; // clip the label before dropping the detail
+    else detail.length = 0;
+  }
+  if (label.length > labelMax) label = labelMax > 1 ? label.slice(0, Math.max(0, labelMax - 1)) + "…" : "";
+  const segs: Seg[] = [[g + " ", st(gc)], [verb, st(t.running ? theme.fg2 : theme.muted)], [label, st(t.running ? theme.fg : failed ? theme.err : theme.fg2)]];
+  if (detail.length) segs.push([" ".repeat(Math.max(1, w - 2 - verb.length - label.length - dw)), st(-1)], ...detail);
+  return segs;
+}
+
+/** the status word after `◆ aion ·` for the current run: the live activity while running, else the outcome */
+export function activityLabel(s: SextantState): string {
+  const a = s.activity;
+  if (s.running) return a.label || a.state.toLowerCase();
+  switch (a.state) {
+    case "SUCCESS": return "done";
+    case "ERROR": return "error";
+    case "WAITING": return "needs you";
+    case "IDLE": return "";
+    default: return a.label || a.state.toLowerCase();
+  }
+}
+
+/** `@path` mentions in a user line get the accent (app.js:596) */
+function mentionSegs(line: string, theme: Theme): Seg[] {
+  return line.split(/(@[\w./\\-]+)/).filter(Boolean).map((part): Seg => [part, part[0] === "@" ? st(theme.accent, -1, ATTR.BOLD) : st(theme.fg, -1, ATTR.BOLD)]);
+}
+
+/** Flatten s.messages into drawable rows for a panel `w` cells wide (app.js:572-637). Each run
+ *  (the rows after a user row) opens with a `◆ aion · <status>` header before its first row; the
+ *  current run carries the live status, earlier ones just the diamond. */
+export function buildRows(s: SextantState, w: number, theme: Theme, now: number): Row[] {
+  const rows: Row[] = [];
+  const blank = (): void => { rows.push({ segs: [] }); };
+  const iw = Math.max(1, w - 2);
+  let lastUser = -1;
+  s.messages.forEach((m, i) => { if (m.kind === "user") lastUser = i; });
+  let prev: SextantState["messages"][number] | null = null;
+  let headerDue = true;
+  const outcome = s.activity.state === "SUCCESS" ? theme.ok : s.activity.state === "ERROR" ? theme.err : theme.accentDim;
+  const header = (i: number): void => {
+    const current = i > lastUser;
+    const label = current ? activityLabel(s) : "";
+    const dc = !current ? theme.accentDim : s.running ? theme.accent : outcome;
+    rows.push({ segs: [["◆ ", st(dc)], ["aion", st(theme.fg, -1, ATTR.BOLD)], [label ? "  · " + label : "", st(s.running ? theme.accent : theme.muted)]] });
+    headerDue = false;
+  };
+  s.messages.forEach((m, i) => {
+    switch (m.kind) {
+      case "user": {
+        if (prev) blank();
+        const last = i === lastUser;
+        rows.push({ segs: [["you", st(last ? theme.accent : theme.muted)], [last ? "  · sent" : "", st(theme.accentDim)]] });
+        for (const l of wrap(m.text, iw)) rows.push({ segs: mentionSegs(l, theme), indent: 2 });
+        if (m.images?.length) rows.push({ segs: m.images.flatMap((name): Seg[] => [[` ▣ ${name} `, st(theme.fg2, theme.selBg)], ["  ", st(-1)]]), indent: 2 });
+        headerDue = true;
+        break;
+      }
+      case "assistant": {
+        if (headerDue) { blank(); header(i); } else if (prev && prev.kind !== "assistant") blank();
+        const lines = m.text ? wrap(m.text, iw) : [];
+        lines.forEach((l, k) => {
+          const segs: Seg[] = [[l, st(theme.fg2)]];
+          if (m.streaming && k === lines.length - 1) segs.push(["▌", st(theme.accent)]);
+          rows.push({ segs, indent: 2 });
+        });
+        if (m.streaming && !lines.length) rows.push({ segs: [["▌", st(theme.accent)]], indent: 2 });
+        break;
+      }
+      case "tool":
+        if (headerDue) { blank(); header(i); } else if (prev && prev.kind === "assistant") blank();
+        rows.push({ segs: toolRow(m, iw, theme, now), indent: 2 });
+        break;
+      case "steer":
+        if (headerDue) { blank(); header(i); } else blank();
+        wrap(m.text, iw).forEach((l, k) => rows.push({ segs: [[k === 0 ? "» " : "  ", st(theme.accent)], [l, st(theme.fg)]] }));
+        break;
+      case "compaction":
+        blank();
+        for (const l of wrap(m.text, iw)) rows.push({ segs: [["▸ ", st(theme.accentDim)], [l, st(theme.muted, -1, ATTR.ITALIC)]] });
+        break;
+      case "system": {
+        if (prev && prev.kind !== "system") blank();
+        const err = m.tone === "error";
+        const gc = err ? theme.err : m.tone === "warn" ? theme.warn : theme.accentDim;
+        for (const l of wrap(m.text, iw)) rows.push({ segs: [[err ? "× " : "▸ ", st(gc)], [l, st(err ? theme.err : theme.muted)]] });
+        break;
+      }
+    }
+    prev = m;
+  });
+  return rows;
+}
+
+/** row skeleton of the card: total rows and the free-text row index (question card) — the shared
+ *  geometry behind `cardRows` and `promptCursor` */
+export function cardShape(card: CardState, w: number, maxDetail: number): { total: number; freeText: number | null } {
+  if (card.kind === "approval") {
+    const n = card.detail ? card.detail.split("\n").length : 0;
+    return { total: 3 + Math.min(n, Math.max(1, maxDetail)), freeText: null };
+  }
+  const q = Math.min(MAX_QUESTION_ROWS, wrap(card.prompt.question, Math.max(1, w - 2)).length);
+  const opts = card.prompt.options?.length ?? 0;
+  const free = card.prompt.allowFreeText !== false;
+  return { total: 1 + q + opts + (free ? 1 : 0) + 2, freeText: free ? 1 + q + opts : null };
+}
+
+/** color of one previewDiff line inside the approval card */
+function diffLineStyle(l: string, theme: Theme): Seg {
+  if (l.startsWith("+++") || l.startsWith("---") || l.startsWith("@@") || l.startsWith("…") || l.startsWith("\\")) return [l, st(theme.dim)];
+  if (l[0] === "+") return [l, st(theme.ok)];
+  if (l[0] === "-") return [l, st(theme.err)];
+  return [l, st(theme.fg2)];
+}
+
+/** The modal card rows (app.js:607-616): approval = `◆ needs your permission  <tool> <args>`, the
+ *  previewDiff detail bounded to `maxDetail` rows (clip marker), the verdict buttons
+ *  `allow · always · deny` with the selected one inverted; question = the question, its options,
+ *  the free-text row (when allowed) and `skip this question`, selection inverted the same way. */
+export function cardRows(card: CardState, w: number, maxDetail: number, theme: Theme): Row[] {
+  const rows: Row[] = [{ segs: [] }];
+  const button = (label: string, sel: boolean): Seg => [` ${label} `, sel ? st(theme.bg, theme.accent, ATTR.BOLD) : st(theme.muted)];
+  if (card.kind === "approval") {
+    rows.push({ segs: [["◆ ", st(theme.warn)], ["needs your permission", st(theme.fg, -1, ATTR.BOLD)], [`   ${card.tool} ${card.argsPreview}`.trimEnd(), st(theme.fg2)]] });
+    if (card.detail) {
+      const all = card.detail.split("\n");
+      const max = Math.max(1, maxDetail);
+      const lines = all.length > max ? [...all.slice(0, max - 1), moreMarker(all.length - max + 1)] : all;
+      for (const l of lines) rows.push({ segs: [diffLineStyle(l, theme)], indent: 2 });
+    }
+    const segs: Seg[] = [];
+    VERDICTS.forEach((v, i) => { segs.push(button(v, i === card.selected), ["  ", st(-1)]); });
+    segs.push([" ⏎ confirm  ←→ choose  esc deny", st(theme.dim)]);
+    rows.push({ segs, indent: 2 });
+    return rows;
+  }
+  const q = wrap(card.prompt.question, Math.max(1, w - 2));
+  const shown = q.length > MAX_QUESTION_ROWS ? [...q.slice(0, MAX_QUESTION_ROWS - 1), (q[MAX_QUESTION_ROWS - 1] ?? "").slice(0, Math.max(0, w - 4)) + "…"] : q;
+  shown.forEach((l, k) => rows.push({ segs: [[k === 0 ? "◆ " : "  ", st(theme.warn)], [l, st(theme.fg, -1, ATTR.BOLD)]] }));
+  const opts = card.prompt.options ?? [];
+  opts.forEach((o, i) => rows.push({ segs: [button(o, i === card.selected)], indent: 2 }));
+  const free = card.prompt.allowFreeText !== false;
+  if (free) {
+    const sel = card.selected === opts.length;
+    const text = card.freeText;
+    rows.push({ segs: [["▌ ", st(sel ? theme.accent : theme.accentDim)], [text || FREE_TEXT_HINT, text ? st(theme.fg, -1, ATTR.BOLD) : st(theme.dim)]], indent: 2 });
+  }
+  rows.push({ segs: [button(SKIP_LABEL, card.selected === opts.length + (free ? 1 : 0))], indent: 2 });
+  rows.push({ segs: [["⏎ confirm  ↑↓ choose", st(theme.dim)]], indent: 2 });
+  return rows;
+}
+
+/** detail rows an approval card may take inside a message area `h` rows tall (≈60 % of it) */
+const detailBudget = (h: number): number => Math.max(2, Math.floor(h * 0.6) - 3);
+
+/** message rows above the rule, card rows (bounded so ≥1 message row survives), rows per message area */
+function areas(B: Rect, s: SextantState): { h: number; cardH: number; msgH: number; maxDetail: number } {
+  const h = Math.max(0, B.h - 2);
+  const maxDetail = detailBudget(h);
+  const cardH = s.card ? Math.min(cardShape(s.card, B.w, maxDetail).total, Math.max(0, h - 1)) : 0;
+  return { h, cardH, msgH: h - cardH, maxDetail };
+}
+
+/** Scroll geometry for the message rows: `max` = rows that do not fit, `offset` = the row drawn
+ *  first — the tail when `stick`, else s.msgScroll clamped. The renderer writes `offset` back into
+ *  s.msgScroll after a frame (the prototype mutated S.msgScroll in place; a pure painter cannot). */
+export function messagesScroll(rect: Rect, s: SextantState, theme: Theme, now: number): { offset: number; max: number } {
+  const B = inner(rect);
+  const { msgH } = areas(B, s);
+  const rows = buildRows(s, B.w, theme, now);
+  const max = Math.max(0, rows.length - msgH);
+  return { offset: s.stick ? max : Math.max(0, Math.min(s.msgScroll, max)), max };
+}
+
+/** Where the terminal cursor belongs for the prompt (or the question card's free-text row when it
+ *  is selected); null when the messages panel is not taking text (other focus, palette/help, approval). */
+export function promptCursor(rect: Rect, s: SextantState): { x: number; y: number } | null {
+  if (s.palette || s.help) return null;
+  const B = inner(rect);
+  if (B.w < 3 || B.h < 3) return null;
+  const { cardH, msgH, maxDetail } = areas(B, s);
+  if (s.card) {
+    if (s.card.kind !== "question") return null;
+    const shape = cardShape(s.card, B.w, maxDetail);
+    if (shape.freeText === null || s.card.selected !== (s.card.prompt.options?.length ?? 0)) return null; // selection index = options.length is the free-text row
+    const row = shape.freeText - (shape.total - cardH); // rows hidden when the card is clipped scroll off the top
+    if (row < 0) return null;
+    return { x: Math.min(B.x + 4 + s.card.freeText.length, B.x + B.w - 1), y: B.y + msgH + row };
+  }
+  if (s.focus !== "messages") return null;
+  const inW = B.w - 2;
+  const off = Math.max(0, s.input.cur - inW + 1);
+  return { x: B.x + 2 + s.input.cur - off, y: B.y + B.h - 1 };
+}
+
+/** Paint the messages panel into `rect`: frame + count, rows (scrolled), the pinned card, the ╌
+ *  rule, the prompt line `▌ <text>` (placeholder when empty). Pure over its inputs. */
+export function drawMessages(scr: ScreenLike, rect: Rect, s: SextantState, theme: Theme, now: number): void {
+  if (rect.w < 4 || rect.h < 3) return;
+  const count = s.messages.filter((m) => m.kind === "user").length;
+  const focused = s.focus === "messages";
+  const B = panel(scr, rect, "messages", focused, count ? [[String(count), st(theme.muted)]] : [], theme);
+  const { h, cardH, msgH, maxDetail } = areas(B, s);
+  if (h > 0) {
+    const rows = buildRows(s, B.w, theme, now);
+    const max = Math.max(0, rows.length - msgH);
+    const offset = s.stick ? max : Math.max(0, Math.min(s.msgScroll, max));
+    for (let i = 0; i < msgH; i++) {
+      const r = rows[offset + i];
+      if (!r) break;
+      const cx = B.x + (r.indent ?? 0);
+      scr.text(cx, B.y + i, r.segs, B.x + B.w - cx);
+    }
+    if (max > 0 && offset < max && msgH > 0) scr.put(B.x + B.w - 1, B.y + msgH - 1, "▾", st(theme.accent));
+    if (s.card && cardH > 0) {
+      const all = cardRows(s.card, B.w, maxDetail, theme);
+      const shown = all.slice(all.length - cardH); // when clipped keep the tail: the buttons must stay reachable
+      shown.forEach((r, i) => { const cx = B.x + (r.indent ?? 0); scr.text(cx, B.y + msgH + i, r.segs, B.x + B.w - cx); });
+    }
+  }
+  const py = B.y + B.h - 1;
+  if (B.h >= 2) scr.hline(B.x, py - 1, B.w, st(theme.frameDim), "╌");
+  const hasText = s.input.text.length > 0;
+  scr.put(B.x, py, "▌", st(hasText || focused ? theme.accent : theme.accentDim));
+  const inW = B.w - 2;
+  if (inW <= 0) return;
+  if (hasText) {
+    const off = Math.max(0, s.input.cur - inW + 1);
+    scr.put(B.x + 2, py, s.input.text.slice(off), st(theme.fg, -1, ATTR.BOLD), inW);
+  } else scr.put(B.x + 2, py, PLACEHOLDER, st(theme.dim), inW);
+}
