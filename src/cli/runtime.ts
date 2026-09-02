@@ -14,6 +14,7 @@ import { withToolCallParsing, toolPromptBlock } from "../providers/middleware.ts
 import { ModelCatalog } from "../providers/catalog.ts";
 import { loadProjectContext, type ProjectContext } from "../core/config.ts";
 import { estimateTokens, type ContextChunk } from "../core/context.ts";
+import { parseCompactionStrategy } from "../core/compaction.ts";
 import { ToolGuard } from "../core/guardrails.ts";
 import { loadMcpConfig, McpManager } from "../mcp/client.ts";
 import { createMcpTools } from "../mcp/tools.ts";
@@ -275,6 +276,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     },
     buildCfg: (yolo: boolean, approval?: ApprovalFn): RunConfig => ({
       maxTurns: 60, contextBudgetTokens: 200_000, compactionThreshold: 0.8,
+      compactionStrategy: parseCompactionStrategy(process.env.AION_COMPACTION) ?? "head-summarize", // port #25: AION_COMPACTION=head-summarize|keep-window|provider-native
       parallelTools: true,
       permissionRules: yolo
         ? [{ action: "*", resource: "*", effect: "allow" }]

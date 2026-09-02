@@ -1,6 +1,7 @@
 /** Aion core type contracts. Single source of truth for the runtime. */
 
 import type { ContextChunk } from "./context.ts";
+import type { CompactionStrategy, CompactionTrigger } from "./compaction.ts";
 
 // ---------- Messages (harness-level; converted to provider form only at the seam) ----------
 
@@ -120,7 +121,10 @@ export type RunEvent =
   | { type: "tool_execution_update"; callId: string; note: string }
   | { type: "tool_execution_end"; callId: string; ok: boolean; output: string; durationMs: number }
   | { type: "tool_call_failed"; callId: string; reason: "truncated" | "invalid_args" | "permission_denied" | "not_found"; detail: string }
-  | { type: "compaction"; strategy: string; tokensBefore: number; tokensAfter: number }
+  /** strategy = the one that RAN (core/compaction.ts seam, or "context-drop" for ADR-007 chunk
+   *  eviction); trigger (port #25) is set on history compactions only: "speculative" = estimate
+   *  crossed the threshold, "emergency" = the provider rejected the request as an overflow */
+  | { type: "compaction"; strategy: string; trigger?: CompactionTrigger; tokensBefore: number; tokensAfter: number }
   | { type: "turn_end"; turn: number; stopReason: StopReason }
   | { type: "steer"; text: string }
   | { type: "run_end"; status: "done" | "stopped" | "error" | "budget"; summary: string };
@@ -159,6 +163,10 @@ export interface RunConfig {
   maxTurns: number;
   contextBudgetTokens: number;
   compactionThreshold: number;   // fraction of budget triggering compaction
+  /** port #25: history compaction strategy (core/compaction.ts; env AION_COMPACTION); default head-summarize */
+  compactionStrategy?: CompactionStrategy;
+  /** port #25 keep-window: user turns kept BEFORE the current one (default 2; an emergency keeps 0) */
+  compactionKeepTurns?: number;
   parallelTools: boolean;
   permissionRules: PermissionRule[];
   approval?: ApprovalFn;

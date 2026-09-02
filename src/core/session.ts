@@ -2,7 +2,7 @@
  *  Entries form a tree by (id, parentId); a leaf pointer selects the active path.
  *  One serde path (JSON) for every backend. Corruption is detected, classified, and reported. */
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import type { Message, RunEvent, TextPart } from "./types.ts";
@@ -40,6 +40,12 @@ function sortKeys(v: unknown): unknown {
 }
 
 interface Wrapped { id: string; parentId: string | null; createdAt: number; prevHash: string; hash: string; entry: Entry }
+
+/** Event entry (kind "event") vs message — tolerant of foreign/corrupt entry shapes. */
+function isEventWrapped(w: Wrapped): boolean {
+  const e: unknown = w.entry;
+  return !!e && typeof e === "object" && (e as { kind?: unknown }).kind === "event";
+}
 
 /** Single-line preview of a message's text parts; ≤80 chars, "" when no text. */
 function previewText(m: Message): string {
@@ -209,6 +215,21 @@ export class SessionStore {
     if (this.leafPersisted) this.persistLeaf(); // keep the durable leaf in step after a branch
   }
 
+  /** Persist a RunEvent as an ANNOTATION of the current leaf (port #25: the loop's compaction
+   *  marker). The entry hangs off the leaf without becoming one — the loop parents its next
+   *  message on the last real message (history.at(-1)), so a chain-linked event would turn
+   *  into a dead sibling the moment that message lands. Hash-chained like any entry; path()
+   *  folds it back in right after the message it annotates; messages() never sees it. */
+  appendEvent(event: RunEvent): Entry {
+    const parentId = this.leaf === "root" ? null : this.leaf;
+    const entry: Entry = { id: randomUUID(), kind: "event", parentId, createdAt: Date.now(), event };
+    const w: Wrapped = { id: entry.id, parentId, createdAt: entry.createdAt, prevHash: this.prevHash, hash: "", entry };
+    w.hash = chainHash(this.prevHash, w);
+    appendFileSync(this.file, JSON.stringify(w) + "\n");
+    this.cache.push(w);
+    return entry;
+  }
+
   /** Active path = root → leaf (omp buildSessionContext). */
   path(): Entry[] { return this.wrappedPath().map((w) => w.entry); }
 
@@ -217,13 +238,27 @@ export class SessionStore {
     const out: Wrapped[] = [];
     let cur = byId.get(this.leaf);
     while (cur) { out.unshift(cur); cur = cur.parentId ? byId.get(cur.parentId) : undefined; }
-    return out;
+    // event annotations (appendEvent) are children of path entries but never parents: fold each
+    // in right after the entry it annotates, file order. Chain-linked events (a supplied
+    // parentId via append, e.g. the export fixture) are already on the path and stay put.
+    const onPath = new Set(out.map((w) => w.id));
+    const notes = new Map<string | null, Wrapped[]>();
+    for (const w of this.cache) {
+      if (onPath.has(w.id) || !isEventWrapped(w)) continue;
+      if (w.parentId !== null && !onPath.has(w.parentId)) continue;
+      const list = notes.get(w.parentId) ?? []; list.push(w); notes.set(w.parentId, list);
+    }
+    if (notes.size === 0) return out;
+    const folded: Wrapped[] = [...(notes.get(null) ?? [])];
+    for (const w of out) folded.push(w, ...(notes.get(w.id) ?? []));
+    return folded;
   }
 
   /** User turns along the ACTIVE path only, root→leaf order. */
   turnPoints(): TurnPoint[] {
     const children = new Map<string | null, number>();
-    for (const w of this.cache) children.set(w.parentId, (children.get(w.parentId) ?? 0) + 1);
+    // event annotations hang off entries without forking them: not a branch (port #25)
+    for (const w of this.cache) if (!isEventWrapped(w)) children.set(w.parentId, (children.get(w.parentId) ?? 0) + 1);
     const out: TurnPoint[] = [];
     for (const w of this.wrappedPath()) {
       const e = w.entry;

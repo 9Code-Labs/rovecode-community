@@ -14,7 +14,8 @@ import { ToolRegistry, type ExtensionHooks } from "./tools.ts";
 import type { ToolGuard } from "./guardrails.ts";
 import { servedBy } from "../providers/router.ts";
 import { SessionStore } from "./session.ts";
-import { assembleContext, planCompaction, estimateTokens, type ContextChunk } from "./context.ts";
+import { assembleContext, estimateTokens, type ContextChunk } from "./context.ts";
+import { compactionTrigger, planCompaction, applyCompaction, isContextOverflow, type CompactionCtx, type NativeCompactor } from "./compaction.ts";
 
 export interface LoopDeps {
   stream: StreamFn;
@@ -22,6 +23,9 @@ export interface LoopDeps {
   store: SessionStore;
   hooks?: ExtensionHooks;
   summarize?: (texts: string[]) => Promise<string>;  // weak-model head summarizer
+  /** port #25 provider-native compaction capability — set ONLY when the active provider does
+   *  server-side compaction (none of aion's adapters do today; compaction.ts header) */
+  compactNative?: NativeCompactor;
   tools?: ToolSchema[];
   /** orchestrator seam: run a child agent; receives parent depth + 1 */
   childRunner?: (agent: string, goal: string, vars: AgentVars | undefined, depth: number) => Promise<{ ok: boolean; summary: string; usage: TokenUsage }>;
@@ -127,6 +131,11 @@ async function* runLoop(
   // the guard inert. Follow-ups are new user turns (second reset below).
   deps.guard?.onTurn();
 
+  // port #25 emergency compaction state: an overflow rejection (error-stop block) arms ONE
+  // aggressive compaction + re-drive for the next iteration; at most one re-drive per run
+  let emergencyPending = false;
+  let emergencyRedrives = 0;
+
   for (let turn = 1; turn <= cfg.maxTurns; turn++) {
     // --- abort check: an abort that landed during the previous batch (or before
     // turn 1) must not consume steering or touch the provider again
@@ -141,23 +150,25 @@ async function* runLoop(
 
     yield { type: "turn_start", turn };
 
-    // --- context assembly + compaction (ADR-007) ---
+    // --- context assembly + compaction (ADR-007; strategy seam + adaptive trigger: port #25) ---
     // counted over ALL parts (partsTokenText): tool calls/results dominate agentic histories,
     // and a text-only count would keep this trigger permanently below threshold
     const histTokens = history.reduce((n, m) => n + estimateTokens(partsTokenText(m.parts)), 0);
-    if (histTokens > cfg.contextBudgetTokens * cfg.compactionThreshold && deps.summarize) {
-      const plan = planCompaction(history.map((m) => ({ id: m.id, tokens: estimateTokens(partsTokenText(m.parts)), text: partsTokenText(m.parts) })), cfg.contextBudgetTokens);
-      const summary = await deps.summarize(plan.summarize.map((m) => m.text));
-      const compactMsg: Message = {
-        id: randomUUID(), role: "system",
-        parts: [{ kind: "text", text: `Summary of earlier conversation:\n${summary}` }],
-        parentId: history[0]?.id ?? null, createdAt: Date.now(),
-      };
-      // plan.keep holds {id,tokens,text} projections — map back to the real messages
-      const keepIds = new Set(plan.keep.map((k) => k.id));
-      const kept = history.filter((m) => keepIds.has(m.id));
-      history.length = 0; history.push(compactMsg, ...kept);
-      yield { type: "compaction", strategy: "head-summarize", tokensBefore: histTokens, tokensAfter: history.reduce((n, m) => n + estimateTokens(partsTokenText(m.parts)), 0) };
+    // speculative: the estimate crossed budget × threshold, before this turn's provider call;
+    // emergency: the previous turn was REJECTED as a context overflow (error-stop block) — plan
+    // against the observed size and re-drive once (compaction.ts header: senpi/opencode cites)
+    const trigger = compactionTrigger(histTokens, cfg, emergencyPending);
+    emergencyPending = false; // consumed: one compaction per overflow
+    if (trigger) {
+      const cctx: CompactionCtx = { trigger, tokenText: (m) => partsTokenText(m.parts), summarize: deps.summarize, native: deps.compactNative, model, signal: runAc.signal };
+      const plan = planCompaction(history, cfg, cctx);
+      const out = plan ? await applyCompaction(history, plan, cfg, cctx) : null;
+      if (out) {
+        history.length = 0; history.push(...out.history);
+        const ev: RunEvent = { type: "compaction", strategy: out.strategy, trigger, tokensBefore: histTokens, tokensAfter: history.reduce((n, m) => n + estimateTokens(partsTokenText(m.parts)), 0) };
+        deps.store.appendEvent(ev); // real sessions carry the marker (export + replay), not just fixtures
+        yield ev;
+      }
     }
 
     const systemText = typeof def.systemPrompt === "function" ? def.systemPrompt(vars) : def.systemPrompt;
@@ -223,6 +234,9 @@ async function* runLoop(
     // --- error stops: the run ends in 'error', never a fake 'done' ---
     if (stopReason === "error") {
       const errText = turnResult.error ?? "provider stream failed";
+      // port #25: a context-overflow rejection arms an emergency compaction (next iteration's
+      // compaction block) and re-drives ONCE per run; a second overflow ends the run below
+      if (isContextOverflow(errText) && emergencyRedrives === 0) { emergencyRedrives++; emergencyPending = true; continue; }
       const partial = partsText(parts);
       yield { type: "run_end", status: "error", summary: partial ? `${partial}\nerror: ${errText}` : `error: ${errText}` };
       return;

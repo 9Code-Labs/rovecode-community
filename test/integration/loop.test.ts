@@ -1,10 +1,11 @@
 import { test, expect } from "bun:test";
-import { agentLoop, SteeringQueue } from "../../src/core/loop.ts";
+import { agentLoop, SteeringQueue, partsTokenText } from "../../src/core/loop.ts";
 import { ToolRegistry } from "../../src/core/tools.ts";
-import { SessionStore } from "../../src/core/session.ts";
+import { SessionStore, type Entry } from "../../src/core/session.ts";
 import { mockStream, textTurn, toolTurn } from "../../src/providers/stream.ts";
 import { readTool, writeTool } from "../../src/coding/hashline.ts";
-import type { AgentDefinition, RunConfig, Tool } from "../../src/core/types.ts";
+import { exportSession } from "../../src/cli/export.ts";
+import type { AgentDefinition, RunConfig, RunEvent, Tool } from "../../src/core/types.ts";
 import type { Message, ModelRef, StreamEvent, StreamFn } from "../../src/core/types.ts";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -212,5 +213,70 @@ test("compaction rebuilds history from real messages, not projections", async ()
   // (3) the run completes with run_end
   expect(status).toBe("done");
   expect(events.at(-1)).toBe("run_end");
+  rmSync(dir, { recursive: true, force: true });
+});
+
+/** Two long user/assistant turns (4 × 50 tokens) so a 60-token window compacts at turn 1. */
+function seedLongHistory(store: SessionStore): void {
+  let parent: string | null = null;
+  for (let i = 0; i < 4; i++) {
+    const m: Message = { id: randomUUID(), role: i % 2 === 0 ? "user" : "assistant", parts: [{ kind: "text", text: "x".repeat(200) }], parentId: parent, createdAt: Date.now() };
+    store.append(m); parent = m.id;
+  }
+}
+
+// port #25: the compaction event names strategy + trigger, and a REAL session carries the marker —
+// persisted as an event entry annotating the leaf, on the active path after reload, rendered by export
+test("compaction event carries strategy+trigger; the marker is persisted, survives reload, and `aion export` renders it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-loop-"));
+  const sid = randomUUID();
+  const store = new SessionStore(dir, sid);
+  seedLongHistory(store);
+  const events: RunEvent[] = [];
+  for await (const ev of agentLoop(baseDef, "compact this run", {}, cfg({ contextBudgetTokens: 60, compactionThreshold: 0.5 }), {
+    stream: mockStream({ turns: [textTurn("done")] }), registry: new ToolRegistry(), store, summarize: async () => "SUMMARY",
+  }, new SteeringQueue())) events.push(ev);
+  const comp = events.filter((e) => e.type === "compaction");
+  expect(comp.length).toBe(1);
+  expect(comp[0]).toMatchObject({ strategy: "head-summarize", trigger: "speculative" });
+  // persisted right after the goal message (the leaf at compaction time); the reply chains on the goal — no fork
+  const path = store.path();
+  const idx = path.findIndex((e) => "kind" in e && e.kind === "event");
+  expect(idx).toBeGreaterThan(0);
+  expect((path[idx] as Extract<Entry, { kind: "event" }>).event).toEqual(comp[0]!);
+  expect(path[idx - 1]).toMatchObject({ role: "user" });
+  expect(path[idx + 1]).toMatchObject({ role: "assistant" });
+  // reload: identical path, no corruption, and the loop-facing messages() is unchanged
+  const re = new SessionStore(dir, sid);
+  expect(re.reload()).toEqual([]);
+  expect(re.path().map((e) => e.id)).toEqual(path.map((e) => e.id));
+  expect(re.messages().length).toBe(6); // 4 seeded + goal + reply
+  const out = mkdtempSync(join(tmpdir(), "aion-loop-export-"));
+  const res = exportSession(dir, sid, { cwd: out });
+  const c0 = comp[0] as { tokensBefore: number; tokensAfter: number };
+  expect(readFileSync(res.path, "utf8")).toContain(`> compacted (head-summarize): ${c0.tokensBefore} → ${c0.tokensAfter} tokens`);
+  rmSync(dir, { recursive: true, force: true }); rmSync(out, { recursive: true, force: true });
+});
+
+test("cfg.compactionStrategy=keep-window compacts without a summarizer: deterministic marker on the wire, seeded head gone, event names the strategy", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-loop-"));
+  const store = new SessionStore(dir, randomUUID());
+  seedLongHistory(store);
+  const recorded: Message[][] = [];
+  const stream: StreamFn = async function* (_model: ModelRef, messages: Message[]): AsyncGenerator<StreamEvent> {
+    recorded.push([...messages]);
+    yield { type: "turn", turn: textTurn("done") };
+  };
+  const events: RunEvent[] = [];
+  for await (const ev of agentLoop(baseDef, "compact this run", {}, cfg({ contextBudgetTokens: 60, compactionThreshold: 0.5, compactionStrategy: "keep-window", compactionKeepTurns: 0 }), {
+    stream, registry: new ToolRegistry(), store, // no summarize: keep-window needs none
+  }, new SteeringQueue())) events.push(ev);
+  expect(events.find((e) => e.type === "compaction")).toMatchObject({ strategy: "keep-window", trigger: "speculative" });
+  const wire = recorded[0]!.map((m) => partsTokenText(m.parts)).join("\n");
+  expect(wire).not.toContain("x".repeat(200));
+  expect(wire).toContain("[context compacted (keep-window): 4 earlier messages");
+  expect(wire).toContain("compact this run");
+  expect(events.at(-1)).toMatchObject({ type: "run_end", status: "done" });
+  expect(store.path().some((e) => "kind" in e && e.kind === "event")).toBe(true);
   rmSync(dir, { recursive: true, force: true });
 });
