@@ -5,7 +5,8 @@
  *  - Anthropic /messages (x-api-key), with tools
  *  - Any custom base URL + key (AION_BASE_URL/AION_API_KEY or explicit config)
  *  Model catalogs are FETCHED from the endpoint (/v1/models) — never hard-coded (pi pattern).
- *  Error-turn shaping (abort vs error; HTTP status + Retry-After side-channel, port #23) lives in stream-errors.ts. */
+ *  Error-turn shaping (abort vs error; HTTP status + Retry-After side-channel, port #23) lives in stream-errors.ts.
+ *  Message lowering (harness parts → wire content, incl. port #34 image blocks) lives in wire-messages.ts. */
 
 import type { StreamFn, Message, AssistantTurn, StreamEvent, ModelRef, StopReason } from "../core/types.ts";
 import { partsText } from "../core/loop.ts";
@@ -13,6 +14,15 @@ import { applyAnthropicCacheBoundaries } from "./cache.ts";
 import { normalizeUsage } from "../core/usage.ts";
 import { loadCredentials } from "./auth.ts";
 import { failedTurn, httpErrorTurn } from "./stream-errors.ts";
+import { supportsImages } from "./catalog.ts";
+import { toOpenAiMessages, toAnthropicMessages, toOpenAiToolSchemas, asToolSchema, type WireOptions } from "./wire-messages.ts";
+
+export { toOpenAiMessages, toAnthropicMessages, toOpenAiToolSchemas } from "./wire-messages.ts";
+
+/** port #34: image parts go on the wire as image blocks unless the models.dev catalog says the
+ *  model has no image input (then wire-messages.ts substitutes a text placeholder); an unknown
+ *  model is given the image (catalog.ts supportsImages). */
+const wireOptions = (model: ModelRef): WireOptions => ({ vision: supportsImages(model) !== false });
 
 export interface ProviderConfig {
   id: string;             // provider id, e.g. "kaesra"
@@ -70,7 +80,7 @@ export function openaiCompatStream(opts: { baseUrl: string; apiKey: string }): S
         headers: { "content-type": "application/json", authorization: `Bearer ${opts.apiKey}` },
         body: JSON.stringify({
           model: model.model,
-          messages: toOpenAiMessages(messages),
+          messages: toOpenAiMessages(messages, wireOptions(model)),
           ...(options?.tools?.length ? { tools: toOpenAiToolSchemas(options.tools) } : {}),
           stream: false,
           ...(model.maxTokens ? { max_tokens: model.maxTokens } : {}),
@@ -101,7 +111,7 @@ export function openaiCompatStreaming(opts: { baseUrl: string; apiKey: string })
         headers: { "content-type": "application/json", authorization: `Bearer ${opts.apiKey}` },
         body: JSON.stringify({
           model: model.model,
-          messages: toOpenAiMessages(messages),
+          messages: toOpenAiMessages(messages, wireOptions(model)),
           ...(options?.tools?.length ? { tools: toOpenAiToolSchemas(options.tools) } : {}),
           stream: true,
           // ask for the final usage chunk — without it most OpenAI-compat SSE streams omit usage
@@ -164,7 +174,7 @@ export function anthropicStream(opts: { baseUrl: string; apiKey: string }): Stre
       const body: Record<string, unknown> = {
         model: model.model,
         max_tokens: model.maxTokens ?? 4096,
-        messages: toAnthropicMessages(messages),
+        messages: toAnthropicMessages(messages, wireOptions(model)),
       };
       if (options?.tools?.length) {
         body.tools = options.tools.map((t) => { const s = asToolSchema(t); return { name: s.name, description: s.description, input_schema: s.args }; });
@@ -227,78 +237,7 @@ function parseAnthropicResponse(json: unknown): AssistantTurn {
   return { parts, stopReason: stop, usage: { input: u.input, output: u.output, cacheRead: u.cacheRead || undefined, cacheWrite: u.cacheWrite || undefined } };
 }
 
-// ---------- message lowering ----------
-
-export function toOpenAiMessages(messages: Message[]): Record<string, unknown>[] {
-  const out: Record<string, unknown>[] = [];
-  for (const m of messages) {
-    const text = partsText(m.parts);
-    const calls = m.parts.filter((p) => p.kind === "tool_call");
-    const results = m.parts.filter((p) => p.kind === "tool_result");
-    if (m.role === "tool") {
-      for (const r of results) {
-        if (r.kind === "tool_result") out.push({ role: "tool", tool_call_id: r.callId, content: r.output });
-      }
-      continue;
-    }
-    if (m.role === "assistant" && calls.length > 0) {
-      out.push({
-        role: "assistant",
-        content: text || null,
-        tool_calls: calls.map((c) => c.kind === "tool_call" ? {
-          id: c.id, type: "function", function: { name: c.tool, arguments: JSON.stringify(c.args) },
-        } : {}),
-      });
-    } else if (text || m.role === "system") {
-      out.push({ role: m.role, content: text });
-    }
-  }
-  return out;
-}
-
-/** StreamOptions.tools carries bare ToolSchema entries (name/description/args) — that is what
- *  every call site (loop → adapters) passes. Tolerate a {schema} wrapper (a full Tool object)
- *  too, so a mis-passed registry entry degrades gracefully instead of throwing mid-request. */
-function asToolSchema(t: unknown): { name: string; description: string; args: Record<string, unknown> } {
-  const o = t as { name?: string; description?: string; args?: Record<string, unknown>; schema?: { name: string; description: string; args: Record<string, unknown> } };
-  return o.schema ?? { name: o.name ?? "unknown", description: o.description ?? "", args: o.args ?? {} };
-}
-
-export function toOpenAiToolSchemas(tools: unknown[]): Record<string, unknown>[] {
-  return tools.map((t) => {
-    const s = asToolSchema(t);
-    return { type: "function", function: { name: s.name, description: s.description, parameters: s.args } };
-  });
-}
-
-function toAnthropicMessages(messages: Message[]): Record<string, unknown>[] {
-  const out: Record<string, unknown>[] = [];
-  for (const m of messages) {
-    if (m.role === "system") continue;
-    const text = partsText(m.parts);
-    const calls = m.parts.filter((p) => p.kind === "tool_call");
-    const results = m.parts.filter((p) => p.kind === "tool_result");
-    if (m.role === "tool") {
-      for (const r of results) {
-        if (r.kind === "tool_result") {
-          out.push({ role: "user", content: [{ type: "tool_result", tool_use_id: r.callId, content: r.output, is_error: !r.ok }] });
-        }
-      }
-      continue;
-    }
-    if (m.role === "assistant" && calls.length > 0) {
-      const content: Record<string, unknown>[] = [];
-      if (text) content.push({ type: "text", text });
-      for (const c of calls) {
-        if (c.kind === "tool_call") content.push({ type: "tool_use", id: c.id, name: c.tool, input: c.args });
-      }
-      out.push({ role: "assistant", content });
-    } else if (text) {
-      out.push({ role: m.role === "user" ? "user" : "assistant", content: text });
-    }
-  }
-  return out;
-}
+// ---------- SSE ----------
 
 async function* sseLines(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
   const reader = body.getReader();

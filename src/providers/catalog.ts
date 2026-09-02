@@ -134,6 +134,25 @@ export class ModelCatalog {
    *  path that makes aggregator providers like kaesra (default model zai-org/glm-5.3-flash)
    *  priceable. The vendor hit reports the vendor as `provider`, naming the pricing source. */
   lookup(providerId: string, modelId: string): ModelInfo | undefined {
+    const hit = this.resolve(providerId, modelId);
+    return hit ? toModelInfo(hit.as, hit.key, hit.model) : undefined;
+  }
+
+  /** port #34: does the model accept image input? models.dev `modalities.input` (every entry of
+   *  the bundled snapshot carries it — 7479/7479 at @opencode-ai/models 0.0.61). undefined = the
+   *  model is not in the catalog (custom base URLs, local servers, aggregator ids without a
+   *  vendor prefix): callers treat unknown as "send the image" — a wrong guess then fails loudly
+   *  at the provider (HTTP 400 → error turn) instead of silently turning the user's image into
+   *  text. Same resolution order as lookup(). */
+  supportsImages(providerId: string, modelId: string): boolean | undefined {
+    const hit = this.resolve(providerId, modelId);
+    const input: unknown = hit?.model.modalities?.input;
+    return Array.isArray(input) ? input.includes("image") : undefined;
+  }
+
+  /** The catalog entry behind lookup()/supportsImages(): provider key candidates in order, live
+   *  layer over snapshot. `as` = the provider name reported (the vendor for a prefix hit). */
+  private resolve(providerId: string, modelId: string): { as: string; key: string; model: Model } | undefined {
     this.loadDiskCacheOnce();
 
     const candidates: { key: string; as: string; model: string }[] = [];
@@ -146,20 +165,20 @@ export class ModelCatalog {
     }
 
     for (const c of candidates) {
-      const hit = this.lookupIn(c.key, c.as, c.model);
-      if (hit) return hit;
+      const hit = this.findIn(c.key, c.model);
+      if (hit) return { as: c.as, ...hit };
     }
     return undefined;
   }
 
   /** one provider key, live layer over snapshot. */
-  private lookupIn(key: string, providerId: string, modelId: string): ModelInfo | undefined {
+  private findIn(key: string, modelId: string): { key: string; model: Model } | undefined {
     const live = this.liveProviders?.[key];
     if (live) {
       const found = findModelKey(live.models, modelId);
       if (found !== undefined) {
         const model = live.models[found];
-        if (model) return toModelInfo(providerId, found, model);
+        if (model) return { key: found, model };
       }
     }
 
@@ -168,8 +187,7 @@ export class ModelCatalog {
     const found = findModelKey(snap.models, modelId);
     if (found === undefined) return undefined;
     const model = snap.models[found];
-    if (!model) return undefined;
-    return toModelInfo(providerId, found, model);
+    return model ? { key: found, model } : undefined;
   }
 
   /** live fetch https://models.dev/api.json when fetchFn set; false on failure, never throws. */
@@ -217,4 +235,12 @@ export class ModelCatalog {
       // best-effort cache write; a failed write must not fail refresh()
     }
   }
+}
+
+let offlineCatalog: ModelCatalog | null = null;
+
+/** Port #34 adapter hook: image capability of a ModelRef from the offline snapshot (no fetchFn →
+ *  never touches network or disk). undefined = unknown model (see ModelCatalog.supportsImages). */
+export function supportsImages(ref: { provider: string; model: string }, catalog?: ModelCatalog): boolean | undefined {
+  return (catalog ?? (offlineCatalog ??= new ModelCatalog())).supportsImages(ref.provider, ref.model);
 }

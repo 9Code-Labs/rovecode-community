@@ -10,7 +10,24 @@ export type Role = "system" | "user" | "assistant" | "tool";
 export interface TextPart { kind: "text"; text: string }
 export interface ToolCallPart { kind: "tool_call"; id: string; tool: string; args: unknown }
 export interface ToolResultPart { kind: "tool_result"; callId: string; ok: boolean; output: string }
-export type MessagePart = TextPart | ToolCallPart | ToolResultPart;
+/** The four raster types both wire protocols accept (Anthropic image source media_type;
+ *  OpenAI image_url data URL) — decided by magic bytes, never by file extension (core/images.ts). */
+export type ImageMime = "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+/** port #34: an image attached to a user message. Exactly one carrier is set — `bytes` (base64,
+ *  the in-memory / transport form: TUI /attach, ACP image blocks) or `path` (the sidecar file the
+ *  session store wrote under `<session>/attachments/`; session-relative in entries.jsonl,
+ *  resolved to absolute on load). Adapters read either through core/images.ts imageData(). */
+export interface ImagePart {
+  kind: "image";
+  mime: ImageMime;
+  bytes?: string;
+  path?: string;
+  width?: number;
+  height?: number;
+  /** display name (the attached file's basename) — transcript chip + non-vision placeholder */
+  name?: string;
+}
+export type MessagePart = TextPart | ToolCallPart | ToolResultPart | ImagePart;
 
 export interface Message {
   id: string;

@@ -4,10 +4,18 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync, renameSync } from "node:fs";
-import { join } from "node:path";
-import type { Message, RunEvent, TextPart } from "./types.ts";
+import { isAbsolute, join } from "node:path";
+import type { ImagePart, Message, RunEvent, TextPart } from "./types.ts";
+import { imageExt } from "./images.ts";
 
 export type Entry = Message | ({ id: string; kind: "event"; parentId: string | null; createdAt: number; event: RunEvent });
+
+/** Port #34 image sidecars: `<session>/attachments/<sha256>.<ext>`, content-addressed (the same
+ *  image attached twice is one file). Persisted parts reference them by a session-relative,
+ *  forward-slash path; in memory the path is absolute so adapters can read it anywhere.
+ *  `aion export --json` copies entries.jsonl ALONE — the attachments directory travels with the
+ *  session directory, not with the export (the JSONL stays a small, verbatim-copyable record). */
+const ATTACHMENTS_DIR = "attachments";
 
 export type CorruptionKind =
   | "orphan-entry"        // parentId points at nothing
@@ -116,6 +124,8 @@ export class SessionStore {
   private meta: SessionMeta;
   /** true once meta.json carries a leaf field — appends then keep it in step. */
   private leafPersisted = false;
+  /** port #34: image parts waiting for the next user message (stageAttachments) */
+  private staged: ImagePart[] = [];
 
   constructor(rootDir: string, public readonly id: string) {
     this.dir = join(rootDir, id);
@@ -171,6 +181,7 @@ export class SessionStore {
         corrupt.push({ kind: "chain-broken", entryId: w.id, line: i, detail: `prevHash disagrees with parent ${w.parentId ?? "(root)"}` });
       }
       if (!byLine.has(w.id)) byLine.set(w.id, w);
+      w.entry = this.hydrateImages(w.entry); // session-relative sidecar paths → absolute (in memory only)
       this.cache.push(w);
     });
     // cycle check over ancestry
@@ -201,18 +212,73 @@ export class SessionStore {
     if (parentId !== this.leaf) {
       prevHash = parentId === null ? "" : (this.cache.find((c) => c.id === parentId)?.hash ?? this.prevHash);
     }
+    // port #34: staged attachments ride on this user message — folded into the caller's parts
+    // array IN PLACE, because the loop persists the very object it keeps in its history
+    // (loop.ts:116-122); that is what puts the image on the wire this run without a loop change
+    if (this.staged.length > 0 && "role" in entry && entry.role === "user") {
+      entry.parts.push(...this.staged);
+      this.staged = [];
+    }
+    const persisted = this.sidecarImages(entry); // inline bytes → sidecar files; entries.jsonl stays small
     const w: Wrapped = {
       id: entry.id, parentId,
       createdAt: entry.createdAt ?? Date.now(),
       prevHash,
       hash: "",
-      entry,
+      entry: persisted,
     };
     w.hash = chainHash(prevHash, w);
     appendFileSync(this.file, JSON.stringify(w) + "\n");
-    this.cache.push(w);
+    this.cache.push(persisted === entry ? w : { ...w, entry: this.hydrateImages(persisted) });
     this.leaf = w.id; this.prevHash = w.hash;
     if (this.leafPersisted) this.persistLeaf(); // keep the durable leaf in step after a branch
+  }
+
+  /** Port #34 TUI attach path (`/attach <path>` → next submit): image parts staged here are
+   *  appended to the parts of the NEXT user message that lands in append(), then cleared.
+   *  System/assistant/tool entries in between (a pending mode switch, tool results) leave the
+   *  stage untouched. Replaces any earlier stage; `[]` clears it. */
+  stageAttachments(parts: readonly ImagePart[]): void { this.staged = [...parts]; }
+
+  get stagedAttachments(): readonly ImagePart[] { return this.staged; }
+
+  /** The on-disk form: every inline image (`bytes`) becomes a sidecar file and the part keeps a
+   *  session-relative `path` instead — the hash chain covers the path, the content-addressed
+   *  filename covers the bytes. A sidecar that cannot be written (read-only dir, disk full)
+   *  keeps its bytes inline, so nothing is ever dropped. Returns the same object when there is
+   *  nothing to do. */
+  private sidecarImages(entry: Entry): Entry {
+    if (!("role" in entry) || !entry.parts.some((p) => p.kind === "image" && p.bytes !== undefined)) return entry;
+    const parts = entry.parts.map((p) => {
+      if (p.kind !== "image" || p.bytes === undefined) return p;
+      const buf = Buffer.from(p.bytes, "base64");
+      const file = `${createHash("sha256").update(buf).digest("hex")}.${imageExt(p.mime)}`;
+      try {
+        mkdirSync(join(this.dir, ATTACHMENTS_DIR), { recursive: true });
+        const abs = join(this.dir, ATTACHMENTS_DIR, file);
+        if (!existsSync(abs)) writeFileSync(abs, buf);
+      } catch {
+        return p; // inline fallback
+      }
+      const out: ImagePart = { kind: "image", mime: p.mime, path: `${ATTACHMENTS_DIR}/${file}` };
+      if (p.width !== undefined) out.width = p.width;
+      if (p.height !== undefined) out.height = p.height;
+      if (p.name !== undefined) out.name = p.name;
+      return out;
+    });
+    return { ...entry, parts };
+  }
+
+  /** In-memory form: session-relative sidecar paths → absolute under this session's dir, so
+   *  core/images.ts imageData() can read them without knowing the session. Same object when
+   *  there is nothing to resolve. */
+  private hydrateImages(entry: Entry): Entry {
+    if (!("role" in entry) || !Array.isArray(entry.parts)) return entry;
+    if (!entry.parts.some((p) => p.kind === "image" && p.path !== undefined && !isAbsolute(p.path))) return entry;
+    const parts = entry.parts.map((p) =>
+      p.kind === "image" && p.path !== undefined && !isAbsolute(p.path) ? { ...p, path: join(this.dir, ...p.path.split("/")) } : p,
+    );
+    return { ...entry, parts };
   }
 
   /** Persist a RunEvent as an ANNOTATION of the current leaf (port #25: the loop's compaction

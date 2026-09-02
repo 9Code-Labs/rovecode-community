@@ -165,6 +165,101 @@ test("turnPoints: active-path user turns with 1-based index, parentId, branch co
   rmSync(dir, { recursive: true, force: true });
 });
 
+// ── port #34: image parts — sidecar persistence, staging, export ──
+
+import { createHash } from "node:crypto";
+import { existsSync, readdirSync } from "node:fs";
+import { imageFromBytes, imageData } from "../../src/core/images.ts";
+import { exportSession } from "../../src/cli/export.ts";
+import type { ImagePart, Message } from "../../src/core/types.ts";
+import { PNG_1x1, PNG_1x1_B64 } from "../fixtures/images.ts";
+
+const PNG_SHA = createHash("sha256").update(PNG_1x1).digest("hex");
+function dot(): ImagePart { const r = imageFromBytes(PNG_1x1, { name: "dot.png" }); if ("error" in r) throw new Error(r.error); return r; }
+function imsg(text: string, img: ImagePart, parentId: string | null = null) {
+  return { id: randomUUID(), role: "user" as const, parts: [{ kind: "text" as const, text }, img], parentId, createdAt: Date.now() };
+}
+
+test("image round-trip: sidecar on disk, JSONL carries a relative path and NO bytes, in-memory parts resolve to the absolute path, bytes read back identical, chain intact", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-test-"));
+  const s = new SessionStore(dir, "img1");
+  const img = dot();
+  const m = imsg("look", img);
+  s.append(m);
+  const sidecar = join(dir, "img1", "attachments", `${PNG_SHA}.png`);
+  expect(existsSync(sidecar)).toBe(true);
+  expect(Buffer.compare(readFileSync(sidecar), PNG_1x1)).toBe(0);
+  const raw = readFileSync(join(dir, "img1", "entries.jsonl"), "utf8");
+  expect(raw.includes(PNG_1x1_B64)).toBe(false);                    // the JSONL stays small
+  const w = JSON.parse(raw.trim());
+  expect(w.entry.parts[1]).toEqual({ kind: "image", mime: "image/png", path: `attachments/${PNG_SHA}.png`, width: 1, height: 1, name: "dot.png" });
+  expect(chainHash(w.prevHash, { ...w, hash: "" })).toBe(w.hash);     // the chain covers the persisted (path) form
+  expect(m.parts[1]).toBe(img);                                     // the caller's object is untouched (its inline bytes serve this run)
+  for (const store of [s, new SessionStore(dir, "img1")]) {         // fresh cache and a reload agree
+    const part = store.messages()[0]!.parts[1] as ImagePart;
+    expect(part.path).toBe(sidecar);
+    expect(part.bytes).toBeUndefined();
+    expect(imageData(part)).toBe(PNG_1x1_B64);
+  }
+  expect(new SessionStore(dir, "img1").reload()).toEqual([]);
+  // the same image attached again is the same content-addressed file
+  s.append(imsg("again", dot(), m.id));
+  expect(readdirSync(join(dir, "img1", "attachments"))).toEqual([`${PNG_SHA}.png`]);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("aion export --json of a session with an image is still a byte-verbatim copy of entries.jsonl (the attachments dir is not bundled)", () => {
+  const root = mkdtempSync(join(tmpdir(), "aion-test-"));
+  const out = mkdtempSync(join(tmpdir(), "aion-test-out-"));
+  const s = new SessionStore(root, "imgexp");
+  s.append(imsg("look", dot()));
+  const src = readFileSync(join(root, "imgexp", "entries.jsonl"));
+  const res = exportSession(root, "imgexp", { json: true, cwd: out });
+  expect(res.format).toBe("jsonl");
+  const copied = readFileSync(res.path);
+  expect(Buffer.compare(copied, src)).toBe(0);
+  expect(readdirSync(out)).toEqual(["imgexp.jsonl"]);
+  expect(JSON.parse(copied.toString("utf8").trim()).entry.parts[1].path).toBe(`attachments/${PNG_SHA}.png`); // export references, does not carry, the bytes
+  rmSync(root, { recursive: true, force: true }); rmSync(out, { recursive: true, force: true });
+});
+
+test("stageAttachments: a system entry leaves the stage alone; the next USER append gets the parts folded IN PLACE (the loop's history object), persisted as a sidecar, then the stage is empty", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-test-"));
+  const s = new SessionStore(dir, "img3");
+  const img = dot();
+  s.stageAttachments([img]);
+  expect(s.stagedAttachments.length).toBe(1);
+  const sys = { id: randomUUID(), role: "system" as const, parts: [{ kind: "text" as const, text: "<mode_notice>plan</mode_notice>" }], parentId: null, createdAt: Date.now() };
+  s.append(sys);                                                    // e.g. flushModeSwitch before the run
+  expect(sys.parts.length).toBe(1);
+  expect(s.stagedAttachments.length).toBe(1);
+  // the loop's userMsg (loop.ts:116-120): text only, built from the goal
+  const u: Message = { id: randomUUID(), role: "user", parts: [{ kind: "text", text: "describe" }], parentId: sys.id, createdAt: Date.now() };
+  s.append(u);
+  expect(u.parts.length).toBe(2);
+  expect(u.parts[1]).toBe(img);                                     // same object → the loop's in-memory history carries it
+  expect(s.stagedAttachments.length).toBe(0);
+  const back = new SessionStore(dir, "img3").messages();
+  expect(back.map((e) => e.parts.map((p) => p.kind))).toEqual([["text"], ["text", "image"]]);
+  expect(existsSync(join(dir, "img3", "attachments", `${PNG_SHA}.png`))).toBe(true);
+  s.append(msg("plain", u.id));                                     // nothing staged → nothing folded
+  expect(new SessionStore(dir, "img3").messages().at(-1)!.parts.length).toBe(1);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("sidecar write failure keeps the image inline in the JSONL — nothing dropped, the round-trip still reads back", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-test-"));
+  const s = new SessionStore(dir, "img4");
+  writeFileSync(join(dir, "img4", "attachments"), "a file where the directory should be");
+  s.append(imsg("look", dot()));
+  const w = JSON.parse(readFileSync(join(dir, "img4", "entries.jsonl"), "utf8").trim());
+  expect(w.entry.parts[1].bytes).toBe(PNG_1x1_B64);
+  expect(w.entry.parts[1].path).toBeUndefined();
+  const back = new SessionStore(dir, "img4").messages()[0]!.parts[1] as ImagePart;
+  expect(imageData(back)).toBe(PNG_1x1_B64);
+  rmSync(dir, { recursive: true, force: true });
+});
+
 test("hash chain valid after restart → branch → append: zero corruption, per-entry hashes verify", () => {
   const dir = mkdtempSync(join(tmpdir(), "aion-test-"));
   const s1 = new SessionStore(dir, "d6");

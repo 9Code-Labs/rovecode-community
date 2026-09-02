@@ -353,6 +353,7 @@ export function partsTokenText(parts: MessagePart[]): string {
   return parts.map((p) =>
     p.kind === "text" ? p.text
     : p.kind === "tool_call" ? `${p.tool} ${JSON.stringify(p.args)}`
-    : p.output,
+    : p.kind === "tool_result" ? p.output
+    : "", // port #34 image parts carry no token text (image token cost is provider-specific; not estimated here)
   ).join("\n");
 }
