@@ -5,8 +5,10 @@
  *  :1097-1156 (palette groups/open/close/draw), :1564-1574 (onPaletteKey).
  *  Dropped: intent matching, the mock shell table (`!cmd` is plain text for onSubmit), /spawn
  *  /crew /undo /permissions /mode /changes /pet /tasks-as-scenarios. Renderer-local commands
- *  (/help card, /theme, /open, /diff, /focus, /agents) live in LOCAL_COMMANDS; every other slash
- *  line (built-ins + custom, from `s.commands` = setCommands) is handed to onSubmit by keys.ts.
+ *  (/help card, /theme, /open, /diff, /focus, /agents) are listed in LOCAL_COMMANDS and run by
+ *  local-commands.ts; every other slash line (built-ins + custom, from `s.commands` = setCommands)
+ *  is handed to onSubmit by keys.ts. `suggestions` caps its rows at MAX_SUGGESTIONS in one place;
+ *  the drawers never write the state (a paint is not an event).
  *  Pure: no Date.now(), no timers, no process access. Palette actions are strings (contract
  *  PaletteState.items): a slash line, or `theme:<name>` `mode:<CodeMode>` `focus:<Focus>`
  *  `open:<path>` — keys.ts runs them. `fuzzy` is a parameter everywhere (default = the ported
@@ -129,8 +131,16 @@ export interface Suggestion {
   enter: "submit" | "complete";
 }
 
-/** the dropdown above the prompt; [] when nothing applies (overlays, cards, empty or free text) */
+/** rows the box can show — keys.ts wraps ↑↓ over exactly these, so the cap lives here alone */
+export const MAX_SUGGESTIONS = 8;
+
+/** the dropdown above the prompt, at most MAX_SUGGESTIONS rows; [] when nothing applies
+ *  (overlays, cards, empty or free text) */
 export function suggestions(s: SextantState, files: readonly string[], fz: Fuzzy = fuzzy): Suggestion[] {
+  return suggestionRows(s, files, fz).slice(0, MAX_SUGGESTIONS);
+}
+
+function suggestionRows(s: SextantState, files: readonly string[], fz: Fuzzy): Suggestion[] {
   if (s.palette || s.help || s.card) return [];
   const text = s.input.text;
   if (!text.trim()) return [];
@@ -162,21 +172,21 @@ const st = (fg: number, bg = -1, a = 0): Style => ({ fg, bg, a });
 const ENTER: KeyEvent = { type: "key", name: "enter" };
 
 /** app.js:1004-1023 — the box sits just above the prompt line inside the messages panel `rect`;
- *  a row click selects it and replays Enter (HitZone.key) */
+ *  `sugs` is the `suggestions()` list (already capped); a row click selects it and replays Enter
+ *  (HitZone.key). Painting never writes the state: the highlight is clamped locally. */
 export function drawSuggest(scr: ScreenLike, rect: Rect, s: SextantState, sugs: readonly Suggestion[], C: Theme, hits?: HitZone[]): void {
   if (!sugs.length || s.input.sgSel < 0) return;
-  const items = sugs.slice(0, 8);
-  s.input.sgSel = Math.min(s.input.sgSel, items.length - 1);
-  const kind = items[0]!.kind;
+  const selected = Math.min(s.input.sgSel, sugs.length - 1);
+  const kind = sugs[0]!.kind, cmd = parseInput(s.input.text).cmd;
   const title = kind === "mention" ? "mention a file" : kind === "slash" ? "commands"
-    : `/${parseInput(s.input.text).cmd} · ${LOCAL_COMMANDS.find((c) => c.name === parseInput(s.input.text).cmd)?.arg ?? ""}`;
-  const w = Math.min(rect.w - 4, 76), x = rect.x + 2, h = items.length + 3, y0 = Math.max(rect.y + 1, rect.y + rect.h - 3 - h);
+    : `/${cmd} · ${LOCAL_COMMANDS.find((c) => c.name === cmd)?.arg ?? ""}`;
+  const w = Math.min(rect.w - 4, 76), x = rect.x + 2, h = sugs.length + 3, y0 = Math.max(rect.y + 1, rect.y + rect.h - 3 - h);
   scr.box(x, y0, w, h, st(C.rule2), C.bg2);
   scr.text(x + 2, y0 + 1, [[title, st(C.dim, C.bg2)]]);
   const help = kind === "mention" ? "tab insert" : "tab complete  ⏎ run";
   scr.put(x + w - 2 - help.length, y0 + 1, help, st(C.dim, C.bg2));
-  items.forEach((it, i) => {
-    const y = y0 + 2 + i, sel = i === s.input.sgSel;
+  sugs.forEach((it, i) => {
+    const y = y0 + 2 + i, sel = i === selected;
     const segs: [string, Style][] = [[sel ? "▸ " : "  ", st(C.accent, C.bg2)], [it.label, st(sel ? C.fg : C.fg2, C.bg2, sel ? ATTR.BOLD : 0)]];
     if (it.arg) segs.push([" " + it.arg, st(C.dim, C.bg2)]);
     scr.text(x + 2, y, segs, w - 4);
@@ -277,7 +287,7 @@ export function onPaletteKey(s: SextantState, ev: KeyEvent, run: (action: string
   if (name === "up") { P.sel = (P.sel - 1 + n) % n; return; }
   if (name === "down") { P.sel = (P.sel + 1) % n; return; }
   if (name === "enter") { const it = vis[P.sel]; closePalette(s); if (it) run(it.action); return; }
-  if (name === "backspace") { P.query = P.query.slice(0, -1); P.sel = 0; return; }
+  if (name === "backspace") { P.query = [...P.query].slice(0, -1).join(""); P.sel = 0; return; } // by code point (😀 is one)
   const c = name === "space" ? " " : ch;
   if (c && !ctrl && !alt) { P.query += c; P.sel = 0; }
 }

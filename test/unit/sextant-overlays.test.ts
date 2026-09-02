@@ -6,6 +6,7 @@ import { test, expect } from "bun:test";
 import {
   parseInput, mentionAt, resolveFile, fuzzy, suggestions, drawSuggest, paletteItems, openPalette, closePalette,
   paletteVisible, paletteHint, drawPalette, onPaletteKey, helpRows, drawHelp, allCommands, HELP_KEYS, LOCAL_COMMANDS,
+  MAX_SUGGESTIONS,
 } from "../../src/sextant/overlays.ts";
 import type { HitZone } from "../../src/sextant/keys.ts";
 import { GridScreen } from "../helpers/sextant-grid-keys.ts";
@@ -53,7 +54,7 @@ test("fuzzy: subsequence only, consecutive hits and word/path starts score highe
 
 // ---------- suggestions ----------
 
-test("suggestions: '/hel' lists /help then the custom /hello, nothing else; '/' lists every command, local rows first", () => {
+test("suggestions: '/hel' lists /help then the custom /hello, nothing else; '/' lists the first 8 commands, local rows first", () => {
   const s = makeState();
   s.input = { ...s.input, text: "/hel", cur: 4 };
   const sugs = suggestions(s, s.files.paths);
@@ -63,8 +64,10 @@ test("suggestions: '/hel' lists /help then the custom /hello, nothing else; '/' 
   const all = suggestions(s, s.files.paths).map((x) => x.label);
   expect(all.slice(0, LOCAL_COMMANDS.length)).toEqual(LOCAL_COMMANDS.map((c) => "/" + c.name));
   expect(all).toContain("/exit");
-  expect(all).toContain("/hello");
+  expect(all.length).toBe(MAX_SUGGESTIONS); // 9 commands are known; the box shows the 8 best (the cap lives in suggestions)
   expect(new Set(all).size).toBe(all.length); // /help appears once although setCommands lists it too
+  s.input = { ...s.input, text: "/hell", cur: 5 }; // the 9th command is reached by typing its stem
+  expect(suggestions(s, s.files.paths).map((x) => x.label)).toEqual(["/hello"]);
 });
 
 test("suggestions: argument rows for /theme, /open, /diff (changed files first), /focus; none for built-ins or a bare arg", () => {
@@ -129,6 +132,41 @@ test("drawSuggest: a box above the prompt with the title, the selected row marke
   s.input.sgSel = -1;
   drawSuggest(e, L.messages, s, suggestions(s, s.files.paths), THEME);
   expect(e.toText().trim()).toBe("");
+});
+
+test("suggestions caps at MAX_SUGGESTIONS = 8 rows in one place (17 slash candidates → the 8 best; '/' → 8)", () => {
+  const s = makeState();
+  s.commands.push(...Array.from({ length: 16 }, (_, i) => ({ name: `c${i}`, description: `command ${i}` })));
+  s.input = { ...s.input, text: "/c", cur: 2 };
+  expect(MAX_SUGGESTIONS).toBe(8);
+  const sugs = suggestions(s, s.files.paths);
+  expect(sugs.map((x) => x.label)).toEqual(["/c0", "/c1", "/c2", "/c3", "/c4", "/c5", "/c6", "/c7"]);
+  s.input = { ...s.input, text: "/", cur: 1 };
+  expect(suggestions(s, s.files.paths).length).toBe(8);
+});
+
+test("drawSuggest never writes the state: a frozen input paints, sgSel past the rows is clamped for the highlight only, the box holds the capped rows", () => {
+  const s = makeState(), L = makeLayout(160, 44), scr = new GridScreen(160, 44);
+  s.commands.push(...Array.from({ length: 16 }, (_, i) => ({ name: `c${i}`, description: `command ${i}` })));
+  s.input = { ...s.input, text: "/c", cur: 2, sgSel: 20 };
+  const sugs = suggestions(s, s.files.paths);
+  Object.freeze(s.input);
+  const before = structuredClone(s.input);
+  expect(() => drawSuggest(scr, L.messages, s, sugs, THEME)).not.toThrow();
+  expect(s.input).toEqual(before);
+  expect(s.input.sgSel).toBe(20);
+  expect(scr.toText()).toMatch(/▸ \/c7/); // the last drawn row carries the highlight
+  const top = scr.cells.findIndex((r) => r.includes("╭")), bottom = scr.cells.findIndex((r) => r.includes("╰"));
+  expect(bottom - top + 1).toBe(8 + 3); // 8 rows + title + borders: the box height follows the cap
+  expect(top).toBe(L.messages.y + 1); // 11 rows do not fit above the prompt of a 14-row panel: clamped to the first inner row
+});
+
+test("onPaletteKey backspace removes a whole code point (😀 is one)", () => {
+  const s = makeState();
+  openPalette(s);
+  s.palette!.query = "a😀";
+  onPaletteKey(s, key("backspace"), () => {});
+  expect(s.palette!.query).toBe("a");
 });
 
 // ---------- palette ----------

@@ -1,0 +1,133 @@
+/** Sextant renderer-local commands (port #43): the slash lines and palette actions the renderer
+ *  answers itself — /help /theme /open /diff /focus /agents — the /undo /permissions /mode notes
+ *  (ALIAS_NOTE) and the state-then-hook effect helpers keys.ts shares with them. Ported from the
+ *  user's own sextant v0.4.0 prototype app.js:1024-1029 (runSlash) and :944 (openFile); split out
+ *  of keys.ts for the line budget — also the home for #44's further renderer-local commands.
+ *  Pure over (state, ctx): no clock, no timers, no process access. A state field is written BEFORE
+ *  the matching KeyCtx.local hook fires, so the renderer only loads content / rebuilds the palette.
+ *  Everything that is not renderer-local (built-ins, custom commands, `!cmd`, free text, unknown
+ *  `/x`) reaches ctx.hooks.onSubmit unchanged — app.ts handleSlash owns the rest. */
+
+import type { KeyCtx } from "./keys.ts";
+import { parseInput, resolveFile } from "./overlays.ts";
+import { THEME_ORDER, type CodeMode, type Focus, type SextantState, type ThemeName } from "./types.ts";
+
+/** prototype commands with an aion equivalent: a toast instead of a submission — unless
+ *  setCommands lists a custom command of that name, which then runs like any other */
+export const ALIAS_NOTE: Record<string, string> = {
+  undo: "/undo → use /checkpoints + /restore",
+  permissions: "/permissions → use /yolo",
+  mode: "/mode → use /plan or /act",
+};
+
+const isTheme = (v: string): v is ThemeName => (THEME_ORDER as readonly string[]).includes(v);
+
+// ------------------------------------------------------------------ effects (state first, then the hook)
+
+export function setTheme(s: SextantState, ctx: KeyCtx, name: ThemeName): void {
+  s.theme = name;
+  ctx.local.setTheme(name);
+}
+
+export function setMode(s: SextantState, ctx: KeyCtx, mode: CodeMode): void {
+  s.code.mode = mode;
+  s.code.scroll = 0;
+  ctx.local.setMode(mode);
+}
+
+/** the crew board in the code panel (⌃a, /agents): lane closed, focus follows */
+export function showAgents(s: SextantState, ctx: KeyCtx): void {
+  setMode(s, ctx, "agents");
+  s.code.laneOpen = false;
+  s.focus = "code";
+}
+
+/** app.js:944 — parent dirs expand, the code panel shows the file; focus is the caller's call */
+export function openFile(s: SextantState, ctx: KeyCtx, path: string): void {
+  const parts = path.split("/");
+  for (let i = 1; i < parts.length; i++) s.files.expanded.add(parts.slice(0, i).join("/"));
+  s.code.file = path;
+  s.code.mode = "code";
+  s.code.scroll = 0;
+  ctx.local.openFile(path);
+}
+
+/** the files panel only takes focus while the layout shows it (≥ 140 columns) */
+export function setFocus(s: SextantState, ctx: KeyCtx, f: Focus): void {
+  if (f === "files" && !ctx.layout.files) ctx.local.toast("the files panel needs ≥ 140 columns");
+  else s.focus = f;
+}
+
+// ------------------------------------------------------------------ dispatch
+
+/** renderer-local slash commands run here; everything else (built-ins, custom, `!cmd`, free
+ *  text, unknown `/x`) reaches onSubmit unchanged — app.ts handleSlash owns the rest */
+export function dispatch(s: SextantState, text: string, ctx: KeyCtx): void {
+  const p = parseInput(text);
+  if (p.kind !== "slash" || !runLocal(s, p.cmd ?? "", p.arg ?? "", ctx)) ctx.hooks.onSubmit(text);
+}
+
+/** true when the line was answered here and must not reach onSubmit */
+export function runLocal(s: SextantState, cmd: string, arg: string, ctx: KeyCtx): boolean {
+  switch (cmd) {
+    case "help":
+      s.help = true;
+      return false; // the card opens AND /help reaches the transcript
+    case "theme":
+      if (isTheme(arg)) setTheme(s, ctx, arg);
+      else ctx.local.toast(`unknown theme "${arg}" · night, ember or contrast`);
+      return true;
+    case "open": {
+      const p = resolveFile(arg, s.files.paths, ctx.fuzzy);
+      if (!p) { ctx.local.toast(arg ? `no file matches "${arg}"` : "usage: /open <file>"); return true; }
+      openFile(s, ctx, p);
+      s.focus = "code";
+      return true;
+    }
+    case "diff": {
+      if (arg) {
+        const p = resolveFile(arg, s.files.paths, ctx.fuzzy);
+        if (!p) { ctx.local.toast(`no file matches "${arg}"`); return true; }
+        s.code.file = p;
+      }
+      setMode(s, ctx, "diff");
+      return true;
+    }
+    case "focus":
+      if (arg === "messages" || arg === "code" || arg === "files") setFocus(s, ctx, arg);
+      else ctx.local.toast("focus is messages, code or files");
+      return true;
+    case "agents":
+      showAgents(s, ctx);
+      return true;
+    default: {
+      const note = ALIAS_NOTE[cmd];
+      // a custom command of that name (listed by setCommands) wins over the note
+      if (note && !s.commands.some((c) => c.name === cmd)) { ctx.local.toast(note); return true; }
+      return false;
+    }
+  }
+}
+
+/** palette actions (overlays.ts paletteItems): a slash line, or theme: / mode: / focus: / open: */
+export function runAction(s: SextantState, action: string, ctx: KeyCtx): void {
+  if (action.startsWith("/")) {
+    const p = parseInput(action), needsArg = ["theme", "open", "focus"].includes(p.cmd ?? "");
+    if (needsArg && !p.arg) { // the argument is still missing: park the line in the prompt, options open
+      s.input.text = action + " ";
+      s.input.cur = s.input.text.length;
+      s.input.sgSel = 0;
+      s.focus = "messages";
+      return;
+    }
+    dispatch(s, action, ctx);
+    return;
+  }
+  const i = action.indexOf(":"), kind = action.slice(0, i), rest = action.slice(i + 1);
+  if (kind === "theme" && isTheme(rest)) setTheme(s, ctx, rest);
+  else if (kind === "mode") {
+    setMode(s, ctx, rest as CodeMode);
+    if (rest === "agents") s.code.laneOpen = false;
+  } else if (kind === "focus") setFocus(s, ctx, rest as Focus);
+  else if (kind === "open") { openFile(s, ctx, rest); s.focus = "code"; }
+}

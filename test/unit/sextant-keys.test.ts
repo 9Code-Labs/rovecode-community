@@ -4,8 +4,16 @@
 
 import { test, expect } from "bun:test";
 import { focusOrder, ESC_WINDOW_MS, type HitZone } from "../../src/sextant/keys.ts";
+import { ALIAS_NOTE } from "../../src/sextant/local-commands.ts";
+import { MAX_SUGGESTIONS, suggestions } from "../../src/sextant/overlays.ts";
 import type { CardState, SextantState, TreeRow } from "../../src/sextant/types.ts";
 import { makeState, makeLayout, spyCtx, key, ctrl, mouse, paste, press, type } from "../helpers/sextant-fixtures-keys.ts";
+
+/** n running lanes for the agents board */
+const crew = (n: number): SextantState["crew"] =>
+  Array.from({ length: n }, (_, i) => ({ id: `t${i}`, label: `t${i}`, agent: "a", status: "running", createdAt: 0 })) as SextantState["crew"];
+/** the 160×44 layout with the code panel forced to `w` columns (the agents grid is width-based) */
+const codeWidth = (w: number) => { const L = makeLayout(160, 44); L.code = { ...L.code, w }; return L; };
 
 // ---------- slash suggestions → onSubmit ----------
 
@@ -200,11 +208,11 @@ test("←/→ in the code panel cycle code→diff→run→agents (search joins o
 });
 
 test("agents mode with a crew: ←/→/↑/↓ move the lane, Enter opens/closes the lane (Esc closes it too)", () => {
-  const s = makeState({ focus: "code" }), spy = spyCtx();
+  const s = makeState({ focus: "code" }), spy = spyCtx(codeWidth(140)); // a 140-wide code panel → the board draws 3 columns
   s.code.mode = "agents";
-  s.crew = Array.from({ length: 5 }, (_, i) => ({ id: `t${i}`, label: `t${i}`, agent: "a", status: "running", createdAt: 0 })) as SextantState["crew"];
+  s.crew = crew(5);
   press(s, spy, key("right")); expect(s.code.lane).toBe(1);
-  press(s, spy, key("down")); expect(s.code.lane).toBe(4); // 5 lanes → 3 columns
+  press(s, spy, key("down")); expect(s.code.lane).toBe(4); // 5 lanes in 3 columns: ↓ is one row = 3 lanes
   press(s, spy, key("left")); expect(s.code.lane).toBe(3);
   press(s, spy, key("up")); expect(s.code.lane).toBe(0);
   press(s, spy, key("enter")); expect(s.code.laneOpen).toBe(true);
@@ -485,4 +493,111 @@ test("handleInput never touches the clock: same inputs at different `now` values
   type(a, sa, "/hel", 1); type(b, sb, "/hel", 999_999);
   press(a, sa, key("tab"), 1); press(b, sb, key("tab"), 999_999);
   expect(a).toEqual(b);
+});
+
+// ---------- fix pass: critic findings on the #43 port ----------
+
+test("Enter on a fuzzy-only or one-letter slash stem submits the line verbatim (/x /e /ext /exot reach handleSlash), never the top pick", () => {
+  const s = makeState(), spy = spyCtx();
+  s.commands.push({ name: "export", description: "Export this session" }); // the real table has /exit AND /export
+  for (const line of ["/x", "/e", "/ext", "/exot"]) {
+    type(s, spy, line);
+    expect(suggestions(s, s.files.paths).length).toBeGreaterThan(0); // the box IS showing a top pick (/exit or /export)…
+    expect(press(s, spy, key("enter"))).toEqual(["render"]);
+  }
+  expect(spy.submits).toEqual(["/x", "/e", "/ext", "/exot"]); // …and Enter still sends what was typed
+  expect(s.input.history).toEqual(["/x", "/e", "/ext", "/exot"]);
+  expect(spy.toasts).toEqual([]);
+  expect(s.help).toBe(false);
+});
+
+test("a ≥ 2-letter prefix stem still completes and runs (/ne → /new); a ↓-picked row runs without a prefix; no pick → verbatim", () => {
+  const s = makeState(), spy = spyCtx();
+  type(s, spy, "/ne"); press(s, spy, key("enter"));
+  expect(spy.submits).toEqual(["/new"]);
+  // "/l" prefixes nothing; its rows are /help then /hello — ↓ picks the second one explicitly
+  type(s, spy, "/l");
+  expect(suggestions(s, s.files.paths).map((x) => x.label)).toEqual(["/help", "/hello"]);
+  press(s, spy, key("down"));
+  press(s, spy, key("enter"));
+  expect(spy.submits).toEqual(["/new", "/hello"]);
+  type(s, spy, "/l"); press(s, spy, key("enter"));
+  expect(spy.submits).toEqual(["/new", "/hello", "/l"]);
+});
+
+test("a custom command named like an alias (undo) is listed, so it runs through onSubmit; without it the alias note toasts", () => {
+  const s = makeState(), spy = spyCtx();
+  s.commands.push({ name: "undo", description: "custom undo" });
+  type(s, spy, "/undo last"); press(s, spy, key("enter"));
+  expect(spy.submits).toEqual(["/undo last"]);
+  expect(spy.toasts).toEqual([]);
+  const t = makeState(), ts = spyCtx();
+  type(t, ts, "/undo last"); press(t, ts, key("enter"));
+  expect(ts.submits).toEqual([]);
+  expect(ts.toasts).toEqual([ALIAS_NOTE.undo!]);
+});
+
+test("agents grid: prototype key names (constructor, __proto__, …) never move the lane — it stays a finite index", () => {
+  const s = makeState({ focus: "code" }), spy = spyCtx();
+  s.code.mode = "agents";
+  s.crew = crew(5);
+  for (const name of ["constructor", "hasOwnProperty", "toString", "valueOf", "__proto__", "isPrototypeOf"]) press(s, spy, key(name));
+  expect(s.code.lane).toBe(0);
+  expect(Number.isInteger(s.code.lane)).toBe(true);
+  expect(s.input.text).toBe(""); // nor did they type anything
+});
+
+test("agents grid columns follow the board's width-based gridFor: 3 lanes at a 140-wide code panel → ↓ wraps onto the same lane; 2 lanes at 60 → ↓ is lane 1", () => {
+  const s = makeState({ focus: "code" }), spy = spyCtx(codeWidth(140));
+  s.code.mode = "agents"; s.crew = crew(3);
+  press(s, spy, key("down")); expect(s.code.lane).toBe(0); // 3 columns → a single row: ↓ comes back to itself
+  press(s, spy, key("right")); expect(s.code.lane).toBe(1);
+  press(s, spy, key("up")); expect(s.code.lane).toBe(1);
+  const t = makeState({ focus: "code" }), ts = spyCtx(codeWidth(60));
+  t.code.mode = "agents"; t.crew = crew(2);
+  press(t, ts, key("down")); expect(t.code.lane).toBe(1); // one column → ↓ is the next lane
+  press(t, ts, key("up")); expect(t.code.lane).toBe(0);
+});
+
+test("line editing steps by code point: 😀 + Backspace leaves an empty line, ←/→ never stop inside a surrogate pair, Delete removes the whole glyph", () => {
+  const s = makeState(), spy = spyCtx();
+  const emoji = key("😀", { ch: "😀" }); // input.ts delivers one key per code point
+  press(s, spy, emoji);
+  expect(s.input).toMatchObject({ text: "😀", cur: 2 });
+  press(s, spy, key("backspace"));
+  expect(s.input).toMatchObject({ text: "", cur: 0 });
+  type(s, spy, "a"); press(s, spy, emoji); type(s, spy, "b");
+  expect(s.input.text).toBe("a😀b");
+  press(s, spy, key("left")); expect(s.input.cur).toBe(3);
+  press(s, spy, key("left")); expect(s.input.cur).toBe(1);
+  press(s, spy, key("left")); expect(s.input.cur).toBe(0);
+  press(s, spy, key("left")); expect(s.input.cur).toBe(0);
+  press(s, spy, key("right")); expect(s.input.cur).toBe(1);
+  press(s, spy, key("delete"));
+  expect(s.input).toMatchObject({ text: "ab", cur: 1 });
+  press(s, spy, key("right")); press(s, spy, key("right")); expect(s.input.cur).toBe(2); // clamped at the end
+  // the question card's free-text row edits by code point too
+  const c = makeState({ card: { kind: "question", prompt: { question: "?", options: [], allowFreeText: true }, selected: 0, freeText: "x😀", resolve: () => {} } });
+  press(c, spy, key("backspace"));
+  expect((c.card as { freeText: string }).freeText).toBe("x");
+});
+
+test("the suggestion box holds at most 8 rows and ↓/↑ wrap inside them (17 candidates: ↓×9 → row 1, ↑×2 → row 7)", () => {
+  const s = makeState(), spy = spyCtx();
+  s.commands.push(...Array.from({ length: 16 }, (_, i) => ({ name: `c${i}`, description: `command ${i}` })));
+  type(s, spy, "/c");
+  expect(suggestions(s, s.files.paths).length).toBe(MAX_SUGGESTIONS);
+  for (let i = 0; i < 9; i++) press(s, spy, key("down"));
+  expect(s.input.sgSel).toBe(1);
+  press(s, spy, key("up")); press(s, spy, key("up"));
+  expect(s.input.sgSel).toBe(7);
+});
+
+test("⌃c with a pending card while running denies the card AND interrupts once, no exit (documented deviation)", () => {
+  const { card, answers } = approval();
+  const s = makeState({ card, running: true }), spy = spyCtx();
+  press(s, spy, ctrl("c"));
+  expect(answers).toEqual(["deny"]);
+  expect(s.card).toBeNull();
+  expect(spy.n).toEqual({ interrupts: 1, exits: 0 });
 });
