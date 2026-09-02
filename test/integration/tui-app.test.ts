@@ -297,3 +297,56 @@ test("resume: /resume <id-prefix> swaps sessions and replays the old transcript"
   await app;
   rmSync(cwd, { recursive: true, force: true });
 }, 30_000);
+
+// ---------- port #38: /export ----------
+
+test("/export writes <short>.md, --json copies the JSONL byte-verbatim, a spaced path stays whole, no silent overwrite", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const sid = randomUUID();
+  const short = sid.slice(0, 8);
+  const term = new VirtualTerminal(80, 24);
+  const renderer = new PiTuiRenderer({ terminal: term, cwd });
+  const stream = mockStream({ turns: [textTurn("exported answer")] });
+  const app = runTui({ renderer, stream, cwd, sessionId: sid, yolo: true, exitOnClose: false, model: "scripted" });
+  term.sendInput("say something"); term.sendInput("\r");
+  // wait for the run's finally (busy loader gone) so the store is settled before exporting
+  await until(term, (s) => s.includes("exported answer") && !s.includes("thinking"));
+
+  // /export → <cwd>/<short>.md (markdown over the active path)
+  term.sendInput("/export"); term.sendInput("\r");
+  const noted = await until(term, (s) => s.includes("exported markdown"));
+  expect(noted).toContain("exported markdown");
+  const mdPath = join(cwd, `${short}.md`);
+  expect(existsSync(mdPath)).toBe(true);
+  const rendered = readFileSync(mdPath, "utf8");
+  expect(rendered).toContain(`# aion session ${short}`);
+  expect(rendered).toContain("say something");
+  expect(rendered).toContain("exported answer");
+
+  // /export --json → byte-verbatim copy of THIS session's entries.jsonl
+  term.sendInput("/export --json"); term.sendInput("\r");
+  await until(term, (s) => s.includes("exported jsonl"));
+  const jsonlPath = join(cwd, `${short}.jsonl`);
+  expect(existsSync(jsonlPath)).toBe(true);
+  const src = readFileSync(join(cwd, ".aion", "sessions", sid, "entries.jsonl"));
+  expect(Buffer.compare(readFileSync(jsonlPath), src)).toBe(0);
+
+  // /export <path with spaces> → ONE path, not the first word (LOW-3 wrote a file named "my")
+  const spaced = join(cwd, "my file.md");
+  term.sendInput("/export my file.md"); term.sendInput("\r");
+  await until(term, () => existsSync(spaced));
+  expect(existsSync(spaced)).toBe(true);
+  expect(existsSync(join(cwd, "my"))).toBe(false);
+
+  // a second /export without --force refuses — and the TUI survives the error note
+  term.sendInput("/export"); term.sendInput("\r");
+  const refused = await until(term, (s) => s.includes("refusing to overwrite"));
+  expect(refused).toContain("refusing to overwrite");
+  term.sendInput("/status"); term.sendInput("\r");
+  const alive = await until(term, (s) => s.includes("provider="));
+  expect(alive).toContain("model=scripted");
+
+  term.sendInput("\x03");
+  await app;
+  rmSync(cwd, { recursive: true, force: true });
+}, 30_000);

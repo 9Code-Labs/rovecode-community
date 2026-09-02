@@ -313,7 +313,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
           const words = arg.split(/\s+/).filter(Boolean);
           const res = exportSession(sessionsDir, store.id, {
             json: words.includes("--json"), force: words.includes("--force"),
-            out: words.find((w) => !w.startsWith("-")), cwd: rt.cwd,
+            out: words.filter((w) => !w.startsWith("-")).join(" ") || undefined, cwd: rt.cwd,
           });
           renderer.addSystemNote(`exported ${res.format} → ${res.path}`);
         } catch (e) {

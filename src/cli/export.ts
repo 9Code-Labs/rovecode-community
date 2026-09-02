@@ -26,6 +26,8 @@ import type { Message, ToolCallPart, ToolResultPart } from "../core/types.ts";
 export const TOOL_OUTPUT_CAP = 2000;
 /** One-line args summary cap — same 120-char clip the TUI uses for tool cards. */
 const ARGS_CAP = 120;
+/** CLI usage line — thrown (exit 1 via cmdExport) on a missing id or a dangling --out. */
+const USAGE = "usage: aion export <session-id|prefix> [--json] [--out <path>] [--force]";
 
 export interface ExportOptions {
   /** raw JSONL copy (verbatim bytes) instead of markdown */
@@ -62,16 +64,26 @@ export function resolveSessionId(sessionsRoot: string, idOrPrefix: string): stri
 
 function isMessage(e: Entry): e is Message { return "role" in e; }
 
-/** Inline-code span that survives backticks in the content (args may contain them). */
+/** Longest backtick run in s (0 when none) — a CommonMark span/fence must be longer. */
+function tickRun(s: string): number {
+  let run = 0;
+  for (const m of s.matchAll(/`+/g)) run = Math.max(run, m[0].length);
+  return run;
+}
+
+/** Inline-code span that survives backticks in the content (args may contain them):
+ *  delimiter = longest run + 1 (a fixed `` closes at the first inner double tick),
+ *  space-padded so a leading/trailing tick stays inside the span. */
 function inlineCode(s: string): string {
-  return s.includes("`") ? `\`\` ${s} \`\`` : `\`${s}\``;
+  const run = tickRun(s);
+  if (run === 0) return `\`${s}\``;
+  const tick = "`".repeat(run + 1);
+  return `${tick} ${s} ${tick}`;
 }
 
 /** Fenced block whose fence is longer than any backtick run in the content. */
 function fenced(content: string): string {
-  let run = 0;
-  for (const m of content.matchAll(/`+/g)) run = Math.max(run, m[0].length);
-  const fence = "`".repeat(Math.max(3, run + 1));
+  const fence = "`".repeat(Math.max(3, tickRun(content) + 1));
   return `${fence}\n${content}\n${fence}`;
 }
 
@@ -198,7 +210,7 @@ function targetPath(out: string | undefined, id: string, format: "markdown" | "j
  *  --json copies entries.jsonl BYTE-VERBATIM (whole tree, every branch); markdown
  *  renders the active path only. Never overwrites an existing file without force. */
 export function exportSession(sessionsRoot: string, idOrPrefix: string, opts: ExportOptions = {}): ExportResult {
-  if (!idOrPrefix) throw new Error("usage: aion export <session-id|prefix> [--json] [--out <path>] [--force]");
+  if (!idOrPrefix) throw new Error(USAGE);
   const id = resolveSessionId(sessionsRoot, idOrPrefix);
   const format: ExportResult["format"] = opts.json ? "jsonl" : "markdown";
   const target = targetPath(opts.out, id, format, opts.cwd ?? process.cwd());
@@ -218,28 +230,36 @@ export function exportSession(sessionsRoot: string, idOrPrefix: string, opts: Ex
 
 export interface ExportCliArgs { idOrPrefix?: string; json: boolean; out?: string; force: boolean }
 
-/** Parse `aion export` argv. parseCli strips flags but leaves flag VALUES in rest,
- *  so the --out value is excluded here explicitly (same reason main.ts hand-parses
- *  --resume: dispatch flags are boolean-only). First remaining non-flag = the id. */
+/** Parse `aion export` argv. Flags may sit anywhere — parseCli accepts `aion --json
+ *  export <id>` for every subcommand — so the whole argv after the script path is
+ *  scanned and the single `export` command token skipped. parseCli strips flags but
+ *  leaves flag VALUES in rest, so --out is consumed here (same reason main.ts hand-
+ *  parses --resume: dispatch flags are boolean-only); a missing or flag-shaped --out
+ *  value is a usage error, never a silent default. First remaining non-flag = the id. */
 export function parseExportArgs(argv: readonly string[]): ExportCliArgs {
-  const at = argv.indexOf("export");
-  const args = at === -1 ? [] : argv.slice(at + 1);
+  const args = argv.slice(2);
   const parsed: ExportCliArgs = { json: false, force: false };
+  let cmdSeen = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i]!;
     if (a === "--json") parsed.json = true;
     else if (a === "--force") parsed.force = true;
-    else if (a === "--out") { parsed.out = args[++i]; }
-    else if (!a.startsWith("-") && parsed.idOrPrefix === undefined) parsed.idOrPrefix = a;
+    else if (a === "--out") {
+      const v = args[++i];
+      if (v === undefined || v.startsWith("-")) throw new Error(`--out needs a path — ${USAGE}`);
+      parsed.out = v;
+    } else if (!a.startsWith("-")) { // other flags (--yolo, --plain, …) belong to dispatch
+      if (!cmdSeen && a === "export") cmdSeen = true; // the command token itself
+      else if (parsed.idOrPrefix === undefined) parsed.idOrPrefix = a;
+    }
   }
-  if (parsed.out === undefined) delete (parsed as { out?: string }).out;
   return parsed;
 }
 
 /** `aion export <session> [--json] [--out <path>] [--force]` — errors exit 1. */
 export function cmdExport(argv: readonly string[]): void {
-  const a = parseExportArgs(argv);
   try {
+    const a = parseExportArgs(argv); // inside: a dangling --out is a usage error too
     const res = exportSession(join(process.cwd(), ".aion", "sessions"), a.idOrPrefix ?? "", a);
     console.log(`exported ${res.format} → ${res.path}`);
   } catch (e) {

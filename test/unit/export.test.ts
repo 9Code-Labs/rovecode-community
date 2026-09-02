@@ -5,7 +5,7 @@
  *  wall-clock line — the render must be byte-stable. */
 
 import { test, expect } from "bun:test";
-import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionStore } from "../../src/core/session.ts";
@@ -210,6 +210,20 @@ test("tool output containing ``` gets a longer fence (block cannot be broken out
   rmSync(root, { recursive: true, force: true });
 });
 
+test("args containing a `` run get a longer inline-code delimiter (span cannot be closed early)", () => {
+  const root = mkdtempSync(join(tmpdir(), "aion-export-"));
+  const s = new SessionStore(root, "ticky");
+  s.append({ id: "u1", role: "user", parts: [{ kind: "text", text: "go" }], parentId: null, createdAt: T0 });
+  s.append({ id: "a1", role: "assistant", parts: [{ kind: "tool_call", id: "c1", tool: "bash", args: { cmd: "echo ``x``" } }], parentId: "u1", createdAt: T0 + 1 });
+  s.append({ id: "t1", role: "tool", parts: [{ kind: "tool_result", callId: "c1", ok: true, output: "x" }], parentId: "a1", createdAt: T0 + 2 });
+  const md = renderSessionMarkdown(s.path(), "ticky", new ModelCatalog());
+  // CommonMark closes a span at the first backtick string of EQUAL length, so a fixed ``
+  // delimiter ends at the inner `` — the delimiter must be (longest run + 1) = ```
+  expect(md).toContain('args: ``` {"cmd":"echo ``x``"} ```');
+  expect(md).not.toContain('args: `` {"cmd"');
+  rmSync(root, { recursive: true, force: true });
+});
+
 test("markdown walks the ACTIVE path only (branched-away turns excluded); empty session renders", () => {
   const root = mkdtempSync(join(tmpdir(), "aion-export-"));
   const s = buildScriptedSession(root);
@@ -233,6 +247,18 @@ test("parseExportArgs: --out value never becomes the session id; flags parsed", 
   expect(parseExportArgs(["bun", "main.ts"]).idOrPrefix).toBeUndefined();
 });
 
+test("parseExportArgs: flags before the command are honored; a dangling or flag-shaped --out is a usage error", () => {
+  // parseCli dispatches `aion --json export <id>` to export — the parser must see that flag too
+  expect(parseExportArgs(["bun", "main.ts", "--json", "export", "abc1"])).toEqual({ idOrPrefix: "abc1", json: true, force: false });
+  expect(parseExportArgs(["bun", "main.ts", "--force", "--json", "export", "abc1", "--out", "o.jsonl"]))
+    .toEqual({ idOrPrefix: "abc1", out: "o.jsonl", json: true, force: true });
+  // dispatch-level flags are ignored; only the FIRST `export` is the command (a session
+  // whose id starts with "export" is still addressable)
+  expect(parseExportArgs(["bun", "main.ts", "--yolo", "export", "export"])).toEqual({ idOrPrefix: "export", json: false, force: false });
+  expect(() => parseExportArgs(["bun", "main.ts", "export", "abc1", "--out"])).toThrow(/--out needs a path/);
+  expect(() => parseExportArgs(["bun", "main.ts", "export", "abc1", "--out", "--force"])).toThrow(/--out needs a path/);
+});
+
 // CLI wiring e2e: the `aion export` subcommand end-to-end through main.ts (known set +
 // dispatch case). spawnSync — no async stdout readers (the --resume flake class).
 const MAIN = join(import.meta.dir, "..", "..", "src", "cli", "main.ts");
@@ -250,5 +276,29 @@ test("aion export e2e: prefix resolves, file lands in cwd, exit 0; unknown id ex
   const bad = Bun.spawnSync([process.execPath, MAIN, "export", "nope"], { cwd, stdout: "pipe", stderr: "pipe" });
   expect(bad.exitCode).toBe(1);
   expect(bad.stderr.toString()).toContain('no session matching "nope"');
+  rmSync(cwd, { recursive: true, force: true });
+});
+
+test("aion export e2e: --json before the command is honored; dangling --out exits 1 and writes nothing", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "aion-export-e2e-"));
+  const sessionsRoot = join(cwd, ".aion", "sessions");
+  mkdirSync(sessionsRoot, { recursive: true });
+  buildScriptedSession(sessionsRoot, "e2e-fixed-id");
+  const src = readFileSync(join(sessionsRoot, "e2e-fixed-id", "entries.jsonl"));
+  // parseCli routes `aion --json export …` to export; the flag must not be lost on the
+  // way (it used to write MARKDOWN into o.jsonl with exit 0)
+  const pre = Bun.spawnSync([process.execPath, MAIN, "--json", "export", "e2e-f", "--out", "o.jsonl"], { cwd, stdout: "pipe", stderr: "pipe" });
+  expect(pre.exitCode).toBe(0);
+  expect(pre.stdout.toString()).toContain("exported jsonl →");
+  expect(Buffer.compare(readFileSync(join(cwd, "o.jsonl")), src)).toBe(0);
+  // --out with no value, or with a flag as its value: usage error, exit 1, no file written
+  // (previously: silent default → wrote e2e-fixe.md; or a file literally named "--force")
+  for (const tail of [["--out"], ["--out", "--force"]]) {
+    const before = readdirSync(cwd);
+    const bad = Bun.spawnSync([process.execPath, MAIN, "export", "e2e-f", ...tail], { cwd, stdout: "pipe", stderr: "pipe" });
+    expect(bad.exitCode).toBe(1);
+    expect(bad.stderr.toString()).toContain("--out needs a path");
+    expect(readdirSync(cwd)).toEqual(before);
+  }
   rmSync(cwd, { recursive: true, force: true });
 });
