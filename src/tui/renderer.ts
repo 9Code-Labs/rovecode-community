@@ -2,6 +2,10 @@
  *  PiTuiRenderer is today's implementation; OpenTUI or others can slot in later
  *  without touching the app/loop. House code outside src/tui must not import vendor. */
 
+import type { QuestionAnswer, QuestionPrompt } from "../tools/ask-user.ts";
+
+export type { QuestionAnswer, QuestionPrompt };
+
 export type ApprovalAnswer = "once" | "always" | "deny";
 
 export interface StatusInfo {
@@ -51,6 +55,11 @@ export interface Renderer {
   askApproval(tool: string, argsPreview: string, detail?: string): Promise<ApprovalAnswer>;
   /** modal picker (session/turn navigators); resolves null on cancel/escape/stop */
   pickOne(items: PickItem[], title?: string): Promise<string | null>;
+  /** modal question for the ask_user tool (port #33): options + a free-text entry when allowed.
+   *  Resolves the pick/typed text; null when the user declines, `signal` aborts (the run's
+   *  controller — the card must dismiss, never leak), or the UI stops. Implementations may
+   *  reject a SECOND concurrent ask with a clear error (the tool turns it into a failed result). */
+  askQuestion(q: QuestionPrompt, signal?: AbortSignal): Promise<QuestionAnswer | null>;
   /** remove all transcript items (history replay after rewind/resume) */
   clearTranscript(): void;
   /** place text in the editor for edit-and-resubmit (pi sessions.md:106-116) */

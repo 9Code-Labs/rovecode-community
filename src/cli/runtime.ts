@@ -26,6 +26,7 @@ import { createRouter, roleTableFromEnv, type Router } from "../providers/router
 import { retryOptionsFromEnv, withRetry } from "../providers/retry.ts";
 import { createEvalCellTool } from "../tools/evalcell.ts";
 import { webFetchTool } from "../tools/webfetch.ts";
+import { askUserTool, type AskFn } from "../tools/ask-user.ts";
 import { execPolicyApprover } from "../core/execpolicy.ts";
 import { recallTool } from "../memory/recall.ts";
 import { configureExecutor, type SpawnRunner } from "../core/executor.ts";
@@ -96,6 +97,11 @@ export interface Runtime {
   setSessionStore(s: SessionStore): void;
   /** port #27: executor rung selected by .aion/sandbox.json / AION_SANDBOX (+ probe) */
   sandbox: SandboxState;
+  /** port #33: bind (or unbind with undefined) the interactive asker behind the ask_user
+   *  tool — the TUI hands in its question overlay; headless surfaces (run/serve/acp) never
+   *  call this, so the tool fails closed for them. setBlockStore idiom: registered once,
+   *  dependency rebound late. */
+  setAskUser(fn: AskFn | undefined): void;
 }
 
 export function createRuntime(opts: RuntimeOptions = {}): Runtime {
@@ -161,6 +167,10 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   // port #17: cross-session recall (kind read → file.read gate; pure transcript search)
   registry.register(recallTool(sessionsDir));
   registry.register(...todoTools(sessionsDir)); // port #32: per-session todo list at <session>/todos.json (todo_write kind memory → memory.write allow; todo_read kind read)
+  // port #33: ask_user on EVERY surface (kind read → auto-runs under gated/plan rules); only an
+  // interactive surface binds an asker via setAskUser — unbound, the tool fails closed
+  let askUser: AskFn | undefined;
+  registry.register(askUserTool(() => askUser));
   const guard = new ToolGuard(); // port #4: loop signatures + duplicate-result stubs
 
   // port #3: MCP servers from .aion/mcp.json + harvested .mcp.json; two lazy tools only.
@@ -247,6 +257,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     checkpointsFor,
     setSessionStore(s: SessionStore) { activeStore = s; },
     sandbox,
+    setAskUser(fn: AskFn | undefined) { askUser = fn; },
     provider, stream, defaultModel, systemPrompt,
     buildDef: (model: ModelRef): AgentDefinition => {
       // models the catalog knows CANNOT do native tool calling get the senpi-format

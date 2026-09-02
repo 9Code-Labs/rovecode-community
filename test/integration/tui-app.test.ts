@@ -14,7 +14,7 @@ import { runTui, buildCostNote } from "../../src/tui/app.ts";
 import { anthropicStream, mockStream, textTurn, toolTurn } from "../../src/providers/stream.ts";
 import { ModelCatalog } from "../../src/providers/catalog.ts";
 import { fileTag, lineHash } from "../../src/coding/hashline.ts";
-import type { Message, StreamFn, TokenUsage } from "../../src/core/types.ts";
+import type { Message, ModelRef, StreamEvent, StreamFn, TokenUsage } from "../../src/core/types.ts";
 
 async function until(term: VirtualTerminal, pred: (screen: string) => boolean, ms = 8000): Promise<string> {
   const deadline = Date.now() + ms;
@@ -470,6 +470,50 @@ test("relative tool paths resolve against runTui({cwd}), not process.cwd(): the 
   await app;
   rmSync(cwd, { recursive: true, force: true });
 }, 20_000);
+
+// ---------- port #33: ask_user question overlay ----------
+
+/** Provider script for the ask_user e2e: turn 1 issues the question; once the tool answered (last
+ *  message role tool) the NEXT turn echoes the tool result — proving the answer reached the model. */
+function askStream(args: unknown): StreamFn {
+  return async function* (_m: ModelRef, messages: Message[]): AsyncGenerator<StreamEvent> {
+    const last = messages[messages.length - 1];
+    if (last?.role === "tool") {
+      const out = last.parts.map((p) => (p.kind === "tool_result" ? p.output : "")).join("");
+      yield { type: "turn", turn: textTurn(`MODEL-SAW ${out}`) };
+      return;
+    }
+    yield { type: "turn", turn: toolTurn([{ id: "ask-1", tool: "ask_user", args }]) };
+  };
+}
+
+const DB_ARGS = { question: "Which database?", options: ["postgres", "sqlite"] };
+
+test("ask_user e2e (gated): the overlay shows the options with NO approval prompt; Down+Enter answers and the next model turn sees `answer: sqlite`", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const term = new VirtualTerminal(80, 24);
+  const renderer = new PiTuiRenderer({ terminal: term, cwd });
+  const app = runTui({ renderer, stream: askStream(DB_ARGS), cwd, yolo: false, exitOnClose: false, model: "scripted" });
+  term.sendInput("pick a db"); term.sendInput("\r");
+
+  const card = await until(term, (s) => s.includes("type an answer…"));
+  expect(card).toContain("Which database?");
+  expect(card).toContain("→ postgres");                     // options rendered, first selected (mutation: renderer ignores options → fails)
+  expect(card).toContain("sqlite");
+  expect(card).toContain("Esc stop the run");               // busy hint: Escape interrupts the run
+  expect(card.toLowerCase()).not.toContain("approval");     // kind read: asking never needs approval under gated rules
+
+  term.sendInput("\x1b[B");                                  // down → sqlite
+  term.sendInput("\r");
+  const done = await until(term, (s) => s.includes("MODEL-SAW"));
+  expect(done).toContain("MODEL-SAW answer: sqlite");        // the chosen label rode the tool result into the next turn (mutation: getter always undefined → fails)
+  expect(done).toContain("← ok ask_user");                   // tool card closed green
+  expect(done).not.toContain("type an answer…");             // overlay gone
+
+  term.sendInput("\x03");
+  await app;
+  rmSync(cwd, { recursive: true, force: true });
+}, 20_000);
 // ---------- port #30: custom slash commands (.aion/commands/*.md) ----------
 
 test("custom commands e2e: palette + /help list /hello, dispatch submits the rendered $ARGUMENTS prompt as the user turn, mode: plan flips the indicator, model: overrides per run", async () => {
@@ -532,3 +576,57 @@ test("custom commands e2e: palette + /help list /hello, dispatch submits the ren
     rmSync(home, { recursive: true, force: true });
   }
 }, 30_000);
+
+test("ask_user e2e: free text — pick 'type an answer…', type, Enter → the model sees the typed text", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const term = new VirtualTerminal(80, 24);
+  const renderer = new PiTuiRenderer({ terminal: term, cwd });
+  const app = runTui({ renderer, stream: askStream(DB_ARGS), cwd, yolo: false, exitOnClose: false, model: "scripted" });
+  term.sendInput("pick a db"); term.sendInput("\r");
+  await until(term, (s) => s.includes("type an answer…"));
+
+  term.sendInput("\x1b[B"); term.sendInput("\x1b[B"); term.sendInput("\r"); // third entry: type an answer…
+  const input = await until(term, (s) => s.includes("Enter sends"));
+  expect(input).toContain("Enter sends · Esc back to the options");
+  term.sendInput("use mysql"); term.sendInput("\r");
+  const done = await until(term, (s) => s.includes("MODEL-SAW"));
+  expect(done).toContain("MODEL-SAW answer: use mysql");
+  expect(done).not.toContain("Enter sends");                 // input overlay gone
+
+  term.sendInput("\x03");
+  await app;
+  rmSync(cwd, { recursive: true, force: true });
+}, 20_000);
+
+test("ask_user e2e: Esc while the question is open interrupts the run — overlay gone, run aborted (failed result stored), TUI alive", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const sid = randomUUID();
+  const term = new VirtualTerminal(80, 24);
+  const renderer = new PiTuiRenderer({ terminal: term, cwd });
+  const app = runTui({ renderer, stream: askStream(DB_ARGS), cwd, sessionId: sid, yolo: false, exitOnClose: false, model: "scripted" });
+  term.sendInput("pick a db"); term.sendInput("\r");
+  await until(term, (s) => s.includes("type an answer…"));
+
+  term.sendInput("\x1b");                                    // Esc → onInterrupt → runAbort.abort() → the signal dismisses the card
+  const after = await until(term, (s) => s.includes("run interrupted") && !s.includes("type an answer…") && !s.includes("thinking…"));
+  expect(after).toContain("run interrupted");
+  expect(after).not.toContain("type an answer…");            // overlay dismissed via the signal (mutation: signal not honored → stays)
+  expect(after).not.toContain("MODEL-SAW");                  // the run did NOT continue to another model turn
+  expect(after).not.toContain("thinking…");                  // busy cleared: the run settled
+
+  term.sendInput("/status"); term.sendInput("\r");            // TUI alive
+  const alive = await until(term, (s) => s.includes("provider="));
+  expect(alive).toContain("model=scripted");
+  // wire-well-formed store: the issued call has a FAILED result mentioning the abort
+  const toolMsgs = new SessionStore(join(cwd, ".aion", "sessions"), sid).messages().filter((m) => m.role === "tool");
+  expect(toolMsgs.length).toBe(1);
+  const part = toolMsgs[0]!.parts[0]!;
+  if (part.kind !== "tool_result") throw new Error("expected tool_result part");
+  expect(part.callId).toBe("ask-1");
+  expect(part.ok).toBe(false);
+  expect(part.output.toLowerCase()).toContain("aborted");
+
+  term.sendInput("\x03");
+  await app;
+  rmSync(cwd, { recursive: true, force: true });
+}, 20_000);

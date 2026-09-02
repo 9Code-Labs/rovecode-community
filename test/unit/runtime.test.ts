@@ -26,8 +26,9 @@ test("createRuntime registers the full CLI tool set", () => {
   const cwd = tmpCwd();
   const rt = createRuntime({ cwd, stream: null });
   const names = rt.registry.list().map((t) => t.schema.name).sort();
-  // port #17 adds recall; port #22 adds glob/grep/ls; port #31 adds web_fetch; port #32 adds todo_read/todo_write; eval_cell must stay ABSENT while AION_EVAL_CELL is unset (port #18 flag door)
-  expect(names).toEqual(["bash", "edit", "glob", "grep", "ls", "memory_edit", "read", "recall", "skill_view", "skills_list", "todo_read", "todo_write", "web_fetch", "write"]);
+  // port #17 adds recall; port #22 adds glob/grep/ls; port #31 adds web_fetch; port #32 adds todo_read/todo_write; port #33 adds ask_user
+  // (registered on EVERY surface; headless ones fail closed at execute); eval_cell must stay ABSENT while AION_EVAL_CELL is unset (port #18 flag door)
+  expect(names).toEqual(["ask_user", "bash", "edit", "glob", "grep", "ls", "memory_edit", "read", "recall", "skill_view", "skills_list", "todo_read", "todo_write", "web_fetch", "write"]);
   rmSync(cwd, { recursive: true, force: true });
 });
 

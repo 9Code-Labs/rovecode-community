@@ -92,6 +92,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     }
   })();
   const renderer: Renderer = opts.renderer ?? new PiTuiRenderer({ cwd: rt.cwd });
+  rt.setAskUser((q, signal) => renderer.askQuestion(q, signal)); // port #33: ask_user → the question overlay (Esc/abort dismisses it via signal)
   const sessionsDir = join(rt.cwd, ".aion", "sessions");
   // /cost pricing + context window. Boots from the offline snapshot; the live models.dev
   // half is user-invoked only (/cost refresh), cached to .aion/cache with a 24h TTL —

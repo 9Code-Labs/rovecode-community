@@ -7,7 +7,7 @@
  *  Vendor quirk: TruncatedText has no setText (its text is private), so setStatus
  *  swaps the status-line instance in tui.children instead of mutating it.
  *
- *  Only this module (and theme.ts) may import from vendor/pi-tui.
+ *  Only this module, overlays.ts (card bodies) and theme.ts may import from vendor/pi-tui.
  */
 
 import {
@@ -24,20 +24,21 @@ import {
 	type Terminal,
 	Text,
 	TruncatedText,
-	truncateToWidth,
 	type TUI,
 	TuiMainScreen,
-	visibleWidth,
 } from "../../vendor/pi-tui/src/index.ts";
 import type {
 	ApprovalAnswer,
 	AssistantView,
 	PickItem,
+	QuestionAnswer,
+	QuestionPrompt,
 	Renderer,
 	RendererHooks,
 	SlashCommand,
 	StatusInfo,
 } from "./renderer.ts";
+import { ApprovalCard, FREE_TEXT, QuestionCard } from "./overlays.ts";
 import { aionEditorTheme, aionMarkdownTheme, aionSelectListTheme, pal, st } from "./theme.ts";
 
 /** Tool cards stay single-line: collapse whitespace and clip to ~120 columns. */
@@ -51,40 +52,6 @@ interface ToolCard {
 	line: Text;
 	tool: string;
 	base: string;
-}
-
-/** Port #24: body of an edit/write approval overlay — title, the bounded unified diff
- *  (+ green, - red, headers/@@ dim), a spacer, then the verdict list. Keys go straight
- *  to the list, so verdicts and bindings are identical to the plain approval overlay. */
-const MORE_RE = /^… \+(\d+) more line/;
-class ApprovalCard implements Component {
-	constructor(
-		private readonly title: string,
-		private readonly diff: string[],
-		private readonly list: SelectList,
-		private readonly rows: () => number,
-	) {}
-	handleInput(data: string): void { this.list.handleInput(data); }
-	invalidate(): void { this.list.invalidate(); }
-	render(width: number): string[] {
-		// physical bound: title, list and some transcript must stay visible. previewDiff already
-		// clipped logically — fold its marker's count into ours rather than stacking two markers.
-		const max = Math.max(4, this.rows() - 12);
-		let lines = this.diff;
-		if (lines.length > max) {
-			const tail = MORE_RE.exec(lines[lines.length - 1]!);
-			const hidden = lines.length - max + (tail ? Number(tail[1]) - 1 : 0);
-			lines = [...lines.slice(0, max), `… +${hidden} more line${hidden === 1 ? "" : "s"}`];
-		}
-		const fit = (s: string): string => { const t = truncateToWidth(s, width - 2, "…"); return ` ${t}${" ".repeat(Math.max(0, width - 1 - visibleWidth(t)))}`; };
-		return [fit(pal.warn(this.title)), ...lines.map((l, i) => fit(paintDiff(l, i))), " ".repeat(width), ...this.list.render(width)];
-	}
-}
-
-function paintDiff(line: string, idx: number): string {
-	if ((idx === 0 && line.startsWith("--- ")) || (idx === 1 && line.startsWith("+++ "))) return st.dim(line);
-	const c = line[0];
-	return c === "+" ? pal.ok(line) : c === "-" ? pal.err(line) : c === " " ? line : st.dim(line);
 }
 
 export interface PiTuiRendererOptions {
@@ -312,6 +279,50 @@ export class PiTuiRenderer implements Renderer {
 			picked = await this.pickWith(card, list, Math.max(40, Math.min(this.terminal.columns - 4, 100)));
 		} else picked = await this.pickOne(items);
 		return picked === "once" || picked === "always" ? picked : "deny"; // null/cancel/stop → deny
+	}
+
+	/** Port #33 question overlay, modal like approval (keys go to the card). Escape while a run is
+	 *  in flight (loader showing) INTERRUPTS the run — stopping beats letting the model proceed
+	 *  unanswered — and the run's abort signal then dismisses the card; Escape with no run (idle
+	 *  caller) declines → null; inside the free-text input Escape steps back to the options. */
+	askQuestion(q: QuestionPrompt, signal?: AbortSignal): Promise<QuestionAnswer | null> {
+		const tui = this.tui;
+		const editor = this.editor;
+		if (!tui || !editor || signal?.aborted) return Promise.resolve(null); // nobody to ask / run already gone
+		// concurrent-ask decision: ONE modal at a time — a second ask is a caller bug surfaced loudly, not queued
+		if (tui.hasOverlay()) return Promise.reject(new Error("a question or approval overlay is already open"));
+		const options = q.options ?? [];
+		const freeText = q.allowFreeText !== false;
+		const items: SelectItem[] = options.map((label, i) => ({ value: String(i), label }));
+		if (freeText) items.push({ value: FREE_TEXT, label: "type an answer…" });
+		const list = new SelectList(items, Math.max(1, items.length), aionSelectListTheme);
+		const card = new QuestionCard(q.question, list, options.length, freeText, () => this.terminal.rows, () => this.loader !== null);
+		this.addSystemNote(`question: ${oneLine(q.question)}`, "warn"); // transcript record, like approvals
+		return new Promise<QuestionAnswer | null>((resolve) => {
+			const handle = tui.showOverlay(card, { width: Math.max(40, Math.min(this.terminal.columns - 4, 100)), anchor: "center" });
+			let settled = false;
+			const finish = (answer: QuestionAnswer | null): void => {
+				if (settled) return;
+				settled = true;
+				this.pendingPickers.delete(cancel);
+				signal?.removeEventListener("abort", cancel);
+				handle.hide();
+				if (this.tui) { tui.setFocus(editor); tui.requestRender(); }
+				resolve(answer);
+			};
+			const cancel = () => finish(null);
+			this.pendingPickers.add(cancel);
+			signal?.addEventListener("abort", cancel, { once: true }); // the run's abort (port #21) dismisses the card
+			const escape = () => { if (this.loader) this.hooks?.onInterrupt(); else finish(null); };
+			list.onCancel = escape;
+			list.onSelect = (item: SelectItem) => {
+				if (item.value === FREE_TEXT) { card.setTyping(true); tui.requestRender(); return; }
+				const choice = Number(item.value);
+				finish({ choice, label: options[choice] });
+			};
+			card.input.onEscape = () => { if (options.length > 0) { card.setTyping(false); tui.requestRender(); } else escape(); };
+			card.input.onSubmit = (value: string) => { const text = value.trim(); if (text) finish({ text }); };
+		});
 	}
 
 	/** Remove every transcript item (keep header, loader, editor, status) — history replay. */

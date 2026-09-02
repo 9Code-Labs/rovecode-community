@@ -16,6 +16,16 @@ import { VirtualTerminal } from "../../vendor/pi-tui/test/virtual-terminal.ts";
 
 const stripAnsi = (line: string): string => line.replace(/\x1b\[[0-9;]*m/g, "");
 
+const sleepP = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+/** House hazard: an await with no pending timer hangs the runner — probes that could hang ride a deadline. */
+function deadline<T>(p: Promise<T>, ms = 3000): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const bomb = new Promise<never>((_, rej) => { timer = setTimeout(() => rej(new Error(`did not settle within ${ms}ms`)), ms); });
+	return Promise.race([p, bomb]).finally(() => { if (timer) clearTimeout(timer); });
+}
+/** "settled" | "pending" snapshot of a promise after a short beat (asserting something did NOT resolve). */
+const stateOf = (p: Promise<unknown>): Promise<string> => Promise.race([p.then(() => "settled", () => "settled"), sleepP(60).then(() => "pending")]);
+
 /** Terminal delegate that records every write() payload (for redraw assertions). */
 class RecordingTerminal implements Terminal {
 	readonly writes: string[] = [];
@@ -417,5 +427,138 @@ describe("PiTuiRenderer", () => {
 		// an approval already on screen at stop() time settles to deny — nothing may
 		// stay pending (a stuck resolver pins embedded hosts that await it)
 		await expect(pending).resolves.toBe("deny");
+	});
+
+	// ---------- port #33: askQuestion overlay ----------
+
+	const DB_Q = { question: "Which database?", options: ["postgres", "sqlite"] };
+
+	it("askQuestion renders the question, its options and the free-text entry; Down+Enter picks the second option", async () => {
+		const { renderer, term } = boot();
+		const pending = renderer.askQuestion(DB_Q);
+		const screen = await view(term);
+		expect(screen).toContain("question: Which database?"); // transcript record (like "approval needed")
+		expect(screen).toContain("→ postgres");                 // options rendered, first one selected
+		expect(screen).toContain("sqlite");
+		expect(screen).toContain("type an answer…");            // free text allowed by default
+		expect(screen).toContain("Esc skip");                    // idle (no run): Escape declines
+		term.sendInput("\x1b[B");                               // down → sqlite
+		expect(await view(term)).toContain("→ sqlite");
+		term.sendInput("\r");
+		await expect(deadline(pending)).resolves.toEqual({ choice: 1, label: "sqlite" });
+		const after = await view(term);
+		expect(after).not.toContain("type an answer…");         // overlay gone
+		expect(after).not.toContain("→ sqlite");
+	});
+
+	it("askQuestion free text: 'type an answer…' opens a one-line input (empty Enter is ignored), Escape steps back to the options, Enter sends {text}", async () => {
+		const { renderer, term } = boot();
+		const pending = renderer.askQuestion(DB_Q);
+		await term.waitForRender();
+		term.sendInput("\x1b[B"); term.sendInput("\x1b[B");    // down twice → "type an answer…"
+		term.sendInput("\r");
+		let screen = await view(term);
+		expect(screen).toContain("Enter sends · Esc back to the options");
+		expect(screen).not.toContain("→ postgres");             // the list gave way to the input
+		term.sendInput("\r");                                    // empty answer: ignored, still open
+		expect(await stateOf(pending)).toBe("pending");
+		term.sendInput("\x1b");                                  // back to the options (selection kept)
+		screen = await view(term);
+		expect(screen).toContain("→ type an answer…");
+		expect(screen).toContain("postgres");
+		term.sendInput("\r");                                    // into the input again
+		term.sendInput("mysql please");
+		expect(await view(term)).toContain("mysql please");
+		term.sendInput("\r");
+		await expect(deadline(pending)).resolves.toEqual({ text: "mysql please" });
+		expect(await view(term)).not.toContain("Enter sends");
+	});
+
+	it("askQuestion honors allowFreeText:false (no free-text entry) and opens the input directly when there are no options", async () => {
+		const { renderer, term } = boot();
+		const p1 = renderer.askQuestion({ ...DB_Q, allowFreeText: false });
+		let screen = await view(term);
+		expect(screen).toContain("→ postgres");
+		expect(screen).not.toContain("type an answer…");        // mutation: renderer ignores allowFreeText → fails
+		term.sendInput("\r");
+		await expect(deadline(p1)).resolves.toEqual({ choice: 0, label: "postgres" });
+		const p2 = renderer.askQuestion({ question: "Name the branch?" });
+		screen = await view(term);
+		expect(screen).toContain("Name the branch?");
+		expect(screen).toContain("Enter sends · Esc skip");      // input-only card, idle
+		term.sendInput("feat/x"); term.sendInput("\r");
+		await expect(deadline(p2)).resolves.toEqual({ text: "feat/x" });
+	});
+
+	it("askQuestion Escape on the options declines (null) when no run is in flight", async () => {
+		const { renderer, term } = boot();
+		const pending = renderer.askQuestion(DB_Q);
+		await term.waitForRender();
+		term.sendInput("\x1b");
+		await expect(deadline(pending)).resolves.toBeNull();
+		expect(await view(term)).not.toContain("type an answer…");
+	});
+
+	it("askQuestion: the run's abort signal dismisses the card and resolves null (no leak); a pre-aborted signal never renders", async () => {
+		const { renderer, term } = boot();
+		const ac = new AbortController();
+		const pending = renderer.askQuestion(DB_Q, ac.signal);
+		expect(await view(term)).toContain("type an answer…");
+		ac.abort();
+		await expect(deadline(pending)).resolves.toBeNull();     // mutation: renderer ignores the signal → deadline fails
+		expect(await view(term)).not.toContain("type an answer…");
+		const dead = new AbortController();
+		dead.abort();
+		await expect(deadline(renderer.askQuestion(DB_Q, dead.signal))).resolves.toBeNull();
+		expect(await view(term)).not.toContain("→ postgres");
+	});
+
+	it("askQuestion while a run is in flight: Escape interrupts the run (onInterrupt), the card stays until the run's signal aborts", async () => {
+		let interrupts = 0;
+		const ac = new AbortController();
+		const { renderer, term } = boot(stubHooks({ onInterrupt: () => { interrupts++; } }));
+		renderer.setBusy(true, "thinking…");
+		const pending = renderer.askQuestion(DB_Q, ac.signal);
+		let screen = await view(term);
+		expect(screen).toContain("Esc stop the run");            // busy hint: Escape means "stop the run"
+		term.sendInput("\x1b");
+		expect(interrupts).toBe(1);                              // routed to the run, not to a decline
+		screen = await view(term);
+		expect(screen).toContain("type an answer…");            // still open: the app's abort closes it, not the key
+		expect(await stateOf(pending)).toBe("pending");
+		ac.abort();                                              // what app.ts onInterrupt does: runAbort.abort()
+		await expect(deadline(pending)).resolves.toBeNull();
+		expect(await view(term)).not.toContain("type an answer…");
+		renderer.setBusy(false);
+	});
+
+	it("askQuestion rejects a second concurrent ask with a clear error while the first stays answerable; stop() settles a pending one to null", async () => {
+		const { renderer, term } = boot();
+		const first = renderer.askQuestion(DB_Q);
+		await term.waitForRender();
+		await expect(deadline(renderer.askQuestion({ question: "another?" }))).rejects.toThrow("a question or approval overlay is already open");
+		term.sendInput("\r");
+		await expect(deadline(first)).resolves.toEqual({ choice: 0, label: "postgres" });
+		const late = renderer.askQuestion(DB_Q);
+		await term.waitForRender();
+		renderer.stop();
+		await expect(deadline(late)).resolves.toBeNull();
+		await expect(deadline(renderer.askQuestion(DB_Q))).resolves.toBeNull(); // stopped UI: nobody to ask
+	});
+
+	it("askQuestion clips a long question to the terminal with a folded marker and keeps the options on screen", async () => {
+		const { renderer, term } = boot();
+		const long = Array.from({ length: 40 }, (_, i) => `line-${i + 1}`).join("\n");
+		const pending = renderer.askQuestion({ question: long, options: ["alpha", "beta"] });
+		const screen = await view(term);
+		// card rows are standalone lines (the one-line transcript note above the card also echoes the text)
+		const rows = screen.split("\n").map((l) => l.trim());
+		expect(rows).toContain("line-1");
+		expect(rows).toContain("line-11");
+		expect(rows).toContain("… +29 more lines");             // 24 rows → 12 question rows: 11 lines + marker
+		expect(rows).not.toContain("line-12");                   // clipped by the physical bound
+		expect(screen).toContain("→ alpha");                    // options still reachable below the question
+		term.sendInput("\r");
+		await expect(deadline(pending)).resolves.toEqual({ choice: 0, label: "alpha" });
 	});
 });

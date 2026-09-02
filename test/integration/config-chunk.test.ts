@@ -101,6 +101,7 @@ class NoteRenderer implements Renderer {
   toolUpdate(): void {}
   toolEnd(): void {}
   async askApproval(): Promise<"deny"> { return "deny"; }
+  async askQuestion(): Promise<null> { return null; } // port #33 seam: no-op stub (declines)
   async pickOne(): Promise<null> { return null; }
   clearTranscript(): void {}
   prefillEditor(): void {}

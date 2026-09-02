@@ -43,6 +43,7 @@ class FakeRenderer implements Renderer {
   toolUpdate(): void {}
   toolEnd(callId: string, ok: boolean): void { this.toolEnds.push({ callId, ok }); }
   async askApproval(): Promise<ApprovalAnswer> { return "once"; }
+  async askQuestion(): Promise<null> { return null; } // port #33 seam: no-op stub (declines)
   async pickOne(items: PickItem[], title?: string): Promise<string | null> {
     this.pickCalls.push({ items, title });
     return this.nextPick(items);
