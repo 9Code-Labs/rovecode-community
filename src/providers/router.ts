@@ -1,6 +1,7 @@
 /** Role router + provider fallback chains (port #14). ModelRef resolver + StreamFn wrapper —
  *  NO second agent loop (ADR-003): the wrapper makes one bounded pass over a chain's remaining
- *  candidates inside a single stream invocation; retry/backoff policy stays the loop's job.
+ *  candidates inside a single stream invocation; same-model retry/backoff is the port-#23
+ *  withRetry wrapper, which sits INSIDE this wrap (retries exhaust before the chain advances).
  *
  *  Role table (oh-my-pi, MIT — research/source_snapshots/can1357-oh-my-pi):
  *  - Role names ported as the documented SUBSET default/smol/plan/commit/task of OMP's
@@ -37,7 +38,7 @@
  *  - gemini-cli retries the new model immediately (retry.ts:404, :459 `attempt = 0; continue`)
  *    inside its retryWithBackoff loop; aion tries each candidate ONCE per invocation — no
  *    delays, no attempt reset (ADR-003: no second loop). Status is read from the seam's
- *    error TEXT ("HTTP <status>: <body>" — src/providers/stream.ts:78,109,171), the same
+ *    error TEXT ("HTTP <status>: <body>" — built by src/providers/stream-errors.ts httpErrorTurn), the same
  *    message-sniffing fallback gemini-cli itself uses (retry.ts:553-558).
  *  - Mid-stream failure: gemini-cli re-streams and signals the consumer with a RETRY event
  *    (core/geminiChat.ts:655-679). Aion's StreamEvent grammar (core/types.ts:47-50) has no
