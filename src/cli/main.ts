@@ -79,7 +79,9 @@ async function cmdRun(prompt: string): Promise<void> {
     ? { provider: rt.provider.id, model: process.env.AION_MODEL ?? rt.provider.defaultModel ?? "gpt-4o-mini" }
     : { provider: "mock", model: "default" };
   const stream = rt.stream ?? mockStream({ turns: [textTurn("Aion mock provider: run `aion auth set <provider>`, or set AION_BASE_URL and AION_API_KEY (or a <NAME>_API_KEY env var), for a real model.")] });
+  rt.hooks.onWarning((w) => console.error(`hooks: ${w}`)); // port #29: load + runtime hook notes → stderr (stdout stays the transcript)
   const exit = async (code: number): Promise<never> => {
+    await rt.hooks.close(); // port #29: session_close, after in-flight on_event taps settle
     await rt.mcp?.close().catch(() => {});
     return process.exit(code);
   };
@@ -87,7 +89,7 @@ async function cmdRun(prompt: string): Promise<void> {
   // byte-identical to the pre-port console.log lines; json/ndjson guard stdout and send human
   // progress to stderr) and its signal aborts on SIGINT, so Ctrl-C ends the run "stopped" (exit 130)
   const sink = createOutputSink(parseOutputMode(process.argv), { stdout: process.stdout, stderr: process.stderr, model, messages: () => rt.store.messages() });
-  for await (const ev of agentLoop(rt.buildDef(model), prompt, {}, rt.buildCfg(yolo), { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, cwd: rt.cwd, signal: sink.signal }, rt.steering)) { // port #26: runtime queue -> task notes reach the run; cwd threaded like every other surface
+  for await (const ev of agentLoop(rt.buildDef(model), prompt, {}, rt.buildCfg(yolo), { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, cwd: rt.cwd, signal: sink.signal, hooks: rt.hooks }, rt.steering)) { // port #26: runtime queue -> task notes reach the run; cwd threaded like every other surface
     if (ev.type === "turn_start") resetTurnFailureCount();
     sink.onEvent(ev);
     if (ev.type === "run_end") await exit(sink.finish(ev));

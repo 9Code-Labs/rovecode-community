@@ -88,8 +88,15 @@ export async function* agentLoop(
   const follow = () => runAc.abort();
   if (deps.signal?.aborted) runAc.abort();
   else deps.signal?.addEventListener("abort", follow, { once: true });
+  // port #29: run-level hooks ride the event stream (core/hooks.ts observer): pre_run / compaction /
+  // post_run are awaited BEFORE the event reaches the consumer (post_run must land before a cmdRun
+  // exit), on_event is a fire-and-forget tap; timeout + isolation live in the runner, never here
+  const obs = deps.hooks?.observer?.({ cwd: deps.cwd ?? process.cwd(), sessionId: deps.store.id });
   try {
-    yield* runLoop(def, goal, vars, cfg, deps, steering, depth, followUps, runAc);
+    for await (const ev of runLoop(def, goal, vars, cfg, deps, steering, depth, followUps, runAc)) {
+      if (obs) await obs.observe(ev);
+      yield ev;
+    }
   } finally {
     deps.signal?.removeEventListener("abort", follow);
     runAc.abort();
@@ -272,7 +279,7 @@ async function* runLoop(
     // --- tool execution: ctx.signal IS the run controller's signal, so the ONE
     // per-run controller reaches child processes by identity (executor G4 seam)
     const ctx: ToolContext = {
-      sessionId: deps.store.id, cwd: deps.cwd ?? process.cwd(), signal: runAc.signal,
+      sessionId: deps.store.id, cwd: deps.cwd ?? process.cwd(), signal: runAc.signal, runId,
       spawn: undefined, permissions: { effect: "allow" },
     };
     const runChild = deps.childRunner;

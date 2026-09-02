@@ -1,4 +1,5 @@
-/** Tool pipeline: validate → revise (extension hooks) → policy → approve → execute (ADR-005).
+/** Tool pipeline: validate → revise (extension hooks) → policy → [pre_tool hook] → approve
+ *  ([approval hook] before the human) → execute → [post_tool hook] (ADR-005; hooks v2 = port #29).
  *  Tool calls are recorded BEFORE execution; truncated responses fail calls unexecuted. */
 
 import type {
@@ -6,12 +7,18 @@ import type {
   ApprovalRequest, ToolCallPart, RunEvent,
 } from "./types.ts";
 import type { ToolGuard } from "./guardrails.ts";
+import type { HookCtx, HookRunner } from "./hooks.ts";
 import { isAbsolute, join } from "node:path";
 
 export interface ExtensionHooks {
   /** May revise args; returns revised args (omp revision gate). */
   reviseToolArgs?: (tool: string, args: unknown) => Promise<unknown>;
   onToolResult?: (tool: string, args: unknown, out: ToolOutput) => Promise<void>;
+  /** port #29 typed hook set (core/hooks.ts; a HookRunner satisfies this seam): pre_tool / approval /
+   *  post_tool ride dispatch at the seams below, timeout-bounded + isolated by the runner; the loop
+   *  taps the run-level hooks (pre_run / compaction / post_run / on_event) through observer(). */
+  run?: HookRunner["run"];
+  observer?: HookRunner["observer"];
 }
 
 /** Output of a tool_call that never executed because the run aborted (port
@@ -19,6 +26,9 @@ export interface ExtensionHooks {
  *  the abort. Same text loop.ts synthesizes for calls a batch never delivered
  *  (opencode session/processor.ts:587; codex normalize.rs:51-67). */
 export const ABORTED_TOOL_RESULT = "Tool execution aborted";
+/** port #29: the small ctx hooks receive — cwd, session, run; no registry/store handles */
+const hookCtx = (c: ToolContext): HookCtx =>
+  ({ cwd: c.cwd, sessionId: c.sessionId, ...(c.runId !== undefined ? { runId: c.runId } : {}) });
 
 /** Deny-by-default wildcard rules, last match wins (opencode permission.ts:126). */
 export function evaluatePermissions(rules: PermissionRule[], action: string, resource: string): PermissionDecision {
@@ -90,9 +100,28 @@ export class ToolRegistry {
       return { ok: false, output: `Permission denied: ${decision.reason}` };
     }
 
+    // 2b. pre_tool hook (port #29) — AFTER policy: the rule deny above is never un-denied and hooks
+    // never see rule-rejected calls; a hook deny applies in every mode incl. yolo (the user's own
+    // stricter layer) and takes the policy-deny failure shape with the hook's reason
+    const veto = await hooks?.run?.("pre_tool", hookCtx(ctx), { id: call.id, tool: call.tool, args });
+    if (veto) {
+      emit({ type: "tool_call_failed", callId: call.id, reason: "permission_denied", detail: veto.deny });
+      return { ok: false, output: `Permission denied by hook: ${veto.deny}` };
+    }
+
     // 3. approval — always resolved against the REVISED args (omp wrapper.ts:205-247)
     if (decision.effect === "prompt") {
-      const cached = this.approvalCache.get(cacheKey(call.tool, args));
+      // port #29: the approval hook stands in for the HUMAN — consulted only here (policy said prompt)
+      // and only when nothing is cached; "allow" = one-shot yes (never cached), "deny" = hook deny,
+      // void = the approver chain below (execpolicy refinement + human), byte-for-byte as before
+      const key = cacheKey(call.tool, args);
+      const pre = this.approvalCache.has(key) ? undefined
+        : await hooks?.run?.("approval", hookCtx(ctx), { tool: call.tool, args, revisedArgs: args, reason: decision.prompt });
+      if (pre === "deny") {
+        emit({ type: "tool_call_failed", callId: call.id, reason: "permission_denied", detail: "denied by hook" });
+        return { ok: false, output: "Permission denied by hook" };
+      }
+      const cached = pre === "allow" ? "once" : this.approvalCache.get(key);
       if (!cached) {
         if (!approve) {
           emit({ type: "tool_call_failed", callId: call.id, reason: "permission_denied", detail: "approval required but no approver connected" });
@@ -134,6 +163,10 @@ export class ToolRegistry {
       if (r.deduped) out = { ...out, output: r.output };
     }
     if (warnNote) out = { ...out, output: `${out.output}\n\n[loop-guard] ${warnNote}` };
+    // port #29: post_tool may annotate/replace what the model will see (growth-bounded in the runner);
+    // tool_execution_end below carries the final text, like the guard's stub/warn rewrites above
+    const ann = await hooks?.run?.("post_tool", hookCtx(ctx), { id: call.id, tool: call.tool, args }, out);
+    if (ann?.output !== undefined) out = { ...out, output: ann.output };
     emit({ type: "tool_execution_end", callId: call.id, ok: out.ok, output: out.output, durationMs: Date.now() - t0 });
     if (hooks?.onToolResult) await hooks.onToolResult(call.tool, args, out).catch(() => {});
     return out;

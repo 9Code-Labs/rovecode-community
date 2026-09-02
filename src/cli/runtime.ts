@@ -16,6 +16,7 @@ import { loadProjectContext, type ProjectContext } from "../core/config.ts";
 import { estimateTokens, type ContextChunk } from "../core/context.ts";
 import { parseCompactionStrategy } from "../core/compaction.ts";
 import { ToolGuard } from "../core/guardrails.ts";
+import { HookRunner } from "../core/hooks.ts";
 import { loadMcpConfig, McpManager } from "../mcp/client.ts";
 import { createMcpTools } from "../mcp/tools.ts";
 import { readTool, editTool, writeTool, bashTool } from "../coding/hashline.ts";
@@ -113,6 +114,12 @@ export interface Runtime {
   steering: SteeringQueue;
   /** port #26: background subagents (bounded FIFO jobs over orchestrator runChild) */
   tasks: TaskManager;
+  /** port #29: typed hook set — `.aion/hooks.{ts,js}` (+ `~/.aion`, AION_HOME) loaded at construction
+   *  (background import; every run() waits for it, so no surface can race the load), session_open
+   *  fired once loaded. Thread into LoopDeps.hooks; attach more sets programmatically via hooks.add()
+   *  (port #39 OTel); surfaces call hooks.close() at teardown → session_close once. Load + runtime
+   *  notes (import failure, wrong version, timeout, throw) land in hooks.warnings / onWarning(). */
+  hooks: HookRunner;
 }
 
 export function createRuntime(opts: RuntimeOptions = {}): Runtime {
@@ -183,6 +190,10 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   let askUser: AskFn | undefined;
   registry.register(askUserTool(() => askUser));
   const guard = new ToolGuard(); // port #4: loop signatures + duplicate-result stubs
+  // port #29: hooks v2 — the runner exists synchronously (createRuntime stays sync); open() imports
+  // .aion/hooks.{ts,js} (+ user scope) in the background and fires session_open; run() awaits it
+  const hooks = new HookRunner({ cwd, sessionId });
+  void hooks.open(cwd);
 
   // port #3: MCP servers from .aion/mcp.json + harvested .mcp.json; two lazy tools only.
   // connect() is fire-and-forget; tool executes await first-connect before dispatching.
@@ -338,6 +349,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     setSessionStore(s: SessionStore) { activeStore = s; },
     sandbox,
     setAskUser(fn: AskFn | undefined) { askUser = fn; },
+    hooks,
     provider, stream, defaultModel, systemPrompt,
     buildDef, buildCfg,
     steering, tasks,
@@ -355,6 +367,7 @@ export async function bootRuntime(opts: RuntimeOptions = {}): Promise<Runtime> {
   const rt = createRuntime(opts);
   try {
     await rt.sandbox.ready;
+    await rt.hooks.ready; // port #29: hook files + session_open joined here too (notes recorded before the first prompt)
   } catch (e) {
     await rt.mcp?.close().catch(() => {});
     throw e;

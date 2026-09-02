@@ -202,6 +202,7 @@ export function startServer(opts: ServerOptions = {}): AionServer {
     const run = agentLoop(def, text, {}, cfg, {
       stream, registry: rt.registry, store: rt.store,
       tools: rt.registry.list().map((t) => t.schema), guard: rt.guard,
+      hooks: rt.hooks, // port #29: .aion/hooks.{ts,js} of the server cwd
       cwd: rt.cwd, // session cwd reaches ToolContext (same gap as ACP HIGH-G1)
       signal: ac.signal, // port #21: DELETE / disconnect / stop() kill in-flight work
     }, rt.steering); // port #26: the session's queue — background-task notes land on the next prompt
@@ -275,6 +276,7 @@ export function startServer(opts: ServerOptions = {}): AionServer {
       // unbounded local spawn primitive that outlives the server.
       const closing: Promise<unknown>[] = [];
       for (const { runtime } of sessions.values()) {
+        closing.push(runtime.hooks.close()); // port #29: session_close per session runtime
         if (runtime.mcp) closing.push(runtime.mcp.close().catch(() => {}));
       }
       await Promise.all(closing);

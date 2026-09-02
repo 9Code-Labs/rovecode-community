@@ -86,6 +86,8 @@ export interface ToolContext {
   sessionId: string;
   cwd: string;
   signal: AbortSignal;
+  /** port #29: the run this call belongs to (hook ctx, tracing); unset for bare registry use */
+  runId?: string;
   /** emit progress updates surfaced as tool_execution_update events */
   onUpdate?: (note: string) => void;
   /** spawn a child agent (multi-agent path) */

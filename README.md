@@ -204,7 +204,17 @@ tokens, cache hits, and catalog-priced spend.
 
 - **Tool**: implement `Tool` (schema + kind + execute), `registry.register(t)`; kind maps to a policy action.
 - **Provider**: implement `StreamFn` — must not throw; failures become `{stopReason: "error"}`.
-- **Hooks**: `ExtensionHooks.reviseToolArgs` rewrites args before policy + approval (approval always sees revised args).
+- **Hooks** (`core/hooks.ts`, port #29): drop a `.aion/hooks.ts` (or `.js`; user scope `~/.aion/hooks.*`)
+  exporting `{ version: 1, hooks: {…} }` — plain `import`, no build step. Nine typed hooks, all optional,
+  sync or async: `pre_run`, `post_run`, `pre_tool` (return `{deny: reason}` to block), `post_tool` (return
+  `{output}` to annotate what the model sees, growth-bounded), `approval` (return `"allow"`/`"deny"` to
+  pre-answer a prompt), `compaction`, `session_open`, `session_close`, `on_event` (every RunEvent, not
+  awaited). Every call is timeout-bounded (`AION_HOOK_TIMEOUT_MS`, default 5000) and isolated — a throwing
+  or hanging hook is one warning note, never a dead run. Policy wins: rules run before `pre_tool` (a hook
+  can only deny, in every mode incl. yolo) and the approval hook only answers prompts policy allowed to be
+  asked. Hooks are trusted code run in-process (same class as `.aion/mcp.json`); loaded once per process,
+  restart to pick up edits; `AION_NO_HOOKS=1` skips the files. The programmatic
+  `ExtensionHooks.reviseToolArgs` still rewrites args before policy + approval (approval sees revised args).
 - **MCP**: add servers to `.aion/mcp.json`; tools arrive lazily through `mcp_list`/`mcp_call` under the same policy pipeline.
 
 ## License & notices

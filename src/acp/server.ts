@@ -203,6 +203,7 @@ export class AionAcpAgent implements Agent {
     const deps = {
       stream, registry: s.rt.registry, store: s.rt.store,
       tools: s.rt.registry.list().map((t) => t.schema), guard: s.rt.guard,
+      hooks: s.rt.hooks, // port #29: .aion/hooks.{ts,js} of the session cwd
       cwd: s.rt.cwd, // HIGH-G1: the client's authoritative session cwd reaches ToolContext
       signal: abort.signal, // port #21: session/cancel kills in-flight fetch/tools mid-turn
     };
@@ -256,6 +257,7 @@ export class AionAcpAgent implements Agent {
   async shutdown(): Promise<void> {
     const closing: Promise<unknown>[] = [];
     for (const s of this.sessions.values()) {
+      closing.push(s.rt.hooks.close()); // port #29: session_close per session runtime
       if (s.rt.mcp) closing.push(s.rt.mcp.close().catch(() => {}));
     }
     await Promise.all(closing);
