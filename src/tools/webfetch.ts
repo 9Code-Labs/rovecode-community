@@ -12,14 +12,18 @@
  *  per-mime handling (web-fetch.ts:686-721).
  *  Deviations: redirects are followed MANUALLY (≤5 hops) so the guard re-runs
  *  on every hop — upstreams let fetch follow them, the classic redirect-to-
- *  127.0.0.1 bypass; ipaddr.js / html-to-text / htmlparser2 are replaced by the
- *  ~50 lines of address parsing below and html-text.ts; the byte cap TRUNCATES
- *  with a marker instead of failing; no LLM pass, retries or rate limiter.
+ *  127.0.0.1 bypass — and only while the host stays the same: policy consented
+ *  to net.fetch on the ORIGINAL host, so a hop to another host stops with the
+ *  target URL for the model to fetch directly (its own policy decision);
+ *  ipaddr.js / html-to-text / htmlparser2 are replaced by the ~50 lines of
+ *  address parsing below and html-text.ts; the byte cap TRUNCATES with a marker
+ *  instead of failing; no LLM pass, retries or rate limiter. The timeout covers
+ *  the DNS phase too (the guard's lookup is raced against the controller).
  *  Known gap: DNS is resolved once for the guard and again inside fetch
  *  (rebinding TOCTOU); pinning the socket to the checked address needs a
  *  dispatcher hook Bun's fetch does not expose.
- *  Policy: kind "network" → action net.fetch, resource = URL host (core/tools.ts
- *  describeResource); runtime.ts buildCfg makes it PROMPT by default.
+ *  Policy: kind "network" → action net.fetch, resource = canonical URL host
+ *  (core/tools.ts hostOf); runtime.ts buildCfg makes it PROMPT by default.
  *  Env: AION_WEBFETCH_TIMEOUT_MS (default 30000), AION_WEBFETCH_ALLOW_PRIVATE=1
  *  (skip the private-address guard, for local dev servers). */
 
@@ -150,6 +154,17 @@ function looksLikeHtml(mime: string, text: string): boolean {
   return mime === "" && /^\s*<(!doctype\s+html|html|head|body)[\s>]/i.test(text.slice(0, 1024));
 }
 
+/** Rejects as soon as `signal` aborts, so a phase that is not itself abortable
+ *  (the guard's DNS lookup) cannot outlive the tool's timeout or the user's Esc. */
+function abortable<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(new Error("aborted"));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(new Error("aborted"));
+    signal.addEventListener("abort", onAbort, { once: true });
+    p.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
+  });
+}
+
 /** Streams the body up to `cap` bytes, then cancels the stream (gemini-cli
  *  web-fetch.ts:568-585 loop, truncating instead of throwing). An abort mid-body
  *  rejects out of reader.read() and is handled by the caller. */
@@ -163,6 +178,7 @@ async function readBounded(res: Response, cap: number): Promise<{ bytes: Uint8Ar
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
+      if (value.length === 0) continue; // an empty chunk carries no bytes: not overflow even at the cap
       if (total >= cap) { truncated = true; break; }
       const room = cap - total;
       if (value.length > room) { chunks.push(value.subarray(0, room)); total = cap; truncated = true; break; }
@@ -219,16 +235,29 @@ export function createWebFetchTool(deps: WebFetchDeps = {}): Tool {
 
     try {
       let hops = 0;
+      const origin = canonicalHost(current.hostname);
       for (;;) {
         // scheme + SSRF gate on the initial URL AND every redirect target
         if (current.protocol !== "http:" && current.protocol !== "https:") {
           return { ok: false, output: `web_fetch: unsupported URL scheme ${current.protocol} (http/https only)` };
         }
         if (!allowPrivate) {
-          const reason = await ssrfDenyReason(current.hostname, resolve);
+          let reason: string | null;
+          try { reason = await abortable(ssrfDenyReason(current.hostname, resolve), ac.signal); } catch (e) { return fail(e); }
           if (reason !== null) {
             return { ok: false, output: `web_fetch: refused ${current.href}: ${reason} (set AION_WEBFETCH_ALLOW_PRIVATE=1 for local dev servers)` };
           }
+        }
+        // Policy consented to net.fetch on the host of the ORIGINAL url only
+        // (core/tools.ts hostOf), so a redirect to a different host is not
+        // followed: the target is reported for a direct fetch that gets its own
+        // decision. Checked AFTER the guard so a private target keeps its precise
+        // refusal instead of advice to fetch it. Same canonical host (case and
+        // trailing dot ignored, any port) still follows, so http→https upgrades
+        // and path moves stay seamless.
+        const host = canonicalHost(current.hostname);
+        if (host !== origin) {
+          return { ok: false, output: `web_fetch: redirected to ${current.href}; fetch it directly (a redirect from ${origin} to ${host} needs its own net.fetch permission)` };
         }
         let res: Response;
         try {
@@ -283,7 +312,7 @@ export function createWebFetchTool(deps: WebFetchDeps = {}): Tool {
   return {
     schema: {
       name: "web_fetch",
-      description: `Fetch a public http(s) URL with GET and return its content as readable text. HTML is reduced to text (scripts/styles dropped, headings/paragraphs/lists kept, links as "text (href)"); JSON, XML and plain text pass through unchanged. Follows at most ${MAX_REDIRECTS} redirects; only text/*, JSON, XML and XHTML responses are accepted. The body is read up to ${MAX_BYTES} bytes and the text is capped at maxChars (default ${CHARS_DEFAULT}, cap ${CHARS_CAP}); both truncations leave a marker. Times out after ${TIMEOUT_DEFAULT_MS / 1000}s. Private, loopback, link-local and unresolvable hosts are refused. Output starts with a header line: final URL, HTTP status, content-type, bytes read.`,
+      description: `Fetch a public http(s) URL with GET and return its content as readable text. HTML is reduced to text (scripts/styles dropped, headings/paragraphs/lists kept, links as "text (href)"); JSON, XML and plain text pass through unchanged. Follows at most ${MAX_REDIRECTS} redirects, and only within the same host: a redirect to another host stops with that URL — fetch it directly. Only text/*, JSON, XML and XHTML responses are accepted. The body is read up to ${MAX_BYTES} bytes and the text is capped at maxChars (default ${CHARS_DEFAULT}, cap ${CHARS_CAP}); both truncations leave a marker. Times out after ${TIMEOUT_DEFAULT_MS / 1000}s. Private, loopback, link-local and unresolvable hosts are refused. Output starts with a header line: final URL, HTTP status, content-type, bytes read.`,
       args: {
         type: "object",
         properties: {

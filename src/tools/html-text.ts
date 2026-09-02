@@ -2,18 +2,22 @@
  *  dependency gemini-cli uses (Apache-2.0, 0bd1d43, packages/core/src/tools/
  *  web-fetch.ts:704-709: links keep their href, images are skipped) and for
  *  opencode's htmlparser2 skip-depth extractor (MIT, ebece6e, packages/opencode/
- *  src/tool/webfetch.ts:158-180: script/style/noscript/iframe/object/embed
- *  subtrees dropped). One regex tokenizer pass: raw-text elements are jumped
- *  over wholesale, dropped subtrees are depth-tracked, block elements become
- *  line breaks, list items get "- ", links render as `text (href)` resolved
- *  against the page URL, entities are decoded, whitespace collapses except
- *  inside <pre>. Not a spec parser: attributes containing ">" mis-tokenize,
- *  which only costs readability — nothing security-relevant reads this. */
+ *  src/tool/webfetch.ts:158-180: script/style/noscript/iframe/object subtrees
+ *  dropped; <embed> is void, so unlike opencode it is not depth-tracked). One
+ *  regex tokenizer pass: raw-text elements are jumped over wholesale, dropped
+ *  subtrees are depth-tracked, block elements become line breaks, list items
+ *  get "- ", links render as `text (href)` resolved against the page URL,
+ *  entities are decoded, whitespace collapses except inside <pre>. Not a spec
+ *  parser: attributes containing "<" or ">" mis-tokenize, which only costs
+ *  readability — nothing security-relevant reads this. Every scan is bounded
+ *  (see tagRx) so a hostile body parses in O(n): the tool's timeout cannot
+ *  interrupt a synchronous parse, so the parse must never be the slow part. */
 
 /** Elements whose CONTENT is raw text up to the matching close tag. */
 const RAW = new Set(["script", "style", "noscript", "template"]);
-/** Elements dropped with their whole (markup) subtree. */
-const DROP = new Set(["head", "svg", "iframe", "object", "embed", "canvas", "audio", "video", "select"]);
+/** Elements dropped with their whole (markup) subtree. An omitted </head> —
+ *  legal HTML, common in minified pages — is closed by the <body> start tag. */
+const DROP = new Set(["head", "svg", "iframe", "object", "canvas", "audio", "video", "select"]);
 /** Elements that break lines; PARA members separate with a blank line. */
 const BLOCK = new Set([
   "address", "article", "aside", "blockquote", "body", "caption", "center", "dd", "details", "dialog", "div", "dl", "dt",
@@ -56,7 +60,12 @@ export function htmlToText(html: string, baseUrl?: string): string {
   let skip = 0; // depth inside DROP subtrees
   let pre = 0;  // depth inside <pre>
   let link: { href: string; start: number } | null = null;
-  const tagRx = /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<[!?][^>]*>|<\/?([a-zA-Z][\w:.-]*)([^>]*)>/g;
+  // Linear-time tokenizer (MED-3): every alternative stops at the next "<" — an
+  // unterminated comment/CDATA swallows the rest, as browsers do — so each "<" is
+  // examined once. The attribute part must START with whitespace or "/" so the
+  // name and attribute quantifiers can never trade characters (that nesting made
+  // `<aaaa…` quadratic); the old `[^>]*` rescanned to end-of-input per unterminated tag.
+  const tagRx = /<!--[\s\S]*?(?:-->|$)|<!\[CDATA\[[\s\S]*?(?:\]\]>|$)|<[!?][^<>]*>|<\/?([a-zA-Z][\w:.-]*)((?:[\s/][^<>]*)?)>/g;
   let pos = 0;
 
   const text = (raw: string): void => {
@@ -65,7 +74,7 @@ export function htmlToText(html: string, baseUrl?: string): string {
     if (pre === 0) {
       s = s.replace(/\s+/g, " ");
       const last = out.length > 0 ? out[out.length - 1]! : "\n";
-      if (/(\n|- )$/.test(last)) s = s.trimStart();
+      if (last.endsWith("\n") || last.endsWith("- ")) s = s.trimStart();
     }
     if (s) out.push(s);
   };
@@ -84,14 +93,18 @@ export function htmlToText(html: string, baseUrl?: string): string {
       tagRx.lastIndex = pos;
       continue;
     }
+    if (name === "body" && !closing) skip = 0; // <body> ends a <head> whose </head> was omitted (MED-4)
     if (DROP.has(name)) { skip = closing ? Math.max(0, skip - 1) : skip + 1; continue; }
     if (skip > 0) continue;
     if (name === "a") {
-      if (!closing) { const href = attr(m[2] ?? "", "href"); link = { href: href ? resolveHref(href, baseUrl) : "", start: out.length }; }
-      else if (link) {
+      if (!closing) {
+        // same-page fragments are judged on the RAW href: resolved against a base they never start with "#"
+        const href = attr(m[2] ?? "", "href") ?? "";
+        link = { href: href === "" || href.startsWith("#") ? "" : resolveHref(href, baseUrl), start: out.length };
+      } else if (link) {
         const label = out.slice(link.start).join("").trim();
         const h = link.href;
-        if (h && label && label !== h && !h.startsWith("#") && !/^(javascript|data|mailto|tel):/i.test(h)) out.push(` (${h})`);
+        if (h && label && label !== h && !/^(javascript|data|mailto|tel):/i.test(h)) out.push(` (${h})`);
         link = null;
       }
       continue;
@@ -104,5 +117,8 @@ export function htmlToText(html: string, baseUrl?: string): string {
     if (BLOCK.has(name)) { const sep = PARA.has(name) ? "\n\n" : "\n"; if (!last.endsWith(sep)) out.push(sep); }
   }
   text(html.slice(pos));
-  return out.join("").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  // Trailing blanks before a newline: the lookbehind anchors each run at its
+  // first blank so a <pre> full of spaces is scanned once (bare `[ \t]+\n`
+  // re-scanned the run from every blank — quadratic, minutes on 512KB).
+  return out.join("").replace(/(?<=^|[^ \t])[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
 }

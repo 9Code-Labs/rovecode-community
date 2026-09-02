@@ -245,10 +245,15 @@ function describeResource(tool: Tool, args: unknown, cwd: string): string {
 
 /** Policy resource for url-declared tools (port #31): the URL's hostname — no
  *  scheme/port/credentials/path — so `allow net.fetch docs.example.com` and
- *  `deny net.fetch *` read naturally. Unparseable URLs keep the raw string (the
- *  tool rejects them anyway), so `*` rules still see a stable resource. */
+ *  `deny net.fetch *` read naturally. The host is CANONICAL (lowercased, trailing
+ *  dot stripped — the form the tool's own SSRF guard checks), so `evil.com.`
+ *  cannot dodge a `deny net.fetch evil.com` rule. The decision covers this host
+ *  only: web_fetch stops at a redirect to a different host and reports the
+ *  target URL, so that host comes back through this gate as its own call.
+ *  Unparseable URLs keep the raw string (the tool rejects them anyway), so `*`
+ *  rules still see a stable resource. */
 function hostOf(url: string): string {
-  try { return new URL(url).hostname || url; } catch { return url; }
+  try { const h = new URL(url).hostname; return (h.endsWith(".") ? h.slice(0, -1) : h).toLowerCase() || url; } catch { return url; }
 }
 
 function cacheKey(tool: string, args: unknown): string { return tool + "|" + JSON.stringify(sortK(args)); }

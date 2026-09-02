@@ -508,6 +508,8 @@ test("tool kind and title mapping", () => {
   expect(kindFor("write")).toBe("edit");
   expect(kindFor("bash")).toBe("execute");
   expect(kindFor("mystery")).toBe("other");
+  expect(kindFor("web_fetch")).toBe("fetch"); // port #31: the SDK's ToolKind has a fetch class
+  expect(titleFor("web_fetch", { url: "https://docs.example.com/guide" })).toBe("web_fetch: https://docs.example.com/guide");
   expect(titleFor("bash", { command: "ls -la" })).toBe("bash: ls -la");
   expect(titleFor("read", { path: "/a/b.txt" })).toBe("read: /a/b.txt");
   expect(titleFor("skills_list", {})).toBe("skills_list");

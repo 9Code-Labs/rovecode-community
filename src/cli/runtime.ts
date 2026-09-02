@@ -301,7 +301,10 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
           { action: "shell.exec", resource: "*", effect: "prompt" },
           { action: "spawn", resource: "*", effect: "prompt" },
           { action: "tool.mcp_call", resource: "*", effect: "prompt" },
-          { action: "net.fetch", resource: "*", effect: "prompt" }, // port #31: resource = host; `allow net.fetch <host>` auto-runs
+          // port #31: resource = canonical host (lowercased, no trailing dot), so `allow
+          // net.fetch <host>` auto-runs THAT host only; web_fetch stops at a redirect to
+          // another host and reports it, so the new host gets its own decision here
+          { action: "net.fetch", resource: "*", effect: "prompt" },
         ],
     // port #9: execpolicy refines the PROMPT branch only (allow-listed argv →
     // "once", forbidden → deny before any human); rules above stay the outer gate.

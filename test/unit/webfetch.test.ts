@@ -1,15 +1,18 @@
 /** Port #31 web_fetch: html→text extraction pinned byte-exact, JSON/XML/plain
  *  passthrough, charset decode, content-type gate BEFORE the body is read,
- *  redirect chain + hop cap, SSRF guard (literal private/loopback/link-local/
- *  metadata/unspecified/mapped targets refused before any connection, DNS-
- *  resolved private refused, redirect-to-private refused AT THE HOP with the
- *  target never reached), the AION_WEBFETCH_ALLOW_PRIVATE door, byte + char
- *  bounds with exact markers and the clamp contract, timeout via a ref'd timer
- *  (deadline-raced so a hang fails instead of freezing the runner), mid-fetch
- *  abort, policy class (net.fetch, resource = host, prompt-by-default under the
- *  runtime rules, allow-host auto-run, deny-* block), registration pins.
- *  Fixtures are a local Bun.serve on 127.0.0.1 and an injected resolver/fetch —
- *  nothing here touches the real network or real DNS. */
+ *  redirect chain + hop cap, same-host-only redirects (a cross-host hop stops
+ *  with the target so it re-enters policy as its own call), SSRF guard (literal
+ *  private/loopback/link-local/metadata/unspecified/mapped targets refused before
+ *  any connection, DNS-resolved private refused, redirect-to-private refused AT
+ *  THE HOP with the target never reached), the AION_WEBFETCH_ALLOW_PRIVATE door,
+ *  byte + char bounds with exact markers, the empty-chunk edge and the clamp
+ *  contract, timeout via a ref'd timer that also bounds the DNS phase (deadline-
+ *  raced so a hang fails instead of freezing the runner), mid-fetch abort, policy
+ *  class (net.fetch, resource = CANONICAL host so `evil.com.` cannot dodge a deny,
+ *  prompt-by-default under the runtime rules, allow-host auto-run, deny-* block),
+ *  registration pins. Fixtures are a local Bun.serve on 127.0.0.1 and an injected
+ *  resolver/fetch that refuses any host it does not rewrite onto the fixture —
+ *  nothing here touches the real network or real DNS, even under a mutation. */
 
 import { test, expect, afterAll } from "bun:test";
 import { readFileSync, mkdtempSync, rmSync } from "node:fs";
@@ -91,6 +94,8 @@ const server = Bun.serve({
       case "/redir/2": return redirect("/html", 307);
       case "/loop": { const n = Number(u.searchParams.get("n") ?? "0"); return redirect(`/loop?n=${n + 1}`, 302); }
       case "/to-private": return redirect(`http://private.test:${server.port}/html`, 302);
+      case "/to-other": return redirect(`http://other.test:${server.port}/json`, 302);        // a different host
+      case "/to-same": return redirect(`http://PUBLIC.test.:${server.port}/json`, 302);       // same host, spelled differently
       case "/to-file": return redirect("file:///etc/passwd", 302);
       case "/no-location": return new Response(null, { status: 302 });
       case "/slow": // headers after 5s; timers are cleared in afterAll
@@ -126,11 +131,18 @@ async function within<T>(ms: number, p: Promise<T>): Promise<T> {
 
 /** A tool whose fetch records every request and rewrites fake public/private
  *  hosts onto the fixture, with a scripted resolver — so the guard sees real
- *  "public" and "private" answers while every socket stays local. */
+ *  "public" and "private" answers while every socket stays local. Any other
+ *  host is REFUSED rather than fetched: a broken gate must fail here, never
+ *  reach the real network. */
 function seamTool(resolve: (host: string) => Promise<string[]>): { tool: ReturnType<typeof createWebFetchTool>; calls: string[] } {
   const calls: string[] = [];
   const tool = createWebFetchTool({
-    fetch: (url, init) => { calls.push(url); return fetch(url.replace(/(public|private|mixed)\.test/, "127.0.0.1"), init); },
+    fetch: (url, init) => {
+      calls.push(url);
+      const onFixture = url.replace(/(public|private|mixed|other)\.test\.?/, "127.0.0.1");
+      if (onFixture === url) throw new Error(`fixture-only fetch seam: refusing ${url}`);
+      return fetch(onFixture, init);
+    },
     resolve,
   });
   return { tool, calls };
@@ -234,6 +246,41 @@ test("redirects: a 3xx without Location, or to a non-http scheme, is a clean err
   expect(toFile.ok).toBe(false);
   expect(toFile.output).toBe("web_fetch: unsupported URL scheme file: (http/https only)");
 }));
+
+test("MED-1: a redirect to a DIFFERENT host is not followed — the tool stops and names the target for a direct fetch; the same host spelled with case/trailing dot still follows", async () => {
+  const { tool, calls } = seamTool(async (host) => {
+    if (host === "public.test") return ["93.184.216.34"];
+    if (host === "other.test") return ["93.184.216.35"];
+    throw new Error(`unexpected lookup ${host}`);
+  });
+  const before = hits["/json"] ?? 0;
+  const cross = await tool.execute({ url: `http://public.test:${server.port}/to-other` }, ctx());
+  expect(cross.ok).toBe(false);
+  expect(cross.output).toBe(`web_fetch: redirected to http://other.test:${server.port}/json; fetch it directly (a redirect from public.test to other.test needs its own net.fetch permission)`);
+  expect(calls).toEqual([`http://public.test:${server.port}/to-other`]); // the hop was never issued
+  expect(hits["/json"]).toBe(before);
+  const same = await tool.execute({ url: `http://public.test:${server.port}/to-same` }, ctx());
+  expect(same.ok).toBe(true);
+  expect(same.output.startsWith(`http://public.test.:${server.port}/json (HTTP 200, application/json, 17 bytes, 1 redirect)\n\n`)).toBe(true);
+  expect(calls).toHaveLength(3);
+  expect(hits["/json"]).toBe(before + 1);
+  expect(webFetchTool.schema.description).toContain("only within the same host");
+});
+
+test("MED-1 via policy: `allow net.fetch public.test` cannot reach other.test through a redirect — the direct fetch is denied and the hop stops before any request to it", async () => {
+  const { tool, calls } = seamTool(async (host) => (host === "public.test" ? ["93.184.216.34"] : ["93.184.216.35"]));
+  const r = new ToolRegistry();
+  r.register(tool);
+  const rules: PermissionRule[] = [{ action: "net.fetch", resource: "public.test", effect: "allow" }];
+  const direct = await r.dispatch(call("m1", `http://other.test:${server.port}/json`), ctx(), undefined, rules, undefined, () => {});
+  expect(direct.output).toBe("Permission denied: no rule allows net.fetch");
+  const before = hits["/json"] ?? 0;
+  const via = await r.dispatch(call("m2", `http://public.test:${server.port}/to-other`), ctx(), undefined, rules, undefined, () => {});
+  expect(via.ok).toBe(false);
+  expect(via.output).toContain(`web_fetch: redirected to http://other.test:${server.port}/json; fetch it directly`);
+  expect(calls).toEqual([`http://public.test:${server.port}/to-other`]);
+  expect(hits["/json"]).toBe(before);
+});
 
 // ---------- SSRF guard ----------
 
@@ -362,6 +409,27 @@ test("byte bound: a body of exactly MAX_BYTES is NOT truncated and carries no ma
   expect(out.output.endsWith("€ab")).toBe(true);
 }));
 
+test("LOW-8: a zero-length chunk after exactly MAX_BYTES is not overflow (no marker); a real byte after the cap still truncates", async () => {
+  const exact = new TextEncoder().encode("€".repeat(174_762) + "ab");
+  expect(exact.length).toBe(MAX_BYTES);
+  let tail: Uint8Array[] = [new Uint8Array(0)];
+  const tool = createWebFetchTool({
+    fetch: async () => new Response(new ReadableStream<Uint8Array>({
+      start(c) { c.enqueue(exact); for (const t of tail) c.enqueue(t); c.close(); },
+    }), { headers: { "content-type": "text/plain; charset=utf-8" } }),
+    resolve: async () => ["93.184.216.34"],
+  });
+  const clean = await tool.execute({ url: "http://public.test/exact", maxChars: CHARS_CAP }, ctx());
+  expect(clean.data).toEqual({ url: "http://public.test/exact", status: 200, contentType: "text/plain", bytes: MAX_BYTES, redirects: 0, truncated: false });
+  expect(clean.output).not.toContain("truncated");
+  expect(clean.output.endsWith("€ab")).toBe(true);
+  tail = [new Uint8Array(0), new Uint8Array([0x63])];
+  const over = await tool.execute({ url: "http://public.test/over", maxChars: CHARS_CAP }, ctx());
+  expect((over.data as { bytes: number; truncated: boolean }).bytes).toBe(MAX_BYTES);
+  expect((over.data as { truncated: boolean }).truncated).toBe(true);
+  expect(over.output).toContain(`(Body truncated at ${MAX_BYTES} bytes.)`);
+});
+
 test("char bound: maxChars truncates the text with the exact marker; absurd values clamp to CHARS_CAP; the schema advertises default and cap", async () => local(async () => {
   const cut = await webFetchTool.execute({ url: `${base}/text`, maxChars: 100 }, ctx());
   expect(cut.output).toBe(`${base}/text (HTTP 200, text/plain, 1000 bytes)\n\n${"0123456789".repeat(10)}\n\n(Text truncated: showing first 100 of 1000 characters.)`);
@@ -394,6 +462,32 @@ test("timeout: AION_WEBFETCH_TIMEOUT_MS=200 against a 5s-silent server → clean
     expect(elapsed).toBeLessThan(1000);
   });
   expect(TIMEOUT_DEFAULT_MS).toBe(30_000);
+});
+
+test("LOW-7: the timeout bounds the DNS phase — a 1.5s resolver under AION_WEBFETCH_TIMEOUT_MS=200 fails at ~200ms, not 1500; Esc during DNS aborts promptly; nothing is sent", async () => {
+  const pending = new Set<ReturnType<typeof setTimeout>>();
+  const slow = (): Promise<string[]> => new Promise((r) => { pending.add(setTimeout(() => r(["93.184.216.34"]), 1500)); });
+  const { tool, calls } = seamTool(slow);
+  try {
+    await withEnv({ AION_WEBFETCH_ALLOW_PRIVATE: undefined, AION_WEBFETCH_TIMEOUT_MS: "200" }, async () => {
+      const t0 = Date.now();
+      const out = await within(3000, tool.execute({ url: "http://public.test/json" }, ctx()));
+      const elapsed = Date.now() - t0;
+      expect(out.ok).toBe(false);
+      expect(out.output).toBe("web_fetch: timed out after 200ms");
+      expect(elapsed).toBeGreaterThanOrEqual(150);
+      expect(elapsed).toBeLessThan(1000);
+    });
+    await withEnv({ AION_WEBFETCH_ALLOW_PRIVATE: undefined, AION_WEBFETCH_TIMEOUT_MS: undefined }, async () => {
+      const ac = new AbortController();
+      pending.add(setTimeout(() => ac.abort(), 100));
+      const t0 = Date.now();
+      const out = await within(3000, tool.execute({ url: "http://public.test/json" }, ctx(ac.signal)));
+      expect(out.output).toBe("web_fetch: aborted");
+      expect(Date.now() - t0).toBeLessThan(1000);
+    });
+    expect(calls).toEqual([]);
+  } finally { for (const t of pending) clearTimeout(t); }
 });
 
 test("abort: ctx.signal aborted mid-fetch → prompt 'aborted' failure (not a timeout); a pre-aborted signal sends nothing", async () => local(async () => {
@@ -456,6 +550,22 @@ test("policy: `allow net.fetch <host>` auto-runs for that host only; `deny net.f
   expect((await registry().dispatch(call("a4"), ctx(), undefined, readOnly, undefined, () => {})).ok).toBe(false);
   expect(hits["/json"]).toBe(before + 1);
 }));
+
+test("MED-2: policy sees the CANONICAL host — `deny net.fetch evil.com` holds for evil.com., EVIL.COM and a port; `allow net.fetch public.test` covers PUBLIC.test.", async () => {
+  const { tool, calls } = seamTool(async () => ["93.184.216.34"]);
+  const r = new ToolRegistry();
+  r.register(tool);
+  const deny: PermissionRule[] = [{ action: "net.fetch", resource: "*", effect: "allow" }, { action: "net.fetch", resource: "evil.com", effect: "deny" }];
+  for (const url of ["http://evil.com./json", "http://EVIL.COM/json", "http://EVIL.com.:8080/json"]) {
+    const out = await r.dispatch(call(`d:${url}`, url), ctx(), undefined, deny, undefined, () => {});
+    expect([url, out.output]).toEqual([url, "Permission denied: denied by rule net.fetch evil.com"]);
+  }
+  expect(calls).toEqual([]); // denied before execution; the seam would have refused evil.com anyway
+  const allow: PermissionRule[] = [{ action: "net.fetch", resource: "public.test", effect: "allow" }];
+  const dotted = await r.dispatch(call("a:dot", `http://PUBLIC.test.:${server.port}/json`), ctx(), undefined, allow, undefined, () => {});
+  expect(dotted.ok).toBe(true);
+  expect(calls).toEqual([`http://public.test.:${server.port}/json`]);
+});
 
 test("policy: under the runtime's default gated rules web_fetch is PROMPT class (fails closed headless, runs with an approver); yolo auto-runs", async () => local(async () => {
   const cwd = mkdtempSync(join(tmpdir(), "aion-web-rt-"));

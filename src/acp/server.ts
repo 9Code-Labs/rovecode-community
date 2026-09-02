@@ -84,7 +84,7 @@ export function promptText(blocks: ContentBlock[]): string {
 const TOOL_KINDS: Record<string, AcpToolKind> = {
   read: "read", edit: "edit", write: "edit", bash: "execute",
   skill_view: "read", skills_list: "search", mcp_list: "search",
-  mcp_call: "other", memory_edit: "other",
+  mcp_call: "other", memory_edit: "other", web_fetch: "fetch",
 };
 
 export function kindFor(tool: string): AcpToolKind {
@@ -95,7 +95,7 @@ export function kindFor(tool: string): AcpToolKind {
 export function titleFor(tool: string, args: unknown): string {
   if (args && typeof args === "object") {
     const a = args as Record<string, unknown>;
-    const salient = a.path ?? a.command ?? a.name;
+    const salient = a.path ?? a.command ?? a.name ?? a.url;
     if (salient !== undefined) return `${tool}: ${String(salient).slice(0, 120)}`;
   }
   return tool;
