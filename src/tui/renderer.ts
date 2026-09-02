@@ -3,8 +3,10 @@
  *  without touching the app/loop. House code outside src/tui must not import vendor. */
 
 import type { QuestionAnswer, QuestionPrompt } from "../tools/ask-user.ts";
+import type { RunEvent } from "../core/types.ts";
+import type { SextantAttach } from "../sextant/types.ts";
 
-export type { QuestionAnswer, QuestionPrompt };
+export type { QuestionAnswer, QuestionPrompt, SextantAttach };
 
 export type ApprovalAnswer = "once" | "always" | "deny";
 
@@ -68,4 +70,13 @@ export interface Renderer {
   prefillEditor(text: string): void;
   setBusy(busy: boolean, label?: string): void;
   setStatus(info: StatusInfo): void;
+  /** port #44 (OPTIONAL — FakeRenderer/PiTuiRenderer omit it): every RunEvent of the live run, delivered
+   *  as the FIRST statement of the app's event loop, BEFORE the toolStart/beginAssistant/addSystemNote
+   *  calls the same event triggers. A renderer that implements it (sextant) treats the event stream as
+   *  its source of truth for transcript rows and ignores the duplicate per-event calls while busy. */
+  onEvent?(ev: RunEvent): void;
+  /** port #44 (OPTIONAL): the runtime handles the sextant panels read — cwd, sessions dir, the ACTIVE
+   *  store, tasks, model + context window, usage math. Called exactly once by runTui, after runtime
+   *  construction and before start(). */
+  attach?(ctx: SextantAttach): void;
 }

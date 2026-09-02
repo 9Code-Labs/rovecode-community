@@ -39,7 +39,8 @@ reinstall to update).
 ## Quickstart
 
 ```bash
-aion                        # TUI chat (default surface; --plain = readline REPL)
+aion                        # TUI chat — the sextant surface on a truecolor TTY ≥ 100×30, else the classic pi-tui chat
+aion --classic              # force the classic chat; --plain = readline REPL; --pet <name> names the sextant pet
 aion "fix the failing test" # one-shot task
 aion run "<prompt>" --yolo  # one-shot, all tool approvals granted
 aion run "<prompt>" --output json    # ONE result object on stdout (ndjson: one line per RunEvent + a result line)
@@ -81,7 +82,23 @@ AION_MODEL_DEFAULT=prov/a,prov/b     # role fallback chains (DEFAULT SMOL PLAN C
 
 TUI slash commands: `/help /status /cost /model /yolo /plan /act /rewind /sessions /resume /new
 /checkpoints /restore /skills /memory /export /todos /tasks /exit`, plus one `/name` per custom command
-file in `.aion/commands/` (project) or `~/.aion/commands/` (user scope).
+file in `.aion/commands/` (project) or `~/.aion/commands/` (user scope). The sextant surface adds its own
+renderer-local `/theme night|ember|contrast`, `/open <file>`, `/diff [file]`, `/focus messages|code|files`
+and `/agents` (they never reach the agent; the names are reserved against custom commands).
+
+**The sextant surface** (wave 4, ports #40–#46 — ported from the user's own sextant v0.4.0 prototype):
+a panelled cockpit instead of a chat log — `files` (git tree with M/A/D, touched-file spinner) · `code`
+(the file the agent reads/edits with the highlight band, `±` HEAD-vs-disk diff after an edit lands and the
+approval preview before it, `$` run output with PASS/FAIL chips, `∷` the crew board over background tasks)
+· `messages` (compact tool rows `· read x … N lines` `~ edit x +a −b` `$ run cmd`, the ONE modal card for
+approvals and `ask_user`, the prompt with `/` suggestions and `@file` mentions) · `plan` (the session's
+todos + crew) · `usage` (tokens, context bar, cost) · `nimbus`, the weather-cloud pet whose mood follows
+the run. `aion` picks it when stdout is a TTY of at least 100×30 that renders truecolor (`COLORTERM`,
+`WT_SESSION`, `TERM_PROGRAM` vscode/iTerm/WezTerm/ghostty, kitty/`-direct` `TERM`); `AION_TUI=sextant|classic`
+overrides the heuristics (a non-TTY never gets sextant), `--classic` beats both. Keys: `⏎` send · `tab`
+complete/cycle focus · `esc esc` stop the run · `⌃c` quit (interrupts first) · `⌃k` palette · `⌃s ⌃d ⌃r ⌃a`
+code/diff/run/agents · `⌃e` files · `⌃t` theme · mouse clicks/wheel. `aion smoke-tui --sextant` renders a
+160×44 frame through the real pipeline and prints PASS.
 
 ## Features beyond the 20 ports (wave 3, verified per port in `PORTS.md`)
 
@@ -125,7 +142,11 @@ Full ledger with bars, critic verdicts, and evidence: workspace `PORTS.md`. Sour
 Apache-2.0 only; Apache attributions in `THIRD_PARTY_NOTICES.md`.
 
 **Surfaces**
-- #1 differential-render TUI, vendored pi-tui behind a `Renderer` seam (pi, MIT)
+- #1 differential-render TUI, vendored pi-tui behind a `Renderer` seam (pi, MIT) — now the `--classic` chat
+- #40–#46 the sextant surface (user-owned prototype): cell buffer + diff flush, key/mouse/paste parser, the
+  RunEvent reducer, files/code/messages/plan/usage panels, the crew board and the pet — a second `Renderer`
+  implementation over the same ONE loop (`src/sextant/`, `tui/sextant-io.ts`); `onEvent?`/`attach?` are the
+  two optional seam members it needs
 - #2 branch navigator + rewind/edit-resubmit over the session DAG (pi pattern, MIT)
 - #15 ACP v1 endpoint for Zed/JetBrains via the official SDK (Apache-2.0)
 - #19 headless HTTP server: sessions, SSE RunEvents, OpenAPI at `/doc` (opencode design, MIT)
@@ -211,6 +232,10 @@ Environment knobs (`aion help` prints the same list):
 - `AION_SANDBOX` / `AION_SANDBOX_IMAGE` — executor rung for `bash` and the docker image (#27)
 - `--output text|json|ndjson` (flag, `aion run` only) — output mode (#35); `AION_YOLO=1` — allow all tool actions;
   `AION_STREAM=sse` — raw SSE adapter; `AION_HOME` — credentials + user-scope commands dir (default `~/.aion`)
+- `AION_TUI=sextant|classic` — force the TUI surface (#44; sextant still needs a TTY, `--classic` wins);
+  `AION_THEME=night|ember|contrast` — the sextant palette at boot (`/theme` switches it live);
+  `AION_PET=0` — hide the sextant pet panel (`--pet <name>` renames it); the surface needs ≥ 100×30 cells
+  and truecolor — below that, or on a pipe, `aion` opens the classic pi-tui chat
 - Kill switches / budgets: `AION_NO_CHECKPOINTS=1`, `AION_NO_REPOMAP=1`, `AION_REPOMAP_TOKENS`,
   `AION_NO_TOOL_MIDDLEWARE=1`, `AION_TOOL_MIDDLEWARE=1`, `AION_EVAL_CELL=1`
 

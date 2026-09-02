@@ -6,8 +6,9 @@
  *  math) and empty titled boxes keep the frame renderable. No timers, no clocks — `now` is a parameter. */
 
 import { GridScreen } from "./grid.ts";
-import { drawFiles, drawFrame, drawToasts, panel } from "./draw-frame.ts";
+import { drawFiles, drawFrame, drawToasts } from "./draw-frame.ts";
 import { drawPlan, drawUsage } from "./draw-plan.ts";
+import { panel } from "./layout.ts";
 import { pruneToasts } from "./model.ts";
 import type { DumpFrame, Layout, LayoutOptions, Rect, ScreenLike, SextantState, Theme } from "./types.ts";
 

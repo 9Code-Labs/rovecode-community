@@ -231,7 +231,7 @@ export function moodCtxFrom(s: SextantState, now: number): MoodCtx {
     running: s.running,
     waiting: s.card != null,
     delegating: s.crew.some((t) => t.status === "queued" || t.status === "running"),
-    errorAt: a.state === "ERROR" ? (a.endedAt ?? a.startedAt ?? 0) : null,
+    errorAt: a.state === "ERROR" ? (a.errorAt ?? a.endedAt ?? a.startedAt ?? 0) : null,
     tokens: s.usage.tokensIn + s.usage.tokensOut,
     activeAt: Math.max(a.startedAt ?? 0, a.endedAt ?? 0),
     runStartedAt: s.running ? a.startedAt : null,

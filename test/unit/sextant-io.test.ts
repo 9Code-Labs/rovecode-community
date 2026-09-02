@@ -1,0 +1,152 @@
+/** Port #44 — sextant-io.ts: the surface choice (truecolor heuristics, the 100×30 floor, the TTY gate,
+ *  AION_TUI / --classic overrides), MemoryIO, ProcessIO raw-mode ordering incl. the Windows VT-input helper
+ *  (win32 only, AFTER setRawMode), utf8 decoding of Buffer chunks, resize, and pickRenderer. */
+
+import { test, expect } from "bun:test";
+import { existsSync } from "node:fs";
+import { SextantRenderer } from "../../src/sextant/sextant-renderer.ts";
+import { chooseSurface, MemoryIO, pickRenderer, ProcessIO, sextantOk, truecolor, vtInputCandidates, type RawStdout } from "../../src/tui/sextant-io.ts";
+
+const tty = (columns = 160, rows = 44) => ({ isTTY: true, columns, rows });
+
+class FakeStdin {
+  isRaw = false;
+  log: string[] = [];
+  handlers = new Set<(d: string | Buffer) => void>();
+  setRawMode(m: boolean): this { this.isRaw = m; this.log.push(`raw:${m}`); return this; }
+  setEncoding(e: string): this { this.log.push(`enc:${e}`); return this; }
+  resume(): this { this.log.push("resume"); return this; }
+  pause(): this { this.log.push("pause"); return this; }
+  on(_e: "data", cb: (d: string | Buffer) => void): this { this.handlers.add(cb); return this; }
+  off(_e: "data", cb: (d: string | Buffer) => void): this { this.handlers.delete(cb); return this; }
+  emit(d: string | Buffer): void { for (const h of this.handlers) h(d); }
+}
+class FakeStdout implements RawStdout {
+  isTTY = true; columns: number | undefined = 120; rows: number | undefined = 40; out = "";
+  resizers = new Set<() => void>();
+  write(s: string): boolean { this.out += s; return true; }
+  on(_e: "resize", cb: () => void): this { this.resizers.add(cb); return this; }
+  off(_e: "resize", cb: () => void): this { this.resizers.delete(cb); return this; }
+  emitResize(): void { for (const r of this.resizers) r(); }
+}
+
+test("truecolor(): COLORTERM truecolor/24bit, WT_SESSION, TERM_PROGRAM vscode/iTerm.app/WezTerm/ghostty, TERM kitty/-direct — nothing else", () => {
+  expect(truecolor({ COLORTERM: "truecolor" })).toBe(true);
+  expect(truecolor({ COLORTERM: "24bit" })).toBe(true);
+  expect(truecolor({ COLORTERM: "TRUECOLOR" })).toBe(true);
+  expect(truecolor({ WT_SESSION: "abc" })).toBe(true);
+  for (const p of ["vscode", "iTerm.app", "WezTerm", "ghostty"]) expect(truecolor({ TERM_PROGRAM: p })).toBe(true);
+  expect(truecolor({ TERM: "xterm-kitty" })).toBe(true);
+  expect(truecolor({ TERM: "xterm-direct" })).toBe(true);
+  expect(truecolor({ TERM: "xterm-256color" })).toBe(false);
+  expect(truecolor({ TERM_PROGRAM: "Apple_Terminal" })).toBe(false);
+  expect(truecolor({ COLORTERM: "yes" })).toBe(false);
+  expect(truecolor({})).toBe(false);
+});
+
+test("sextantOk(): TTY and ≥ 100×30 and truecolor — every leg is necessary, the floor is inclusive", () => {
+  const env = { COLORTERM: "truecolor" };
+  expect(sextantOk(env, tty(160, 44))).toBe(true);
+  expect(sextantOk(env, tty(100, 30))).toBe(true);
+  expect(sextantOk(env, tty(99, 44))).toBe(false);
+  expect(sextantOk(env, tty(160, 29))).toBe(false);
+  expect(sextantOk(env, { isTTY: false, columns: 160, rows: 44 })).toBe(false);
+  expect(sextantOk(env, { columns: 160, rows: 44 })).toBe(false); // isTTY undefined = a pipe
+  expect(sextantOk({}, tty(160, 44))).toBe(false);                // no truecolor evidence
+  expect(sextantOk(env, { isTTY: true })).toBe(false);            // unknown size
+});
+
+test("chooseSurface() matrix: heuristics by default; AION_TUI overrides both ways; a non-TTY never gets sextant; --classic wins over everything", () => {
+  const tc = { COLORTERM: "truecolor" };
+  expect(chooseSurface({ classic: false }, tc, tty(160, 44))).toBe("sextant");
+  expect(chooseSurface({ classic: false }, tc, tty(99, 44))).toBe("classic");
+  expect(chooseSurface({ classic: false }, {}, tty(160, 44))).toBe("classic");
+  expect(chooseSurface({ classic: false }, tc, { isTTY: false, columns: 160, rows: 44 })).toBe("classic");
+  expect(chooseSurface({ classic: false }, { ...tc, AION_TUI: "classic" }, tty(160, 44))).toBe("classic");   // forced classic on a capable TTY
+  expect(chooseSurface({ classic: false }, { AION_TUI: "sextant" }, tty(99, 20))).toBe("sextant");           // forced sextant skips size + color
+  expect(chooseSurface({ classic: false }, { AION_TUI: " Sextant " }, tty(80, 24))).toBe("sextant");         // trimmed, case-insensitive
+  expect(chooseSurface({ classic: false }, { AION_TUI: "sextant" }, { isTTY: false, columns: 160, rows: 44 })).toBe("classic"); // never on a pipe
+  expect(chooseSurface({ classic: true }, { ...tc, AION_TUI: "sextant" }, tty(160, 44))).toBe("classic");   // --classic wins
+  expect(chooseSurface({ classic: false }, { ...tc, AION_TUI: "bogus" }, tty(160, 44))).toBe("sextant");    // an unknown value = heuristics
+});
+
+test("pickRenderer(): undefined for classic (runTui builds the PiTuiRenderer); a SextantRenderer when sextant is chosen, carrying AION_THEME", () => {
+  expect(pickRenderer({ classic: true }, { AION_TUI: "sextant" }, new FakeStdout())).toBeUndefined();
+  expect(pickRenderer({ classic: false }, {}, new FakeStdout())).toBeUndefined();               // no truecolor evidence → classic
+  const r = pickRenderer({ classic: false, pet: "stormy" }, { AION_TUI: "sextant", AION_THEME: "ember" }, new FakeStdout());
+  expect(r).toBeInstanceOf(SextantRenderer);
+  const sx = r as SextantRenderer;
+  expect(sx.themeName).toBe("ember");
+  expect(sx.active).toBe(false);                                                              // constructed, not started: no interval, no writes
+  const plain = pickRenderer({ classic: false }, { COLORTERM: "truecolor" }, new FakeStdout()) as SextantRenderer;
+  expect(plain).toBeInstanceOf(SextantRenderer);
+  expect(plain.themeName).toBe("night");
+});
+
+test("ProcessIO.enterRaw: setRawMode(true) → utf8 → resume → the Windows VT-input helper (win32 only, AFTER raw mode); leaveRaw restores the previous raw state and pauses stdin", () => {
+  const stdin = new FakeStdin(), stdout = new FakeStdout();
+  let vt = 0;
+  const win = new ProcessIO(stdin, stdout, {}, { platform: "win32", vtInput: () => { stdin.log.push("vt"); vt++; return true; } });
+  win.enterRaw();
+  expect(stdin.log).toEqual(["raw:true", "enc:utf8", "resume", "vt"]); // order pinned: the helper must follow setRawMode (it resets the console flags)
+  expect(vt).toBe(1);
+  win.leaveRaw();
+  expect(stdin.log.slice(4)).toEqual(["raw:false", "pause"]);          // wasRaw = false restored, stdin paused
+  const posix = new ProcessIO(new FakeStdin(), stdout, {}, { platform: "linux", vtInput: () => { throw new Error("must not run off win32"); } });
+  expect(() => posix.enterRaw()).not.toThrow();
+  const already = new FakeStdin(); already.isRaw = true;
+  const p2 = new ProcessIO(already, stdout, {}, { platform: "linux" });
+  p2.enterRaw(); p2.leaveRaw();
+  expect(already.log).toEqual(["raw:true", "enc:utf8", "resume", "raw:true", "pause"]); // a stdin that was raw before stays raw after
+});
+
+test("ProcessIO: input chunks arrive as utf8 strings (Buffers decoded), resize reports the stream size, size() falls back to 80×24, unsubscribes work, env is the injected map", () => {
+  const stdin = new FakeStdin(), stdout = new FakeStdout();
+  const io = new ProcessIO(stdin, stdout, { X: "1" }, { platform: "linux" });
+  const chunks: string[] = [];
+  const off = io.onInput((c) => chunks.push(c));
+  stdin.emit("abc"); stdin.emit(Buffer.from("é✓", "utf8"));
+  expect(chunks).toEqual(["abc", "é✓"]);
+  off(); stdin.emit("zzz");
+  expect(chunks).toEqual(["abc", "é✓"]);
+  const sizes: [number, number][] = [];
+  const offR = io.onResize((c, r) => sizes.push([c, r]));
+  stdout.columns = 90; stdout.rows = 31; stdout.emitResize();
+  expect(sizes).toEqual([[90, 31]]);
+  offR(); stdout.emitResize();
+  expect(sizes).toHaveLength(1);
+  io.write("hi");
+  expect(stdout.out).toBe("hi");
+  expect(io.env).toEqual({ X: "1" });
+  const bare = new FakeStdout(); bare.columns = undefined; bare.rows = undefined;
+  expect(new ProcessIO(stdin, bare, {}, { platform: "linux" }).size()).toEqual({ cols: 80, rows: 24 });
+});
+
+test("vtInputCandidates(): pi-tui's prebuilt console-mode helper resolves from src/tui — the win32-x64 build ships in the vendor tree", () => {
+  const c = vtInputCandidates("x64");
+  expect(c.some((p) => /vendor[\\/]pi-tui[\\/]native[\\/]win32[\\/]prebuilds[\\/]win32-x64[\\/]win32-console-mode\.node$/.test(p))).toBe(true);
+  expect(c.some((p) => existsSync(p))).toBe(true);
+  expect(vtInputCandidates("arm64").some((p) => p.includes("win32-arm64"))).toBe(true);
+  expect(vtInputCandidates("x64", "C:/bin/aion.exe").some((p) => p.replace(/\\/g, "/").startsWith("C:/bin/native/"))).toBe(true); // beside a compiled binary
+});
+
+test("MemoryIO: records writes, replays fed input to subscribers, emulates resizes, tracks raw + listeners", () => {
+  const io = new MemoryIO(100, 30, { AION_PET: "0" });
+  const got: string[] = [];
+  const sizes: [number, number][] = [];
+  const off = io.onInput((c) => got.push(c));
+  const offR = io.onResize((c, r) => sizes.push([c, r]));
+  expect(io.listeners).toBe(2);
+  io.feed("x"); io.resize(120, 40);
+  expect(got).toEqual(["x"]);
+  expect(sizes).toEqual([[120, 40]]);
+  expect(io.size()).toEqual({ cols: 120, rows: 40 });
+  io.enterRaw(); expect(io.raw).toBe(true);
+  io.leaveRaw(); expect(io.raw).toBe(false);
+  io.write("a"); io.write("b");
+  expect(io.output()).toBe("ab");
+  expect(io.writes).toEqual(["a", "b"]);
+  off(); offR();
+  expect(io.listeners).toBe(0);
+  expect(io.env.AION_PET).toBe("0");
+});

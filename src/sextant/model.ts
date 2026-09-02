@@ -52,7 +52,11 @@ export interface ApplyHooks {
 }
 interface CallInfo { tool: string; verb: string; path: string | null; add: number; del: number; cmd: string | null }
 
-const setActivity = (s: SextantState, state: ActivityState, label: string): void => { s.activity.state = state; s.activity.label = label; };
+/** `now` is passed on ERROR transitions only — it stamps activity.errorAt (the pet's storm trigger) */
+const setActivity = (s: SextantState, state: ActivityState, label: string, now?: number): void => {
+  s.activity.state = state; s.activity.label = label;
+  if (state === "ERROR" && now !== undefined) s.activity.errorAt = now;
+};
 const pushRow = (s: SextantState, row: MessageRow): void => { s.messages.push(row); s.stick = true; };
 function finalizeAssistant(s: SextantState): void { for (const r of s.messages) if (r.kind === "assistant") r.streaming = false; }
 function findRow(s: SextantState, callId: string): ToolRow | undefined {
@@ -87,7 +91,7 @@ export function makeApplyEvent(hooks: ApplyHooks = {}): ApplyEvent {
       case "message_update": {
         const last = s.messages[s.messages.length - 1];
         if (last && last.kind === "assistant" && last.streaming) last.text += ev.delta;
-        else { finalizeAssistant(s); pushRow(s, { kind: "assistant", text: ev.delta, streaming: true }); }
+        else { finalizeAssistant(s); pushRow(s, { kind: "assistant", text: ev.delta, streaming: true, id: ev.messageId }); }
         sawText = true; setActivity(s, "WRITING", "writing");
         break;
       }
@@ -96,6 +100,7 @@ export function makeApplyEvent(hooks: ApplyHooks = {}): ApplyEvent {
         const d = describeCall(ev.tool, ev.args, s.cwd);
         calls.set(ev.callId, { tool: ev.tool, verb: d.verb, path: d.path, add: d.add, del: d.del, cmd: d.cmd });
         const row: ToolRow = { kind: "tool", callId: ev.callId, tool: ev.tool, verb: d.verb, label: d.label, running: true };
+        if (d.path) row.path = d.path;
         if (d.verb === "edit" || d.verb === "write") { row.add = d.add; row.del = d.del; }
         pushRow(s, row);
         setActivity(s, d.state, d.activity);
@@ -117,14 +122,17 @@ export function makeApplyEvent(hooks: ApplyHooks = {}): ApplyEvent {
         row.running = false; row.ok = ev.ok; row.ms = ev.durationMs;
         const end = summarizeEnd({ verb: row.verb }, row.tool, ev.ok, ev.output);
         if (end.detail) row.detail = end.detail;
-        if (end.runLines && s.code.run && (!info?.cmd || s.code.run.cmd === info.cmd)) { s.code.run.lines = end.runLines; s.code.run.status = ev.ok ? "ok" : "fail"; }
+        if (end.runLines && s.code.run && (!info?.cmd || s.code.run.cmd === info.cmd)) {
+          s.code.run.lines = end.runLines; s.code.run.status = ev.ok ? "ok" : "fail";
+          if (end.exitCode !== undefined) s.code.run.exitCode = end.exitCode;
+        }
         if (end.searchLines && s.code.search) s.code.search.lines = end.searchLines;
         if (ev.ok && info?.path && (row.verb === "edit" || row.verb === "write")) {
           if (row.verb === "write") addPath(s, info.path);
           const diff = hooks.diffFor?.(info.path, row.tool, s) ?? null;
           if (diff) { row.add = diff.add; row.del = diff.del; s.code.diff = { file: info.path, ...diff }; s.code.mode = "diff"; }
         }
-        if (!ev.ok) setActivity(s, "ERROR", `${row.verb} failed`);
+        if (!ev.ok) setActivity(s, "ERROR", `${row.verb} failed`, now);
         else if (!anyRunning(s)) setActivity(s, "THINKING", "thinking");
         break;
       }
@@ -135,7 +143,7 @@ export function makeApplyEvent(hooks: ApplyHooks = {}): ApplyEvent {
         if (row) { row.running = false; row.ok = false; row.detail = reason; }
         pushRow(s, { kind: "system", tone: "error", text: `${reason}: ${ev.detail}` });
         const what = ev.reason === "permission_denied" ? "denied" : reason;
-        setActivity(s, "ERROR", row ? `${row.label} ${what}` : what);
+        setActivity(s, "ERROR", row ? `${row.label} ${what}` : what, now);
         break;
       }
       case "compaction":
@@ -153,7 +161,7 @@ export function makeApplyEvent(hooks: ApplyHooks = {}): ApplyEvent {
           setActivity(s, "SUCCESS", "done");
           if (!sawText && ev.summary) pushRow(s, { kind: "assistant", text: ev.summary, streaming: false });
         } else if (ev.status === "error") {
-          setActivity(s, "ERROR", "error");
+          setActivity(s, "ERROR", "error", now);
           if (ev.summary) pushRow(s, { kind: "system", tone: "error", text: ev.summary });
         } else {
           setActivity(s, "IDLE", ev.status);
@@ -305,7 +313,11 @@ export function setUsage(s: SextantState, u: UsagePatch): void {
   if (u.turns !== undefined) s.usage.turns = u.turns;
   if (u.tokensIn !== undefined) s.usage.tokensIn = u.tokensIn;
   if (u.tokensOut !== undefined) s.usage.tokensOut = u.tokensOut;
-  if ("contextTokens" in u || "contextWindow" in u) s.usage.contextPct = contextPercent(u.contextTokens ?? 0, u.contextWindow);
+  if ("contextTokens" in u || "contextWindow" in u) {
+    s.usage.contextPct = contextPercent(u.contextTokens ?? 0, u.contextWindow);
+    if (u.contextTokens !== undefined) s.usage.contextTokens = u.contextTokens;
+    if (u.contextWindow !== undefined) s.usage.contextWindow = u.contextWindow; else delete s.usage.contextWindow;
+  }
   if (u.costUsd !== undefined) s.usage.costUsd = u.costUsd;
 }
 /** loadTodos() result → plan panel (a corrupt file arrives as empty + note, never throws) */

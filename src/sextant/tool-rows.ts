@@ -29,6 +29,8 @@ export interface CallEnd {
   del?: number;
   /** bash: output lines (exit= header stripped) */
   runLines?: string[];
+  /** bash: the `exit=N` header's code (absent when the output carries none) */
+  exitCode?: number;
   /** glob/grep: result lines */
   searchLines?: string[];
 }
@@ -156,7 +158,7 @@ export function summarizeEnd(desc: Pick<CallDesc, "verb">, tool: string, ok: boo
     const lines = text.split(/\r?\n/);
     while (lines.length && lines[lines.length - 1]!.trim() === "") lines.pop();
     const last = lastLine(text);
-    return { detail: last || (m ? `exit ${m[1]}` : ""), runLines: lines };
+    return { detail: last || (m ? `exit ${m[1]}` : ""), runLines: lines, ...(m ? { exitCode: Number(m[1]) } : {}) };
   }
   if (!ok) return { detail: firstLine(output) };
   switch (desc.verb) {

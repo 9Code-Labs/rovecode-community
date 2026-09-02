@@ -75,7 +75,9 @@ export interface Theme {
 export interface KeyEvent {
   type: "key";
   /** "up" "down" "left" "right" "home" "end" "pageup" "pagedown" "insert" "delete" "enter" "tab"
-   *  "shift-tab" "backspace" "escape" "space" "f1".."f12", a single character, or "unknown" */
+   *  "shift-tab" "backspace" "escape" "space" "f1".."f12", a single character, or "unknown".
+   *  "space" is Ctrl+Space (the NUL byte) ONLY — the space bar arrives as the character " " with
+   *  `ch: " "` (input.ts CTRL_NAMES); consumers that insert text must accept both. */
   name: string;
   /** the printable character for plain keys (and the letter for alt+letter) */
   ch?: string;
@@ -89,6 +91,30 @@ export interface MouseEvent { type: "mouse"; b: number; x: number; y: number; pr
 /** bracketed paste (CSI 200~ … 201~) delivered as ONE event so multi-line pastes never submit */
 export interface PasteEvent { type: "paste"; text: string }
 export type InputEvent = KeyEvent | MouseEvent | PasteEvent;
+
+/** a click zone a drawer registered while painting the current frame (drawSuggest / drawPalette /
+ *  drawHelp / the pet panel); keys.ts walks the list in REVERSE so the last registered zone under
+ *  the pointer wins (overlays sit above panels) */
+export interface HitZone {
+  rect: Rect;
+  onClick: () => void;
+  /** a key replayed through handleInput after onClick (e.g. Enter to run the row just selected) */
+  key?: KeyEvent;
+}
+
+/** The terminal the renderer drives (#44): the ONE place raw stdin/stdout live. tui/sextant-io.ts
+ *  implements it over the process streams (+ the Windows VT-input helper); tests and the smoke use
+ *  an in-memory double. `env` is the process environment the renderer reads AION_PET/AION_THEME from. */
+export interface TerminalIO {
+  write(s: string): void;
+  /** raw input chunks (utf8); returns the unsubscribe */
+  onInput(cb: (chunk: string) => void): () => void;
+  onResize(cb: (cols: number, rows: number) => void): () => void;
+  size(): { cols: number; rows: number };
+  enterRaw(): void;
+  leaveRaw(): void;
+  env: Readonly<Record<string, string | undefined>>;
+}
 
 // ------------------------------------------------------------------ layout
 
@@ -154,6 +180,8 @@ export interface ActivityInfo {
   runId: string | null;
   startedAt: number | null;
   endedAt: number | null;
+  /** clock of the transition into ERROR (the pet's storm trigger); absent until the first error */
+  errorAt?: number;
 }
 
 export type CodeMode = "code" | "diff" | "run" | "agents" | "search";
@@ -176,8 +204,9 @@ export interface CodeState {
   scroll: number;
   /** last glob/grep result lines */
   search: { query: string; lines: string[] } | null;
-  /** last bash call: command, output lines (10k-char tool bound applies), verdict */
-  run: { cmd: string; lines: string[]; status: "running" | "ok" | "fail" } | null;
+  /** last bash call: command, output lines (10k-char tool bound applies), verdict, and the exit
+   *  code from the tool's `exit=N` header once the call ended (absent while running / unparsable) */
+  run: { cmd: string; lines: string[]; status: "running" | "ok" | "fail"; exitCode?: number } | null;
   /** pre-approval preview or post-edit HEAD-vs-disk hunks */
   diff: { file: string; hunks: DiffHunk[]; add: number; del: number } | null;
   /** agents board selection */
@@ -195,6 +224,8 @@ export interface ToolRow {
   verb: string;
   /** what the row names: basename, command head, url host… */
   label: string;
+  /** cwd-relative posix path for file tools (read/edit/write/remove) — the code panel target */
+  path?: string;
   running: boolean;
   ok?: boolean;
   /** trailing summary: "18 passed", "+21 −4", "N lines", first output line… */
@@ -205,8 +236,10 @@ export interface ToolRow {
 }
 
 export type MessageRow =
-  | { kind: "user"; text: string; /** image chips `[image: name]` */ images?: string[] }
-  | { kind: "assistant"; text: string; streaming: boolean }
+  /** `at` = the clock the line was sent (renderer addUser); the `· sent` tag fades 1.4 s after it */
+  | { kind: "user"; text: string; /** image chips `[image: name]` */ images?: string[]; at?: number }
+  /** `id` = the RunEvent messageId the streaming row belongs to (absent on replayed/summary rows) */
+  | { kind: "assistant"; text: string; streaming: boolean; id?: string }
   | ToolRow
   | { kind: "system"; text: string; tone: "info" | "warn" | "error" }
   /** a steering note that reached the run (task completion, reflection nudge) */
@@ -242,6 +275,9 @@ export interface UsageState {
   tokensOut: number;
   /** 0..100 estimated context fill, null when the window is unknown */
   contextPct: number | null;
+  /** the inputs behind contextPct when known: estimated tokens in the prompt + the model's window */
+  contextTokens?: number;
+  contextWindow?: number;
   /** null = unpriced */
   costUsd: number | null;
 }
@@ -257,7 +293,8 @@ export interface InputState {
   cur: number;
   history: string[];
   histIdx: number;
-  /** selected row in the suggestion box */
+  /** selected row in the suggestion box; -1 = the box was dismissed with Esc and stays hidden until
+   *  the text changes (keys.ts resets it to 0 on every edit) */
   sgSel: number;
 }
 
@@ -268,8 +305,9 @@ export interface Toast { text: string; until: number; tone: "info" | "warn" | "e
 export interface PaletteState {
   query: string;
   sel: number;
-  /** flat items: label + what pressing enter does (a slash line or a renderer-local action) */
-  items: { label: string; group: string; action: string }[];
+  /** flat items: label + what pressing enter does (a slash line, a renderer-local action, or
+   *  `pick:<value>` for a Renderer.pickOne picker); `hint` overrides the derived right-hand hint */
+  items: { label: string; group: string; action: string; hint?: string }[];
 }
 
 /** the whole surface state — owned by model.ts (pure `applyEvent`) and mutated by keys.ts */
@@ -294,6 +332,9 @@ export interface SextantState {
   toasts: Toast[];
   /** first Esc while busy arms "again to stop" until this clock */
   escUntil: number;
+  /** two-press ⌃c guarantee (renderer-level): a ⌃c while busy interrupts and arms this clock; a
+   *  second ⌃c before it quits even if the interrupted run has not settled yet */
+  ctrlCUntil?: number;
   running: boolean;
   mode: "plan" | "act";
   yolo: boolean;
@@ -318,13 +359,26 @@ export interface SextantAttach {
   model(): { provider: string; model: string };
   /** context window for the usage bar; undefined when the catalog does not know the model */
   contextWindow(): number | undefined;
+  /** session accounting for the usage panel (tui/cost.ts math over the ACTIVE store): cost priced
+   *  per message at its origin model (null = unpriced), context = estimated prompt tokens */
+  usage?(): { costUsd: number | null; contextTokens: number };
+  /** `--pet <name>`; the renderer's own option is the fallback */
+  petName?: string;
 }
 
 /** pure reducer contract (model.ts): (state, event, now) → same state object, mutated in place */
 export type ApplyEvent = (s: SextantState, ev: RunEvent, now: number) => void;
 
+/** what a headless dump may inject (frame.ts FrameDeps is the concrete shape): the layout function,
+ *  per-panel painters and the layout options */
+export type PanelPainter = (scr: ScreenLike, rect: Rect, s: SextantState, theme: Theme, now: number) => void;
+export interface DumpFrameDeps {
+  layout?: (w: number, h: number, opts: LayoutOptions) => Layout;
+  painters?: Partial<Record<"frame" | "files" | "code" | "messages" | "plan" | "usage" | "pet", PanelPainter>>;
+  layoutOpts?: LayoutOptions;
+}
 /** headless frame dump (frame.ts): deterministic at a fixed clock — the golden-test seam */
-export type DumpFrame = (s: SextantState, cols: number, rows: number, now: number, theme: Theme) => string;
+export type DumpFrame = (s: SextantState, cols: number, rows: number, now: number, theme: Theme, deps?: DumpFrameDeps) => string;
 
 export const SEXTANT_MIN_COLS = 100;
 export const SEXTANT_MIN_ROWS = 30;

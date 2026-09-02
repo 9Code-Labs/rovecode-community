@@ -27,7 +27,7 @@
  *  renderer-local names (theme open diff focus agents) so a custom command file cannot shadow them. */
 
 import {
-  THEME_ORDER, type CodeMode, type Focus, type InputEvent, type KeyEvent, type Layout, type MouseEvent,
+  THEME_ORDER, type CodeMode, type Focus, type HitZone, type InputEvent, type KeyEvent, type Layout, type MouseEvent,
   type Rect, type SextantState, type ThemeName, type TreeRow,
 } from "./types.ts";
 import { type Fuzzy, type Suggestion, onPaletteKey, openPalette, parseInput, resolveFile, suggestions } from "./overlays.ts";
@@ -37,13 +37,8 @@ import { gridFor } from "./draw-agents.ts";
 
 // ------------------------------------------------------------------ contract
 
-/** a click zone a drawer registered this frame; the LAST registered zone under the pointer wins */
-export interface HitZone {
-  rect: Rect;
-  onClick: () => void;
-  /** a key replayed through handleInput after onClick (e.g. Enter to run the row just selected) */
-  key?: KeyEvent;
-}
+/** a click zone a drawer registered this frame; the LAST registered zone under the pointer wins (contract: types.ts) */
+export type { HitZone } from "./types.ts";
 
 export interface KeyCtx {
   layout: Layout;

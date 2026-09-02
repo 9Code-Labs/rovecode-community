@@ -4,26 +4,12 @@
  *  constants are read from SextantState. Pure: `now` is a parameter — no clocks, no timers. */
 
 import { ATTR, SPIN } from "./types.ts";
-import type { ActivityState, FileStatus, Rect, ScreenLike, Seg, SextantState, Style, Theme } from "./types.ts";
+import type { ActivityState, FileStatus, Rect, ScreenLike, Seg, SextantState, Theme } from "./types.ts";
 import { elapsed, fileCount, fmtClock, repoModified, treeGuides, treeRows, type Guide } from "./model.ts";
+import { panel, segWidth } from "./layout.ts";
+import { st } from "./theme.ts";
 
-export const st = (fg: number, bg = -1, a = 0): Style => ({ fg, bg, a });
-/** cells a segment list occupies (one per code point) */
-export const segWidth = (segs: readonly Seg[]): number => segs.reduce((n, [t]) => n + [...t].length, 0);
 const gap: Seg = [" ", undefined];
-
-/** rounded panel with a bold title in the border (+ right-aligned extra); returns the inner rect */
-export function panel(scr: ScreenLike, P: Rect, title: string, focused: boolean, extra: readonly Seg[], theme: Theme, color?: number): Rect {
-  const col = color ?? (focused ? theme.accent : theme.frame);
-  scr.box(P.x, P.y, P.w, P.h, st(col));
-  if (title) scr.text(P.x + 2, P.y, [gap, [title, st(color ?? (focused ? theme.accent : theme.fg2), -1, ATTR.BOLD)], gap]);
-  if (extra.length) {
-    const ew = segWidth(extra);
-    const ex = P.x + P.w - 3 - ew;
-    if (ex > P.x + 4 + title.length) scr.text(ex, P.y, [gap, ...extra, gap]);
-  }
-  return { x: P.x + 2, y: P.y + 1, w: P.w - 4, h: P.h - 2 };
-}
 
 type Mode = "idle" | "thinking" | "active" | "waiting" | "complete" | "error";
 const MODE: Record<ActivityState, Mode> = {

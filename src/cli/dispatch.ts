@@ -9,17 +9,21 @@ export interface CliInvocation {
   cmd: string;
   plain: boolean;
   yolo: boolean;
+  /** port #44: `--classic` forces the pi-tui chat (the sextant surface is the default on a capable TTY) */
+  classic: boolean;
+  /** port #44: `--pet <name>` names the sextant pet (TUI-only value flag; absent when not given) */
+  pet?: string;
   /** args after the command, flags excluded (one-shot prompt words, ids) */
   rest: string[];
 }
 
 /** Every flag the CLI hand-parses a VALUE for out of process.argv: --resume
  *  (main.ts, TUI session id), --key (cmdAuth, key name), --out (export.ts, target
- *  path), --output (output.ts, cmdRun output mode). parseCli only skips the value
- *  when locating cmd; the owners still read it themselves, and `rest` keeps
- *  post-command values (cmdAuth/export.ts/output.ts drop their own). Add here
- *  when a new value flag lands. */
-export const VALUE_FLAGS: ReadonlySet<string> = new Set(["--resume", "--key", "--out", "--output"]);
+ *  path), --output (output.ts, cmdRun output mode), --pet (here, the sextant pet
+ *  name). parseCli only skips the value when locating cmd; the owners still read
+ *  it themselves, and `rest` keeps post-command values (cmdAuth/export.ts/output.ts
+ *  drop their own). Add here when a new value flag lands. */
+export const VALUE_FLAGS: ReadonlySet<string> = new Set(["--resume", "--key", "--out", "--output", "--pet"]);
 
 export function parseCli(argv: string[]): CliInvocation {
   const args = argv.slice(2);
@@ -27,10 +31,16 @@ export function parseCli(argv: string[]): CliInvocation {
   // a token is the command unless it is a flag or the value of the value flag before it
   const cmdIdx = args.findIndex((a, i) => !isFlag(a) && !(i > 0 && VALUE_FLAGS.has(args[i - 1]!)));
   const wantsHelp = args.includes("--help") || args.includes("-h");
+  // --pet <name>: a flag-shaped "value" is not a value (the flag after it stays a flag)
+  const petIdx = args.indexOf("--pet");
+  const petArg = petIdx !== -1 ? args[petIdx + 1] : undefined;
+  const pet = petArg !== undefined && !isFlag(petArg) ? petArg : undefined;
   return {
     cmd: wantsHelp && cmdIdx === -1 ? "help" : cmdIdx === -1 ? "" : args[cmdIdx]!,
     plain: args.includes("--plain"),
     yolo: args.includes("--yolo"),
+    classic: args.includes("--classic"),
+    ...(pet !== undefined ? { pet } : {}),
     rest: cmdIdx === -1 ? [] : args.slice(cmdIdx + 1).filter((a) => !isFlag(a)),
   };
 }

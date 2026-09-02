@@ -87,11 +87,14 @@ test("crew block: `crew k working` counts queued + running, rows label · status
   const L = lines(t);
   const crewAt = L.indexOf("crew  2 working");
   expect(crewAt).toBeGreaterThan(0);
-  expect(L.slice(crewAt + 1, crewAt + 6)).toEqual(["◈ write tests          working", "◆ review                  done", "◇ docs                  queued", "◆ lint                  failed", "◇ old                cancelled"]);
+  // glyphs + status words are the crew board's (#46 draw-agents laneGlyph/laneStatus): the 140 ms spinner
+  // phase at T+200 is ◇, × failed, ▪ cancelled, `working mm:ss`
+  expect(L.slice(crewAt + 1, crewAt + 6)).toEqual(["◇ write tests    working 00:00", "◆ review                  done", "◇ docs                  queued", "× lint                  failed", "▪ old                cancelled"]);
   expect(L[crewAt + 6]).toBe("");
   expect(L[crewAt + 7]).toBe("next");
   expect(crewWorking(s.crew)).toBe(2);
-  expect(crewStatus(mk("x", "x", "running"))).toBe("working");
+  expect(crewStatus(mk("x", "x", "running"), T + 61_500)).toBe("working 01:01");
+  expect(crewStatus(mk("x", "x", "failed"))).toBe("failed");
   setCrew(s, [mk("2", "review", "done"), mk("4", "lint", "failed")]);
   expect(plan(s)).toContain("crew  1/2 done");
   setCrew(s, []);

@@ -23,6 +23,7 @@ import { previewDiff } from "../coding/diff.ts";
 import { discoverCommands, commandsForPalette, dispatchCustomCommand, type CustomCommandCtx } from "./commands.ts";
 import type { Renderer, AssistantView, StatusInfo } from "./renderer.ts";
 import { PiTuiRenderer } from "./pi-renderer.ts";
+import { buildSextantAttach, SEXTANT_LOCAL_NAMES } from "./sextant-attach.ts";
 import type { RunEvent, StreamFn } from "../core/types.ts";
 import { join } from "node:path";
 
@@ -43,6 +44,8 @@ export interface TuiAppOptions {
    *  probe (never a real wsl.exe/docker in tests) and the platform the probe assumes */
   spawnRunner?: SpawnRunner;
   platform?: NodeJS.Platform;
+  /** port #44: the sextant pet's name (`--pet <name>`); the classic renderer ignores it */
+  pet?: string;
 }
 
 export const TUI_COMMANDS = [
@@ -115,8 +118,9 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   });
   modes.restore(modeFromEntries(store.messages()) ?? modes.mode);
   // port #30: custom slash commands — .aion/commands/*.md, project shadows ~/.aion/commands (commands.ts);
-  // LOW-1: /quit is a `case` alias of /exit below, not a TUI_COMMANDS entry — reserve it explicitly
-  const custom = discoverCommands(rt.cwd, { reserved: [...TUI_COMMANDS.map((c) => c.name), "quit"] });
+  // LOW-1: /quit is a `case` alias of /exit below, not a TUI_COMMANDS entry — reserve it explicitly;
+  // port #44: the sextant surface's own /theme /open /diff /focus /agents never reach handleSlash — reserved too
+  const custom = discoverCommands(rt.cwd, { reserved: [...TUI_COMMANDS.map((c) => c.name), "quit", ...SEXTANT_LOCAL_NAMES] });
   const state: TuiState = {
     yolo: opts.yolo ?? process.env.AION_YOLO === "1",
     provider: modes.modelFor().provider,
@@ -298,6 +302,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     }, steering);
     try {
       for await (const ev of run) {
+        renderer.onEvent?.(ev); // port #44: FIRST — the sextant reducer is its rows' source of truth; the calls below are duplicates it ignores while busy
         if (ev.type === "turn_start") { resetTurnFailureCount(); state.turns++; pushStatus(); } // pushStatus here + in the finally also refreshes the port #32 todo label after a todo_write
         else if (ev.type === "message_update") {
           let v = views.get(ev.messageId);
@@ -354,6 +359,8 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     if (state.busy) { steering.push(text); renderer.addSystemNote(`queued as steering (applies before the next model turn)${queuedAttachNote(store)}`); return Promise.resolve(); }
     return startRun(text);
   };
+  // port #44: a renderer with panels (sextant) reads the runtime through this handle — once, before start()
+  renderer.attach?.(buildSextantAttach({ cwd: rt.cwd, sessionsDir, store: () => store, tasks: rt.tasks, model: () => modes.modelFor(), catalog, petName: opts.pet }));
   renderer.setCommands([...TUI_COMMANDS, ...commandsForPalette(custom.commands)]);
   renderer.start({
     onSubmit: (text) => { if (text.startsWith("/")) handleSlash(text); else void submit(text); },

@@ -3,12 +3,14 @@
  *  steps ARE the session's todos (tools/todo.ts loadTodos), the crew rows are TaskManager TaskInfo,
  *  usage comes from the run's real token/cost accounting. Pure: `now` only drives the crew spinner. */
 
-import { ATTR, SPIN } from "./types.ts";
+import { ATTR } from "./types.ts";
 import type { Rect, ScreenLike, Seg, SextantState, Theme } from "./types.ts";
 import type { TaskInfo } from "../core/tasks.ts";
 import type { TodoItem } from "../tools/todo.ts";
 import { fmtK, planCounts } from "./model.ts";
-import { panel, st } from "./draw-frame.ts";
+import { crewSummary, laneGlyph, laneStatus, laneTone } from "./draw-agents.ts";
+import { panel } from "./layout.ts";
+import { st } from "./theme.ts";
 
 const CREW_MAX = 5;
 export const STEP_GLYPH: Record<TodoItem["status"], string> = { completed: "◆", in_progress: "◈", pending: "◇" };
@@ -37,17 +39,14 @@ export function nextSteps(todos: readonly TodoItem[]): TodoItem[] {
   const pend = todos.find((t) => t.status === "pending"); if (pend) out.push(pend);
   return out;
 }
-/** non-terminal tasks = "working" (queued + running) */
-export const crewWorking = (crew: readonly TaskInfo[]): number => crew.filter((t) => t.status === "queued" || t.status === "running").length;
+/** non-terminal tasks = "working" (queued + running) — crewSummary(crew).working agrees */
+export const crewWorking = (crew: readonly TaskInfo[]): number => crewSummary(crew).working;
+/** the crew board's glyph + tone (#46 draw-agents): ◇ queued · spinner running · ◆ done · × failed · ▪ cancelled */
 export function crewGlyph(t: TaskInfo, theme: Theme, now: number): [string, number] {
-  switch (t.status) {
-    case "running": return [SPIN[Math.floor(Math.max(0, now) / 200) % SPIN.length] ?? "◆", theme.accent];
-    case "done": return ["◆", theme.ok];
-    case "failed": return ["◆", theme.err];
-    default: return ["◇", theme.dim];
-  }
+  return [laneGlyph(t.status, now), laneTone(t.status, theme)];
 }
-export const crewStatus = (t: TaskInfo): string => (t.status === "running" ? "working" : t.status);
+/** the crew board's status word (#46 laneStatus): `working mm:ss` while running, else the status */
+export const crewStatus = (t: TaskInfo, now = 0): string => laneStatus(t, now);
 
 /** Plan panel: `plan  done/total` title, todo steps (◆ done · ◈ in_progress · ◇ pending, priority hint
  *  at the right), then — anchored to the bottom — `crew  k working` (when any) and `next`. */
@@ -80,10 +79,9 @@ export function drawPlan(scr: ScreenLike, R: Rect, s: SextantState, theme: Theme
   if (shown < todos.length && shown > 0) { y--; scr.fill(B.x, y, B.w, 1, " "); scr.put(B.x, y, `  +${todos.length - shown + 1} more`, st(theme.dim), B.w); }
   if (crewRows) {
     let cy = crewY;
-    const working = crewWorking(s.crew), done = s.crew.filter((t) => t.status === "done").length;
-    scr.text(B.x, cy++, [["crew", st(theme.muted)], [working ? `  ${working} working` : `  ${done}/${s.crew.length} done`, st(theme.dim)]], B.w);
+    scr.text(B.x, cy++, [["crew", st(theme.muted)], [`  ${crewSummary(s.crew).text}`, st(theme.dim)]], B.w);
     for (const t of crew) {
-      const [g, gc] = crewGlyph(t, theme, now), status = crewStatus(t);
+      const [g, gc] = crewGlyph(t, theme, now), status = crewStatus(t, now);
       scr.text(B.x, cy, [[g + " ", st(gc)], [t.label, st(t.status === "done" ? theme.fg2 : t.status === "failed" ? theme.err : theme.fg)]], B.w - status.length - 1);
       scr.put(B.x + B.w - status.length, cy, status, st(t.status === "failed" ? theme.err : theme.dim));
       cy++;

@@ -77,7 +77,7 @@ test("run_end done → SUCCESS 'done', endedAt frozen, running false; the summar
   run(s2);
   applyEvent(s2, { type: "message_update", messageId: "m", delta: "hi" }, T);
   applyEvent(s2, { type: "run_end", status: "done", summary: "hi" }, T + 1);
-  expect(s2.messages).toEqual([{ kind: "assistant", text: "hi", streaming: false }]);
+  expect(s2.messages).toEqual([{ kind: "assistant", text: "hi", streaming: false, id: "m" }]);
 });
 
 test("run_end error → ERROR + error system row; stopped/budget → IDLE + warn row; running tool rows are closed as interrupted", () => {
@@ -106,13 +106,13 @@ test("message_update: creates a streaming row, appends deltas to it, WRITING; a 
   run(s);
   applyEvent(s, { type: "message_update", messageId: "m1", delta: "Let me " }, T);
   applyEvent(s, { type: "message_update", messageId: "m1", delta: "look." }, T);
-  expect(s.messages).toEqual([{ kind: "assistant", text: "Let me look.", streaming: true }]);
+  expect(s.messages).toEqual([{ kind: "assistant", text: "Let me look.", streaming: true, id: "m1" }]); // #44 contract: id = the RunEvent messageId
   expect(s.activity).toMatchObject({ state: "WRITING", label: "writing" });
   start(s, "c1", "read", { path: "README.md" });
-  expect(s.messages[0]).toEqual({ kind: "assistant", text: "Let me look.", streaming: false });
+  expect(s.messages[0]).toEqual({ kind: "assistant", text: "Let me look.", streaming: false, id: "m1" });
   end(s, "c1", true, "README.md#aa\n1#bb|# atlas\n(showing lines 1-1 of 1)");
   applyEvent(s, { type: "message_update", messageId: "m2", delta: "Done." }, T);
-  expect(s.messages.at(-1)).toEqual({ kind: "assistant", text: "Done.", streaming: true });
+  expect(s.messages.at(-1)).toEqual({ kind: "assistant", text: "Done.", streaming: true, id: "m2" });
   applyEvent(s, { type: "turn_end", turn: 1, stopReason: "end_turn" as never }, T);
   expect(s.messages.at(-1)).toMatchObject({ streaming: false });
   applyEvent(s, { type: "turn_start", turn: 2 }, T);
@@ -131,7 +131,7 @@ test("edit start: EDITING 'editing <basename>', touched for exactly 1.5 s, tree 
   expect(TOUCH_MS).toBe(1500);
   expect([...s.files.expanded]).toEqual(["src", "src/auth"]);
   expect(s.code).toMatchObject({ mode: "code", file: "src/auth/callback.ts", hl: [2, 4], content: null, scroll: 0 });
-  expect(lastTool(s)).toEqual({ kind: "tool", callId: "c1", tool: "edit", verb: "edit", label: "callback.ts", running: true, add: 4, del: 2 });
+  expect(lastTool(s)).toEqual({ kind: "tool", callId: "c1", tool: "edit", verb: "edit", label: "callback.ts", path: "src/auth/callback.ts", running: true, add: 4, del: 2 }); // #44 contract: path = the code-panel target
   const row = treeRows(s).find((r) => r.path === "src/auth/callback.ts")!;
   expect(row.touchedUntil).toBe(T + 1600);
   // the drawer shows the diamond spinner only while the clock is inside the TTL
@@ -205,7 +205,7 @@ test("bash: RUNNING 'running <head>' (TESTING 'running tests' for test/vitest/je
   expect(lastTool(s)).toMatchObject({ verb: "run", label: "npm run build" });
   expect(s.code).toMatchObject({ mode: "run", run: { cmd: "npm   run build\n", lines: [], status: "running" } });
   end(s, "c1", true, "exit=0\nbuilding…\ndone in 3s\n\n");
-  expect(s.code.run).toEqual({ cmd: "npm   run build\n", lines: ["building…", "done in 3s"], status: "ok" });
+  expect(s.code.run).toEqual({ cmd: "npm   run build\n", lines: ["building…", "done in 3s"], status: "ok", exitCode: 0 }); // #44 contract: exitCode from the exit= header
   expect(lastTool(s)).toMatchObject({ ok: true, detail: "done in 3s" });
   for (const cmd of ["bun test", "npx vitest run", "jest --ci", "pytest -q tests", "npm run tests"]) {
     expect(describeCall("bash", { command: cmd }, CWD)).toMatchObject({ state: "TESTING", activity: "running tests" });
@@ -217,7 +217,8 @@ test("bash: RUNNING 'running <head>' (TESTING 'running tests' for test/vitest/je
   expect(s.code.run).toMatchObject({ status: "fail", lines: [" 17 pass", " 1 fail"] }); // a red run still fills the panel
   expect(lastTool(s)).toMatchObject({ ok: false, detail: "1 fail" });
   expect(s.activity).toMatchObject({ state: "ERROR", label: "run failed" });
-  expect(summarizeEnd({ verb: "run" }, "bash", true, "exit=0\n")).toEqual({ detail: "exit 0", runLines: [] });
+  expect(summarizeEnd({ verb: "run" }, "bash", true, "exit=0\n")).toEqual({ detail: "exit 0", runLines: [], exitCode: 0 });
+  expect(summarizeEnd({ verb: "run" }, "bash", false, "no header\nboom")).toEqual({ detail: "boom", runLines: ["no header", "boom"] }); // no exit= header → no exitCode key
 });
 
 test("glob/grep: SEARCH mode with the query, READING 'searching <q>', results counted without the truncation notes", () => {

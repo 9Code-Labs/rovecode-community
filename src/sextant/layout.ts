@@ -2,7 +2,10 @@
 /* Panel geometry for the sextant surface and the rounded panel frame. Pure: no clock, no I/O.
    layout() mirrors app.js layout() number for number (sextant-layout.test.ts pins nine sizes
    computed from the prototype); panel() takes the screen and theme explicitly instead of closing
-   over them, and measures title/extra widths in cells (the prototype used string length). */
+   over them, and measures title/extra widths in cells (the prototype used string length). This is
+   the ONE panel() of the surface (#44 folded the #41 draw-frame and #42 draw-util copies into it):
+   the interior is cleared to the theme background and an extra that would not fit is clipped with
+   an ellipsis before it is dropped — text-identical to the prototype for every extra that fits. */
 
 import { MIN_COLS, MIN_ROWS, strWidth } from "./screen.ts";
 import { st } from "./theme.ts";
@@ -38,16 +41,46 @@ export function layout(w: number, h: number, opts: LayoutOptions): Layout {
   return { w: W, h: H, frame, files, code, messages, plan, usage, pet };
 }
 
+/** cells a segment list occupies (East-Asian-width aware, like the borders) */
+export const segWidth = (segs: readonly Seg[]): number => segs.reduce((n, [t]) => n + strWidth(t), 0);
+
+/** the longest prefix of `s` that fits `w` cells */
+function headCells(s: string, w: number): string {
+  let out = "", used = 0;
+  for (const c of s) { const cw = strWidth(c); if (used + cw > w) break; out += c; used += cw; }
+  return out;
+}
+
+/** clip the widest segment (with an ellipsis) until the run fits `room` cells; [] when hopeless
+ *  (room under 6 cells, or fewer than 3 cells of the clipped text would survive) */
+export function fitSegs(segs: readonly Seg[], room: number): Seg[] {
+  let out: Seg[] = segs.filter(([t]) => t.length > 0);
+  let ew = segWidth(out);
+  if (ew <= room) return out;
+  if (room < 6) return [];
+  let widest = 0;
+  out.forEach(([t], i) => { if (strWidth(t) > strWidth(out[widest]?.[0] ?? "")) widest = i; });
+  const [text, style] = out[widest]!;
+  const keep = strWidth(text) - (ew - room) - 1;
+  if (keep < 3) return [];
+  out = out.map((sg, i) => (i === widest ? [headCells(text, keep) + "…", style] : sg));
+  ew = segWidth(out);
+  return ew <= room ? out : [];
+}
+
 /** rounded panel with the title in the top border and right-aligned extra segments; returns the inner rect.
+ *  Interior cleared to the theme background; the title is clipped to the box; extras must leave a
+ *  `─` between themselves and the title (the prototype's strict `ex > x + 4 + titleW`) — when they do
+ *  not fit, the widest one is clipped with an ellipsis (fitSegs), else they are dropped.
  *  Border/title colors: `color` when given, else accent when focused, else frame (border) / fg2 (title). */
 export function panel(scr: ScreenLike, P: Rect, title: string, focused: boolean, extra: readonly Seg[] | undefined, C: Theme, color?: number): Rect {
   const col = color ?? (focused ? C.accent : C.frame);
-  scr.box(P.x, P.y, P.w, P.h, st(col));
-  if (title) scr.text(P.x + 2, P.y, [[" ", st(-1)], [title, st(color ?? (focused ? C.accent : C.fg2), -1, ATTR.BOLD)], [" ", st(-1)]]);
+  scr.box(P.x, P.y, P.w, P.h, st(col), C.bg);
+  if (title) scr.text(P.x + 2, P.y, [[" ", st(-1)], [title, st(color ?? (focused ? C.accent : C.fg2), -1, ATTR.BOLD)], [" ", st(-1)]], Math.max(0, P.w - 4));
   if (extra && extra.length) {
-    const ew = extra.reduce((s, [t]) => s + strWidth(t), 0);
-    const ex = P.x + P.w - 3 - ew;
-    if (ex > P.x + 4 + (title ? strWidth(title) : 0)) scr.text(ex, P.y, [[" ", st(-1)], ...extra, [" ", st(-1)]]);
+    const segs = fitSegs(extra, P.w - 8 - strWidth(title));
+    const ew = segWidth(segs);
+    if (ew > 0) scr.text(P.x + P.w - 3 - ew, P.y, [[" ", st(-1)], ...segs, [" ", st(-1)]]);
   }
   return { x: P.x + 2, y: P.y + 1, w: P.w - 4, h: P.h - 2 };
 }

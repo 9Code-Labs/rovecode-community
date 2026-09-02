@@ -7,6 +7,10 @@
 
 import { ATTR, type Rect, type ScreenLike, type Seg, type SextantState, type Style, type Theme } from "./types.ts";
 import { CODE_RAIN, FACE, INNER, SPRITE, moodCtxFrom, type Mood, type MoodCtx, type Pet } from "./pet.ts";
+import { mix, st } from "./theme.ts";
+
+/** term.js mix() lives in theme.ts (port #40); re-exported for the pet tests/fixtures that import it here */
+export { mix };
 
 /** the sprite shifts one row every SWAY_MS — pet.js:196 `Math.floor(t / 1800) % 2`, the README's "1.8 s salınım"
  *  (full period 3.6 s); the prototype's ±1-column drift (pet.js:197) is deliberately not ported: "titreme yok" */
@@ -15,16 +19,6 @@ export const SWAY_MS = 1800;
 export const STORM_PERIOD_MS = 2600;
 export const STORM_FLASH_MS = 260;
 export const SPRITE_W = 18;
-
-const st = (fg: number, bg = -1, a = 0): Style => ({ fg, bg, a });
-
-/** term.js mix(): linear blend of two packed 0xRRGGBB colors (theme.ts owns the shared one — port #40) */
-export function mix(c1: number, c2: number, t: number): number {
-  const r = Math.round(((c1 >> 16) & 255) + ((((c2 >> 16) & 255) - ((c1 >> 16) & 255)) * t));
-  const g = Math.round(((c1 >> 8) & 255) + ((((c2 >> 8) & 255) - ((c1 >> 8) & 255)) * t));
-  const b = Math.round((c1 & 255) + (((c2 & 255) - (c1 & 255)) * t));
-  return (r << 16) | (g << 8) | b;
-}
 
 /** the click zone the input layer registers (a click anywhere in the panel pokes); null when hidden */
 export function petHit(rect: Rect | null): Rect | null { return rect; }

@@ -4,7 +4,25 @@ import { parseCli, VALUE_FLAGS } from "../../src/cli/dispatch.ts";
 const argv = (...args: string[]) => ["bun", "main.ts", ...args];
 
 test("bare invocation → interactive default", () => {
-  expect(parseCli(argv())).toEqual({ cmd: "", plain: false, yolo: false, rest: [] });
+  expect(parseCli(argv())).toEqual({ cmd: "", plain: false, yolo: false, classic: false, rest: [] });
+});
+
+// ---------- port #44: --classic / --pet <name> ----------
+
+test("--classic is a boolean flag, never the command; absent → false (sextant is the default on a capable TTY)", () => {
+  expect(parseCli(argv("--classic"))).toMatchObject({ cmd: "", classic: true });
+  expect(parseCli(argv("--classic", "--yolo"))).toMatchObject({ cmd: "", classic: true, yolo: true });
+  expect(parseCli(argv("run", "x", "--classic"))).toMatchObject({ cmd: "run", classic: true, rest: ["x"] });
+  expect(parseCli(argv()).classic).toBe(false);
+});
+
+test("--pet <name> is a value flag: the name never becomes the command, is exposed as `pet`, and the key is absent when not given", () => {
+  expect(parseCli(argv("--pet", "stormy"))).toEqual({ cmd: "", plain: false, yolo: false, classic: false, pet: "stormy", rest: [] });
+  expect(parseCli(argv("--pet", "stormy", "--resume", "abc"))).toMatchObject({ cmd: "", pet: "stormy" });
+  expect(parseCli(argv("--pet", "--classic"))).toMatchObject({ cmd: "", classic: true }); // a flag-shaped "value" is not a value
+  expect("pet" in parseCli(argv("--pet", "--classic"))).toBe(false);
+  expect("pet" in parseCli(argv())).toBe(false);
+  expect(parseCli(argv("--pet", "s", "trace", "abc"))).toMatchObject({ cmd: "trace", rest: ["abc"], pet: "s" }); // value skipped when locating cmd
 });
 
 test("--plain stays a flag, never the command (regression: aion --plain ran a one-shot)", () => {
@@ -46,7 +64,7 @@ test("--key <name> before auth: cmd is auth, not the key name", () => {
 });
 
 test("--resume <id> alone → interactive default (main.ts opens the TUI on cmd \"\" and reads the id from argv itself)", () => {
-  expect(parseCli(argv("--resume", "abc"))).toEqual({ cmd: "", plain: false, yolo: false, rest: [] });
+  expect(parseCli(argv("--resume", "abc"))).toEqual({ cmd: "", plain: false, yolo: false, classic: false, rest: [] });
   expect(parseCli(argv("--resume", "abc", "--plain"))).toMatchObject({ cmd: "", plain: true });
   // a flag-shaped "value" is not a value: the flag after it stays a flag, cmd stays ""
   expect(parseCli(argv("--resume", "--plain"))).toMatchObject({ cmd: "", plain: true });
@@ -71,6 +89,6 @@ test("--output <mode> before the command: cmd is the command, the mode is never 
   expect(parseCli(argv("--output=json", "run", "hi"))).toMatchObject({ cmd: "run", rest: ["hi"] }); // = form is a plain flag
 });
 
-test("VALUE_FLAGS is the inventory of every value flag main.ts/export.ts/output.ts hand-parse", () => {
-  expect([...VALUE_FLAGS].sort()).toEqual(["--key", "--out", "--output", "--resume"]);
+test("VALUE_FLAGS is the inventory of every value flag main.ts/export.ts/output.ts/dispatch.ts hand-parse", () => {
+  expect([...VALUE_FLAGS].sort()).toEqual(["--key", "--out", "--output", "--pet", "--resume"]);
 });

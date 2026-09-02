@@ -22,6 +22,7 @@ import { bootRuntime } from "./runtime.ts";
 import { SandboxConfigError } from "../core/sandbox-config.ts";
 import { runRepl } from "./repl.ts";
 import { runTui } from "../tui/app.ts";
+import { pickRenderer } from "../tui/sextant-io.ts";
 import { expandSlashPrompt } from "../tui/commands.ts";
 import { parseCli } from "./dispatch.ts";
 import { buildRunDeps, createOutputSink, guardStdout, parseOutputMode, runPromptWords } from "./output.ts";
@@ -150,10 +151,13 @@ function cmdHelp(): void {
   console.log(`aion — agent harness
 
 commands:
-  aion                      interactive TUI chat (pi-tui; --plain for readline REPL)
+  aion                      interactive TUI chat — the sextant surface (files · code · messages · plan · usage · pet)
+                            on a truecolor TTY of at least 100x30, else the classic pi-tui chat;
+                            --classic forces the classic chat · --pet <name> names the pet · --plain = readline REPL
   aion --resume <id>        open the TUI resuming a session (full id or unique prefix)
   aion "prompt"             one-shot task (same as run)
   aion smoke-tui            render check: full pipeline into an 80x24 terminal emulator (dev-only)
+  aion smoke-tui --sextant  render check: the sextant surface at 160x44 through the full pipeline (no emulator needed)
   aion run "<prompt>"       run an agent task (--yolo allows all tools; mock provider only if no provider env set)
                             "/name args" expands a custom command (.aion/commands/<name>.md, else ~/.aion/commands)
                             the way the TUI does; an unknown /name is sent verbatim; model:/mode: frontmatter is
@@ -188,6 +192,9 @@ env:
                   (e.g. AION_MODEL_DEFAULT=kaesra/zai-org/glm-5.3-flash,openai/gpt-4o-mini)
   AION_STREAM=sse use SSE streaming
   AION_YOLO=1     allow all tool actions
+  AION_TUI        sextant | classic — force the TUI surface (sextant still needs a TTY; --classic wins)
+  AION_THEME      sextant palette: night (default) | ember | contrast (/theme switches it live)
+  AION_PET=0      hide the sextant pet panel (nimbus); --pet <name> renames it
   AION_SANDBOX    executor rung for bash: direct (default) | wsl | docker; beats .aion/sandbox.json {"rung","dockerImage"}
   AION_SANDBOX_IMAGE  image for the docker rung (default debian:stable-slim; must contain bash)
   AION_RETRY_MAX  same-model retries after a 429/5xx/transport failure (default 3; 0 = off)
@@ -274,9 +281,10 @@ const rIx = process.argv.indexOf("--resume");
 const rArg = rIx !== -1 ? process.argv[rIx + 1] : undefined;
 const resumeId = rArg !== undefined && !rArg.startsWith("-") ? rArg : undefined;
 if (cmd === "" || cmd === "chat" || cmd === "repl") {
-  // default surface is the pi-tui chat (port #1); --plain keeps the readline REPL
+  // default surface (port #44): the sextant renderer on a truecolor TTY of ≥ 100×30 (AION_TUI / --classic
+  // override — sextant-io.ts chooseSurface), else the pi-tui chat (port #1); --plain keeps the readline REPL
   if (cli.plain) await runRepl({ yolo: cli.yolo });
-  else await runTui({ yolo: cli.yolo, sessionId: resumeId });
+  else await runTui({ yolo: cli.yolo, sessionId: resumeId, renderer: pickRenderer(cli, process.env, process.stdout), ...(cli.pet !== undefined ? { pet: cli.pet } : {}) });
 } else if (known.has(cmd)) {
   switch (cmd) {
     // port #35: runPromptWords drops a post-command --output value; port #30: a leading /name expands a custom command
@@ -296,6 +304,9 @@ if (cmd === "" || cmd === "chat" || cmd === "repl") {
     // not an Error instance): smoke.ts imports the live TUI modules, so any other
     // import failure is a real module-init bug and must propagate as itself.
     case "smoke-tui": {
+      // port #44: `--sextant` drives the sextant surface through the real pipeline over an in-memory
+      // terminal — no @xterm/headless involved, so it also runs from an installed tree or the binary
+      if (process.argv.includes("--sextant")) { await (await import("../tui/sextant-smoke.ts")).runSextantSmoke(); break; }
       const smoke = await import("../tui/smoke.ts").catch((e: unknown) => {
         if ((e as { code?: unknown } | null)?.code === "ERR_MODULE_NOT_FOUND") return null;
         throw e;
