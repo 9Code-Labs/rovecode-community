@@ -320,6 +320,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
       stream, registry: rt.registry, store,
       tools: rt.registry.list().map((t) => t.schema),
       guard: rt.guard, signal: runAbort.signal, // port #21: Esc aborts this run's controller
+      cwd: rt.cwd, // cwd must be threaded — tools resolve relative paths against it, same as checkpoints/LSP/preview
     }, steering);
     try {
       for await (const ev of run) {

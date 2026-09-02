@@ -2,7 +2,7 @@
  *  Covers: streaming render, tool cards, gated approval via overlay, steering note, exit. */
 
 import { test, expect } from "bun:test";
-import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -355,9 +355,8 @@ test("/export writes <short>.md, --json copies the JSONL byte-verbatim, a spaced
 // ---------- port #24: diff preview in the approval overlay ----------
 
 /** gated TUI whose first scripted turn is an anchored edit of notes.txt (old-line → new-line).
- *  Absolute tool path, like every scripted call in this file: the TUI's LoopDeps carry no cwd,
- *  so tools resolve RELATIVE paths against process.cwd() (loop.ts:261) while the preview uses
- *  rt.cwd — identical under `aion chat`, different under a test's temp cwd. */
+ *  Absolute tool path, like the other scripted calls in this file; the RELATIVE-path case
+ *  (LoopDeps.cwd threaded, so tools resolve against rt.cwd like the preview) is covered below. */
 function gatedEditApp(cwd: string, term: VirtualTerminal, finalText: string) {
   const target = join(cwd, "notes.txt");
   const content = "keep-1\nold-line\nkeep-2\n";
@@ -435,6 +434,37 @@ test("gated write of a new file: the overlay shows an all-adds diff against /dev
   term.sendInput("\r");                                 // allow once
   await until(term, (s) => s.includes("created."));
   expect(readFileSync(probe, "utf8")).toBe("alpha\nbeta\n");
+  term.sendInput("\x03");
+  await app;
+  rmSync(cwd, { recursive: true, force: true });
+}, 20_000);
+
+// ---------- LoopDeps.cwd threading: relative tool paths resolve against the TUI's cwd ----------
+
+test("relative tool paths resolve against runTui({cwd}), not process.cwd(): the write lands under cwd and the follow-up edit applies", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  mkdirSync(join(cwd, "out"));                            // write does not mkdir -p: out/ exists ONLY under the TUI's cwd
+  const term = new VirtualTerminal(80, 24);
+  const renderer = new PiTuiRenderer({ terminal: term, cwd });
+  const content = "alpha\nbeta\n";
+  const edit = { path: "out/rel.txt", edits: [{ tag: fileTag(content), anchorLine: 1, anchorHash: lineHash("alpha"), newLines: ["ALPHA"] }] };
+  const stream = mockStream({
+    turns: [
+      toolTurn([{ id: "t1", tool: "write", args: { path: "out/rel.txt", content } }]),
+      toolTurn([{ id: "t2", tool: "edit", args: edit }]),
+      textTurn("relative done."),
+    ],
+  });
+  const app = runTui({ renderer, stream, cwd, yolo: true, exitOnClose: false, model: "scripted" });
+  term.sendInput("use relative paths"); term.sendInput("\r");
+  const screen = await until(term, (s) => s.includes("relative done."));
+
+  const target = join(cwd, "out", "rel.txt");
+  expect(existsSync(target)).toBe(true);                                 // landed under the TUI's cwd …
+  expect(existsSync(join(process.cwd(), "out", "rel.txt"))).toBe(false); // … not under the process dir
+  expect(readFileSync(target, "utf8")).toBe("ALPHA\nbeta\n");            // the anchored edit found the file the write created
+  expect(screen).not.toContain("Edit rejected");                         // without cwd: "line 0 out of range (file has 0 lines)"
+
   term.sendInput("\x03");
   await app;
   rmSync(cwd, { recursive: true, force: true });

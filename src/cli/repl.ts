@@ -95,7 +95,7 @@ export async function runRepl( /* eslint-disable-line complexity */
     const def = rt.buildDef({ provider: state.provider, model: state.model });
 
     const ac = new AbortController();
-    const gen = agentLoop(def, text, {}, rt.buildCfg(state.yolo, approval), { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, signal: ac.signal }, new SteeringQueue());
+    const gen = agentLoop(def, text, {}, rt.buildCfg(state.yolo, approval), { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, cwd: rt.cwd, signal: ac.signal }, new SteeringQueue());
     running = { ac, gen };
     try {
       let live = "";
