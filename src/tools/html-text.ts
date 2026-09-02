@@ -8,16 +8,23 @@
  *  subtrees are depth-tracked, block elements become line breaks, list items
  *  get "- ", links render as `text (href)` resolved against the page URL,
  *  entities are decoded, whitespace collapses except inside <pre>. Not a spec
- *  parser: attributes containing "<" or ">" mis-tokenize, which only costs
- *  readability — nothing security-relevant reads this. Every scan is bounded
- *  (see tagRx) so a hostile body parses in O(n): the tool's timeout cannot
- *  interrupt a synchronous parse, so the parse must never be the slow part. */
+ *  parser (no tree, no adoption agency) but the tokenizer follows the HTML5
+ *  tag and attribute states, so quoted attribute values may contain "<" and
+ *  ">". Every scan is bounded (see tagRx) so a hostile body parses in O(n):
+ *  the tool's timeout cannot interrupt a synchronous parse, so the parse must
+ *  never be the slow part. */
 
-/** Elements whose CONTENT is raw text up to the matching close tag. */
-const RAW = new Set(["script", "style", "noscript", "template"]);
-/** Elements dropped with their whole (markup) subtree. An omitted </head> —
- *  legal HTML, common in minified pages — is closed by the <body> start tag. */
+/** Elements whose CONTENT is raw text up to the matching close tag. <title> is
+ *  RCDATA and never rendered, so a page that omits <head> still loses its title. */
+const RAW = new Set(["script", "style", "noscript", "template", "title"]);
+/** Elements dropped with their whole (markup) subtree. <head> also ends at the
+ *  first start tag outside HEAD_ONLY: an omitted </head> — even an omitted
+ *  <body> — is legal HTML, common in minified pages. */
 const DROP = new Set(["head", "svg", "iframe", "object", "canvas", "audio", "video", "select"]);
+/** Start tags the HTML5 "in head" insertion mode keeps inside <head>; any other
+ *  start tag implies </head> (and <body>). RAW members are jumped before the
+ *  check ever runs — listed so the set reads as the spec's. */
+const HEAD_ONLY = new Set(["head", "meta", "link", "base", "basefont", "bgsound", "noframes", "title", "style", "script", "noscript", "template"]);
 /** Elements that break lines; PARA members separate with a blank line. */
 const BLOCK = new Set([
   "address", "article", "aside", "blockquote", "body", "caption", "center", "dd", "details", "dialog", "div", "dl", "dt",
@@ -59,13 +66,18 @@ export function htmlToText(html: string, baseUrl?: string): string {
   const out: string[] = [];
   let skip = 0; // depth inside DROP subtrees
   let pre = 0;  // depth inside <pre>
+  let inHead = false; // between <head> and </head>, explicit or implied
   let link: { href: string; start: number } | null = null;
-  // Linear-time tokenizer (MED-3): every alternative stops at the next "<" — an
-  // unterminated comment/CDATA swallows the rest, as browsers do — so each "<" is
-  // examined once. The attribute part must START with whitespace or "/" so the
-  // name and attribute quantifiers can never trade characters (that nesting made
-  // `<aaaa…` quadratic); the old `[^>]*` rescanned to end-of-input per unterminated tag.
-  const tagRx = /<!--[\s\S]*?(?:-->|$)|<!\[CDATA\[[\s\S]*?(?:\]\]>|$)|<[!?][^<>]*>|<\/?([a-zA-Z][\w:.-]*)((?:[\s/][^<>]*)?)>/g;
+  // Linear-time tokenizer (MED-3): every alternative is deterministic, so each
+  // character is examined once. Comment/CDATA run lazily to their close or EOF
+  // (unterminated swallows the rest, as browsers do). A tag, once opened, never
+  // backs out: the name runs to the next blank, "/" or ">" (HTML5 tag-name state —
+  // `<a<a<a…` is ONE element, as in a browser), the attribute part must START with
+  // a blank or "/" so the name and attribute quantifiers can never trade characters
+  // (that nesting made `<aaaa…` quadratic), and inside it a quoted value consumes
+  // "<" and ">" while an unterminated quote runs to EOF ("eof-in-tag"), so raw-text
+  // jumps and subtree drops engage on legal markup like <script data-x="<">.
+  const tagRx = /<!--[\s\S]*?(?:-->|$)|<!\[CDATA\[[\s\S]*?(?:\]\]>|$)|<[!?][^<>]*>|<\/?([a-zA-Z][^\s/>]*)((?:[\s/](?:[^>"']|"[^"]*(?:"|$)|'[^']*(?:'|$))*)?)(?:>|$)/g;
   let pos = 0;
 
   const text = (raw: string): void => {
@@ -93,7 +105,10 @@ export function htmlToText(html: string, baseUrl?: string): string {
       tagRx.lastIndex = pos;
       continue;
     }
-    if (name === "body" && !closing) skip = 0; // <body> ends a <head> whose </head> was omitted (MED-4)
+    // Browser "in head" insertion mode (MED-4): the first start tag that is not a
+    // head-only element — <body>, but also a bare <p> — closes an unclosed <head>.
+    if (inHead && !closing && !HEAD_ONLY.has(name)) { inHead = false; skip = 0; }
+    if (name === "head") inHead = !closing;
     if (DROP.has(name)) { skip = closing ? Math.max(0, skip - 1) : skip + 1; continue; }
     if (skip > 0) continue;
     if (name === "a") {
