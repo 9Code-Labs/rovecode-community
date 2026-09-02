@@ -11,19 +11,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { RunEvent } from "../../src/core/types.ts";
 import type { TaskInfo } from "../../src/core/tasks.ts";
+import type { GitRunner, GitRunnerAsync } from "../../src/sextant/git-status.ts";
 import { enterSequence, leaveSequence } from "../../src/sextant/input.ts";
 import { SextantRenderer } from "../../src/sextant/sextant-renderer.ts";
-import type { SextantAttach } from "../../src/sextant/types.ts";
+import type { SextantAttach, ToolRow } from "../../src/sextant/types.ts";
 import type { RendererHooks } from "../../src/tui/renderer.ts";
 import { MemoryIO } from "../../src/tui/sextant-io.ts";
 
 const T0 = 1_700_000_000_000;
 const CMDS = ["help", "exit", "plan", "act", "yolo", "new", "cost", "tasks", "status"].map((name) => ({ name, description: name }));
 
-function make(o: { cols?: number; rows?: number; cwd?: string; env?: Record<string, string>; start?: boolean } = {}) {
+function make(o: { cols?: number; rows?: number; cwd?: string; env?: Record<string, string>; start?: boolean; git?: GitRunner | GitRunnerAsync } = {}) {
   let now = T0;
   const io = new MemoryIO(o.cols ?? 160, o.rows ?? 44, o.env ?? {});
-  const renderer = new SextantRenderer({ io, clock: () => now, cwd: o.cwd ?? "C:/repo", scan: false, pet: "nimbus" });
+  const renderer = new SextantRenderer({ io, clock: () => now, cwd: o.cwd ?? "C:/repo", scan: false, pet: "nimbus", ...(o.git ? { git: o.git } : {}) });
   const spy = { submits: [] as string[], interrupts: 0, exits: 0 };
   const hooks: RendererHooks = { onSubmit: (t) => { spy.submits.push(t); }, onInterrupt: () => { spy.interrupts++; }, onExit: () => { spy.exits++; } };
   renderer.setCommands(CMDS);
@@ -424,6 +425,78 @@ test("#46 wiring: ∷ paints the crew board through setAgentsPainter; an open la
   expect(f).toContain("summary line 79");                                    // the last line is on screen
   expect(f).not.toContain("summary line 30");                                // the middle scrolled away (the result row still quotes line 0)
   renderer.stop();
+});
+
+// ---------- re-verify pass: #44 LOW-2 · LOW-3 · MED-1 side fix ----------
+
+test("no `cannot read` flash: the file reload runs BEFORE the paint, so the first frame after an edit's start shows the old content and the first frame after its end shows the new one — never the placeholder", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "aion-sx-flash-"));
+  const file = join(cwd, "a.ts");
+  writeFileSync(file, "const a = 1;\n");
+  const { renderer, frame } = make({ cwd, git: () => null });
+  renderer.setBusy(true);
+  ev(renderer, { type: "run_start", runId: "r", sessionId: "s", goal: "g" });
+  ev(renderer, { type: "tool_execution_start", callId: "c1", tool: "edit", args: { path: file, edits: [{ tag: "t", anchorLine: 1, anchorHash: "h", newLines: ["const a = 2;"] }] } });
+  let f = frame();                                                          // the very next tick (mutation: paint before onTick → `cannot read a.ts`)
+  expect(f).not.toContain("cannot read");
+  expect(f).toContain("const a = 1;");
+  writeFileSync(file, "const a = 2;\n");                                    // the tool wrote
+  ev(renderer, { type: "tool_execution_end", callId: "c1", ok: true, output: "applied 1 edit(s); new TAG x", durationMs: 1 });
+  f = frame();
+  expect(f).not.toContain("cannot read");
+  expect(f).toContain("const a = 2;");                                      // reloaded in the same tick
+  renderer.stop();
+  rmSync(cwd, { recursive: true, force: true });
+});
+
+test("git runs beside the frame loop: with a 300 ms git runner the live 40 ms interval keeps painting (no frame gap near the scan's length) and the scan's result lands afterwards — branch, files and statuses on the next frame", async () => {
+  let resolved = 0;
+  const slow: GitRunnerAsync = (args) => new Promise((res) => setTimeout(() => {
+    resolved++;
+    const k = args.join(" ");
+    res(k.startsWith("ls-files") ? { status: 0, stdout: "a.ts\0src/b.ts\0" } : k.startsWith("status") ? { status: 0, stdout: " M a.ts\0" } : k === "rev-parse --abbrev-ref HEAD" ? { status: 0, stdout: "feature/slow\n" } : { status: 128, stdout: "" });
+  }, 300));
+  const io = new MemoryIO(160, 44, {});
+  const renderer = new SextantRenderer({ io, cwd: "C:/repo", git: slow, pet: "nimbus" });   // the real clock; the scan is on
+  renderer.start({ onSubmit() {}, onInterrupt() {}, onExit() {} });
+  const t0 = Date.now();
+  let last = t0, maxGap = 0, frames = renderer.frames, sawInFlight = false;
+  while (Date.now() - t0 < 480) {
+    await new Promise((r) => setTimeout(r, 5));
+    if (renderer.frames !== frames) { const t = Date.now(); maxGap = Math.max(maxGap, t - last); last = t; frames = renderer.frames; }
+    if (Date.now() - t0 > 150 && Date.now() - t0 < 250 && renderer.state.repo.branch === null) sawInFlight = true; // the scan is genuinely still pending
+  }
+  expect(sawInFlight).toBe(true);
+  expect(frames).toBeGreaterThan(5);                                        // the boot reveal animates: a frame every tick
+  expect(maxGap).toBeLessThan(200);                                         // a synchronous 300 ms scan would open a ≥300 ms gap
+  expect(resolved).toBe(3);                                                 // ls-files, status, rev-parse — all landed
+  expect(renderer.state).toMatchObject({ repo: { branch: "feature/slow" }, files: { paths: ["a.ts", "src/b.ts"] } });
+  expect(renderer.state.files.statuses.get("a.ts")).toBe("M");
+  renderer.tick();
+  expect(renderer.frameText()).toContain("feature/slow");                   // painted, not just stored
+  renderer.stop();
+});
+
+test("a DENIED approval drops its pre-edit snapshot: a later ungated edit of the same file never diffs against that stale base (the row keeps the reducer's counts)", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "aion-sx-deny-"));
+  const file = join(cwd, "x.ts");
+  writeFileSync(file, "a\n");
+  const { renderer, feed } = make({ cwd, git: () => null });
+  const p = renderer.askApproval("edit", JSON.stringify({ path: file }), "--- a/x.ts\n+++ b/x.ts\n@@ -1 +1 @@\n-a\n+b");
+  await settle();
+  feed("\x1b");                                                               // deny
+  expect(await p).toBe("deny");
+  await settle();
+  writeFileSync(file, "a\nb\nc\n");                                           // a later ungated edit landed (yolo)
+  renderer.setBusy(true);
+  ev(renderer, { type: "run_start", runId: "r", sessionId: "s", goal: "g" });
+  ev(renderer, { type: "tool_execution_start", callId: "c1", tool: "edit", args: { path: file, edits: [{ tag: "stale", anchorLine: 1, anchorHash: "zzz", newLines: ["a"] }] } });
+  ev(renderer, { type: "tool_execution_end", callId: "c1", ok: true, output: "applied 1 edit(s); new TAG y", durationMs: 1 });
+  await settle(); await settle(); await settle();
+  const row = renderer.state.messages.find((m) => m.kind === "tool") as ToolRow;
+  expect(row).toMatchObject({ add: 1, del: 1 });                             // (mutation: snapshot kept → diffed against "a\n" → +2 −0)
+  renderer.stop();
+  rmSync(cwd, { recursive: true, force: true });
 });
 
 test("frame budget: a 200-message transcript (user, assistant, tool rows) paints in well under 40 ms per frame headless", () => {

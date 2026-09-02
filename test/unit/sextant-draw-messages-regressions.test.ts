@@ -13,8 +13,11 @@ import { join } from "node:path";
 import type { CardState, MessageRow, Seg, SextantState, ToolRow } from "../../src/sextant/types.ts";
 import { activityLabel, buildRows, cardRows, cardShape, drawMessages, toolRow } from "../../src/sextant/draw-messages.ts";
 import { hardWrap, wrap } from "../../src/sextant/draw-util.ts";
+import { layout } from "../../src/sextant/layout.ts";
 import { applyEvent } from "../../src/sextant/model.ts";
+import { summarizeEnd } from "../../src/sextant/tool-rows.ts";
 import { previewDiff } from "../../src/coding/diff.ts";
+import { describeEditFailure } from "../../src/coding/hashline.ts";
 import { GridScreen, THEME, baseState } from "../helpers/sextant-grid.ts";
 
 const RECT = { x: 2, y: 1, w: 70, h: 14 }; // the 160×44 frame's messages height: inner 66×12 → message area h = 10 (y 2..11), rule y 12, prompt y 13
@@ -65,6 +68,61 @@ test("a failed edit row shows its rejection detail in red and never the +a −b 
   const ry = rowOf(gr, "~ edit");
   expect(gr.span(BX, ry, BW)).toMatch(/^ {2}~ edit {3}note\.ts {2,}Edit rejected: stale anchor$/);
   expect(gr.toText()).not.toContain("+1 −1");
+});
+
+// ------------------------------------------------------------------ re-verify MED: the reason survives at the frame's width
+
+/** the REAL rejection the edit tool emits for a stale anchor, with an absolute temp path in the message */
+const REJECTION = describeEditFailure({ kind: "hash-mismatch", path: "C:\\Users\\admins\\AppData\\Local\\Temp\\aion-sextant-Ab3xYz\\notes.txt", line: 2, expected: "cd3", actual: "e5f", nearest: "", text: "old-line", matches: [] });
+const REASON = "Edit rejected: anchor mismatch — line 2 now reads \"old-line\" (hash e5f), your anchor expected hash cd3.";
+
+test("a failed edit's row detail drops the ` at <abs path>:N` locator (the label names the file) so the 80-cell detail carries the reason and what the line holds now; other verbs keep their text", () => {
+  expect(REJECTION).toContain(" at C:\\Users\\admins\\AppData\\Local\\Temp\\aion-sextant-Ab3xYz\\notes.txt:2 — ");
+  const end = summarizeEnd({ verb: "edit" }, "edit", false, REJECTION);
+  expect(end.detail).not.toContain("Temp");
+  expect(end.detail!.startsWith(REASON.slice(0, 79))).toBe(true);           // firstLine's 80-cell clip lands inside the reason's tail, not the path
+  expect([...end.detail!]).toHaveLength(80);
+  expect(summarizeEnd({ verb: "write" }, "write", false, "Write rejected: directory C:\\x does not exist — create it first").detail).toBe("Write rejected: directory C:\\x does not exist — create it first");
+  expect(summarizeEnd({ verb: "read" }, "read", false, "read failed at C:\\x\\y.ts:3 — nope").detail).toBe("read failed at C:\\x\\y.ts:3 — nope"); // only file-writing verbs strip
+});
+
+test("a failed edit row at 60 / 83 / 120 cells keeps its reason: the label stays whole, the detail is clipped with … to the room left (never dropped), the row is exactly w cells; at 120 the whole detail fits", () => {
+  const detail = summarizeEnd({ verb: "edit" }, "edit", false, REJECTION).detail!;
+  const row = (w: number): string => rowText(toolRow(tool({ verb: "edit", label: "notes.txt", ok: false, add: 1, del: 1, detail }), w, THEME, 0));
+  const r60 = row(60), r83 = row(83), r120 = row(120);
+  for (const [w, r] of [[60, r60], [83, r83], [120, r120]] as [number, string][]) {
+    expect(r.startsWith("~ edit   notes.txt  ")).toBe(true);                 // the label is never clipped for a 9-cell name
+    expect(r).toContain("Edit rejected: anchor mismatch");                  // (mutation: the drop rule → a bare `~ edit   notes.txt`)
+    expect([...r]).toHaveLength(w);
+    expect(r).not.toContain("+1"); expect(r).not.toContain("−1");
+  }
+  expect(r60).toBe("~ edit   notes.txt  " + [...detail].slice(0, 39).join("") + "…");   // room 51 − 9 − 2 = 40 cells of detail
+  expect(r83).toBe("~ edit   notes.txt  " + [...detail].slice(0, 62).join("") + "…");   // room 74 − 9 − 2 = 63
+  expect(r83).toContain("line 2 now reads \"old-line\"");                    // the tail the critic wanted, not the path
+  expect(r120).toBe("~ edit   notes.txt" + " ".repeat(120 - 2 - 7 - 9 - 80) + detail); // fits whole, right-aligned
+  // a long label yields down to 24 cells before the detail is clipped; a detail with under 6 cells of room is dropped; the counts pair is dropped whole when it cannot fit
+  const long = rowText(toolRow(tool({ verb: "edit", label: "a-very-long-file-name-that-goes-on-and-on.ts", ok: false, detail }), 60, THEME, 0));
+  expect(long.startsWith("~ edit   a-very-long-file-name-t…  Edit rejected")).toBe(true);
+  expect([...long]).toHaveLength(60);
+  expect(rowText(toolRow(tool({ verb: "edit", label: "notes.txt", ok: false, detail }), 22, THEME, 0))).toBe("~ edit   notes.txt");       // room 13: 13 − 9 − 2 = 2 < 6 → dropped
+  expect(rowText(toolRow(tool({ verb: "edit", label: "a-very-long-file-name.ts", add: 21, del: 4 }), 30, THEME, 0))).toBe("~ edit   a-very-long-…  +21 −4"); // the prototype's rule: the label yields only what the pair needs
+  expect(rowText(toolRow(tool({ verb: "edit", label: "a-very-long-file-name.ts", add: 21, del: 4 }), 22, THEME, 0))).toBe("~ edit   a-very-long-…");        // under 8 label cells left → the pair is dropped whole
+});
+
+test("composed at the frame's 160×44 messages rect through the real reducer + real rejection text: the failed edit row shows its reason (previously a bare red `~ edit notes.txt`)", () => {
+  const L = layout(160, 44, { pet: true });
+  const s = baseState({ cwd: "C:/repo" });
+  applyEvent(s, { type: "run_start", runId: "r1", sessionId: "sess", goal: "fix" }, 0);
+  s.messages.push({ kind: "user", text: "fix the note" });
+  applyEvent(s, { type: "tool_execution_start", callId: "e1", tool: "edit", args: { path: "C:/repo/notes.txt", edits: [{ tag: "a1b2", anchorLine: 2, anchorHash: "cd3", newLines: ["x"] }] } }, 1);
+  applyEvent(s, { type: "tool_execution_end", callId: "e1", ok: false, output: REJECTION, durationMs: 3 }, 2);
+  const g = new GridScreen(160, 44, "░");
+  drawMessages(g, L.messages, s, THEME, 0);
+  const y = rowOf(g, "~ edit");
+  const line = g.span(L.messages.x + 2, y, L.messages.w - 4);
+  expect(line).toMatch(/^ {2}~ edit {3}notes\.txt {2}Edit rejected: anchor mismatch — line 2 now reads "old-line" \(…$/); // 63 cells of detail beside the 9-cell label
+  expect(line).not.toContain("Temp");
+  expect(g.cell(g.row(y).indexOf("Edit rejected"), y).fg).toBe(THEME.err);
 });
 
 // ------------------------------------------------------------------ MED-2: the approval card shows the hunk

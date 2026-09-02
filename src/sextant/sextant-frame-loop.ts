@@ -47,7 +47,9 @@ export interface FrameLoopDeps {
   beforeInput?: (ev: InputEvent, now: number) => boolean;
   /** after keys.handleInput ran for `ev` */
   afterInput?: (ev: InputEvent, now: number) => void;
-  /** after every tick (whether or not a frame was painted) — the renderer schedules I/O here */
+  /** every tick, BEFORE the paint decision — the renderer reloads the code panel's file and schedules
+   *  its git/fs work here, so a reload an event asked for lands in the same frame (never a one-frame
+   *  `cannot read <file>` between an edit's end and the next tick) */
   onTick?: (now: number) => void;
 }
 
@@ -145,8 +147,8 @@ export class FrameLoop {
 
   tick(): void {
     const now = this.d.clock();
+    this.d.onTick?.(now); // first: a reload marks dirty and paints below, in this very frame
     if (this.dirty || this.animating(now) || now - this.lastRender >= IDLE_REPAINT_MS) this.render(now);
-    this.d.onTick?.(now);
   }
 
   /** paint one frame: panels (renderFrame) → suggestion box → palette → help → scroll write-backs → cursor → flush */

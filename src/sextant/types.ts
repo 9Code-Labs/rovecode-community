@@ -207,8 +207,10 @@ export interface CodeState {
   /** last bash call: command, output lines (10k-char tool bound applies), verdict, and the exit
    *  code from the tool's `exit=N` header once the call ended (absent while running / unparsable) */
   run: { cmd: string; lines: string[]; status: "running" | "ok" | "fail"; exitCode?: number } | null;
-  /** pre-approval preview or post-edit HEAD-vs-disk hunks */
-  diff: { file: string; hunks: DiffHunk[]; add: number; del: number } | null;
+  /** pre-approval preview or post-edit hunks; `base: "head"` marks a HEAD-vs-disk view (no pre-edit
+   *  content — the /diff command, or an ungated edit whose base could not be rebuilt): cumulative
+   *  over every uncommitted change, so the title says `vs HEAD` and the row keeps its own counts */
+  diff: { file: string; hunks: DiffHunk[]; add: number; del: number; base?: "head" } | null;
   /** agents board selection */
   lane: number;
   laneOpen: boolean;

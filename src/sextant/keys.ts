@@ -22,7 +22,8 @@
  *  answered the card); End re-sticks the messages tail but wheel-down never does — only the drawer
  *  knows maxScroll (#44 handoff: re-stick in the messages drawer at the tail); /help opens the
  *  keys card AND reaches handleSlash; a left-button drag never clicks; a click on a panel body with
- *  no hit zone focuses it; ←/→, Backspace and Delete step by code point (😀 is never split).
+ *  no hit zone focuses it; ←/→, Backspace and Delete step by code point (😀 is never split); the
+ *  mouse goes through the #40 mouseKind, so a shift/alt/ctrl + wheel scrolls and never clicks.
  *  NOTE for #44: once sextant is the default, app.ts discoverCommands `reserved` should include the
  *  renderer-local names (theme open diff focus agents) so a custom command file cannot shadow them. */
 
@@ -34,6 +35,7 @@ import { type Fuzzy, type Suggestion, onPaletteKey, openPalette, parseInput, res
 import { dispatch, openFile, runAction, setFocus, setMode, setTheme, showAgents } from "./local-commands.ts";
 import { dismissCard, onCardKey } from "./card-keys.ts";
 import { gridFor } from "./draw-agents.ts";
+import { mouseKind } from "./input.ts";
 
 // ------------------------------------------------------------------ contract
 
@@ -340,11 +342,15 @@ function wordJump(text: string, cur: number, d: -1 | 1): number {
 
 // ------------------------------------------------------------------ mouse (app.js:1575-1584)
 
+/** the button kinds come from the #40 parser's mouseKind, which masks the modifier bits (4 shift, 8 meta,
+ *  16 ctrl) first: shift/alt/ctrl + wheel (b 68/69, 72/73, 80/81) is a wheel — the prototype's raw
+ *  `b === 64 || b === 65` let those fall through into the click walk, so shift+wheel over the `/exit`
+ *  suggestion row ran it; a modified or non-left button, a drag and a release never click */
 function onMouse(s: SextantState, ev: MouseEvent, ctx: KeyCtx, now: number): KeyEffect[] {
-  if (!ev.press) return NONE();
+  const kind = mouseKind(ev);
   const L = ctx.layout;
-  if (ev.b === 64 || ev.b === 65) return onWheel(s, ev, L, ev.b === 64 ? -1 : 1);
-  if ((ev.b & 3) !== 0 || (ev.b & 32) !== 0) return NONE(); // left button only, no drag
+  if (kind === "wheel-up" || kind === "wheel-down") return onWheel(s, ev, L, kind === "wheel-up" ? -1 : 1);
+  if (kind !== "click") return NONE();
   for (let i = ctx.hits.length - 1; i >= 0; i--) {
     const z = ctx.hits[i]!;
     if (!inRect(ev.x, ev.y, z.rect)) continue;

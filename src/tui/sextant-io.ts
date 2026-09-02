@@ -4,12 +4,14 @@
  *  Shift+Tab arrives as a plain \t instead of CSI Z; the helper is loaded AFTER setRawMode(true), which
  *  resets the console mode, exactly as vendor/pi-tui/src/terminal.ts:186-190 does). MemoryIO is the
  *  in-memory double tests and the smoke drive. chooseSurface() is the pure `aion` default rule:
- *  sextant only on a TTY of at least 100×30 that renders truecolor; `--classic` beats everything;
- *  AION_TUI=classic|sextant overrides the heuristics (a non-TTY still never gets sextant). */
+ *  sextant only on a TTY of at least 100×30 that renders truecolor or 256 colors (the #40 quantizer
+ *  paints the latter); `--classic` beats everything; AION_TUI=classic|sextant overrides the heuristics
+ *  (a non-TTY still never gets sextant, nor does a TTY under the 40×12 Screen floor). */
 
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { getNativeModuleCandidates } from "../../vendor/pi-tui/src/native-module-path.ts";
+import { MIN_COLS, MIN_ROWS } from "../sextant/screen.ts";
 import { SextantRenderer } from "../sextant/sextant-renderer.ts";
 import { SEXTANT_MIN_COLS, SEXTANT_MIN_ROWS, type TerminalIO } from "../sextant/types.ts";
 import type { Renderer } from "./renderer.ts";
@@ -135,28 +137,48 @@ export function truecolor(env: Env): boolean {
   return /kitty|direct/.test(env.TERM ?? "");
 }
 
+export type ColorDepth = "truecolor" | "256" | "none";
+
+/** what the terminal renders: truecolor per the heuristics above; else 256 colors when TERM says so
+ *  (xterm-256color, screen-/tmux-256color) and COLORTERM is silent — the surface then paints through the
+ *  #40 quantizer (SGR 38;5); else nothing sextant can use */
+export function colorDepth(env: Env): ColorDepth {
+  if (truecolor(env)) return "truecolor";
+  if (!(env.COLORTERM ?? "").trim() && /256color/.test(env.TERM ?? "")) return "256";
+  return "none";
+}
+
 export interface StdoutInfo { isTTY?: boolean; columns?: number; rows?: number }
 
-/** the heuristic: a TTY of at least SEXTANT_MIN_COLS×SEXTANT_MIN_ROWS with truecolor */
+/** the heuristic: a TTY of at least SEXTANT_MIN_COLS×SEXTANT_MIN_ROWS with truecolor or 256 colors */
 export function sextantOk(env: Env, stdout: StdoutInfo): boolean {
-  return !!stdout.isTTY && (stdout.columns ?? 0) >= SEXTANT_MIN_COLS && (stdout.rows ?? 0) >= SEXTANT_MIN_ROWS && truecolor(env);
+  return !!stdout.isTTY && (stdout.columns ?? 0) >= SEXTANT_MIN_COLS && (stdout.rows ?? 0) >= SEXTANT_MIN_ROWS && colorDepth(env) !== "none";
+}
+
+/** the Screen floor (screen.ts MIN_COLS×MIN_ROWS): below it the cell buffer is larger than the terminal
+ *  (39-cell rows into a 30-column window), so even a forced sextant yields; an unknown size counts as
+ *  the 80×24 ProcessIO.size() falls back to */
+export function fitsFloor(stdout: StdoutInfo): boolean {
+  return (stdout.columns ?? 80) >= MIN_COLS && (stdout.rows ?? 24) >= MIN_ROWS;
 }
 
 export type Surface = "sextant" | "classic";
 
-/** `--classic` wins; AION_TUI=classic forces classic, AION_TUI=sextant forces sextant on any TTY (size and
- *  color heuristics skipped); otherwise sextantOk(). A non-TTY stdout never gets sextant. */
+/** `--classic` wins; AION_TUI=classic forces classic, AION_TUI=sextant forces sextant on any TTY at or
+ *  above the 40×12 floor (the 100×30 and color heuristics skipped); otherwise sextantOk(). A non-TTY
+ *  stdout never gets sextant. */
 export function chooseSurface(cli: { classic: boolean }, env: Env, stdout: StdoutInfo): Surface {
   if (cli.classic) return "classic";
   const force = (env.AION_TUI ?? "").trim().toLowerCase();
   if (force === "classic") return "classic";
-  if (force === "sextant") return stdout.isTTY ? "sextant" : "classic";
+  if (force === "sextant") return stdout.isTTY && fitsFloor(stdout) ? "sextant" : "classic";
   return sextantOk(env, stdout) ? "sextant" : "classic";
 }
 
-/** main.ts: the renderer to hand runTui — a SextantRenderer over the process terminal, or undefined
- *  (runTui then builds the classic PiTuiRenderer exactly as before) */
+/** main.ts: the renderer to hand runTui — a SextantRenderer over the process terminal (truecolor SGR, or
+ *  the 256-color quantizer when that is all the terminal declares), or undefined (runTui then builds the
+ *  classic PiTuiRenderer exactly as before) */
 export function pickRenderer(cli: { classic: boolean; pet?: string }, env: Env = process.env, stdout: RawStdout = process.stdout): Renderer | undefined {
   if (chooseSurface(cli, env, stdout) !== "sextant") return undefined;
-  return new SextantRenderer({ io: new ProcessIO(process.stdin, stdout, env), truecolor: truecolor(env), ...(cli.pet !== undefined ? { pet: cli.pet } : {}), ...(env.AION_THEME ? { theme: env.AION_THEME } : {}) });
+  return new SextantRenderer({ io: new ProcessIO(process.stdin, stdout, env), truecolor: colorDepth(env) === "truecolor", ...(cli.pet !== undefined ? { pet: cli.pet } : {}), ...(env.AION_THEME ? { theme: env.AION_THEME } : {}) });
 }

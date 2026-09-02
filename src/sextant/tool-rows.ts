@@ -148,9 +148,14 @@ function readLineCount(output: string): number {
   return output.split(/\r?\n/).filter((l) => /^\d+#/.test(l)).length;
 }
 
+/** a rejection's ` at <abs path>:<line>` locator (coding/hashline.ts describeEditFailure): the row's label
+ *  already names the file and the locator alone can fill the 80-cell detail, so the reason and the
+ *  "line N now reads …" tail take its place */
+const dropLocator = (s: string): string => s.replace(/ at \S.*?:\d+(?=\s|$)/, "");
+
 /** The row's trailing detail (and panel payloads) when a tool call ends. A command's output is
  *  parsed whether it passed or failed (a red test run is exactly when the run panel matters);
- *  every other failed call reports its first output line. */
+ *  every other failed call reports its first output line — a file tool's without the path locator. */
 export function summarizeEnd(desc: Pick<CallDesc, "verb">, tool: string, ok: boolean, output: string): CallEnd {
   if (desc.verb === "run") {
     const m = /^exit=(-?\d+)\r?\n?/.exec(output);
@@ -160,7 +165,7 @@ export function summarizeEnd(desc: Pick<CallDesc, "verb">, tool: string, ok: boo
     const last = lastLine(text);
     return { detail: last || (m ? `exit ${m[1]}` : ""), runLines: lines, ...(m ? { exitCode: Number(m[1]) } : {}) };
   }
-  if (!ok) return { detail: firstLine(output) };
+  if (!ok) return { detail: firstLine(desc.verb === "edit" || desc.verb === "write" ? dropLocator(output) : output) };
   switch (desc.verb) {
     case "read": return { detail: `${readLineCount(output)} lines` };
     case "edit": return {};

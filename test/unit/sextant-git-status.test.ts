@@ -9,7 +9,11 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, unlinkSync, renameSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { gitBranch, gitHeadContent, gitPorcelain, parsePorcelain, unquotePath, spawnGit, type GitRunner } from "../../src/sextant/git-status.ts";
+import {
+  gitBranch, gitBranchAsync, gitHeadContent, gitHeadContentAsync, gitPorcelain, gitPorcelainAsync, gitRunnerAsync, parsePorcelain, spawnGit, spawnGitAsync, toAsync, unquotePath,
+  type GitRunner,
+} from "../../src/sextant/git-status.ts";
+import { fileDiff, fileDiffAsync, scanRepo, scanRepoAsync } from "../../src/sextant/sextant-files.ts";
 
 const Z = [" M src/a.ts", "?? new.ts", "D  gone.ts", "R  new-name.ts", "old-name.ts", "A  added.ts", "AM added-mod.ts", "!! ignored.log", "MM both.ts", " D wt-deleted.ts", "RM moved-mod.ts", "was.ts", "C  copy.ts", "orig.ts", "?? ../above.ts", "UU conflict.ts", "T  typechange.ts"].join("\0") + "\0";
 
@@ -113,6 +117,56 @@ test.if(haveGit)("real repo: branch, M/A/D incl. staged rename and untracked fil
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ---------- re-verify pass: the async twins (#44 LOW-3) ----------
+
+test("gitRunnerAsync: a hung child is killed at the timeout and the call resolves null (no rejection, no 30 s wait); a missing executable resolves null; a throwing sync runner wrapped by toAsync yields null through the twins", async () => {
+  const t0 = Date.now();
+  const hang = gitRunnerAsync({ timeoutMs: 100, argv: () => [process.execPath, "-e", "setTimeout(() => {}, 30000)"] });
+  expect(await hang(["x"], ".")).toBeNull();
+  expect(Date.now() - t0).toBeLessThan(5000);                              // (mutation: no timeout → the sleeper holds the call for 30 s)
+  const missing = gitRunnerAsync({ argv: () => ["definitely-not-a-binary-f44", "--version"] });
+  expect(await missing(["x"], ".")).toBeNull();
+  for (const run of [none, notRepo, boom]) {
+    expect(await gitBranchAsync("C:/x", toAsync(run))).toBeNull();
+    expect(await gitPorcelainAsync("C:/x", toAsync(run))).toBeNull();
+    expect(await gitHeadContentAsync("C:/x", "a.ts", toAsync(run))).toBeNull();
+  }
+  expect(await gitBranchAsync("C:/x", toAsync(fake({ "rev-parse --abbrev-ref HEAD": "HEAD\n", "rev-parse --short HEAD": "d6d3977\n" })))).toBe("d6d3977");
+  expect(await gitHeadContentAsync("C:/x", "../escape.ts", toAsync(fake({})))).toBeNull();
+});
+
+test.if(haveGit)("real repo: every async twin answers exactly what its sync form does — branch, porcelain (rename + untracked), HEAD content, the full scanRepo snapshot, fileDiff; `git --version` through spawnGitAsync exits 0; a non-repo dir → null", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-sx-git-async-"));
+  try {
+    git(dir, "init", "-q");
+    git(dir, "symbolic-ref", "HEAD", "refs/heads/main");
+    git(dir, "config", "user.email", "t@example.com"); git(dir, "config", "user.name", "t"); git(dir, "config", "core.autocrlf", "false");
+    mkdirSync(join(dir, "sub"));
+    writeFileSync(join(dir, "a.ts"), "const a = 1;\n"); writeFileSync(join(dir, "b.ts"), "const b = 2;\n"); writeFileSync(join(dir, "sub", "c.ts"), "const c = 3;\n");
+    git(dir, "add", "-A"); git(dir, "commit", "-q", "-m", "init");
+    writeFileSync(join(dir, "a.ts"), "const a = 2;\n"); unlinkSync(join(dir, "b.ts")); writeFileSync(join(dir, "new.ts"), "new\n");
+    renameSync(join(dir, "sub", "c.ts"), join(dir, "sub", "renamed.ts")); git(dir, "add", "-A", "sub");
+    expect(await gitBranchAsync(dir)).toBe(gitBranch(dir));
+    expect(await gitBranchAsync(dir)).toBe("main");
+    expect(await gitPorcelainAsync(dir)).toEqual(gitPorcelain(dir));
+    expect([...(await gitPorcelainAsync(dir))!].sort()).toEqual([["a.ts", "M"], ["b.ts", "D"], ["new.ts", "A"], ["sub/renamed.ts", "M"]]);
+    expect(await gitHeadContentAsync(dir, "a.ts")).toBe("const a = 1;\n");
+    expect(await gitHeadContentAsync(dir, "new.ts")).toBeNull();
+    const snap = await scanRepoAsync(dir);
+    expect(snap).toEqual(scanRepo(dir));
+    expect(snap.git).toBe(true); expect(snap.branch).toBe("main"); expect(snap.paths).toContain("sub/renamed.ts"); expect(snap.paths).toContain("new.ts");
+    expect(await fileDiffAsync(dir, "a.ts", undefined)).toEqual(fileDiff(dir, "a.ts", undefined));
+    expect(await fileDiffAsync(dir, "a.ts", undefined)).toMatchObject({ add: 1, del: 1, base: "head" });
+    expect((await spawnGitAsync(["--version"], dir))?.status).toBe(0);
+    const outside = mkdtempSync(join(tmpdir(), "aion-sx-norepo-async-"));
+    try {
+      const inside = spawnSync("git", ["-C", outside, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8", windowsHide: true }).status === 0;
+      if (!inside) { expect(await gitBranchAsync(outside)).toBeNull(); expect(await gitPorcelainAsync(outside)).toBeNull(); expect((await scanRepoAsync(outside)).git).toBe(false); }
+      expect(await gitBranchAsync(join(outside, "definitely", "missing"))).toBeNull();
+    } finally { rmSync(outside, { recursive: true, force: true }); }
+  } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
 test.if(haveGit)("real git, not a repo / missing dir → null for all three (real spawnGit, nothing thrown)", () => {

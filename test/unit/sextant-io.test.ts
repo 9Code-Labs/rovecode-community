@@ -1,13 +1,15 @@
-/** Port #44 — sextant-io.ts: the surface choice (truecolor heuristics, the 100×30 floor, the TTY gate,
- *  AION_TUI / --classic overrides), MemoryIO, ProcessIO raw-mode ordering incl. the Windows VT-input helper
- *  (win32 only, AFTER setRawMode), utf8 decoding of Buffer chunks, resize, and pickRenderer. */
+/** Port #44 — sextant-io.ts: the surface choice (truecolor / 256-color heuristics, the 100×30 floor, the
+ *  40×12 Screen floor even when forced, the TTY gate, AION_TUI / --classic overrides), MemoryIO, ProcessIO
+ *  raw-mode ordering incl. the Windows VT-input helper (win32 only, AFTER setRawMode), utf8 decoding of
+ *  Buffer chunks, resize, and pickRenderer (incl. the SGR mode it hands the renderer). */
 
 import { test, expect } from "bun:test";
 import { existsSync } from "node:fs";
 import { SextantRenderer } from "../../src/sextant/sextant-renderer.ts";
-import { chooseSurface, MemoryIO, pickRenderer, ProcessIO, sextantOk, truecolor, vtInputCandidates, type RawStdout } from "../../src/tui/sextant-io.ts";
+import { chooseSurface, colorDepth, fitsFloor, MemoryIO, pickRenderer, ProcessIO, sextantOk, truecolor, vtInputCandidates, type RawStdout } from "../../src/tui/sextant-io.ts";
 
 const tty = (columns = 160, rows = 44) => ({ isTTY: true, columns, rows });
+const NOOP_HOOKS = { onSubmit() {}, onInterrupt() {}, onExit() {} };
 
 class FakeStdin {
   isRaw = false;
@@ -44,7 +46,19 @@ test("truecolor(): COLORTERM truecolor/24bit, WT_SESSION, TERM_PROGRAM vscode/iT
   expect(truecolor({})).toBe(false);
 });
 
-test("sextantOk(): TTY and ≥ 100×30 and truecolor — every leg is necessary, the floor is inclusive", () => {
+test("colorDepth(): truecolor per the heuristics; 256 for a *-256color TERM with COLORTERM unset or blank; none for a plain TERM or a COLORTERM that says something else", () => {
+  expect(colorDepth({ COLORTERM: "truecolor", TERM: "xterm-256color" })).toBe("truecolor");
+  expect(colorDepth({ WT_SESSION: "1", TERM: "xterm-256color" })).toBe("truecolor");
+  expect(colorDepth({ TERM: "xterm-256color" })).toBe("256");
+  expect(colorDepth({ TERM: "screen-256color" })).toBe("256");
+  expect(colorDepth({ TERM: "tmux-256color", COLORTERM: "  " })).toBe("256");
+  expect(colorDepth({ TERM: "xterm-256color", COLORTERM: "yes" })).toBe("none");   // COLORTERM present but not truecolor: not claimed
+  expect(colorDepth({ TERM: "xterm" })).toBe("none");
+  expect(colorDepth({ TERM: "dumb" })).toBe("none");
+  expect(colorDepth({})).toBe("none");
+});
+
+test("sextantOk(): TTY and ≥ 100×30 and truecolor OR 256 colors — every leg is necessary, the floor is inclusive", () => {
   const env = { COLORTERM: "truecolor" };
   expect(sextantOk(env, tty(160, 44))).toBe(true);
   expect(sextantOk(env, tty(100, 30))).toBe(true);
@@ -52,35 +66,71 @@ test("sextantOk(): TTY and ≥ 100×30 and truecolor — every leg is necessary,
   expect(sextantOk(env, tty(160, 29))).toBe(false);
   expect(sextantOk(env, { isTTY: false, columns: 160, rows: 44 })).toBe(false);
   expect(sextantOk(env, { columns: 160, rows: 44 })).toBe(false); // isTTY undefined = a pipe
-  expect(sextantOk({}, tty(160, 44))).toBe(false);                // no truecolor evidence
+  expect(sextantOk({}, tty(160, 44))).toBe(false);                // no color evidence at all
+  expect(sextantOk({ TERM: "xterm-256color" }, tty(160, 44))).toBe(true);  // 256 colors suffice (the quantizer paints)
+  expect(sextantOk({ TERM: "xterm-256color" }, tty(99, 44))).toBe(false);  // …but the 100×30 floor still holds
+  expect(sextantOk({ TERM: "xterm" }, tty(160, 44))).toBe(false);
   expect(sextantOk(env, { isTTY: true })).toBe(false);            // unknown size
 });
 
-test("chooseSurface() matrix: heuristics by default; AION_TUI overrides both ways; a non-TTY never gets sextant; --classic wins over everything", () => {
+test("fitsFloor(): the 40×12 Screen floor, inclusive; an unknown size counts as ProcessIO's 80×24 fallback", () => {
+  expect(fitsFloor(tty(40, 12))).toBe(true);
+  expect(fitsFloor(tty(39, 12))).toBe(false);
+  expect(fitsFloor(tty(40, 11))).toBe(false);
+  expect(fitsFloor(tty(30, 10))).toBe(false);
+  expect(fitsFloor({ isTTY: true })).toBe(true);
+  expect(fitsFloor({ isTTY: true, columns: 200 })).toBe(true);
+});
+
+test("chooseSurface() matrix: heuristics by default (truecolor or 256); AION_TUI overrides both ways but a forced sextant still needs a TTY at or above 40×12; a non-TTY never gets sextant; --classic wins over everything", () => {
   const tc = { COLORTERM: "truecolor" };
   expect(chooseSurface({ classic: false }, tc, tty(160, 44))).toBe("sextant");
+  expect(chooseSurface({ classic: false }, { TERM: "xterm-256color" }, tty(160, 44))).toBe("sextant");      // 256-color terminal
   expect(chooseSurface({ classic: false }, tc, tty(99, 44))).toBe("classic");
   expect(chooseSurface({ classic: false }, {}, tty(160, 44))).toBe("classic");
+  expect(chooseSurface({ classic: false }, { TERM: "xterm" }, tty(160, 44))).toBe("classic");
   expect(chooseSurface({ classic: false }, tc, { isTTY: false, columns: 160, rows: 44 })).toBe("classic");
   expect(chooseSurface({ classic: false }, { ...tc, AION_TUI: "classic" }, tty(160, 44))).toBe("classic");   // forced classic on a capable TTY
-  expect(chooseSurface({ classic: false }, { AION_TUI: "sextant" }, tty(99, 20))).toBe("sextant");           // forced sextant skips size + color
+  expect(chooseSurface({ classic: false }, { AION_TUI: "sextant" }, tty(99, 20))).toBe("sextant");           // forced sextant skips the 100×30 + color rules
   expect(chooseSurface({ classic: false }, { AION_TUI: " Sextant " }, tty(80, 24))).toBe("sextant");         // trimmed, case-insensitive
+  expect(chooseSurface({ classic: false }, { AION_TUI: "sextant" }, tty(40, 12))).toBe("sextant");           // exactly the Screen floor
+  expect(chooseSurface({ classic: false }, { AION_TUI: "sextant" }, tty(39, 12))).toBe("classic");           // under the floor the buffer would outgrow the terminal
+  expect(chooseSurface({ classic: false }, { AION_TUI: "sextant" }, tty(40, 11))).toBe("classic");
+  expect(chooseSurface({ classic: false }, { AION_TUI: "sextant" }, tty(30, 10))).toBe("classic");           // the critic's 30×10 case
+  expect(chooseSurface({ classic: false }, { AION_TUI: "sextant" }, { isTTY: true })).toBe("sextant");       // unknown size = the 80×24 fallback
   expect(chooseSurface({ classic: false }, { AION_TUI: "sextant" }, { isTTY: false, columns: 160, rows: 44 })).toBe("classic"); // never on a pipe
   expect(chooseSurface({ classic: true }, { ...tc, AION_TUI: "sextant" }, tty(160, 44))).toBe("classic");   // --classic wins
   expect(chooseSurface({ classic: false }, { ...tc, AION_TUI: "bogus" }, tty(160, 44))).toBe("sextant");    // an unknown value = heuristics
 });
 
-test("pickRenderer(): undefined for classic (runTui builds the PiTuiRenderer); a SextantRenderer when sextant is chosen, carrying AION_THEME", () => {
+test("pickRenderer(): undefined for classic (runTui builds the PiTuiRenderer) and for a forced sextant under the floor; a SextantRenderer when sextant is chosen, carrying AION_THEME and the SGR mode — truecolor on a truecolor terminal, the 256 quantizer on a 256-color one", () => {
   expect(pickRenderer({ classic: true }, { AION_TUI: "sextant" }, new FakeStdout())).toBeUndefined();
-  expect(pickRenderer({ classic: false }, {}, new FakeStdout())).toBeUndefined();               // no truecolor evidence → classic
+  expect(pickRenderer({ classic: false }, {}, new FakeStdout())).toBeUndefined();               // no color evidence → classic
+  const tiny = new FakeStdout(); tiny.columns = 30; tiny.rows = 10;
+  expect(pickRenderer({ classic: false }, { AION_TUI: "sextant" }, tiny)).toBeUndefined();     // (mutation: forced ignores the floor → a renderer)
   const r = pickRenderer({ classic: false, pet: "stormy" }, { AION_TUI: "sextant", AION_THEME: "ember" }, new FakeStdout());
   expect(r).toBeInstanceOf(SextantRenderer);
   const sx = r as SextantRenderer;
   expect(sx.themeName).toBe("ember");
   expect(sx.active).toBe(false);                                                              // constructed, not started: no interval, no writes
+  expect(sx.truecolor).toBe(false);                                                           // forced with no color evidence: the quantizer
   const plain = pickRenderer({ classic: false }, { COLORTERM: "truecolor" }, new FakeStdout()) as SextantRenderer;
   expect(plain).toBeInstanceOf(SextantRenderer);
   expect(plain.themeName).toBe("night");
+  expect(plain.truecolor).toBe(true);
+  const x256 = pickRenderer({ classic: false }, { TERM: "xterm-256color" }, new FakeStdout()) as SextantRenderer;
+  expect(x256).toBeInstanceOf(SextantRenderer);
+  expect(x256.truecolor).toBe(false);
+  // the SGR mode reaches the wire: a 256-color renderer emits 38;5;N and never a 38;2;r;g;b triple
+  const io = new MemoryIO(100, 30, {});
+  const q = new SextantRenderer({ io, truecolor: false, scan: false, cwd: "C:/repo" });
+  q.start(NOOP_HOOKS); q.stop();
+  expect(io.output()).toMatch(/\x1b\[[0-9;]*38;5;\d+/);
+  expect(io.output()).not.toContain("38;2;");
+  const io2 = new MemoryIO(100, 30, {});
+  const t = new SextantRenderer({ io: io2, truecolor: true, scan: false, cwd: "C:/repo" });
+  t.start(NOOP_HOOKS); t.stop();
+  expect(io2.output()).toContain("38;2;");
 });
 
 test("ProcessIO.enterRaw: setRawMode(true) → utf8 → resume → the Windows VT-input helper (win32 only, AFTER raw mode); leaveRaw restores the previous raw state and pauses stdin", () => {

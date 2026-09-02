@@ -10,6 +10,7 @@ import type { CardState, Rect, ScreenLike, Seg, SextantState, Theme, ToolRow } f
 import { ATTR } from "./types.ts";
 import { moreMarker } from "../coding/diff.ts";
 import { inner, panel, spinner, st, wrap } from "./draw-util.ts";
+import { clipText } from "./tool-rows.ts";
 
 export interface Row { segs: Seg[]; indent?: number }
 
@@ -22,13 +23,24 @@ export const SKIP_LABEL = "skip this question";
 const MAX_QUESTION_ROWS = 6;
 
 const VERB_GLYPH: Record<string, string> = { read: "·", edit: "~", write: "+", remove: "−", run: "$", search: "⌕", fetch: "↗", task: "»" };
+/** the label shrinks to this many cells before a detail that would still fit whole is touched (app.js) */
+const LABEL_MIN = 8;
+/** when the detail must be clipped instead, the label keeps up to this many cells (all of a shorter one) */
+const LABEL_KEEP = 24;
+/** a text detail that would keep fewer cells than this says nothing — dropped instead of clipped */
+const DETAIL_MIN = 6;
 
 /** cells a string takes: one per code point (types.ts) — `.length` would count an emoji twice */
 const cells = (s: string): number => [...s].length;
+const segCells = (segs: readonly Seg[]): number => segs.reduce((n, [s]) => n + cells(s), 0);
 
 /** `<glyph> <verb> <label>` with the detail right-aligned: `· read x … N lines`, `~ edit x +a −b`,
  *  `$ run cmd … last line`; the spinner replaces the glyph while the call runs (app.js:561-571).
- *  A failed edit shows its rejection detail, never the +a −b it did not apply. */
+ *  A failed edit shows its rejection detail, never the +a −b it did not apply. When label and detail
+ *  do not both fit, the label yields first (down to LABEL_MIN cells, the prototype's rule); when even
+ *  that leaves no room, a TEXT detail is clipped with `…` beside a label kept at up to LABEL_KEEP cells
+ *  — a rejection's reason stays on the row at the frame's 160×44 message width instead of vanishing;
+ *  the `+a −b` pair is dropped whole when it cannot fit. */
 export function toolRow(t: ToolRow, w: number, theme: Theme, now: number): Seg[] {
   const failed = !t.running && t.ok === false;
   const g = t.running ? spinner(now) : VERB_GLYPH[t.verb] ?? "·";
@@ -39,12 +51,18 @@ export function toolRow(t: ToolRow, w: number, theme: Theme, now: number): Seg[]
     if (t.add) detail.push([`+${t.add}`, st(theme.ok)]);
     if (t.del) detail.push([`${t.add ? " " : ""}−${t.del}`, st(theme.err)]);
   } else if (t.detail) detail.push([(t.verb === "edit" ? "" : "… ") + t.detail, st(failed ? theme.err : theme.muted)]);
-  const dw = detail.reduce((n, [s]) => n + cells(s), 0);
+  let dw = segCells(detail);
   let label = t.label;
-  let labelMax = w - 2 - verb.length;
+  const room = w - 2 - verb.length; // cells for label + gap + detail
+  let labelMax = room;
   if (dw) {
-    if (labelMax - dw - 2 >= 8) labelMax -= dw + 2; // clip the label before dropping the detail
-    else detail.length = 0;
+    const keep = Math.min(cells(label), LABEL_KEEP);
+    if (room - dw - 2 >= Math.min(cells(label), LABEL_MIN)) labelMax = room - dw - 2; // both fit once the label is clipped
+    else if (detail.length === 1 && room - keep - 2 >= DETAIL_MIN) { // clip the text detail beside the kept label
+      const [text, style] = detail[0]!;
+      detail[0] = [clipText(text, room - keep - 2), style];
+      labelMax = keep; dw = segCells(detail);
+    } else { detail.length = 0; dw = 0; }
   }
   if (cells(label) > labelMax) label = labelMax > 1 ? [...label].slice(0, labelMax - 1).join("") + "…" : "";
   const segs: Seg[] = [[g + " ", st(gc)], [verb, st(t.running ? theme.fg2 : theme.muted)], [label, st(t.running ? theme.fg : failed ? theme.err : theme.fg2)]];

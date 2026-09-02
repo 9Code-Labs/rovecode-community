@@ -7,7 +7,8 @@
  *  #46 crew board over rt.tasks, resize re-layout, and the smoke module itself. */
 
 import { test, expect, afterEach } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { appendFileSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { partsText } from "../../src/core/loop.ts";
@@ -15,7 +16,7 @@ import { resetExecutor } from "../../src/core/executor.ts";
 import { fileTag, lineHash } from "../../src/coding/hashline.ts";
 import { mockStream, textTurn, toolTurn } from "../../src/providers/stream.ts";
 import { SextantRenderer } from "../../src/sextant/sextant-renderer.ts";
-import type { SextantAttach } from "../../src/sextant/types.ts";
+import type { SextantAttach, ToolRow } from "../../src/sextant/types.ts";
 import { runTui } from "../../src/tui/app.ts";
 import type { ApprovalAnswer, AssistantView, Renderer, RendererHooks, StatusInfo } from "../../src/tui/renderer.ts";
 import { MemoryIO } from "../../src/tui/sextant-io.ts";
@@ -144,8 +145,10 @@ test("/theme ember recolors with no model turn; /open /diff /focus stay local; /
   expect(renderer.themeName).toBe("ember");
   expect(io.writes.slice(before).join("")).toContain("38;2;255;122;69"); // ember accent #ff7a45 reached the terminal (mutation: theme not rebuilt → night SGR only)
   expect(renderer.state.toasts.some((t) => t.text === "theme · ember")).toBe(true);
+  await until(renderer, () => renderer.state.files.paths.includes("notes.txt")); // the file list lands from the async repo scan (git runs beside the loop)
   io.feed("/open notes.txt\r");
   await until(renderer, () => renderer.state.code.file === "notes.txt");
+  expect(renderer.state.code.file).toBe("notes.txt");
   expect(renderer.state.code.content).toBe("alpha\nbeta\n");        // local: read from disk
   expect(renderer.state.focus).toBe("code");
   io.feed("/diff\r");
@@ -339,6 +342,108 @@ test("sextantSmoke(): the CLI smoke passes in-process (two approval cards, both 
   expect(r.ok).toBe(true);
   expect(r.frame).toContain("Smoke OK");
   expect(r.cardFrame).toMatch(/needs your permission\s+edit\b/);
+}, 30_000);
+
+// ---------- re-verify pass: #43 HIGH — a modified wheel over the suggestion row ----------
+
+test("`/ex` + shift+wheel over the `/exit` suggestion row scrolls instead of clicking: the session stays open and the prompt keeps its text; a plain click on that row still runs /exit", async () => {
+  const { cwd, io, renderer } = surface();
+  const app = runTui({ renderer, stream: mockStream({ turns: [textTurn("never")] }), cwd, yolo: true, exitOnClose: false, model: "scripted" });
+  await until(renderer, (f) => f.includes("/help for commands"));
+  io.feed("/ex"); renderer.tick();
+  const rowOf = (): { x: number; y: number } => {
+    const lines = renderer.frameText().split("\n");
+    const y = lines.findLastIndex((l) => l.includes("/exit"));
+    return { x: lines[y]!.indexOf("/exit"), y };
+  };
+  let at = rowOf();
+  expect(at.y).toBeGreaterThan(0);                                              // the suggestion box lists /exit
+  io.feed(`\x1b[<68;${at.x + 1};${at.y + 1}M`); renderer.flushInput(); renderer.tick(); // shift + wheel-up over the row
+  io.feed(`\x1b[<69;${at.x + 1};${at.y + 1}M`); renderer.flushInput(); renderer.tick(); // shift + wheel-down
+  io.feed(`\x1b[<80;${at.x + 1};${at.y + 1}M`); renderer.flushInput(); renderer.tick(); // ctrl + wheel-up
+  await new Promise((r) => setTimeout(r, 60));
+  expect(renderer.active).toBe(true);                                           // still running (mutation: the wheel clicked the row → /exit quit)
+  expect(renderer.state.input.text).toBe("/ex");
+  expect(renderer.state.messages.some((m) => m.kind === "user")).toBe(false);   // nothing was submitted
+  at = rowOf();
+  io.feed(`\x1b[<0;${at.x + 1};${at.y + 1}M`); renderer.flushInput();           // the plain click runs the row
+  await deadline(app, 8000, "runTui after clicking /exit");
+  expect(renderer.active).toBe(false);
+  for (const seq of LEAVE) expect(io.output().slice(-400)).toContain(seq);
+  rmSync(cwd, { recursive: true, force: true });
+}, 20_000);
+
+// ---------- re-verify pass: #44 MED-1 — ungated edits get an edit-only diff, never cumulative HEAD numbers ----------
+
+const haveGit = spawnSync("git", ["--version"], { encoding: "utf8", windowsHide: true }).status === 0;
+const git = (cwd: string, ...args: string[]): void => {
+  const r = spawnSync("git", ["-C", cwd, ...args], { encoding: "utf8", windowsHide: true, timeout: 20_000 });
+  if (r.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${r.stderr}`);
+};
+/** a repo with notes.txt COMMITTED as `committed`, then dirtied on disk by appending `dirty` (uncommitted) */
+function dirtyRepo(committed: string, dirty: string): { cwd: string; target: string; content: string } {
+  const cwd = mkdtempSync(join(tmpdir(), "aion-sextant-git-"));
+  git(cwd, "init", "-q"); git(cwd, "config", "user.email", "t@example.com"); git(cwd, "config", "user.name", "t"); git(cwd, "config", "core.autocrlf", "false");
+  const target = join(cwd, "notes.txt");
+  writeFileSync(target, committed);
+  git(cwd, "add", "-A"); git(cwd, "commit", "-q", "-m", "init");
+  appendFileSync(target, dirty);
+  return { cwd, target, content: readFileSync(target, "utf8") };
+}
+const editOf = (target: string, content: string, line: number, newLines: string[]) =>
+  ({ path: target, edits: [{ tag: fileTag(content), anchorLine: line, anchorHash: lineHash(content.split("\n")[line - 1]!), newLines }] });
+const changes = (r: SextantRenderer) => r.state.code.diff!.hunks.flatMap((h) => h.rows).filter((x) => x.op !== " ").map((x) => [x.op, x.text]);
+
+test.if(haveGit)("yolo edit of ONE committed line in a file dirtied by 5 uncommitted lines: the row stays `+1 −1`, the diff view holds exactly that hunk and the title reads `+1 −1` with no `vs HEAD` (the base is rebuilt from the hashline ops — git itself would say +6 −1)", async () => {
+  const { cwd, target, content } = dirtyRepo("keep-1\nold-line\nkeep-2\n", "extra-1\nextra-2\nextra-3\nextra-4\nextra-5\n");
+  const io = new MemoryIO(160, 44, { COLORTERM: "truecolor" });
+  const renderer = new SextantRenderer({ io, cwd, pet: "nimbus" });
+  const stream = mockStream({ turns: [toolTurn([{ id: "t1", tool: "edit", args: editOf(target, content, 2, ["new-line"]) }]), textTurn("edited.")] });
+  const app = runTui({ renderer, stream, cwd, yolo: true, exitOnClose: false, model: "scripted" });
+  io.feed("edit it\r");
+  const done = await until(renderer, (f) => f.includes("edited.") && /─ diff ─+ notes\.txt\s+\+1 −1/.test(f));
+  expect(done).toMatch(/~ edit\s+notes\.txt\s+\+1 −1/);                        // the row (mutation: HEAD base overwrites → +6 −1)
+  expect(done).toMatch(/─ diff ─+ notes\.txt\s+\+1 −1 ╮/);                     // the title: the ONE edit, nothing flagged after the counts
+  expect(done).not.toContain("vs HEAD");
+  expect(readFileSync(target, "utf8")).toBe("keep-1\nnew-line\nkeep-2\nextra-1\nextra-2\nextra-3\nextra-4\nextra-5\n");
+  const d = renderer.state.code.diff!;
+  expect(d).toMatchObject({ file: "notes.txt", add: 1, del: 1 });
+  expect(d.base).toBeUndefined();
+  expect(d.hunks).toHaveLength(1);
+  expect(changes(renderer)).toEqual([["-", "old-line"], ["+", "new-line"]]);  // exactly the landed change, none of the dirty lines
+  expect(renderer.state.messages.find((m) => m.kind === "tool")).toMatchObject({ verb: "edit", ok: true, add: 1, del: 1 } satisfies Partial<ToolRow>);
+  await quit(io, renderer, app, cwd);
+}, 30_000);
+
+test.if(haveGit)("yolo edit of a line that is itself uncommitted (no line in HEAD or on disk carries its hash): the row keeps the reducer's `+1 −1` while the view falls back to HEAD vs disk, flagged `vs HEAD`", async () => {
+  const { cwd, target, content } = dirtyRepo("keep-1\nkeep-2\n", "extra-1\nextra-2\n");
+  const io = new MemoryIO(160, 44, { COLORTERM: "truecolor" });
+  const renderer = new SextantRenderer({ io, cwd, pet: "nimbus" });
+  const stream = mockStream({ turns: [toolTurn([{ id: "t1", tool: "edit", args: editOf(target, content, 3, ["changed"]) }]), textTurn("edited.")] });
+  const app = runTui({ renderer, stream, cwd, yolo: true, exitOnClose: false, model: "scripted" });
+  io.feed("edit it\r");
+  const done = await until(renderer, (f) => f.includes("edited.") && renderer.state.code.diff?.base === "head");
+  expect(renderer.state.code.diff).toMatchObject({ file: "notes.txt", add: 2, del: 0, base: "head" }); // HEAD → disk: two new lines
+  expect(done).toMatch(/─ diff ─+ notes\.txt\s+\+2\s+vs HEAD ╮/);              // the view says what it compares
+  expect(done).toMatch(/~ edit\s+notes\.txt\s+\+1 −1/);                        // the row keeps its args-derived counts (mutation: overwritten → +2)
+  expect(renderer.state.messages.find((m) => m.kind === "tool")).toMatchObject({ add: 1, del: 1 } satisfies Partial<ToolRow>);
+  await quit(io, renderer, app, cwd);
+}, 30_000);
+
+test.if(haveGit)("gated edit in a dirty repo: the pre-approval snapshot beats HEAD as the base — allow → the row and the view show the ONE landed change, not the file's whole uncommitted delta", async () => {
+  const { cwd, target, content } = dirtyRepo("keep-1\nold-line\nkeep-2\n", "extra-1\nextra-2\nextra-3\n");
+  const io = new MemoryIO(160, 44, { COLORTERM: "truecolor" });
+  const renderer = new SextantRenderer({ io, cwd, pet: "nimbus" });
+  const stream = mockStream({ turns: [toolTurn([{ id: "t1", tool: "edit", args: editOf(target, content, 2, ["new-line"]) }]), textTurn("applied.")] });
+  const app = runTui({ renderer, stream, cwd, yolo: false, exitOnClose: false, model: "scripted" });
+  io.feed("edit it\r");
+  await until(renderer, (f) => f.includes("needs your permission"));
+  io.feed("\r");                                                                 // allow once
+  const done = await until(renderer, (f) => f.includes("applied.") && /─ diff ─+ notes\.txt\s+\+1 −1 ╮/.test(f));
+  expect(done).toMatch(/~ edit\s+notes\.txt\s+\+1 −1/);
+  expect(done).not.toContain("vs HEAD");
+  expect(changes(renderer)).toEqual([["-", "old-line"], ["+", "new-line"]]);  // (mutation: HEAD preferred over the snapshot → +4 −1 with the extras)
+  await quit(io, renderer, app, cwd);
 }, 30_000);
 
 test("the write tool's approval leaves the file absent until allowed (mirror of tui-app's gated write)", async () => {

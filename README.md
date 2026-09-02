@@ -13,8 +13,9 @@ pre-written bar (ledger: `PORTS.md` at the workspace root).
 - **Tests**: 1574 pass / 0 fail / 1 skip (109 files, unit + integration; run in ≤4-file chunks)
 - **Gauntlet**: 10/10 (basic, coding, failure-recovery, adversarial: loop-guard, huge-output, permission-bypass)
 - **Typecheck**: 0 errors · TUI render smoke: PASS
-- **Wave 4 in progress**: the sextant surface (`src/sextant/*`, a new default TUI ported from the user's prototype) — core,
-  model/panels and pet landed; renderer integration building; the current pi-tui surface stays available as `--classic`
+- **Wave 4**: the sextant surface (`src/sextant/*`, the new default TUI ported from the user's prototype) is merged —
+  core, model/panels, code/messages, input, pet, crew board and the renderer integration; the last row (#47 external
+  agentic-CLI lanes) is building; the pi-tui chat stays available as `--classic`
 
 ## Install
 
@@ -94,8 +95,13 @@ approval preview before it, `$` run output with PASS/FAIL chips, `∷` the crew 
 approvals and `ask_user`, the prompt with `/` suggestions and `@file` mentions) · `plan` (the session's
 todos + crew) · `usage` (tokens, context bar, cost) · `nimbus`, the weather-cloud pet whose mood follows
 the run. `aion` picks it when stdout is a TTY of at least 100×30 that renders truecolor (`COLORTERM`,
-`WT_SESSION`, `TERM_PROGRAM` vscode/iTerm/WezTerm/ghostty, kitty/`-direct` `TERM`); `AION_TUI=sextant|classic`
-overrides the heuristics (a non-TTY never gets sextant), `--classic` beats both. Keys: `⏎` send · `tab`
+`WT_SESSION`, `TERM_PROGRAM` vscode/iTerm/WezTerm/ghostty, kitty/`-direct` `TERM`) or 256 colors (a
+`*-256color` `TERM` with no `COLORTERM`, painted through the xterm-256 quantizer); `AION_TUI=sextant|classic`
+overrides the heuristics (a non-TTY never gets sextant, nor does a TTY under the 40×12 floor), `--classic`
+beats both. After an edit the `code` panel's diff is the ONE change that landed — captured before an
+approved edit, rebuilt from the edit's own anchors after an ungated one — and falls back to a `vs HEAD`
+view (every uncommitted change) only when neither is possible. Git runs beside the frame loop: a slow
+`git status` never stalls the spinner or the keys. Keys: `⏎` send · `tab`
 complete/cycle focus · `esc esc` stop the run · `⌃c` quit (interrupts first) · `⌃k` palette · `⌃s ⌃d ⌃r ⌃a`
 code/diff/run/agents · `⌃e` files · `⌃t` theme · mouse clicks/wheel. `aion smoke-tui --sextant` renders a
 160×44 frame through the real pipeline and prints PASS.
@@ -232,10 +238,11 @@ Environment knobs (`aion help` prints the same list):
 - `AION_SANDBOX` / `AION_SANDBOX_IMAGE` — executor rung for `bash` and the docker image (#27)
 - `--output text|json|ndjson` (flag, `aion run` only) — output mode (#35); `AION_YOLO=1` — allow all tool actions;
   `AION_STREAM=sse` — raw SSE adapter; `AION_HOME` — credentials + user-scope commands dir (default `~/.aion`)
-- `AION_TUI=sextant|classic` — force the TUI surface (#44; sextant still needs a TTY, `--classic` wins);
-  `AION_THEME=night|ember|contrast` — the sextant palette at boot (`/theme` switches it live);
-  `AION_PET=0` — hide the sextant pet panel (`--pet <name>` renames it); the surface needs ≥ 100×30 cells
-  and truecolor — below that, or on a pipe, `aion` opens the classic pi-tui chat
+- `AION_TUI=sextant|classic` — force the TUI surface (#44; sextant still needs a TTY of at least 40×12,
+  `--classic` wins); `AION_THEME=night|ember|contrast` — the sextant palette at boot (`/theme` switches it
+  live); `AION_PET=0` — hide the sextant pet panel (`--pet <name>` renames it); the surface picks itself
+  at ≥ 100×30 cells with truecolor or a 256-color `TERM` — below that, or on a pipe, `aion` opens the
+  classic pi-tui chat
 - Kill switches / budgets: `AION_NO_CHECKPOINTS=1`, `AION_NO_REPOMAP=1`, `AION_REPOMAP_TOKENS`,
   `AION_NO_TOOL_MIDDLEWARE=1`, `AION_TOOL_MIDDLEWARE=1`, `AION_EVAL_CELL=1`
 

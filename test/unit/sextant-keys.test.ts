@@ -601,3 +601,29 @@ test("⌃c with a pending card while running denies the card AND interrupts once
   expect(s.card).toBeNull();
   expect(spy.n).toEqual({ interrupts: 1, exits: 0 });
 });
+
+// ---------- re-verify pass: a modified wheel is a wheel (#43 HIGH) ----------
+
+test("shift/alt/ctrl + wheel (b 68/69, 72/73, 80/81) over a hit zone SCROLLS the panel under the pointer and never clicks it — `/ex` + shift+wheel over the /exit row must not quit; a modified left button never clicks; a plain click still hits", () => {
+  const L = makeLayout(160, 44), s = makeState({ msgScroll: 10 }), spy = spyCtx(L);
+  const log: string[] = [];
+  spy.ctx.hits = [{ rect: L.messages, onClick: () => { log.push("row"); s.input.sgSel = 0; }, key: key("enter") }]; // the suggestion row's zone: select + Enter
+  type(s, spy, "/ex");
+  const x = L.messages.x + 2, y = L.messages.y + 2;
+  for (const b of [68, 72, 80]) press(s, spy, mouse(b, x, y));  // shift / alt / ctrl + wheel-up
+  expect(s.msgScroll).toBe(4);
+  expect(s.stick).toBe(false);
+  for (const b of [69, 73, 81]) press(s, spy, mouse(b, x, y));  // + wheel-down
+  expect(s.msgScroll).toBe(10);
+  expect(log).toEqual([]);                                       // (mutation: raw b === 64/65 test → the zone fires and Enter runs /exit)
+  expect(spy.submits).toEqual([]);
+  expect(spy.n.exits).toBe(0);
+  expect(s.input.text).toBe("/ex");
+  press(s, spy, mouse(69, L.code.x + 2, L.code.y + 2));          // shift+wheel-down over code: that panel scrolls
+  expect(s.code.scroll).toBe(3);
+  for (const b of [4, 8, 16, 36]) press(s, spy, mouse(b, x, y)); // shift/alt/ctrl + left, modified drag: "other"
+  expect(log).toEqual([]);
+  press(s, spy, mouse(0, x, y));                                 // the plain left click hits the zone
+  expect(log).toEqual(["row"]);
+  expect(spy.submits).toEqual(["/exit"]);                        // …and its Enter ran the picked row
+});

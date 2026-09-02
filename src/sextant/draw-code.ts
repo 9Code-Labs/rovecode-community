@@ -91,8 +91,9 @@ export function codeTitle(s: SextantState, theme: Theme, now: number): { title: 
   const title = c.mode === "diff" ? "diff" : "code";
   if (!file) return { title, extra: [] };
   const extra: Seg[] = [[file, st(theme.fg2)]];
-  if (c.diff && c.diff.file === file && (c.diff.add || c.diff.del)) {
-    extra.push(["  ", st(-1)], [c.diff.add ? `+${c.diff.add}` : "", st(theme.ok)], [c.diff.del ? `${c.diff.add ? " " : ""}−${c.diff.del}` : "", st(theme.err)]);
+  if (c.diff && c.diff.file === file) {
+    if (c.diff.add || c.diff.del) extra.push(["  ", st(-1)], [c.diff.add ? `+${c.diff.add}` : "", st(theme.ok)], [c.diff.del ? `${c.diff.add ? " " : ""}−${c.diff.del}` : "", st(theme.err)]);
+    if (c.diff.base === "head") extra.push(["  vs HEAD", st(theme.muted)]); // cumulative hunks, not the one edit that landed
   }
   if (readingThis(s) && c.mode === "code") extra.push([`   ${s.activity.state.toLowerCase()}`, st(theme.accent)]);
   return { title, extra };
