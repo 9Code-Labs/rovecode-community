@@ -23,6 +23,7 @@ import { withLspGate, lspGateNote } from "../coding/lsp.ts";
 import { buildRepoMapChunk } from "../coding/repomap.ts";
 import { anchorEntryId, Checkpoints, MUTATING_KINDS } from "../coding/checkpoints.ts";
 import { createRouter, roleTableFromEnv, type Router } from "../providers/router.ts";
+import { retryOptionsFromEnv, withRetry } from "../providers/retry.ts";
 import { createEvalCellTool } from "../tools/evalcell.ts";
 import { execPolicyApprover } from "../core/execpolicy.ts";
 import { recallTool } from "../memory/recall.ts";
@@ -161,9 +162,11 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   // port #7: provider streams get the non-native tool-call parser (strict-gated passthrough
   // for native turns); injected test streams stay untouched. Kill switch: AION_NO_TOOL_MIDDLEWARE=1
   // port #14: the router wraps OUTERMOST (chain advance re-drives the whole turn).
+  // port #23: same-model retry sits INSIDE the router — backoff retries exhaust on candidate N
+  // before the chain advances (AION_RETRY_MAX / AION_RETRY_BASE_MS; providers/retry.ts header).
   const rawStream = provider ? providerStream(provider) : null;
   const middlewared = rawStream && process.env.AION_NO_TOOL_MIDDLEWARE !== "1" ? withToolCallParsing(rawStream) : rawStream;
-  const stream = opts.stream !== undefined ? opts.stream : middlewared ? router.wrap(middlewared) : null;
+  const stream = opts.stream !== undefined ? opts.stream : middlewared ? router.wrap(withRetry(middlewared, retryOptionsFromEnv())) : null;
   const catalog = new ModelCatalog(); // offline models.dev snapshot (port #6)
 
   // port #8: harvest AGENTS.md / CLAUDE.md / .cursor / copilot instructions

@@ -51,7 +51,7 @@ const server = Bun.serve({
 const ENV_KEYS = [
   "AION_BASE_URL", "AION_API_KEY", "AION_MODEL",
   "AION_MODEL_DEFAULT", "AION_MODEL_SMOL", "AION_MODEL_PLAN", "AION_MODEL_COMMIT", "AION_MODEL_TASK",
-  "AION_NO_TOOL_MIDDLEWARE", "AION_TOOL_MIDDLEWARE", "AION_NO_REPOMAP",
+  "AION_NO_TOOL_MIDDLEWARE", "AION_TOOL_MIDDLEWARE", "AION_NO_REPOMAP", "AION_RETRY_MAX",
 ] as const;
 const savedEnv = new Map<string, string | undefined>();
 const tmpDirs: string[] = [];
@@ -62,6 +62,7 @@ beforeAll(() => {
   process.env.AION_API_KEY = "test-key";
   process.env.AION_MODEL_DEFAULT = "custom/alpha, custom/beta";
   process.env.AION_NO_REPOMAP = "1"; // hermetic + fast buildDef in tmp cwds
+  process.env.AION_RETRY_MAX = "0"; // port #23: same-model retry off — these tests pin chain advance alone (retry-wiring.test.ts covers the interplay)
 });
 
 afterAll(() => {

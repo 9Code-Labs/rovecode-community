@@ -91,6 +91,18 @@ truncation-marker strings, and the per-line cap follow opencode (MIT, credited i
 module header); the ripgrep dependency both upstreams share is replaced by a
 pure-TypeScript matcher over a `git ls-files` enumeration.
 
+### Port #23 — same-model retry with backoff
+`src/providers/retry.ts` ports the retryWithBackoff loop shape and retry policy from
+`packages/core/src/utils/retry.ts` (attempt/doubling loop :296-310, :494-501, :517-524; defaults
+:20, :42-47; retryable set and the explicit no-retry-on-400 rule :193-199, :49-62, :174-189; abort
+passthrough :337-340; server-suggested delay as a floor :472-476), the abortable delay from
+`utils/delay.ts:22-48`, and the "suggested delay beyond the cap is terminal" rule from
+`utils/googleQuotaErrors.ts:120, :286-289`. Deviations: full jitter (AWS-style) instead of
++-30%/+20% jitter, a per-invocation total-time budget, the Retry-After header (RFC 9110 s10.2.3)
+as the delay source, and 499 not retried. Snapshot
+`research/source_snapshots/google-gemini-gemini-cli` @ 0bd1d43. Classification is shared with
+the port #14 router (`classifyStreamError`).
+
 ## Zed Industries — agent-client-protocol (Apache-2.0)
 
 - **ACP endpoint (port #15)** — `src/acp/server.ts` speaks ACP v1 via the official SDK

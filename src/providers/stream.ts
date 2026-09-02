@@ -4,13 +4,15 @@
  *  - OpenAI-compatible /chat/completions (JSON + SSE streaming), with tools
  *  - Anthropic /messages (x-api-key), with tools
  *  - Any custom base URL + key (AION_BASE_URL/AION_API_KEY or explicit config)
- *  Model catalogs are FETCHED from the endpoint (/v1/models) — never hard-coded (pi pattern). */
+ *  Model catalogs are FETCHED from the endpoint (/v1/models) — never hard-coded (pi pattern).
+ *  Error-turn shaping (abort vs error; HTTP status + Retry-After side-channel, port #23) lives in stream-errors.ts. */
 
 import type { StreamFn, Message, AssistantTurn, StreamEvent, ModelRef, StopReason } from "../core/types.ts";
 import { partsText } from "../core/loop.ts";
 import { applyAnthropicCacheBoundaries } from "./cache.ts";
 import { normalizeUsage } from "../core/usage.ts";
 import { loadCredentials } from "./auth.ts";
+import { failedTurn, httpErrorTurn } from "./stream-errors.ts";
 
 export interface ProviderConfig {
   id: string;             // provider id, e.g. "kaesra"
@@ -53,13 +55,6 @@ function authHeaders(cfg: ProviderConfig): Record<string, string> {
     : { authorization: `Bearer ${cfg.apiKey}` };
 }
 
-/** Turn for a thrown fetch/stream error. options.signal abort (port #21) → honest "aborted" keeping SSE text already
- *  streamed (tool-call fragments dropped — truncated JSON); other errors keep parts empty (a router re-drive would dup). */
-function failedTurn(e: unknown, signal: AbortSignal | undefined, salvaged = ""): AssistantTurn {
-  if (signal?.aborted) return { parts: salvaged ? [{ kind: "text", text: salvaged }] : [], stopReason: "aborted", usage: { input: 0, output: 0 } };
-  return { parts: [], stopReason: "error", usage: { input: 0, output: 0 }, error: e instanceof Error ? e.message : String(e) };
-}
-
 // ---------- factories ----------
 
 export function providerStream(cfg: ProviderConfig): StreamFn {
@@ -83,7 +78,7 @@ export function openaiCompatStream(opts: { baseUrl: string; apiKey: string }): S
         signal: options?.signal,
       });
       if (!res.ok) {
-        turn = { parts: [], stopReason: "error", usage: { input: 0, output: 0 }, error: `HTTP ${res.status}: ${(await res.text()).slice(0, 300)}` };
+        turn = await httpErrorTurn(res); // status + Retry-After recorded for withRetry (stream-errors.ts)
       } else {
         turn = parseOpenAiResponse(await res.json());
       }
@@ -116,7 +111,7 @@ export function openaiCompatStreaming(opts: { baseUrl: string; apiKey: string })
         signal: options?.signal,
       });
       if (!res.ok || !res.body) {
-        turn = { parts: [], stopReason: "error", usage: { input: 0, output: 0 }, error: `HTTP ${res.status}: ${(await res.text()).slice(0, 300)}` };
+        turn = await httpErrorTurn(res); // status + Retry-After recorded for withRetry (stream-errors.ts)
         yield { type: "turn", turn };
         return;
       }
@@ -183,7 +178,7 @@ export function anthropicStream(opts: { baseUrl: string; apiKey: string }): Stre
         signal: options?.signal,
       });
       if (!res.ok) {
-        turn = { parts: [], stopReason: "error", usage: { input: 0, output: 0 }, error: `HTTP ${res.status}: ${(await res.text()).slice(0, 300)}` };
+        turn = await httpErrorTurn(res); // status + Retry-After recorded for withRetry (stream-errors.ts)
       } else {
         turn = parseAnthropicResponse(await res.json());
       }
