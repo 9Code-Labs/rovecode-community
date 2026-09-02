@@ -409,7 +409,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   if (bootId !== undefined) { replayHistory(); refreshUsage(); }
   renderer.addSystemNote(
     `aion — session in ${rt.cwd}\nmode: ${state.yolo ? "yolo" : "gated"} · /help for commands` +
-    (rt.stream ? "" : "\nno provider configured — set AION_BASE_URL/AION_API_KEY or a <NAME>_API_KEY"),
+    (rt.stream ? "" : "\nno provider configured — run `aion auth set <provider>`, or set AION_BASE_URL/AION_API_KEY or a <NAME>_API_KEY"),
   );
   if (bootWarn) renderer.addSystemNote(bootWarn, "warn");
   pushStatus();

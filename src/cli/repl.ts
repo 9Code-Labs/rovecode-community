@@ -38,7 +38,7 @@ export async function runRepl( /* eslint-disable-line complexity */
   let stream = rt.stream ?? undefined;
   if (!cfgProvider) {
     const rl0 = readline.createInterface({ input: process.stdin, output: process.stdout });
-    console.log("no provider configured (set AION_BASE_URL/AION_API_KEY or a <NAME>_API_KEY env).");
+    console.log("no provider configured (run `aion auth set <provider>`, or set AION_BASE_URL/AION_API_KEY or a <NAME>_API_KEY env).");
     const base = await ask(rl0, "base url [https://api.kaesra.tech/v1]: ");
     const key = await ask(rl0, "api key: ");
     rl0.close();
