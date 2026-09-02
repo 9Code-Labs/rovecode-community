@@ -83,6 +83,14 @@ describe("sextant engine: fuzzy / wrap / formatters (prototype output pinned)", 
     expect(wrap("one  two", 5)).toEqual(["one ", "two"]);
     expect(wrap("exact fit!", 10)).toEqual(["exact fit!"]);
   });
+  it("wrap: width ≤ 0 is clamped to 1 — the prototype's hard-split loop never advanced there (returns, equals width 1)", () => {
+    expect(wrap("abc", 0)).toEqual(wrap("abc", 1));
+    expect(wrap("abc", 1)).toEqual(["a", "b", "c"]);
+    expect(wrap("abc", -5)).toEqual(["a", "b", "c"]);
+    expect(wrap("a b", 0)).toEqual(["a", "b"]);
+    expect(wrap("", 0)).toEqual([""]);
+    expect(wrap("x\nyz", 0)).toEqual(["x", "y", "z"]);
+  }, 2000);
   it("fmtClock / fmtDur / fmtK", () => {
     expect([0, 999, 1000, 59999, 60000, 61050, 3599999, -5, 1234567].map(fmtClock)).toEqual(["00:00.0", "00:01.0", "00:01.0", "00:60.0", "01:00.0", "01:01.0", "59:60.0", "00:00.0", "20:34.6"]);
     expect([0, 999, 999.4, 999.6, 1000, 1500, 12345].map(fmtDur)).toEqual(["0ms", "999ms", "999ms", "1000ms", "1.0s", "1.5s", "12.3s"]);

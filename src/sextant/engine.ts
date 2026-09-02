@@ -205,6 +205,7 @@ export function fuzzy(q: string, s: string): FuzzyMatch | null {
 
 /** greedy word wrap per paragraph (\n); a word longer than width is hard-split (app.js wrap) */
 export function wrap(text: string, width: number): string[] {
+  width = Math.max(1, width); // width ≤ 0 never advanced the hard-split loop below (prototype quirk)
   const out: string[] = [];
   for (const para of String(text).split("\n")) {
     let line = "";

@@ -84,6 +84,20 @@ describe("sextant input: SGR mouse", () => {
     expect(mouseKind(mouse(0, false))).toBe("release");
     expect(mouseKind(mouse(64, false))).toBe("release");
   });
+
+  it("mouseKind masks the modifier bits: shift/meta/ctrl + wheel still scrolls (never clicks); a modified button is 'other'", () => {
+    for (const b of [64, 68, 72, 80, 84, 92]) expect(mouseKind(mouse(b)), `b=${b}`).toBe("wheel-up");     // +4 shift, +8 meta, +16 ctrl
+    for (const b of [65, 69, 73, 81, 85, 93]) expect(mouseKind(mouse(b)), `b=${b}`).toBe("wheel-down");
+    expect(mouseKind(mouse(0))).toBe("click");
+    expect(mouseKind(mouse(32))).toBe("drag");
+    expect(mouseKind(mouse(4))).toBe("other");   // shift+left: a modified press never hits a zone
+    expect(mouseKind(mouse(8))).toBe("other");   // meta+left
+    expect(mouseKind(mouse(16))).toBe("other");  // ctrl+left
+    expect(mouseKind(mouse(36))).toBe("other");  // shift+drag
+    expect(mouseKind(mouse(6))).toBe("other");   // shift+right
+    expect(mouseKind(mouse(68, false))).toBe("release");
+    expect(mouseKind(ev("\x1b[<68;3;3M")[0] as MouseEvent)).toBe("wheel-up"); // through the parser too
+  });
 });
 
 describe("sextant input: chunk boundaries", () => {

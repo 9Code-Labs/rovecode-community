@@ -3,8 +3,10 @@
    events and the frame interval; this module only turns a cell buffer into the minimal byte stream
    that repaints what changed. Additions over the prototype: truecolor → xterm-256 quantization,
    East-Asian width measurement (a width-2 glyph occupies two cells; a later write over either half
-   breaks the glyph into spaces so borders stay put), and control characters never reach a cell
-   (toText()/flush cannot leak stray escape bytes). */
+   breaks the glyph into spaces so borders stay put), zero-width code points (combining marks, VS16,
+   ZWJ and the glyph it joins) ride on the cell before them so the terminal cursor never ends left of
+   the buffer, frame glyphs measure 1 cell even under ambiguousAsWide, and control characters never
+   reach a cell (toText()/flush cannot leak stray escape bytes). */
 
 import { eastAsianWidth } from "get-east-asian-width";
 import { hex } from "./theme.ts";
@@ -21,28 +23,56 @@ export interface Cursor { x: number; y: number }
 export interface ScreenOptions {
   /** emit 38;2/48;2 truecolor SGR (default true); false quantizes to the xterm 256 cube (38;5/48;5) */
   truecolor?: boolean;
-  /** count East-Asian-ambiguous code points (box drawing, ◆ …) as 2 cells; default false */
+  /** count East-Asian-ambiguous text (◆, ¡ …) as 2 cells; default false. Frame glyphs (box drawing,
+   *  block elements, …) stay 1 cell either way — the option measures content, never the frame */
   ambiguousAsWide?: boolean;
 }
-/** one buffer cell for tests/panels: width 2 = a wide glyph, 0 = the continuation half of one */
+/** one buffer cell for tests/panels: width 2 = a wide glyph, 0 = the continuation half of one;
+ *  ch holds the glyph plus any zero-width code points that joined it (e + U+0301, ZWJ sequences) */
 export interface Cell { ch: string; fg: number; bg: number; a: number; width: number }
 
 /* ------------------------------------------------------------ width */
 
-/** display width of one code point (1 or 2) via get-east-asian-width; no wide/ambiguous code point exists below U+1100/U+00A1 */
-export function charWidth(cp: number, ambiguousAsWide = false): 1 | 2 {
-  if (cp < 0x80 || (!ambiguousAsWide && cp < 0x1100)) return 1;
+/** zero-width code points join the glyph before them: combining marks (Mn/Me), format characters
+ *  (Cf — ZWSP/ZWNJ/ZWJ U+200B–D, BOM, tags…) and variation selectors U+FE00–0F. Nothing below
+ *  U+0300 qualifies (U+00AD soft hyphen stays 1 as in wcwidth), which keeps Latin text off the regex. */
+const ZERO_WIDTH_RE = /^[\p{Mn}\p{Me}\p{Cf}\u200B-\u200D\uFE00-\uFE0F]$/u;
+const isZeroWidth = (cp: number): boolean => cp >= 0x300 && ZERO_WIDTH_RE.test(String.fromCodePoint(cp));
+/** Box Drawing + Block Elements (U+2500–259F) and the ellipsis: a frame is 1 cell whatever ambiguousAsWide says */
+const isFrameGlyph = (cp: number): boolean => (cp >= 0x2500 && cp < 0x25a0) || cp === 0x2026;
+const ZWJ = 0x200d;
+const CONTROL_RE = /[\x00-\x1f\x7f-\x9f]/g;
+
+/** display width of one code point: 0 (joins the previous glyph), else 1 or 2 via get-east-asian-width;
+ *  no wide/ambiguous code point exists below U+1100/U+00A1 */
+export function charWidth(cp: number, ambiguousAsWide = false): 0 | 1 | 2 {
+  if (cp < 0x80) return 1;
+  if (isZeroWidth(cp)) return 0;
+  if (ambiguousAsWide ? isFrameGlyph(cp) : cp < 0x1100) return 1;
   return eastAsianWidth(cp, { ambiguousAsWide });
+}
+
+/** a string as cells, [text, width] per glyph: zero-width code points — and the code point a ZWJ
+ *  joins — ride on the glyph before them; a leading one has nothing to join and is dropped */
+export function* glyphs(s: string, ambiguousAsWide = false): Generator<[string, 1 | 2], void> {
+  let cur = "", cw: 1 | 2 = 1, join = false;
+  for (const c of s) {
+    const cp = c.codePointAt(0)!;
+    const w = charWidth(cp, ambiguousAsWide);
+    if (cur && (w === 0 || (join && cp >= 0x80))) { cur += c; join = cp === ZWJ; continue; }
+    if (w === 0) continue;
+    if (cur) yield [cur, cw];
+    cur = c; cw = w; join = false;
+  }
+  if (cur) yield [cur, cw];
 }
 
 /** display width of a string in cells (control characters count as the space they become) */
 export function strWidth(s: string, ambiguousAsWide = false): number {
   let w = 0;
-  for (const c of s) w += charWidth(c.codePointAt(0)!, ambiguousAsWide);
+  for (const [, cw] of glyphs(s, ambiguousAsWide)) w += cw;
   return w;
 }
-
-const isControl = (cp: number): boolean => cp < 0x20 || (cp >= 0x7f && cp < 0xa0);
 
 /* ------------------------------------------------------------ colors */
 
@@ -150,10 +180,9 @@ export class Screen implements ScreenLike {
   /** the longest prefix of s that fits in w cells */
   private head(s: string, w: number): string {
     let out = "", used = 0;
-    for (const c of s) {
-      const cw = charWidth(c.codePointAt(0)!, this.ambiguousAsWide);
+    for (const [g, cw] of glyphs(s, this.ambiguousAsWide)) {
       if (used + cw > w) break;
-      out += c; used += cw;
+      out += g; used += cw;
     }
     return out;
   }
@@ -164,13 +193,10 @@ export class Screen implements ScreenLike {
     const fg = st ? st.fg : -1, bg = st ? st.bg : -1, a = st ? st.a : 0;
     let cx = x;
     const end = Math.min(this.w, x + maxW);
-    for (let c of str) {
+    for (const [g, cw] of glyphs(str.replace(CONTROL_RE, " "), this.ambiguousAsWide)) {
       if (cx >= end) break;
-      let cp = c.codePointAt(0)!;
-      if (isControl(cp)) { c = " "; cp = 0x20; }
-      const cw = charWidth(cp, this.ambiguousAsWide);
       if (cw === 2 && cx + 2 > end) break; // a wide glyph that does not fit is dropped, never half-drawn
-      if (cx >= 0) this.set(y * this.w + cx, c, cw, fg, bg, a);
+      if (cx >= 0) this.set(y * this.w + cx, g, cw, fg, bg, a);
       cx += cw;
     }
     return cx;
@@ -196,10 +222,9 @@ export class Screen implements ScreenLike {
 
   fill(x: number, y: number, w: number, h: number, ch: string, st?: Style): void {
     const fg = st ? st.fg : -1, bg = st ? st.bg : -1, a = st ? st.a : 0;
-    let cp = ch.codePointAt(0) ?? 0x20;
-    let g = String.fromCodePoint(cp);
-    if (isControl(cp)) { g = " "; cp = 0x20; }
-    const cw = charWidth(cp, this.ambiguousAsWide);
+    let cp = ch.replace(CONTROL_RE, " ").codePointAt(0) ?? 0x20;
+    if (isZeroWidth(cp)) cp = 0x20; // a lone zero-width glyph has nothing to join (and a 0-cell step would never advance)
+    const g = String.fromCodePoint(cp), cw = charWidth(cp, this.ambiguousAsWide) || 1;
     for (let yy = y; yy < y + h; yy++) {
       if (yy < 0 || yy >= this.h) continue;
       for (let xx = x; xx < x + w; xx += cw) {

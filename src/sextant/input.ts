@@ -3,7 +3,13 @@
    next chunk) belongs to the renderer (#44). Additions over the prototype: bracketed paste arrives
    as ONE event (a paste split across chunks waits in `rest`), an incomplete control sequence at the
    end of a chunk is carried instead of dropped, and mouseKind() encodes app.js's onMouse rules
-   (releases ignored, 64/65 = wheel, only the left button — b&3 = 0 — clicks or drags). */
+   (releases ignored, 64/65 = wheel under any modifier, only the plain left button — b&3 = 0 and no
+   modifier bits — clicks or drags).
+   Renderer notes (#44): a chunk ending in a lone ESC is ambiguous — hold it ~20 ms before parsing,
+   since a chunk boundary right after ESC turns the next sequence into typed keys; decode stdin as
+   utf8 (a surrogate pair can split across chunks, so never decode chunks independently); OSC/DCS
+   replies are not recognized here, so the renderer must not send OSC queries — a reply would arrive
+   as typed text. */
 
 import type { InputEvent, KeyEvent, MouseEvent } from "./types.ts";
 
@@ -89,12 +95,15 @@ export function parseInput(chunk: string, carry = ""): ParseResult {
 
 export type MouseKind = "click" | "drag" | "wheel-up" | "wheel-down" | "release" | "other";
 
-/** app.js onMouse rules: releases do nothing, 64/65 scroll, only the left button (b&3 = 0) clicks or drags */
+/** app.js onMouse rules: releases do nothing, 64/65 scroll — with the modifier bits (4 shift, 8 meta,
+ *  16 ctrl) masked off first, so shift+wheel over a hit zone scrolls and never clicks it — and only the
+ *  plain left button (b&3 = 0, no modifiers) clicks or drags */
 export function mouseKind(e: MouseEvent): MouseKind {
   if (!e.press) return "release";
-  if (e.b === 64) return "wheel-up";
-  if (e.b === 65) return "wheel-down";
-  if ((e.b & 3) !== 0) return "other";
+  const button = e.b & ~28;
+  if (button === 64) return "wheel-up";
+  if (button === 65) return "wheel-down";
+  if ((e.b & 31) !== 0) return "other"; // a non-left (b&3) or modified (b&28) button never clicks or drags
   return e.b & 32 ? "drag" : "click";
 }
 

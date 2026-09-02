@@ -7,7 +7,7 @@ import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import xterm from "@xterm/headless";
-import { CSI, Screen, charWidth, color256, quantize256, sgr, strWidth } from "../../src/sextant/screen.ts";
+import { CSI, Screen, color256, quantize256, sgr, strWidth } from "../../src/sextant/screen.ts";
 import { buildTheme, st } from "../../src/sextant/theme.ts";
 import { ATTR, THEME_ORDER, type ScreenLike } from "../../src/sextant/types.ts";
 
@@ -239,22 +239,7 @@ describe("sextant screen: width handling", () => {
     expect(writes[0]).not.toContain("字");
   });
 
-  it("ambiguousAsWide is opt-in: box drawing and ◆ are one cell by default, two when asked", () => {
-    expect(charWidth("─".codePointAt(0)!)).toBe(1);
-    expect(charWidth("─".codePointAt(0)!, true)).toBe(2);
-    expect(charWidth("◆".codePointAt(0)!)).toBe(1);
-    expect(charWidth("字".codePointAt(0)!)).toBe(2);
-    expect(charWidth("😀".codePointAt(0)!)).toBe(2); // U+1F600 is East Asian Wide
-    expect(charWidth("🌩".codePointAt(0)!)).toBe(1); // U+1F329 is Neutral (text presentation) — one cell
-    expect(strWidth("◆ sextant")).toBe(9);
-    expect(strWidth("字字")).toBe(4);
-    const wide = make(40, 12, { ambiguousAsWide: true });
-    wide.scr.begin(-1); wide.scr.put(0, 0, "─", st(C.fg));
-    expect(wide.scr.cellAt(0, 0)!.width).toBe(2);
-    const narrow = make(40, 12);
-    narrow.scr.begin(-1); narrow.scr.put(0, 0, "─", st(C.fg));
-    expect(narrow.scr.cellAt(0, 0)!.width).toBe(1);
-  });
+  // ambiguousAsWide + zero-width code points: see sextant-screen-width.test.ts
 
   it("clip() measures in cells: ellipsis on overflow, exact fit untouched, wide-aware prefix", () => {
     const { scr } = make(40, 12);
