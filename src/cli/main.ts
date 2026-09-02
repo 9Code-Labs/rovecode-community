@@ -8,6 +8,7 @@ import { readTool, editTool, writeTool, bashTool } from "../coding/hashline.ts";
 import { globTool, grepTool, lsTool } from "../coding/files.ts";
 import { webFetchTool } from "../tools/webfetch.ts";
 import { todoTools } from "../tools/todo.ts";
+import { askUserTool } from "../tools/ask-user.ts";
 import { mockStream, textTurn, providerStream, openaiCompatStreaming, resolveProvider, listBuiltinProviders } from "../providers/stream.ts";
 import { saveCredential, removeCredential, listProviders, keyNameFor, credentialsPath, readSecret } from "../providers/auth.ts";
 import { runGauntlet, reportResults, providerPreflight, basicTasks, codingTasks, failureTasks, adversarialTasks } from "../eval/gauntlet.ts";
@@ -19,6 +20,7 @@ import { bootRuntime } from "./runtime.ts";
 import { SandboxConfigError } from "../core/sandbox-config.ts";
 import { runRepl } from "./repl.ts";
 import { runTui } from "../tui/app.ts";
+import { expandSlashPrompt } from "../tui/commands.ts";
 import { parseCli } from "./dispatch.ts";
 import { createOutputSink, parseOutputMode, runPromptWords } from "./output.ts";
 import { join } from "node:path";
@@ -118,6 +120,7 @@ function cmdTools(): void {
   registry.register(readTool, editTool, writeTool, bashTool, globTool, grepTool, lsTool);
   registry.register(webFetchTool); // port #31
   registry.register(...todoTools(join(process.cwd(), ".aion", "sessions"))); // port #32: listing only — the root is never touched here
+  registry.register(askUserTool(() => undefined)); // port #33: listing only — no asker is bound here
   for (const t of registry.list()) {
     console.log(`${t.schema.name.padEnd(8)} ${t.kind.padEnd(8)} sequential=${t.sequential !== false}`);
     console.log(`         ${t.schema.description}`);
@@ -133,6 +136,16 @@ commands:
   aion "prompt"             one-shot task (same as run)
   aion smoke-tui            render check: full pipeline into an 80x24 terminal emulator (dev-only)
   aion run "<prompt>"       run an agent task (--yolo allows all tools; mock provider only if no provider env set)
+                            "/name args" expands a custom command (.aion/commands/<name>.md, else ~/.aion/commands)
+                            the way the TUI does; an unknown /name is sent verbatim; model:/mode: frontmatter is
+                            TUI-only and not applied headlessly
+    --output <text|json|ndjson>  text (default): progress + the final answer on stdout
+                            json: exactly ONE result object on stdout {status, summary, sessionId,
+                            model:{provider,model}, origin (served model|null), usage:{input,output,cacheRead,
+                            cacheWrite}, costUsd (null when unpriced), toolCalls:[{tool,ok,ms?}], durationMs, exitCode}
+                            ndjson: one JSON line per RunEvent, then a final {type:"result"} line
+                            json/ndjson: stdout carries only JSON, progress goes to stderr
+                            exit codes: 0 done · 1 error/budget · 2 usage/startup error · 130 aborted (Ctrl-C)
   aion bench                run cross-harness micro-benchmarks (edits, sessions)
   aion gauntlet             run the adversarial evaluation suite
   aion tools                list registered tools
@@ -156,6 +169,12 @@ env:
   AION_YOLO=1     allow all tool actions
   AION_SANDBOX    executor rung for bash: direct (default) | wsl | docker; beats .aion/sandbox.json {"rung","dockerImage"}
   AION_SANDBOX_IMAGE  image for the docker rung (default debian:stable-slim; must contain bash)
+  AION_RETRY_MAX  same-model retries after a 429/5xx/transport failure (default 3; 0 = off)
+  AION_RETRY_BASE_MS  first backoff cap in ms (default 2000; exponential, full jitter, Retry-After honored)
+  AION_WEBFETCH_TIMEOUT_MS  web_fetch request timeout in ms (default 30000)
+  AION_WEBFETCH_ALLOW_PRIVATE=1  let web_fetch reach loopback/private hosts (SSRF guard escape for local dev)
+  AION_COMPACTION  history compaction strategy: head-summarize (default) | keep-window | provider-native
+  AION_TASKS_MAX  concurrent background tasks (default 3; further task starts queue FIFO)
 providers: kaesra openai anthropic deepseek groq openrouter ollama lmstudio
             together mistral cerebras fireworks perplexity xai moondream vllm
             (aion auth set <name>, or set <NAME>_API_KEY — stored creds beat env;
@@ -236,7 +255,8 @@ if (cmd === "" || cmd === "chat" || cmd === "repl") {
   else await runTui({ yolo: cli.yolo, sessionId: resumeId });
 } else if (known.has(cmd)) {
   switch (cmd) {
-    case "run": await cmdRun(runPromptWords(cli, process.argv).join(" ") || "hello"); break; // port #35: drops a post-command --output value
+    // port #35: runPromptWords drops a post-command --output value; port #30: a leading /name expands a custom command
+    case "run": await cmdRun(expandSlashPrompt(runPromptWords(cli, process.argv).join(" ") || "hello", process.cwd())); break;
     case "gauntlet": case "eval": await cmdGauntlet(); break;
     case "bench": await cmdBench(); break;
     case "tools": cmdTools(); break;
@@ -272,12 +292,12 @@ if (cmd === "" || cmd === "chat" || cmd === "repl") {
       const { startServer } = await import("../server/http.ts");
       const port = Number(process.env.AION_PORT ?? "") || undefined;
       const srv = startServer({ ...(port !== undefined ? { port } : {}), yolo: cli.yolo });
-      console.log(`aion server listening on ${srv.url} — POST /session · POST /session/:id/prompt (SSE) · GET /sessions · GET /doc`);
+      console.log(`aion server listening on ${srv.url} — POST /session · POST /session/:id/prompt (SSE) · DELETE /session/:id/prompt · GET /session/:id/tasks · GET /sessions · GET /doc`);
       break;
     }
     default: cmdHelp(); break;
   }
 } else {
-  // bare prompt: one-shot task (port #35: a post-command --output value is not a prompt word)
-  await cmdRun(runPromptWords(cli, process.argv).join(" "));
+  // bare prompt: one-shot task (port #35: a post-command --output value is not a prompt word; port #30: /name expands)
+  await cmdRun(expandSlashPrompt(runPromptWords(cli, process.argv).join(" "), process.cwd()));
 }

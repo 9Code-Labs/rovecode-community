@@ -2,8 +2,9 @@
  *  semantics, clear), validation (each failure precise AND leaves the file
  *  byte-identical), persistence (second instance / session isolation / corrupt
  *  file → empty + note / atomic tmp+rename), policy (auto-runs under the
- *  runtime's default gated rules with NO approver; plan mode denies the write),
- *  registry pins, and the renderTodos golden. */
+ *  runtime's default gated rules with NO approver; plan mode ALLOWS the todo
+ *  write by name while every other write class stays denied), registry pins,
+ *  accept-side bounds, and the renderTodos golden. */
 
 import { test, expect } from "bun:test";
 import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
@@ -314,20 +315,37 @@ test("policy: under the runtime's default gated rules with NO approver, todo_wri
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 
-test("policy: plan mode denies todo_write (memory.write deny, modes.ts) but todo_read stays allowed — pinned as documented", async () => {
+test("policy: plan mode ALLOWS todo_write (the plan's own artifact — modes.ts re-allows `memory.write todo_write` after the memory deny) and todo_read; memory_edit, file.write and shell.exec stay denied, even over yolo's allow-all", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "aion-todo-plan-"));
   try {
     const rt = createRuntime({ cwd, sessionId: "sess-plan", stream: null });
     const cfg = rt.buildCfg(false);
     const c = ctx("sess-plan", cwd);
-    expect((await rt.registry.dispatch(call("todo_write", { todos: items() }), c, undefined, cfg.permissionRules, cfg.approval, () => {})).ok).toBe(true);
     const plan = applyModeRules("plan", cfg.permissionRules);
-    const w = await rt.registry.dispatch(call("todo_write", { todos: [] }), c, undefined, plan, cfg.approval, () => {});
-    expect(w.ok).toBe(false);
-    expect(w.output).toContain("Permission denied");
+    const w = await rt.registry.dispatch(call("todo_write", { todos: items() }), c, undefined, plan, cfg.approval, () => {});
+    expect(w.ok).toBe(true); // mutation: drop the `memory.write todo_write allow` in planModeRules → Permission denied
+    expect(existsSync(join(cwd, ".aion", "sessions", "sess-plan", TODOS_FILE))).toBe(true);
     const r = await rt.registry.dispatch(call("todo_read", {}), c, undefined, plan, cfg.approval, () => {});
     expect(r.ok).toBe(true);
-    expect(dataItems(r)).toEqual(items()); // the denied clear never ran
+    expect(dataItems(r)).toEqual(items());
+    // the re-allow is scoped to the tool NAME: every other write class in plan mode is still denied
+    const denied: ToolCallPart[] = [
+      call("memory_edit", { op: "add", block: "memory", text: "leak" }),  // the same memory.write action, a different resource
+      call("write", { path: join(cwd, "leak.txt"), content: "leak\n" }),   // file.write
+      call("bash", { command: "echo leak" }),                              // shell.exec
+    ];
+    for (const d of denied) {
+      const out = await rt.registry.dispatch(d, c, undefined, plan, cfg.approval, () => {});
+      expect(out.ok, d.tool).toBe(false);
+      expect(out.output, d.tool).toContain("Permission denied");
+    }
+    expect(existsSync(join(cwd, "leak.txt"))).toBe(false);
+    expect(rt.blockStore.renderForPrompt()).not.toContain("leak");
+    // plan rules are appended LAST, so they override yolo's `* * allow` too: write denied, todo allowed
+    const planYolo = applyModeRules("plan", rt.buildCfg(true).permissionRules);
+    expect((await rt.registry.dispatch(call("write", { path: join(cwd, "leak2.txt"), content: "x" }), c, undefined, planYolo, undefined, () => {})).ok).toBe(false);
+    expect((await rt.registry.dispatch(call("todo_write", { todos: [] }), c, undefined, planYolo, undefined, () => {})).ok).toBe(true);
+    expect(loadTodos(join(cwd, ".aion", "sessions", "sess-plan"))).toEqual({ items: [] }); // the plan-mode clear ran
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 
@@ -391,6 +409,33 @@ test("renderTodos golden: mixed list (pinned string), empty list, clipped/collap
   const rows = renderTodos(many).split("\n");
   expect(rows.length).toBe(1 + MAX_TODOS + 1);
   expect(rows.at(-1)).toBe("(+3 more not shown)");
+});
+
+test("bounds accept-side: exactly MAX_TODOS items, a MAX_ID_CHARS id and MAX_CONTENT_CHARS content are all ACCEPTED (the limits are inclusive)", async () => {
+  const h = harness();
+  try {
+    const full: TodoItem[] = Array.from({ length: MAX_TODOS }, (_, i) => ({ id: `t${i}`, content: `step ${i}`, status: "pending" }));
+    expect((await h.run("todo_write", { todos: full })).ok).toBe(true); // mutation: `>=` on the count → rejected
+    expect(dataItems(await h.run("todo_read", {}))).toHaveLength(MAX_TODOS);
+    const edge: TodoItem[] = [{ id: "i".repeat(MAX_ID_CHARS), content: "c".repeat(MAX_CONTENT_CHARS), status: "in_progress" }];
+    const w = await h.run("todo_write", { todos: edge });
+    expect(w.ok).toBe(true); // mutation: `>=` on either length → rejected
+    expect(dataItems(w)).toEqual(edge);
+    expect(validateTodos(edge)).toEqual({ ok: true, items: edge });
+    // and one over each bound is still rejected (the existing BAD table pins the messages)
+    expect(validateTodos([{ id: "i".repeat(MAX_ID_CHARS + 1), content: "x", status: "pending" }]).ok).toBe(false);
+    expect(validateTodos([{ id: "a", content: "c".repeat(MAX_CONTENT_CHARS + 1), status: "pending" }]).ok).toBe(false);
+    expect(validateTodos([...full, { id: "extra", content: "x", status: "pending" }]).ok).toBe(false);
+  } finally { h.done(); }
+});
+
+test("renderTodos flattens an id with an embedded newline to ONE row (validation trims the ends only, so the newline reaches the renderer)", () => {
+  const v = validateTodos([{ id: "a\nb", content: "two-line id", status: "pending" }]);
+  expect(v.ok).toBe(true);
+  if (!v.ok) throw new Error(v.error);
+  expect(v.items[0]!.id).toBe("a\nb");
+  const rows = renderTodos(v.items).split("\n");
+  expect(rows).toEqual(["todos: 1 total · 0 completed · 0 in progress · 1 pending", "[ ] a b: two-line id"]); // mutation: raw t.id → three rows
 });
 
 test("todoCounts / todoStatusLabel: counts by status; label is completed/total, empty for no todos", () => {

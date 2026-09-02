@@ -2,11 +2,56 @@
  *  cap: /sessions + /resume pick or resolve a session to switch to, /rewind (alias /tree)
  *  jumps to an earlier turn for edit-and-resubmit, /new branches back to the session
  *  start. The CALLER owns the swappable store and the rebind routine (switchSession), so
- *  store reads and switches run through the injected ctx — same shape as checkpoints-cmd. */
+ *  store reads and switches run through the injected ctx — same shape as checkpoints-cmd.
+ *  Also home to the pure session helpers the app calls around a switch: transcript replay,
+ *  usage recount, and the `--resume <prefix>` boot resolution (wiring pass, ADR-002 cap). */
 
+import { partsText } from "../core/loop.ts";
 import { listSessions, type SessionStore } from "../core/session.ts";
+import { replayLabel } from "./modes-cmd.ts";
 import type { Renderer } from "./renderer.ts";
 import { randomUUID } from "node:crypto";
+
+/** Re-render the whole transcript from the active session path (boot replay, /resume, /rewind,
+ *  /new, checkpoint restores). Tool calls replay as start+end card pairs; mode switches render
+ *  as a human line (port #20 LOW-3), never the raw <mode_notice> XML the entry carries. */
+export function replayTranscript(renderer: Renderer, store: SessionStore): void {
+  renderer.clearTranscript();
+  for (const m of store.messages()) {
+    const text = partsText(m.parts);
+    if (m.role === "user") { if (text) renderer.addUser(text); }
+    else if (m.role === "assistant") {
+      if (text) { const v = renderer.beginAssistant(); v.append(text); v.done(); }
+      for (const p of m.parts) {
+        if (p.kind === "tool_call") renderer.toolStart(p.id, p.tool, JSON.stringify(p.args).slice(0, 120));
+      }
+    } else if (m.role === "tool") {
+      for (const p of m.parts) {
+        if (p.kind === "tool_result") renderer.toolEnd(p.callId, p.ok, p.output.slice(0, 160).replace(/\n/g, " ⏎ "), 0);
+      }
+    } else if (m.role === "system" && text) renderer.addSystemNote(replayLabel(m, text));
+  }
+}
+
+/** Token usage summed over the active path — the status line's counters. */
+export function usageOf(store: SessionStore): { tokensIn: number; tokensOut: number } {
+  let tokensIn = 0, tokensOut = 0;
+  for (const m of store.messages()) { tokensIn += m.usage?.input ?? 0; tokensOut += m.usage?.output ?? 0; }
+  return { tokensIn, tokensOut };
+}
+
+/** `aion --resume <id>` boot resolution, the /resume rule applied before the runtime exists:
+ *  an exact id or a brand-new id passes through, a UNIQUE prefix resolves, an AMBIGUOUS prefix
+ *  must not silently pick one — start fresh (id undefined) and say so in `warn`. */
+export function resolveBootSession(sessionsDir: string, id: string | undefined): { id: string | undefined; warn?: string } {
+  if (id === undefined) return { id };
+  const known = listSessions(sessionsDir);
+  if (known.some((s) => s.id === id)) return { id };
+  const pre = known.filter((s) => s.id.startsWith(id));
+  if (pre.length === 1) return { id: pre[0]!.id };
+  if (pre.length > 1) return { id: undefined, warn: `"${id}" matches ${pre.length} sessions — started fresh; use /resume to pick one` };
+  return { id };
+}
 
 export interface SessionCmdCtx {
   renderer: Renderer;

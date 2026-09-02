@@ -39,6 +39,8 @@ reinstall to update).
 aion                        # TUI chat (default surface; --plain = readline REPL)
 aion "fix the failing test" # one-shot task
 aion run "<prompt>" --yolo  # one-shot, all tool approvals granted
+aion run "<prompt>" --output json    # ONE result object on stdout (ndjson: one line per RunEvent + a result line)
+aion run "/review src/x.ts" # a leading /name expands .aion/commands/<name>.md (custom slash command) headlessly
 aion gauntlet               # adversarial eval suite (offline, deterministic, 10 tasks)
 aion bench                  # cross-harness micro-benchmarks
 aion tools                  # registered tool listing
@@ -75,7 +77,35 @@ AION_MODEL_DEFAULT=prov/a,prov/b     # role fallback chains (DEFAULT SMOL PLAN C
 ```
 
 TUI slash commands: `/help /status /cost /model /yolo /plan /act /rewind /sessions /resume /new
-/checkpoints /restore /skills /memory /exit`.
+/checkpoints /restore /skills /memory /export /todos /tasks /exit`, plus one `/name` per custom command
+file in `.aion/commands/` (project) or `~/.aion/commands/` (user scope).
+
+## Features beyond the 20 ports (wave 3, verified per port in `PORTS.md`)
+
+- **Custom slash commands** (#30) — `.aion/commands/<name>.md` (project shadows `~/.aion/commands/`):
+  optional frontmatter `description:` / `model:` (per-run override, restored after) / `mode: plan|act`
+  (durable switch), body = prompt template with `$ARGUMENTS`, `$1..$9`, `$$`; autocomplete + `/help`
+  list them; a built-in name always wins (boot warning). `aion run "/name args"` expands the same files
+  headlessly (model:/mode: are TUI-only there). Arguments reach the template raw — whitespace runs and
+  pasted newlines survive.
+- **Todo list** (#32) — `todo_write`/`todo_read` keep one `todos.json` per session (whole-list replace,
+  one `in_progress` at a time, bounded); `/todos` renders it as checkboxes and the status bar shows
+  `todos done/total`. Plan mode keeps `todo_write` (the plan's own artifact) while denying every other write.
+- **Background tasks** (#26) — the `task` tool starts child agent sessions as bounded FIFO jobs
+  (`AION_TASKS_MAX`, default 3) through the ONE agent loop; completion notes land on the parent's next
+  turn as steering; `/tasks` lists them, `/tasks cancel <id>|all` cancels; quitting the TUI, `aion serve`
+  `stop()` and `aion acp` shutdown cancel every live child; `GET /session/:id/tasks` over HTTP.
+- **ask_user** (#33) — the model asks a question through a modal overlay (options or free text) on
+  interactive surfaces; headless surfaces fail the tool closed.
+- **web_fetch** (#31) — bounded, SSRF-guarded HTTP fetch (`net.fetch <host>` policy action; prompt by
+  default; `AION_WEBFETCH_TIMEOUT_MS`, `AION_WEBFETCH_ALLOW_PRIVATE=1`).
+- **Output modes** (#35) — `aion run --output text|json|ndjson`: `json` = exactly ONE result object
+  `{status, summary, sessionId, model, origin, usage, costUsd, toolCalls, durationMs, exitCode}` on stdout;
+  `ndjson` = every RunEvent as a JSON line then a final `{type:"result"}` line; stdout is JSON-only
+  (progress → stderr); exit 0 done · 1 error/budget · 2 usage/startup error · 130 aborted.
+- Also landed: first-class `glob`/`grep`/`ls` tools (#22), same-model retry with backoff (#23), diff
+  previews in approval overlays (#24), compaction strategies (#25), per-project sandbox rung (#27),
+  `aion export` (#38), `aion auth` credential onboarding (#37), packaging (#36).
 
 ## What's ported (the 20 landed ports)
 
@@ -143,8 +173,29 @@ Defaults < project config chunks (harvested, capped) < env < CLI flags.
 - `.aion/modes.json` — per-mode model config (TUI-scoped; see limitations)
 - `.aion/sandbox.json` — `{"rung": "direct"|"wsl"|"docker", "dockerImage"?: "…"}` selects where `bash` runs (#27);
   `AION_SANDBOX=<rung>` / `AION_SANDBOX_IMAGE=<image>` override it; default `direct`
-- `.aion/` also holds sessions, checkpoints, repo-map cache
-- Permission rules: deny-by-default, last-match wildcard (`file.read/write`, `shell.exec`, `spawn`, `memory.write`, `tool.*`); `--yolo`/`AION_YOLO=1` bypasses prompts but not deny rules in plan mode
+- `.aion/commands/*.md` — custom slash commands (project scope); `~/.aion/commands/*.md` (user scope,
+  `AION_HOME`-aware) is scanned first and shadowed by the project's (#30)
+- `.aion/` also holds sessions (each with its `todos.json`), checkpoints, repo-map cache
+- Permission rules: deny-by-default, last-match wildcard (`file.read/write`, `shell.exec`, `spawn`, `memory.write`, `net.fetch`, `tool.*`); `--yolo`/`AION_YOLO=1` bypasses prompts but not deny rules in plan mode
+- Hooks v2 (#28) is not landed yet — `ExtensionHooks.reviseToolArgs` (below) is the only hook seam today
+
+Environment knobs (`aion help` prints the same list):
+
+- `AION_BASE_URL` / `AION_API_KEY` — any OpenAI-compatible or Anthropic endpoint; always wins over stored and named keys
+- `AION_MODEL` — model id; `AION_MODEL_<ROLE>` — fallback chain per role (DEFAULT SMOL PLAN COMMIT TASK), comma-separated
+  `provider/model`, advancing on 429/5xx (#14)
+- `AION_RETRY_MAX` (default 3; 0 = off) / `AION_RETRY_BASE_MS` (default 2000) — same-model retries on 429/5xx/transport
+  failures with exponential backoff, full jitter and `Retry-After` honored; wired INSIDE the router so retries exhaust
+  before the chain advances (#23); each retry is reported like a router note
+- `AION_WEBFETCH_TIMEOUT_MS` (default 30000) / `AION_WEBFETCH_ALLOW_PRIVATE=1` — `web_fetch` timeout and the SSRF-guard
+  escape for loopback/private hosts (local dev servers) (#31)
+- `AION_COMPACTION` — `head-summarize` (default) | `keep-window` | `provider-native` (#25)
+- `AION_TASKS_MAX` (default 3) — concurrent background tasks; extra `task start`s queue FIFO (#26)
+- `AION_SANDBOX` / `AION_SANDBOX_IMAGE` — executor rung for `bash` and the docker image (#27)
+- `--output text|json|ndjson` (flag, `aion run` only) — output mode (#35); `AION_YOLO=1` — allow all tool actions;
+  `AION_STREAM=sse` — raw SSE adapter; `AION_HOME` — credentials + user-scope commands dir (default `~/.aion`)
+- Kill switches / budgets: `AION_NO_CHECKPOINTS=1`, `AION_NO_REPOMAP=1`, `AION_REPOMAP_TOKENS`,
+  `AION_NO_TOOL_MIDDLEWARE=1`, `AION_TOOL_MIDDLEWARE=1`, `AION_EVAL_CELL=1`
 
 ## Safety model (stacked, honest)
 
@@ -191,6 +242,11 @@ tokens, cache hits, and catalog-priced spend.
   wrapped runtime does; `direct` (the default) is denylist + cwd lock. The executor seam is process-wide:
   `aion serve`/`aion acp` sessions booted from different project dirs share the most recently booted
   session's rung. `aion gauntlet` always runs `direct` (it never builds a runtime).
+- **ACP is the one surface that mixes cwds.** `aion acp` boots a runtime per `session/new` cwd on that
+  process-wide seam: a `session/new` REFUSED because its cwd asks for a rung this machine cannot provide
+  (JSON-RPC error) still leaves the seam holding that unmet rung, so existing sessions' `bash` calls fail
+  with the rung error until a later `session/new` boots successfully. Keep one editor window per project,
+  or every project on the same rung.
 - **Plan/Act modes are TUI-scoped.** `run`/`acp`/`serve` ignore `.aion/modes.json` including
   `defaultMode`.
 - **Server sessions are in-memory.** `aion serve` loses its session routing table on restart

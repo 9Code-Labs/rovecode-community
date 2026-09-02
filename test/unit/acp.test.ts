@@ -477,6 +477,40 @@ test("MED-G3: shutdown() closes every session runtime's MCP manager (stdin-close
   }
 });
 
+test("wiring pass (port #26): shutdown() cancels every session's live background tasks — the parked child's run signal aborts", async () => {
+  const cwd = tmpCwd();
+  try {
+    const childSignals: AbortSignal[] = [];
+    const stream: StreamFn = async function* (_m, messages, options): AsyncGenerator<StreamEvent> {
+      const goal = messages.find((m) => m.role === "user")?.parts.map((p) => (p.kind === "text" ? p.text : "")).join("") ?? "";
+      if (goal.startsWith("PARENT")) {
+        if (!messages.some((m) => m.role === "tool")) { yield { type: "turn", turn: toolTurn([{ id: "bg-1", tool: "task", args: { action: "start", goal: "CHILD hold", label: "held" } }]) }; return; }
+        yield { type: "turn", turn: textTurn("parent done") }; return;
+      }
+      // the child parks until ITS run signal aborts (a cancelled task aborts runChild → agentLoop → this)
+      const sig = options!.signal!;
+      childSignals.push(sig);
+      if (!sig.aborted) await new Promise<void>((r) => sig.addEventListener("abort", () => r(), { once: true }));
+      yield { type: "turn", turn: { parts: [], stopReason: "aborted", usage: { input: 0, output: 0 } } };
+    };
+    const { conn, agent } = connect({ stream, yolo: true }); // yolo: the spawn door is open without a permission round-trip
+    const sessionId = await handshake(conn, cwd);
+    expect((await conn.prompt(textPrompt(sessionId, "PARENT spawn"))).stopReason).toBe("end_turn");
+    await until(() => childSignals.length === 1, 5_000, "child reaches its provider turn");
+    await new Promise((r) => setTimeout(r, 50));
+    expect(childSignals[0]!.aborted).toBe(false); // a normal prompt end leaves the task running
+    await agent.shutdown();
+    // mutation: drop s.rt.tasks.cancelAll() in shutdown() → the child stays parked and this times out
+    await until(() => childSignals[0]!.aborted, 4_000, "child cancelled by shutdown");
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+/** Bounded poll (tasks-wiring idiom): a never-true predicate fails here instead of hanging bun. */
+async function until(pred: () => boolean, ms: number, what: string): Promise<void> {
+  const t0 = Date.now();
+  while (!pred()) { if (Date.now() - t0 > ms) throw new Error(`${what}: not true within ${ms}ms`); await new Promise<void>((r) => setTimeout(r, 10)); }
+}
+
 // ---------- pure translation helpers ----------
 
 test("promptText flattens baseline blocks and marks unsupported ones", () => {

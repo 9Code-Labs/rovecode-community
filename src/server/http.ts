@@ -271,6 +271,7 @@ export function startServer(opts: ServerOptions = {}): AionServer {
       // port #21: abort every in-flight run — the provider fetch and tool
       // subprocesses die now instead of running on after the sockets closed.
       for (const entry of sessions.values()) entry.abort?.abort();
+      for (const { runtime } of sessions.values()) runtime.tasks.cancelAll(); // port #26: background children die with the server, never after it
       // MED-F3: reap MCP children — every POST /session spawns one set via
       // createRuntime; without this an unauthenticated loopback port is an
       // unbounded local spawn primitive that outlives the server.

@@ -112,15 +112,20 @@ test("closing mid-run is clean: the run's finally after renderer.stop() must not
   }
 }, 20_000);
 
-test("slash command /status renders without starting a run", async () => {
+test("slash command /status renders without starting a run — incl. the active sandbox rung + origin (port #27 LOW-1)", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
   const term = new VirtualTerminal(80, 24);
   const renderer = new PiTuiRenderer({ terminal: term, cwd });
+  // hermetic rung: a host AION_SANDBOX would change the line; createRuntime reads env synchronously inside runTui()
+  const savedSandbox = process.env.AION_SANDBOX;
+  delete process.env.AION_SANDBOX;
   const app = runTui({ renderer, stream: mockStream({ turns: [textTurn("x")] }), cwd, yolo: true, exitOnClose: false, model: "m1" });
+  if (savedSandbox !== undefined) process.env.AION_SANDBOX = savedSandbox;
   term.sendInput("/status");
   term.sendInput("\r");
   const screen = await until(term, (s) => s.includes("provider="));
   expect(screen).toContain("model=m1");
+  expect(screen).toContain("sandbox: direct (default)"); // describeSandbox: rung + where it came from
   term.sendInput("\x03");
   await app;
   rmSync(cwd, { recursive: true, force: true });
@@ -402,7 +407,10 @@ test("gated edit: allow once applies exactly the previewed change", async () => 
   const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
   const term = new VirtualTerminal(80, 24);
   const { app, target } = gatedEditApp(cwd, term, "applied.");
-  await until(term, (s) => s.includes("+new-line"));
+  const card = await until(term, (s) => s.includes("+new-line"));
+  expect(card).toContain("+new-line");                  // the diff card was ON SCREEN before consent (port #24 LOW: assert, not just wait)
+  expect(card).toContain("-old-line");
+  expect(card).toContain("allow once");
   term.sendInput("\r");                                 // first item: allow once
   const done = await until(term, (s) => s.includes("applied."));
   expect(done).toContain("applied.");

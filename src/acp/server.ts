@@ -257,6 +257,7 @@ export class AionAcpAgent implements Agent {
   async shutdown(): Promise<void> {
     const closing: Promise<unknown>[] = [];
     for (const s of this.sessions.values()) {
+      s.rt.tasks.cancelAll(); // port #26: background children die with the agent, never after it
       closing.push(s.rt.hooks.close()); // port #29: session_close per session runtime
       if (s.rt.mcp) closing.push(s.rt.mcp.close().catch(() => {}));
     }

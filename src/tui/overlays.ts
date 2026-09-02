@@ -56,10 +56,16 @@ function paintDiff(line: string, idx: number): string {
 /** SelectList value of the "type an answer…" entry — can never collide with an option index. */
 export const FREE_TEXT = "\u0000free-text";
 
+/** SelectList value of the "skip this question" entry: the NON-destructive decline (resolves null →
+ *  the tool reports "user declined to answer"), so a busy run — where Escape means "stop the run" —
+ *  can still be left unanswered without killing it (port #33 critic LOW). Same escape idiom as
+ *  FREE_TEXT: an option index can never look like this. */
+export const SKIP_QUESTION = "\u0000skip-question";
+
 /** Port #33: body of a question overlay — title, the wrapped question (bounded by the terminal),
- *  a spacer, then either the option list (options + the free-text entry) or a one-line Input for
- *  a typed answer, each with a key hint. Keys route to whichever is active; the renderer wires
- *  the list/input callbacks (select, submit, escape) and flips `typing`. */
+ *  a spacer, then either the option list (options + the free-text entry + skip) or a one-line
+ *  Input for a typed answer, each with a key hint. Keys route to whichever is active; the renderer
+ *  wires the list/input callbacks (select, submit, escape) and flips `typing`. */
 export class QuestionCard implements Component {
 	private typing: boolean;
 	readonly input = new Input();
@@ -77,7 +83,7 @@ export class QuestionCard implements Component {
 	handleInput(data: string): void { if (this.typing) this.input.handleInput(data); else this.list.handleInput(data); }
 	invalidate(): void { this.list.invalidate(); this.input.invalidate(); }
 	render(width: number): string[] {
-		const bodyRows = this.typing ? 1 : this.optionCount + (this.freeText ? 1 : 0);
+		const bodyRows = this.typing ? 1 : this.optionCount + (this.freeText ? 1 : 0) + 1; // + the skip entry
 		// physical bound: title, body, hint and some transcript must stay visible
 		const max = Math.max(2, this.rows() - 9 - bodyRows);
 		let lines = wrapTextWithAnsi(this.question, width - 2);

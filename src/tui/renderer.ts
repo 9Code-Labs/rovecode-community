@@ -17,6 +17,8 @@ export interface StatusInfo {
   tokensOut: number;
   /** port #20: plan/act mode indicator (optional — plain surfaces omit it) */
   mode?: "plan" | "act";
+  /** port #32: "todos done/total" for the status bar; omitted when the session has no list */
+  todos?: string;
 }
 
 export interface RendererHooks {

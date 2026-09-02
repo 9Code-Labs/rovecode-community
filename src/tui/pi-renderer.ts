@@ -38,7 +38,7 @@ import type {
 	SlashCommand,
 	StatusInfo,
 } from "./renderer.ts";
-import { ApprovalCard, FREE_TEXT, QuestionCard } from "./overlays.ts";
+import { ApprovalCard, FREE_TEXT, QuestionCard, SKIP_QUESTION } from "./overlays.ts";
 import { aionEditorTheme, aionMarkdownTheme, aionSelectListTheme, pal, st } from "./theme.ts";
 
 /** Tool cards stay single-line: collapse whitespace and clip to ~120 columns. */
@@ -295,6 +295,7 @@ export class PiTuiRenderer implements Renderer {
 		const freeText = q.allowFreeText !== false;
 		const items: SelectItem[] = options.map((label, i) => ({ value: String(i), label }));
 		if (freeText) items.push({ value: FREE_TEXT, label: "type an answer…" });
+		items.push({ value: SKIP_QUESTION, label: "skip this question" }); // non-destructive decline → null; Escape on a busy run still stops the run
 		const list = new SelectList(items, Math.max(1, items.length), aionSelectListTheme);
 		const card = new QuestionCard(q.question, list, options.length, freeText, () => this.terminal.rows, () => this.loader !== null);
 		this.addSystemNote(`question: ${oneLine(q.question)}`, "warn"); // transcript record, like approvals
@@ -316,6 +317,7 @@ export class PiTuiRenderer implements Renderer {
 			const escape = () => { if (this.loader) this.hooks?.onInterrupt(); else finish(null); };
 			list.onCancel = escape;
 			list.onSelect = (item: SelectItem) => {
+				if (item.value === SKIP_QUESTION) { finish(null); return; } // declined: the tool reports "user declined to answer"
 				if (item.value === FREE_TEXT) { card.setTyping(true); tui.requestRender(); return; }
 				const choice = Number(item.value);
 				finish({ choice, label: options[choice] });
@@ -354,15 +356,8 @@ export class PiTuiRenderer implements Renderer {
 				this.loader.setMessage(message);
 				return;
 			}
-			const loader = new CancellableLoader(
-				tui,
-				(s) => pal.accent(s),
-				(s) => st.dim(s),
-				message,
-			);
-			loader.onAbort = () => {
-				this.hooks?.onInterrupt();
-			};
+			const loader = new CancellableLoader(tui, (s) => pal.accent(s), (s) => st.dim(s), message);
+			loader.onAbort = () => { this.hooks?.onInterrupt(); };
 			this.loader = loader;
 			const anchor = this.editor;
 			const idx = anchor ? tui.children.indexOf(anchor) : -1;
@@ -384,7 +379,7 @@ export class PiTuiRenderer implements Renderer {
 		const gate = info.yolo ? "yolo" : "gated";
 		const mode = info.mode ? `${info.mode} · ` : ""; // port #20 mode indicator
 		this.statusText = st.dim(
-			`${mode}${info.provider}/${info.model} · ${gate} · turns ${info.turns} · tokens ${info.tokensIn}/${info.tokensOut}`,
+			`${mode}${info.provider}/${info.model} · ${gate} · turns ${info.turns} · tokens ${info.tokensIn}/${info.tokensOut}${info.todos ? ` · ${info.todos}` : ""}`, // port #32 todo progress
 		);
 		const tui = this.tui;
 		if (!tui || !this.statusLine) return; // applied at start()

@@ -1,21 +1,24 @@
 /** TUI chat app (port #1): wires the ONE agentLoop (ADR-003) into a Renderer.
- *  All vendor contact lives behind Renderer (renderer.ts) — swap-friendly. */
+ *  All vendor contact lives behind Renderer (renderer.ts) — swap-friendly. Slash handlers live
+ *  beside it (ADR-002 cap): info-cmd.ts (/help /status /cost /skills /memory /export /todos
+ *  /tasks), session-cmd.ts (/new /rewind /sessions /resume), checkpoints-cmd.ts, modes-cmd.ts. */
 
-import { agentLoop, SteeringQueue, partsText } from "../core/loop.ts";
+import { agentLoop } from "../core/loop.ts";
 import { resetTurnFailureCount } from "../memory/tools.ts";
 import { createRuntime } from "../cli/runtime.ts";
-import { SandboxConfigError, describeSandbox } from "../core/sandbox-config.ts";
-import { SessionStore, listSessions } from "../core/session.ts";
+import { SandboxConfigError } from "../core/sandbox-config.ts";
+import type { SpawnRunner } from "../core/executor.ts";
+import { SessionStore } from "../core/session.ts";
 import { BlockStore } from "../memory/blocks.ts";
 import { ModelCatalog } from "../providers/catalog.ts";
 import { ModeManager, loadModesConfig, modeFromEntries, type AgentMode } from "../core/modes.ts";
-import { togglePlanAct, applyModeToRun, flushModeSwitch, replayLabel } from "./modes-cmd.ts";
+import { isTerminal, taskNote } from "../core/tasks.ts";
+import { togglePlanAct, applyModeToRun, flushModeSwitch } from "./modes-cmd.ts";
 import { cmdCheckpoints, cmdRestore, type CheckpointCmdCtx } from "./checkpoints-cmd.ts";
-import { cmdRewind, cmdSessions, cmdNew, type SessionCmdCtx } from "./session-cmd.ts";
-import { buildCostNote } from "./cost.ts";
-import { exportSession } from "../cli/export.ts";
+import { cmdRewind, cmdSessions, cmdNew, replayTranscript, usageOf, resolveBootSession, type SessionCmdCtx } from "./session-cmd.ts";
+import { cmdHelp, cmdStatus, cmdCost, cmdSkills, cmdMemory, cmdExport, cmdTodos, cmdTasks, todoLabel, type InfoCmdCtx } from "./info-cmd.ts";
 import { previewDiff } from "../coding/diff.ts";
-import { discoverCommands, commandsForPalette, helpForCommands, dispatchCustomCommand, type CustomCommandCtx } from "./commands.ts";
+import { discoverCommands, commandsForPalette, dispatchCustomCommand, type CustomCommandCtx } from "./commands.ts";
 import type { Renderer, AssistantView, StatusInfo } from "./renderer.ts";
 import { PiTuiRenderer } from "./pi-renderer.ts";
 import type { RunEvent, StreamFn } from "../core/types.ts";
@@ -34,6 +37,10 @@ export interface TuiAppOptions {
   stream?: StreamFn | null;
   /** default true: process.exit(0) when the user quits */
   exitOnClose?: boolean;
+  /** port #27 test seams, threaded into createRuntime: the process runner behind the rung
+   *  probe (never a real wsl.exe/docker in tests) and the platform the probe assumes */
+  spawnRunner?: SpawnRunner;
+  platform?: NodeJS.Platform;
 }
 
 export const TUI_COMMANDS = [
@@ -55,6 +62,8 @@ export const TUI_COMMANDS = [
   { name: "checkpoints", description: "List shadow-git snapshots of this session" },
   { name: "restore", description: "Restore a checkpoint: /restore <ref> [files|conversation|both]" },
   { name: "export", description: "Export this session: /export [--json] [path] [--force]" },
+  { name: "todos", description: "Show this session's todo list (agent-maintained via todo_write)" },
+  { name: "tasks", description: "Background tasks: /tasks [cancel <id>|cancel all]" },
 ];
 
 interface TuiState {
@@ -64,19 +73,9 @@ interface TuiState {
 }
 
 export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
-  // opts.sessionId may be a unique id prefix (aion --resume <id>); resolve it against
-  // the sessions dir. Exact ids and brand-new ids pass through; an AMBIGUOUS prefix
-  // must not silently pick one — start fresh and say so (same rule as /resume).
-  let bootId = opts.sessionId;
-  let bootWarn: string | undefined;
-  if (bootId !== undefined) {
-    const known = listSessions(join(opts.cwd ?? process.cwd(), ".aion", "sessions"));
-    if (!known.some((s) => s.id === bootId)) {
-      const pre = known.filter((s) => s.id.startsWith(bootId!));
-      if (pre.length === 1) bootId = pre[0]!.id;
-      else if (pre.length > 1) { bootWarn = `"${bootId}" matches ${pre.length} sessions — started fresh; use /resume to pick one`; bootId = undefined; }
-    }
-  }
+  // opts.sessionId may be a unique id prefix (aion --resume <id>): resolved by the /resume rule
+  // (session-cmd.ts) — exact/new ids pass, a unique prefix resolves, an ambiguous one starts fresh + warns
+  const boot = resolveBootSession(join(opts.cwd ?? process.cwd(), ".aion", "sessions"), opts.sessionId);
   // opts.stream passes through verbatim: a StreamFn overrides, explicit null forces
   // "no provider", undefined defers to the runtime's env-resolved provider
   // port #27: a sandbox MISCONFIG throws synchronously here (before any side effect) — a clean
@@ -85,7 +84,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   // synchronous until the renderer's input handlers are wired (tests/smoke send input right
   // after calling runTui), so no await may sit above that point.
   const rt = (() => {
-    try { return createRuntime({ cwd: opts.cwd, stream: opts.stream, sessionId: bootId }); }
+    try { return createRuntime({ cwd: opts.cwd, stream: opts.stream, sessionId: boot.id, spawnRunner: opts.spawnRunner, platform: opts.platform }); }
     catch (e) {
       if (e instanceof SandboxConfigError && opts.exitOnClose !== false) { console.error(`error: ${e.message}`); process.exit(2); }
       throw e;
@@ -101,7 +100,10 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   // session-scoped stores are swappable at runtime (/sessions, /rewind-to-root)
   let store = rt.store;
   let blocks = rt.blockStore;
-  const steering = new SteeringQueue();
+  // port #26: the runtime's ONE steering queue — background-task completion notes land on the
+  // next model turn; settled tasks also show in the transcript as they happen (failed → warn)
+  const steering = rt.steering;
+  rt.tasks.subscribe((t) => { if (isTerminal(t.status)) renderer.addSystemNote(taskNote(t), t.status === "failed" ? "warn" : "info"); });
   // port #20: per-mode model slots from .aion/modes.json, restored from session entries
   const modesCfg = loadModesConfig(rt.cwd);
   const modes = new ModeManager(modesCfg, {
@@ -109,8 +111,9 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     model: opts.model ?? process.env.AION_MODEL ?? rt.defaultModel ?? "",
   });
   modes.restore(modeFromEntries(store.messages()) ?? modes.mode);
-  // port #30: custom slash commands — .aion/commands/*.md, project shadows ~/.aion/commands (commands.ts)
-  const custom = discoverCommands(rt.cwd, { reserved: TUI_COMMANDS.map((c) => c.name) });
+  // port #30: custom slash commands — .aion/commands/*.md, project shadows ~/.aion/commands (commands.ts);
+  // LOW-1: /quit is a `case` alias of /exit below, not a TUI_COMMANDS entry — reserve it explicitly
+  const custom = discoverCommands(rt.cwd, { reserved: [...TUI_COMMANDS.map((c) => c.name), "quit"] });
   const state: TuiState = {
     yolo: opts.yolo ?? process.env.AION_YOLO === "1",
     provider: modes.modelFor().provider,
@@ -123,10 +126,14 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   let resolveClosed: () => void = () => {};
   const closedP = new Promise<void>((r) => { resolveClosed = r; });
 
-  const status = (): StatusInfo => ({
-    provider: state.provider, model: state.model, yolo: state.yolo, mode: state.mode,
-    turns: state.turns, tokensIn: state.tokensIn, tokensOut: state.tokensOut,
-  });
+  const status = (): StatusInfo => {
+    const todos = todoLabel(join(sessionsDir, store.id)); // port #32: "todos done/total"; key omitted while the list is empty
+    return {
+      provider: state.provider, model: state.model, yolo: state.yolo, mode: state.mode,
+      turns: state.turns, tokensIn: state.tokensIn, tokensOut: state.tokensOut,
+      ...(todos !== undefined ? { todos } : {}),
+    };
+  };
   const pushStatus = () => renderer.setStatus(status());
 
   const close = () => {
@@ -135,37 +142,16 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     // port #20 MED-2: /plan then quit resumes in plan (append is sync — lands pre-exit)
     flushModeSwitch(modes, store);
     runAbort?.abort(); void run?.return(undefined as never); // abort kills in-flight fetch/tools; return settles the generator
+    rt.tasks.cancelAll(); // port #26: background children die with the surface, never after it
     void rt.mcp?.close().catch(() => {}); // stop MCP child processes/connections
     renderer.stop();
     resolveClosed();
     if (opts.exitOnClose !== false) process.exit(0);
   };
 
-  const refreshUsage = () => {
-    let inTok = 0, outTok = 0;
-    for (const m of store.messages()) { inTok += m.usage?.input ?? 0; outTok += m.usage?.output ?? 0; }
-    state.tokensIn = inTok; state.tokensOut = outTok;
-  };
-
-  /** Re-render the whole transcript from the active session path. */
-  const replayHistory = () => {
-    renderer.clearTranscript();
-    for (const m of store.messages()) {
-      const text = partsText(m.parts);
-      if (m.role === "user") { if (text) renderer.addUser(text); }
-      else if (m.role === "assistant") {
-        if (text) { const v = renderer.beginAssistant(); v.append(text); v.done(); }
-        for (const p of m.parts) {
-          if (p.kind === "tool_call") renderer.toolStart(p.id, p.tool, JSON.stringify(p.args).slice(0, 120));
-        }
-      } else if (m.role === "tool") {
-        for (const p of m.parts) {
-          if (p.kind === "tool_result") renderer.toolEnd(p.callId, p.ok, p.output.slice(0, 160).replace(/\n/g, " ⏎ "), 0);
-        }
-      // port #20 LOW-3: mode switches replay as a human line, not raw <mode_notice> XML
-      } else if (m.role === "system" && text) renderer.addSystemNote(replayLabel(m, text));
-    }
-  };
+  // both read the ACTIVE store live — /sessions and a root /rewind swap it (session-cmd.ts helpers)
+  const refreshUsage = () => { const u = usageOf(store); state.tokensIn = u.tokensIn; state.tokensOut = u.tokensOut; };
+  const replayHistory = () => replayTranscript(renderer, store);
 
   const switchSession = (id: string, announce = true) => {
     flushModeSwitch(modes, store); // port #20 MED-2: don't discard a pending switch on /sessions away
@@ -208,6 +194,13 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     pushStatus,
   };
 
+  // read-only info commands (info-cmd.ts) — store/blocks read live, the status slice is `state` itself
+  const infoCtx: InfoCmdCtx = {
+    renderer, rt, sessionsDir, catalog, state,
+    store: () => store, blocks: () => blocks,
+    commands: { builtin: TUI_COMMANDS, custom: custom.commands },
+  };
+
   // port #30: custom command dispatch context (submit = the plain user-turn path, defined below)
   const cmdCtx: CustomCommandCtx = { renderer, modes, state, pushStatus, submit: (t) => submit(t) };
 
@@ -216,9 +209,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     const arg = rest.join(" ").trim();
     switch (cmd) {
       case "exit": case "quit": close(); return true;
-      case "help":
-        renderer.addSystemNote(TUI_COMMANDS.map((c) => `/${c.name} — ${c.description}`).join("\n") + helpForCommands(custom.commands));
-        return true;
+      case "help": cmdHelp(infoCtx); return true;
       case "yolo":
         state.yolo = !state.yolo;
         renderer.addSystemNote(`mode: ${state.yolo ? "yolo (all tools allowed)" : "gated (asks before writes/exec)"}`);
@@ -232,69 +223,26 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
       case "plan": case "act":
         togglePlanAct(modes, cmd as AgentMode, state, renderer, pushStatus);
         return true;
-      case "checkpoints":
-        void cmdCheckpoints(cpCtx);
-        return true;
-      case "restore":
-        void cmdRestore(cpCtx, arg);
-        return true;
-      case "status": {
-        // port #8: config provenance — dropped/truncated sources must be visible (HIGH-2)
-        const pc = rt.projectContext;
-        const cfgBits = pc.sources.map((s) => s.chars === 0 ? `${s.path} (dropped)` : s.truncated ? `${s.path} (truncated)` : s.path);
-        if (pc.skippedFiles > 0) cfgBits.push(`+${pc.skippedFiles} skipped (file cap)`);
-        renderer.addSystemNote(
-          `provider=${state.provider} model=${state.model} turns=${state.turns} tokens=${state.tokensIn}in/${state.tokensOut}out` +
-          `\nsandbox: ${describeSandbox(rt.sandbox)}` + // port #27: active executor rung + origin
-          `\nconfig: ${cfgBits.length > 0 ? cfgBits.join(", ") : "(none)"}`,
-        );
-        return true;
-      }
-      case "cost": {
-        // port #6 live half: /cost refresh re-fetches models.dev pricing (24h disk cache)
-        if (arg === "refresh") {
-          void catalog.refresh().then((ok) => renderer.addSystemNote(
-            ok ? "model catalog refreshed from models.dev" : "catalog refresh failed — using the offline snapshot",
-            ok ? "info" : "warn",
-          ));
-          return true;
-        }
-        // ports #5+#6: normalized usage (incl. cache traffic) priced per message at its origin model
-        renderer.addSystemNote(buildCostNote(store.messages(), catalog, { provider: state.provider, model: state.model }));
-        return true;
-      }
-      case "skills": {
-        const rows = rt.skillStore.list().map((s) => `${s.name} — ${s.description}`);
-        renderer.addSystemNote(rows.length ? rows.join("\n") : "(no skills installed)");
-        return true;
-      }
-      case "memory":
-        renderer.addSystemNote(blocks.renderForPrompt() || "(empty)");
-        return true;
+      case "checkpoints": void cmdCheckpoints(cpCtx); return true;
+      case "restore": void cmdRestore(cpCtx, arg); return true;
+      case "status": cmdStatus(infoCtx); return true;
+      case "cost": cmdCost(infoCtx, arg); return true;
+      case "skills": cmdSkills(infoCtx); return true;
+      case "memory": cmdMemory(infoCtx); return true;
+      case "todos": cmdTodos(infoCtx); return true; // port #32
+      case "tasks": cmdTasks(infoCtx, arg); return true; // port #26
       case "new": cmdNew(sessCtx); return true;
       case "rewind": case "tree": void cmdRewind(sessCtx); return true;
       case "sessions": void cmdSessions(sessCtx); return true;
       case "resume":
         if (arg) void cmdSessions(sessCtx, arg); else void cmdSessions(sessCtx);
         return true;
-      case "export": {
-        // port #38: write THIS session as markdown (raw JSONL with --json), local only.
-        // Read-only over the store (exportSession re-reads from disk) — no busy gate needed.
-        try {
-          const words = arg.split(/\s+/).filter(Boolean);
-          const res = exportSession(sessionsDir, store.id, {
-            json: words.includes("--json"), force: words.includes("--force"),
-            out: words.filter((w) => !w.startsWith("-")).join(" ") || undefined, cwd: rt.cwd,
-          });
-          renderer.addSystemNote(`exported ${res.format} → ${res.path}`);
-        } catch (e) {
-          renderer.addSystemNote(e instanceof Error ? e.message : String(e), "error");
-        }
-        return true;
-      }
+      case "export": cmdExport(infoCtx, arg); return true;
       default:
-        // port #30: a discovered custom command renders its template and submits it as a user turn
-        if (!dispatchCustomCommand(cmdCtx, custom.commands, cmd ?? "", arg)) renderer.addSystemNote(`unknown command: /${cmd} (try /help)`, "warn");
+        // port #30: a discovered custom command renders its template and submits it as a user turn.
+        // MED-2: it gets the RAW remainder of the line (whitespace runs and pasted newlines intact —
+        // renderCommand trims the ends itself); built-ins keep the collapsed `arg` above.
+        if (!dispatchCustomCommand(cmdCtx, custom.commands, cmd ?? "", text.slice(1 + (cmd ?? "").length))) renderer.addSystemNote(`unknown command: /${cmd} (try /help)`, "warn");
         return true;
     }
   };
@@ -322,8 +270,10 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     const def = rt.buildDef({ provider: cur.provider, model: cur.model });
     applyModeToRun(modes, cfg, def);
     const views = new Map<string, AssistantView>();
+    const toolNames = new Map<string, string>(); // callId → tool (tool_execution_end carries no name)
     let lastView: AssistantView | null = null;
     runAbort = new AbortController();
+    rt.tasks.bindRun(runAbort.signal); // port #26: Esc/quit cancel the background tasks THIS run starts; a normal end leaves them running
     run = agentLoop(def, goal, {}, cfg, {
       stream, registry: rt.registry, store,
       tools: rt.registry.list().map((t) => t.schema),
@@ -338,11 +288,13 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
           if (!v) { v = renderer.beginAssistant(); views.set(ev.messageId, v); lastView?.done(); lastView = v; }
           v.append(ev.delta);
         } else if (ev.type === "tool_execution_start") {
+          toolNames.set(ev.callId, ev.tool);
           renderer.toolStart(ev.callId, ev.tool, JSON.stringify(ev.args).slice(0, 120));
         } else if (ev.type === "tool_execution_update") {
           renderer.toolUpdate(ev.callId, ev.note);
         } else if (ev.type === "tool_execution_end") {
           renderer.toolEnd(ev.callId, ev.ok, ev.output.slice(0, 160).replace(/\n/g, " ⏎ "), ev.durationMs);
+          if (ev.ok && toolNames.get(ev.callId) === "todo_write") pushStatus(); // port #32: the status-bar todo label follows the list
         } else if (ev.type === "tool_call_failed") {
           renderer.toolEnd(ev.callId, false, `${ev.reason}: ${ev.detail}`.slice(0, 160), 0);
         } else if (ev.type === "compaction") {
@@ -387,18 +339,21 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     onExit: close,
   });
   // resumed boot: restore the transcript and usage counters (a bare session open left both blank)
-  if (bootId !== undefined) { replayHistory(); refreshUsage(); }
+  if (boot.id !== undefined) { replayHistory(); refreshUsage(); }
   renderer.addSystemNote(
     `aion — session in ${rt.cwd}\nmode: ${state.yolo ? "yolo" : "gated"} · /help for commands` +
     (rt.stream ? "" : "\nno provider configured — run `aion auth set <provider>`, or set AION_BASE_URL/AION_API_KEY or a <NAME>_API_KEY"),
   );
-  if (bootWarn) renderer.addSystemNote(bootWarn, "warn");
+  if (boot.warn) renderer.addSystemNote(boot.warn, "warn");
   for (const w of custom.warnings) renderer.addSystemNote(w, "warn"); // port #30: skipped/shadowed command files
   pushStatus();
   // port #27: an unavailable configured rung (probe failed) is a clean one-line startup
-  // error — stop the renderer first so the terminal is restored, then exit 2
-  await rt.sandbox.ready.catch((e: unknown) => {
-    if (e instanceof SandboxConfigError && opts.exitOnClose !== false) { renderer.stop(); console.error(`error: ${e.message}`); process.exit(2); }
+  // error — stop the renderer first so the terminal is restored, reap the MCP children
+  // construction spawned (LOW-3, as bootRuntime does), then exit 2 (embedders: rethrow)
+  await rt.sandbox.ready.catch(async (e: unknown) => {
+    renderer.stop();
+    await rt.mcp?.close().catch(() => {});
+    if (e instanceof SandboxConfigError && opts.exitOnClose !== false) { console.error(`error: ${e.message}`); process.exit(2); }
     throw e;
   });
   await closedP;

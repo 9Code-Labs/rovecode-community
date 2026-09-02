@@ -61,6 +61,30 @@ export async function runRepl( /* eslint-disable-line complexity */
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: "aion> " });
 
+  // port #33: `--plain` HAS a human (the y/n/a approvals below prove it) — bind ask_user to the same
+  // readline; headless surfaces leave it unbound and the tool fails closed. Numbered options plus
+  // free text when allowed: a number picks, other text is the typed answer, an empty line declines
+  // (null). Piped stdin is fine — it just consumes the next line. The run's abort resolves null so
+  // an interrupted run never stays parked on the question.
+  rt.setAskUser((q, signal) => new Promise((resolve) => {
+    const options = q.options ?? [];
+    const free = q.allowFreeText !== false;
+    console.log(`\n  question: ${q.question}`);
+    options.forEach((o, i) => console.log(`    ${i + 1}) ${o}`));
+    const hint = [options.length > 0 ? `1-${options.length}` : "", free ? "text" : ""].filter(Boolean).join(" or ");
+    const onAbort = (): void => { resolve(null); };
+    signal.addEventListener("abort", onAbort, { once: true });
+    rl.question(`  answer [${hint}; empty = decline]: `, (line) => {
+      signal.removeEventListener("abort", onAbort);
+      const a = line.trim();
+      const n = Number(a);
+      if (a === "") resolve(null);
+      else if (Number.isInteger(n) && n >= 1 && n <= options.length) resolve({ choice: n - 1, label: options[n - 1] });
+      else if (free) resolve({ text: a });
+      else { console.log("  (not one of the options — declined)"); resolve(null); }
+    });
+  }));
+
   const approval: ApprovalFn = async (req) => {
     const argPreview = JSON.stringify(req.revisedArgs).slice(0, 140);
     console.log(`\n  approval needed: ${req.tool} ${argPreview}`);

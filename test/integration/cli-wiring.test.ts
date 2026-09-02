@@ -1,0 +1,184 @@
+/** Wiring pass through the REAL CLI (Bun.spawn; hermetic env like output-modes.test.ts: AION_* and
+ *  *_API_KEY scrubbed, AION_HOME → an empty temp dir, cwd → a temp workspace):
+ *  - `aion help` pins every new env knob, the --output paragraph and the /name expansion note
+ *  - `aion tools` lists ask_user (port #33 critic LOW-1)
+ *  - `aion run "/hello …"` expands .aion/commands/hello.md on BOTH the `run` and the bare-prompt path:
+ *    the session store's first user message is the RENDERED prompt; an unknown /name passes verbatim
+ *  - `aion serve` banner lists GET /session/:id/tasks (+ DELETE /session/:id/prompt)
+ *  - `aion --plain` binds ask_user to readline: numbered options print, the typed number answers,
+ *    and the next model turn sees `answer: sqlite` */
+
+import { test, expect, beforeAll, afterAll } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import type { RunResult } from "../../src/cli/output.ts";
+import { SessionStore } from "../../src/core/session.ts";
+import { partsText } from "../../src/core/loop.ts";
+
+const ROOT = resolve(import.meta.dir, "..", "..");
+const MAIN = join(ROOT, "src", "cli", "main.ts");
+const T = 60_000;
+
+let work = "", home = "";
+beforeAll(() => {
+  work = mkdtempSync(join(tmpdir(), "aion-cliwire-"));
+  home = mkdtempSync(join(tmpdir(), "aion-cliwire-home-"));
+  mkdirSync(join(work, ".aion", "commands"), { recursive: true });
+  writeFileSync(join(work, ".aion", "commands", "hello.md"), "---\ndescription: Say hello\nmodel: not-applied-headlessly\n---\nSay hi to $ARGUMENTS\n");
+});
+afterAll(() => {
+  rmSync(work, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+function hermeticEnv(extra: Record<string, string> = {}): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (v !== undefined && !/^AION_/i.test(k) && !/_API_KEY$/i.test(k)) env[k] = v;
+  }
+  env.AION_HOME = home;
+  return Object.assign(env, extra);
+}
+
+/** ASYNC spawn (output-modes idiom): a loopback provider below lives in THIS process. */
+async function cli(args: string[], extra: Record<string, string> = {}): Promise<{ code: number; stdout: string; stderr: string }> {
+  const p = Bun.spawn([process.execPath, MAIN, ...args], { cwd: work, env: hermeticEnv(extra), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+  const [stdout, stderr, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+  return { code, stdout, stderr };
+}
+
+/** The first user message the run stored — what the model was actually asked. */
+function firstUserText(sessionId: string): string {
+  const m = new SessionStore(join(work, ".aion", "sessions"), sessionId).messages().find((x) => x.role === "user");
+  return m ? partsText(m.parts) : "";
+}
+
+/** Spawn a long-lived CLI child and pump its stdout into a buffer (tui-session-nav CLI idiom:
+ *  ONE pump, never a raced read). */
+function spawnPumped(args: string[], extra: Record<string, string>, stdin: "pipe" | "ignore") {
+  const p = Bun.spawn([process.execPath, MAIN, ...args], { cwd: work, env: hermeticEnv({ NO_COLOR: "1", ...extra }), stdin, stdout: "pipe", stderr: "pipe" });
+  const buf = { out: "" };
+  const dec = new TextDecoder();
+  const pump = (async () => { for await (const chunk of p.stdout) buf.out += dec.decode(chunk, { stream: true }); })().catch(() => {});
+  const waitOut = async (pred: (out: string) => boolean, ms = 20_000): Promise<void> => {
+    const deadline = Date.now() + ms;
+    while (Date.now() < deadline && !pred(buf.out)) await new Promise((r) => setTimeout(r, 50));
+    if (!pred(buf.out)) throw new Error(`CLI output did not match within ${ms}ms:\n${buf.out.slice(-2000)}`);
+  };
+  const stop = async (): Promise<void> => { p.kill(); await p.exited.catch(() => {}); await pump; };
+  /** write a line to the child's stdin (pipe mode only) and flush it through */
+  const type = (line: string): void => { const sink = p.stdin as import("bun").FileSink; sink.write(line); sink.flush(); };
+  const closeStdin = (): void => { try { (p.stdin as import("bun").FileSink).end(); } catch { /* already closed */ } };
+  return { p, buf, waitOut, stop, type, closeStdin };
+}
+
+// ---------- help / tools ----------
+
+test("help: the env block documents the retry / webfetch / compaction / tasks knobs; `aion run` documents /name expansion and --output", async () => {
+  const r = await cli(["help"]);
+  expect(r.code).toBe(0);
+  const out = r.stdout;
+  expect(out).toMatch(/^\s*AION_RETRY_MAX\s+.*default 3.*0 = off/m);
+  expect(out).toMatch(/^\s*AION_RETRY_BASE_MS\s+.*2000.*jitter.*Retry-After/m);
+  expect(out).toMatch(/^\s*AION_WEBFETCH_TIMEOUT_MS\s+.*30000/m);
+  expect(out).toMatch(/^\s*AION_WEBFETCH_ALLOW_PRIVATE=1\s+.*private/m);
+  expect(out).toMatch(/^\s*AION_COMPACTION\s+.*head-summarize.*keep-window.*provider-native/m);
+  expect(out).toMatch(/^\s*AION_TASKS_MAX\s+.*default 3/m);
+  expect(out).toMatch(/^\s*AION_SANDBOX\s+.*direct.*wsl.*docker/m); // still there
+  // --output paragraph under `aion run`
+  expect(out).toContain("--output <text|json|ndjson>");
+  for (const key of ["status", "summary", "sessionId", "origin", "cacheRead", "cacheWrite", "costUsd", "toolCalls", "durationMs", "exitCode"]) expect(out).toContain(key);
+  expect(out).toContain('{type:"result"}');
+  expect(out).toContain("0 done · 1 error/budget · 2 usage/startup error · 130 aborted");
+  // /name expansion note
+  expect(out).toContain('"/name args" expands a custom command');
+  expect(out).toContain("TUI-only");
+}, T);
+
+test("tools: the registry listing includes ask_user (port #33) next to todo_write/todo_read and web_fetch", async () => {
+  const r = await cli(["tools"]);
+  expect(r.code).toBe(0);
+  const names = r.stdout.split("\n").filter((l) => /^\S/.test(l)).map((l) => l.split(/\s+/)[0]);
+  expect(names).toContain("ask_user"); // mutation: drop the askUserTool registration in cmdTools → missing
+  expect(names).toContain("todo_write");
+  expect(names).toContain("todo_read");
+  expect(names).toContain("web_fetch");
+  expect(r.stdout).toMatch(/^ask_user\s+read\s+sequential=true/m);
+}, T);
+
+// ---------- aion run "/name args" ----------
+
+test("aion run \"/hello …\" expands .aion/commands/hello.md: the stored first user message is the RENDERED prompt (spaces intact), model: is not applied headlessly; unknown /name passes verbatim; the bare-prompt path expands too", async () => {
+  const r = await cli(["run", "/hello big   world", "--output", "json"]);
+  expect(r.code).toBe(0);
+  const res = JSON.parse(r.stdout.trim()) as RunResult;
+  expect(res.status).toBe("done");
+  expect(res.model).toEqual({ provider: "mock", model: "default" });      // frontmatter model: is TUI-only
+  expect(firstUserText(res.sessionId!)).toBe("Say hi to big   world");  // mutation: drop expandSlashPrompt in `case "run"` → "/hello big   world"
+
+  const r2 = await cli(["run", "/nope stays", "--output", "json"]);
+  expect(r2.code).toBe(0);
+  expect(firstUserText((JSON.parse(r2.stdout.trim()) as RunResult).sessionId!)).toBe("/nope stays");
+
+  const r3 = await cli(["/hello bare", "--output", "json"]);           // bare prompt (no `run`)
+  expect(r3.code).toBe(0);
+  expect(firstUserText((JSON.parse(r3.stdout.trim()) as RunResult).sessionId!)).toBe("Say hi to bare"); // mutation: drop the bare-branch expansion → "/hello bare"
+}, T);
+
+// ---------- aion serve banner ----------
+
+test("serve: the startup banner lists GET /session/:id/tasks and DELETE /session/:id/prompt", async () => {
+  // a free port, released for the child (AION_PORT=0 would read as "default 4100" in main.ts)
+  const probe = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("") });
+  const port = probe.port!;
+  await probe.stop(true);
+  const child = spawnPumped(["serve"], { AION_PORT: String(port) }, "ignore");
+  try {
+    await child.waitOut((o) => o.includes("aion server listening"));
+  } finally {
+    await child.stop();
+  }
+  expect(child.buf.out).toContain(`aion server listening on http://127.0.0.1:${port}`);
+  expect(child.buf.out).toContain("GET /session/:id/tasks");
+  expect(child.buf.out).toContain("DELETE /session/:id/prompt");
+}, T);
+
+// ---------- aion --plain: ask_user over readline ----------
+
+test("--plain binds ask_user to readline: the question and numbered options print, the typed number answers, and the next model turn sees `answer: sqlite`", async () => {
+  let calls = 0;
+  const server = Bun.serve({
+    port: 0, hostname: "127.0.0.1",
+    async fetch(req) {
+      const body = await req.json() as { messages: { role: string; content?: string | null }[] };
+      if (calls++ === 0) {
+        return Response.json({
+          choices: [{
+            message: { content: null, tool_calls: [{ id: "ask_1", type: "function", function: { name: "ask_user", arguments: JSON.stringify({ question: "Which database?", options: ["postgres", "sqlite"] }) } }] },
+            finish_reason: "tool_calls",
+          }],
+          usage: { prompt_tokens: 1, completion_tokens: 1 },
+        });
+      }
+      const toolMsg = body.messages.filter((m) => m.role === "tool").at(-1);
+      return Response.json({ choices: [{ message: { content: `MODEL-SAW ${toolMsg?.content ?? "(no tool result)"}` }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+    },
+  });
+  const child = spawnPumped(["--plain"], { AION_BASE_URL: `http://127.0.0.1:${server.port}`, AION_API_KEY: "test-key", AION_MODEL: "m", AION_NO_REPOMAP: "1" }, "pipe");
+  try {
+    await child.waitOut((o) => o.includes("aion>"));
+    child.type("pick a db\n");
+    await child.waitOut((o) => o.includes("2) sqlite"));            // the asker printed the numbered options (mutation: no setAskUser → "ask_user unavailable")
+    expect(child.buf.out).toContain("question: Which database?");
+    expect(child.buf.out).toContain("1) postgres");
+    child.type("2\n");                                                 // the typed number picks sqlite
+    await child.waitOut((o) => o.includes("MODEL-SAW"));
+    expect(child.buf.out).toContain("MODEL-SAW answer: sqlite");
+    expect(child.buf.out).not.toContain("ask_user unavailable");
+  } finally {
+    child.closeStdin();
+    await child.stop();
+    server.stop(true);
+  }
+}, T);

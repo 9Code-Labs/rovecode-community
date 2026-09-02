@@ -554,11 +554,51 @@ describe("PiTuiRenderer", () => {
 		// card rows are standalone lines (the one-line transcript note above the card also echoes the text)
 		const rows = screen.split("\n").map((l) => l.trim());
 		expect(rows).toContain("line-1");
-		expect(rows).toContain("line-11");
-		expect(rows).toContain("… +29 more lines");             // 24 rows → 12 question rows: 11 lines + marker
-		expect(rows).not.toContain("line-12");                   // clipped by the physical bound
+		expect(rows).toContain("line-10");
+		expect(rows).toContain("… +30 more lines");             // 24 rows → 11 question rows: 10 lines + marker (the skip entry costs one)
+		expect(rows).not.toContain("line-11");                   // clipped by the physical bound
 		expect(screen).toContain("→ alpha");                    // options still reachable below the question
 		term.sendInput("\r");
 		await expect(deadline(pending)).resolves.toEqual({ choice: 0, label: "alpha" });
+	});
+
+	// ---------- wiring pass: port #32 status label, port #33 critic LOW (non-destructive decline) ----------
+
+	it("setStatus appends the todo label after the tokens segment when present and omits it when absent (port #32)", async () => {
+		const { renderer, term } = boot();
+		renderer.setStatus({ provider: "p", model: "m", yolo: true, turns: 1, tokensIn: 10, tokensOut: 5, todos: "todos 1/3" });
+		let screen = await view(term);
+		expect(screen).toContain("tokens 10/5 · todos 1/3"); // mutation: drop the todos segment → fails
+		renderer.setStatus({ provider: "p", model: "m", yolo: true, turns: 2, tokensIn: 10, tokensOut: 5 });
+		screen = await view(term);
+		expect(screen).toContain("turns 2 · tokens 10/5");
+		expect(screen).not.toContain("todos");
+	});
+
+	it("askQuestion lists a 'skip this question' entry after the options (and after the free-text entry): picking it resolves null without touching the run", async () => {
+		let interrupts = 0;
+		const ac = new AbortController();
+		const { renderer, term } = boot(stubHooks({ onInterrupt: () => { interrupts++; } }));
+		renderer.setBusy(true, "thinking…");
+		const pending = renderer.askQuestion({ ...DB_Q, allowFreeText: false }, ac.signal);
+		let screen = await view(term);
+		expect(screen).toContain("skip this question");
+		expect(screen).not.toContain("type an answer…");
+		term.sendInput("\x1b[B"); term.sendInput("\x1b[B");      // postgres → sqlite → skip
+		expect(await view(term)).toContain("→ skip this question");
+		term.sendInput("\r");
+		await expect(deadline(pending)).resolves.toBeNull();     // declined: the tool reports "user declined to answer"
+		expect(interrupts).toBe(0);                              // the run was NOT interrupted (mutation: skip routed to escape() → 1)
+		expect(ac.signal.aborted).toBe(false);
+		expect(await view(term)).not.toContain("skip this question"); // overlay gone
+		renderer.setBusy(false);
+		// with free text allowed the skip entry sits LAST, after "type an answer…"
+		const p2 = renderer.askQuestion(DB_Q);
+		screen = await view(term);
+		const rows = screen.split("\n").map((l) => l.trim());
+		expect(rows.indexOf("type an answer…")).toBeGreaterThan(-1);
+		expect(rows.indexOf("type an answer…")).toBeLessThan(rows.indexOf("skip this question"));
+		term.sendInput("\r");
+		await expect(deadline(p2)).resolves.toEqual({ choice: 0, label: "postgres" });
 	});
 });

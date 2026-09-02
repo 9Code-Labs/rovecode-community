@@ -32,12 +32,15 @@
  *  <session>/memory). core/tools.ts actionFor() maps it to memory.write, which
  *  the runtime's default gated rules ALLOW (runtime.ts buildCfg), so the list
  *  never prompts; kind "read" would also auto-run but would let read-only rule
- *  sets (plan mode) write to disk — the mirror of recall.ts's argument against
- *  mislabeling kinds. Plan mode (modes.ts planModeRules) therefore denies
- *  todo_write while todo_read (kind "read" → file.read) stays available. The
- *  schemas declare no `path`/`command`, so the policy resource is the tool
- *  name: `memory.write todo_write` targets it precisely. Not in
- *  checkpoints.ts MUTATING_KINDS, so todo writes never trigger snapshots. */
+ *  sets write to disk unseen — the mirror of recall.ts's argument against
+ *  mislabeling kinds. The schemas declare no `path`/`command`, so the policy
+ *  resource is the tool name: `memory.write todo_write` targets it precisely —
+ *  which is how plan mode (modes.ts planModeRules) denies memory.write wholesale
+ *  and then re-allows exactly todo_write: the list is the plan's own artifact
+ *  (agent-private session metadata, not workspace state), while memory_edit,
+ *  file.write and shell.exec stay denied there; todo_read (kind "read" →
+ *  file.read) is always available. Not in checkpoints.ts MUTATING_KINDS, so
+ *  todo writes never trigger snapshots. */
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
@@ -178,13 +181,14 @@ function oneLine(text: string): string {
 }
 
 /** Checkbox rendering: a summary line, then one `[glyph] id: content (priority)`
- *  row per item in list order. Bounded: ≤MAX_TODOS rows, content clipped. */
+ *  row per item in list order. Bounded: ≤MAX_TODOS rows, content clipped, and the
+ *  id flattened too (a trimmed id may still carry an inner newline — one row per item). */
 export function renderTodos(items: readonly TodoItem[]): string {
   if (items.length === 0) return "todos: (empty)";
   const c = todoCounts(items);
   const lines = [`todos: ${c.total} total · ${c.completed} completed · ${c.inProgress} in progress · ${c.pending} pending`];
   for (const t of items.slice(0, MAX_TODOS)) {
-    lines.push(`${GLYPH[t.status]} ${t.id}: ${oneLine(t.content)}${t.priority ? ` (${t.priority})` : ""}`);
+    lines.push(`${GLYPH[t.status]} ${oneLine(t.id)}: ${oneLine(t.content)}${t.priority ? ` (${t.priority})` : ""}`);
   }
   if (items.length > MAX_TODOS) lines.push(`(+${items.length - MAX_TODOS} more not shown)`);
   return lines.join("\n");

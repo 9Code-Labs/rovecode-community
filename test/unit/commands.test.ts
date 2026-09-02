@@ -4,7 +4,7 @@
  *  stub renderer. The terminal e2e lives in test/integration/tui-app.test.ts. */
 
 import { test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import {
@@ -275,4 +275,40 @@ test("dispatch: a model equal to the current one is no override (no note, no pus
   const boom = stubCtx(modes, async () => { throw new Error("boom"); });
   await expect(runCustomCommand(boom.ctx, cmd({ model: "fast" }), "x")).rejects.toThrow("boom");
   expect(modes.modelFor().model).toBe("m0");
+});
+
+// ---------- wiring pass: port #30 critic LOW-2 (bounded echoes) / LOW-3 (symlinked files) ----------
+
+test("LOW-2: a huge `mode:` value is echoed clipped (40 chars + …) in the parse error; a huge description is capped at 200 chars in discovery", () => {
+  const r = parseCommandFile(`---\nmode: ${"y".repeat(5000)}\n---\nbody\n`);
+  expect(r).toEqual({ error: `mode must be "plan" or "act" (got "${"y".repeat(39)}…")` }); // mutation: unbounded echo → 5000 chars
+  if ("error" in r) expect(r.error.length).toBeLessThan(100);
+  expect(parseCommandFile("---\nmode: yolo\n---\nbody\n")).toEqual({ error: 'mode must be "plan" or "act" (got "yolo")' }); // short values untouched
+  project("long.md", `---\ndescription: ${"d".repeat(1000)}\n---\nbody\n`);
+  project("short.md", "---\ndescription: fits\n---\nbody\n");
+  const { commands, warnings } = discoverCommands(cwd, { home });
+  expect(warnings).toEqual([]);
+  expect(commands.map((c) => c.description)).toEqual([`${"d".repeat(199)}…`, "fits"]);
+  expect(commands[0]!.description.length).toBe(200);
+  expect(helpForCommands(commands).split("\n").every((l) => l.length < 260)).toBe(true);
+});
+
+/** Windows needs a privilege or Developer Mode for file symlinks — detect once; the test skips (not fails) without it. */
+const canSymlink = (() => {
+  const d = mkdtempSync(join(tmpdir(), "aion-cmds-sym-"));
+  try { writeFileSync(join(d, "t.md"), "x"); symlinkSync(join(d, "t.md"), join(d, "l.md"), "file"); return true; }
+  catch { return false; }
+  finally { rmSync(d, { recursive: true, force: true }); }
+})();
+
+test.skipIf(!canSymlink)("LOW-3: a symlinked *.md is discovered through its target; a DANGLING link is reported unreadable, never silently dropped (skipped where symlinkSync is not permitted: Windows without Developer Mode)", () => {
+  const target = write(cwd, join("elsewhere", "real.md"), "---\ndescription: via link\n---\nLinked $ARGUMENTS\n");
+  mkdirSync(join(cwd, ".aion", "commands"), { recursive: true });
+  symlinkSync(target, projectPath("linked.md"), "file");
+  symlinkSync(join(cwd, "elsewhere", "gone.md"), projectPath("dangling.md"), "file");
+  const { commands, warnings } = discoverCommands(cwd, { home });
+  // mutation: filter on e.isFile() alone → both links vanish silently (no command, no warning)
+  expect(commands.map((c) => [c.name, c.body, c.description])).toEqual([["linked", "Linked $ARGUMENTS", "via link"]]);
+  expect(warnings).toHaveLength(1);
+  expect(warnings[0]).toStartWith(`${projectPath("dangling.md")}: skipped — unreadable (`);
 });

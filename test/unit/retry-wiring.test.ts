@@ -2,7 +2,8 @@
  *  through the REAL agent loop against a local OpenAI-compatible stub (router-wiring.test.ts
  *  idiom). The seam assertions the module suite cannot see:
  *  - env chain A,B; A answers 429, 429, 200 → A serves, the stub saw A three times, and the
- *    router emitted ZERO notes (retries are not advances)
+ *    router emitted ZERO "router:" notes (retries are not advances) — each retry IS visible as a
+ *    "retry:" note in the same drain (wiring pass: onRetry → routerNotes)
  *  - A answers 429 forever, AION_RETRY_MAX=2 → A is tried 3× (exhaust) THEN B serves — exactly
  *    one note; the swapped composition (retry OUTSIDE the router) would show A once
  *  - abort mid-backoff (Retry-After: 30 keeps the sleep long) → the run stops promptly, the stub
@@ -131,7 +132,13 @@ test("real wiring: 429, 429, 200 on the chain head → the head serves after two
   const end = runEnd(events);
   expect(end.status).toBe("done");
   expect(end.summary).toBe("alpha says hi");
-  expect(rt.drainRouterNotes()).toEqual([]); // retries are not advances
+  // retries are not advances: no "router:" note — but every retry surfaces as a "retry:" note (wiring pass)
+  const notes = rt.drainRouterNotes();
+  expect(notes.filter((n) => n.startsWith("router:"))).toEqual([]);
+  expect(notes.filter((n) => n.startsWith("retry:"))).toHaveLength(2);
+  expect(notes[0]).toMatch(/^retry: custom\/alpha attempt 1 in \d+ms \(.*429.*\)$/);
+  expect(notes[1]).toMatch(/^retry: custom\/alpha attempt 2 in \d+ms \(.*429.*\)$/);
+  expect(rt.drainRouterNotes()).toEqual([]); // drained
   const assistant = rt.store.messages().find((m) => m.role === "assistant");
   expect(assistant?.origin).toEqual({ provider: "custom", model: "alpha" });
   expect(assistant?.usage).toMatchObject({ input: 7, output: 5 });
@@ -151,11 +158,26 @@ test("real wiring: 429 forever on the head → retries EXHAUST (1 + AION_RETRY_M
   expect(end.status).toBe("done");
   expect(end.summary).toBe("beta says hi");
   const notes = rt.drainRouterNotes();
-  expect(notes).toHaveLength(1);
-  expect(notes[0]).toContain("custom/alpha");
-  expect(notes[0]).toContain("custom/beta");
-  expect(notes[0]).toContain("429");
+  const advances = notes.filter((n) => n.startsWith("router:"));
+  expect(advances).toHaveLength(1); // router notes stay per-ADVANCE
+  expect(advances[0]).toContain("custom/alpha");
+  expect(advances[0]).toContain("custom/beta");
+  expect(advances[0]).toContain("429");
+  // the two exhausted retries precede the advance in the same drain (wiring pass)
+  expect(notes.map((n) => n.split(" ")[0])).toEqual(["retry:", "retry:", "router:"]);
   expect(rt.drainRouterNotes()).toHaveLength(0);
+});
+
+test("wiring pass: a 429-then-200 run leaves exactly ONE retry note in drainRouterNotes (model, attempt, delay, reason) and no router note", async () => {
+  script("alpha", [{ status: 429 }, { status: 200 }]);
+  const rt = createRuntime({ cwd: tmpCwd() });
+  const events = await drive(rt, { provider: "custom", model: "alpha" }, "hello");
+  expect(runEnd(events).summary).toBe("alpha says hi");
+  const notes = rt.drainRouterNotes();
+  expect(notes).toHaveLength(1); // mutation: drop onRetry from the withRetry options in createRuntime → []
+  expect(notes[0]).toMatch(/^retry: custom\/alpha attempt 1 in \d+ms \(/);
+  expect(notes[0]).toContain("429");
+  expect(notes[0]).not.toContain("router:");
 });
 
 // ---------- abort mid-backoff ----------
@@ -176,7 +198,10 @@ test("real wiring: abort mid-backoff → the sleep wakes, no further request, no
     const events = await deadline(run, 4_000, "run after abort mid-backoff");
     expect(runEnd(events).status).toBe("stopped");
     expect(modelsSeen.slice(before)).toEqual(["alpha"]); // no retry, no advance to beta
-    expect(rt.drainRouterNotes()).toEqual([]);
+    const notes = rt.drainRouterNotes();
+    expect(notes.filter((n) => n.startsWith("router:"))).toEqual([]); // no advance
+    // the retry was ANNOUNCED (onRetry fires before the backoff sleep) with the 30s server floor, then aborted
+    expect(notes.filter((n) => n.startsWith("retry:"))).toEqual([expect.stringMatching(/^retry: custom\/alpha attempt 1 in 30000ms \(/)]);
     expect(performance.now() - started).toBeLessThan(3_000); // woke on the abort, not after 30s
   } finally {
     onRequest = null;

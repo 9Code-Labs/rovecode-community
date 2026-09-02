@@ -42,6 +42,9 @@
  *    toolset, and a blacklist is a weaker guarantee than a deny rule.
  *  - Upstream plan mode allows spawning sub-agents (presets.ts:55); aion
  *    denies spawn in plan mode because children could write.
+ *  - memory.write is denied in plan mode EXCEPT `todo_write` (port #32): the
+ *    todo list is the plan's own artifact (agent-private session metadata,
+ *    never workspace state), so planning may record it; memory_edit stays denied.
  *  - The mode switch is preserved durably as a session entry (a system-role
  *    Message carrying the upstream notice text) instead of a prefix on the
  *    next user message — aion sessions are an append-only tree, so the entry
@@ -140,6 +143,10 @@ export function planModeRules(allowTools: readonly string[] = []): PermissionRul
     { action: "shell.exec", resource: "*", effect: "deny" },
     { action: "spawn", resource: "*", effect: "deny" },
     { action: "memory.write", resource: "*", effect: "deny" },
+    // port #32: the session todo list IS the plan — todo_write (kind memory; its policy resource
+    // is the tool name, tools/todo.ts) is re-allowed right after the memory deny, so plan mode can
+    // record its plan while memory_edit and every other memory.write stay denied (one ladder)
+    { action: "memory.write", resource: "todo_write", effect: "allow" },
     // blanket deny for custom tools (e.g. mcp_call) — MCP calls can mutate
     { action: "tool.*", resource: "*", effect: "deny" },
   ];

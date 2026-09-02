@@ -231,7 +231,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   // before the chain advances (AION_RETRY_MAX / AION_RETRY_BASE_MS; providers/retry.ts header).
   const rawStream = provider ? providerStream(provider) : null;
   const middlewared = rawStream && process.env.AION_NO_TOOL_MIDDLEWARE !== "1" ? withToolCallParsing(rawStream) : rawStream;
-  const stream = opts.stream !== undefined ? opts.stream : middlewared ? router.wrap(withRetry(middlewared, retryOptionsFromEnv())) : null;
+  const stream = opts.stream !== undefined ? opts.stream : middlewared ? router.wrap(withRetry(middlewared, { ...retryOptionsFromEnv(), onRetry: (n) => routerNotes.push(`retry: ${n.model.provider}/${n.model.model} attempt ${n.attempt} in ${n.delayMs}ms (${n.reason})`) })) : null; // retries surface as router-style notes (drainRouterNotes)
   const catalog = new ModelCatalog(); // offline models.dev snapshot (port #6)
 
   // port #8: harvest AGENTS.md / CLAUDE.md / .cursor / copilot instructions

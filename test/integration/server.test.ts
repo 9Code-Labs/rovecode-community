@@ -603,6 +603,44 @@ test("port #26: DELETE /session/:id/prompt also cancels the background tasks tha
   }
 }, 20_000);
 
+test("wiring pass (port #26): stop() cancels every session's live background tasks — the parked child's run signal aborts", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-srv-tasks-stop-"));
+  const childSignals: AbortSignal[] = [];
+  const stream: StreamFn = async function* (_m: ModelRef, messages: Message[], opts?: StreamOptions): AsyncGenerator<StreamEvent> {
+    const goal = lastUserText(messages);
+    if (goal.includes("BACKGROUND-STOP")) {
+      if (!messages.some((m) => m.role === "tool")) {
+        yield { type: "turn", turn: { parts: [{ kind: "tool_call", id: "bgs-1", tool: "task", args: { action: "start", goal: "CHILD HOLD-STOP", label: "held" } }], stopReason: "tool_use", usage: { input: 0, output: 1 } } };
+        return;
+      }
+      yield { type: "turn", turn: { parts: [{ kind: "text", text: "parent done" }], stopReason: "end_turn", usage: { input: 0, output: 1 } } };
+      return;
+    }
+    // the child parks until ITS run signal aborts (cancel → runChild → agentLoop → this)
+    const sig = opts!.signal!;
+    childSignals.push(sig);
+    if (!sig.aborted) await new Promise<void>((r) => sig.addEventListener("abort", () => r(), { once: true }));
+    yield { type: "turn", turn: { parts: [], stopReason: "aborted", usage: { input: 0, output: 0 } } };
+  };
+  const s = startServer({ port: 0, cwd: dir, stream, yolo: true });
+  try {
+    const id = await createSession(s.url);
+    const { frames } = await promptSse(id, "BACKGROUND-STOP", s.url);
+    expect(frames[frames.length - 1]!.data).toMatchObject({ type: "run_end", status: "done" }); // the parent ended normally…
+    for (let i = 0; i < 200 && childSignals.length === 0; i++) await new Promise((r) => setTimeout(r, 25));
+    expect(childSignals).toHaveLength(1);
+    expect(childSignals[0]!.aborted).toBe(false); // …and its task outlives the run
+    expect(await (await fetch(`${s.url}/session/${id}/tasks`)).json()).toEqual([expect.objectContaining({ id: "t1", status: "running" })]);
+    await s.stop();
+    // mutation: drop runtime.tasks.cancelAll() in stop() → the child stays parked forever
+    for (let i = 0; i < 160 && !childSignals[0]!.aborted; i++) await new Promise((r) => setTimeout(r, 25));
+    expect(childSignals[0]!.aborted).toBe(true);
+  } finally {
+    await s.stop();
+    rmSync(dir, { recursive: true, force: true });
+  }
+}, 20_000);
+
 test("stream: null server refuses prompts with 503, still serves /doc", async () => {
   const noStream = startServer({ port: 0, cwd, stream: null });
   servers.push(noStream);

@@ -28,7 +28,8 @@
  *  and a positional `$N` is exactly one token (upstream's "last placeholder absorbs the rest",
  *  prompt.ts:1387, is not ported); no `!\`shell\`` / `@file` injection (prompt.ts:1397-1408) —
  *  the template reaches the model as plain text; a built-in TUI command always beats a custom
- *  one of the same name (warned at boot).
+ *  one of the same name (warned at boot); a symlinked *.md counts when it points at a file (a
+ *  dangling link is reported unreadable); boot-warning echoes and descriptions are bounded.
  *
  *  TUI semantics (runCustomCommand): `mode` switches through the /plan-/act path and STAYS
  *  switched after the run — the switch is a durable session entry (port #20), and silently
@@ -37,7 +38,7 @@
  *  (/model is not busy-gated). With planActSeparateModels off, /model mirrors writes into
  *  both slots, so the restore does too — same as typing /model <prev> by hand. */
 
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { AgentMode, ModeManager } from "../core/modes.ts";
 import { aionHome } from "../providers/auth.ts";
@@ -71,6 +72,13 @@ const ARGS_RE = /(?:"[^"]*"|'[^']*'|[^\s"']+)/g;
 const QUOTE_TRIM_RE = /^["']|["']$/g;
 /** one pass: `$$` (literal), `$ARGUMENTS`, `$1`..`$9` */
 const PLACEHOLDER_RE = /\$(\$|ARGUMENTS|[1-9])/g;
+/** /help + palette rows stay one line; a 20k-char frontmatter field must not become one */
+const MAX_DESCRIPTION_CHARS = 200;
+
+/** Bounded echo (todo.ts `show` idiom): file content quoted back in a warning is clipped. */
+function clip(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max - 1) + "…" : s;
+}
 
 // ---------- file format ----------
 
@@ -90,7 +98,7 @@ export function parseCommandFile(text: string): ParsedCommandFile | { error: str
   if (body === "") return { error: "empty command body (nothing to send)" };
   const field = (k: string): string | undefined => { const v = fm[k]?.trim(); return v ? v : undefined; };
   const mode = field("mode");
-  if (mode !== undefined && mode !== "plan" && mode !== "act") return { error: `mode must be "plan" or "act" (got "${mode}")` };
+  if (mode !== undefined && mode !== "plan" && mode !== "act") return { error: `mode must be "plan" or "act" (got "${clip(mode, 40)}")` }; // LOW-2: bounded echo
   return { description: field("description"), model: field("model"), mode, body };
 }
 
@@ -138,11 +146,19 @@ export function discoverCommands(cwd: string, opts: DiscoverOptions = {}): Disco
   return { commands: [...byName.values()].sort((a, b) => a.name.localeCompare(b.name)), warnings };
 }
 
+/** LOW-3: a symlinked `*.md` counts when its target is a file (a link to a directory is skipped
+ *  like any directory); a DANGLING link stays in the list so the read below reports it unreadable. */
+function linksToFile(path: string): boolean {
+  try { return statSync(path).isFile(); } catch { return true; }
+}
+
 /** One directory's `*.md` files (top level only, sorted), each parsed or warned about. */
 function scanCommandDir(dir: string, scope: CommandScope, warnings: string[]): CustomCommand[] {
   let files: string[];
   try {
-    files = readdirSync(dir, { withFileTypes: true }).filter((e) => e.isFile() && /\.md$/i.test(e.name)).map((e) => e.name).sort();
+    files = readdirSync(dir, { withFileTypes: true })
+      .filter((e) => /\.md$/i.test(e.name) && (e.isFile() || (e.isSymbolicLink() && linksToFile(join(dir, e.name)))))
+      .map((e) => e.name).sort();
   } catch {
     return []; // no such directory — silent, like the skills store
   }
@@ -161,7 +177,7 @@ function scanCommandDir(dir: string, scope: CommandScope, warnings: string[]): C
     const parsed = parseCommandFile(text);
     if ("error" in parsed) { warnings.push(`${path}: skipped — ${parsed.error}`); continue; }
     out.push({
-      name, description: parsed.description ?? `custom command (${file})`, model: parsed.model, mode: parsed.mode,
+      name, description: clip(parsed.description ?? `custom command (${file})`, MAX_DESCRIPTION_CHARS), model: parsed.model, mode: parsed.mode,
       body: parsed.body, hints: hints(parsed.body), path, scope,
     });
   }
