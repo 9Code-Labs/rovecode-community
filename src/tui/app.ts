@@ -15,6 +15,7 @@ import { cmdRewind, cmdSessions, cmdNew, type SessionCmdCtx } from "./session-cm
 import { buildCostNote } from "./cost.ts";
 import { exportSession } from "../cli/export.ts";
 import { previewDiff } from "../coding/diff.ts";
+import { discoverCommands, commandsForPalette, helpForCommands, dispatchCustomCommand, type CustomCommandCtx } from "./commands.ts";
 import type { Renderer, AssistantView, StatusInfo } from "./renderer.ts";
 import { PiTuiRenderer } from "./pi-renderer.ts";
 import type { RunEvent, StreamFn } from "../core/types.ts";
@@ -107,6 +108,8 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     model: opts.model ?? process.env.AION_MODEL ?? rt.defaultModel ?? "",
   });
   modes.restore(modeFromEntries(store.messages()) ?? modes.mode);
+  // port #30: custom slash commands — .aion/commands/*.md, project shadows ~/.aion/commands (commands.ts)
+  const custom = discoverCommands(rt.cwd, { reserved: TUI_COMMANDS.map((c) => c.name) });
   const state: TuiState = {
     yolo: opts.yolo ?? process.env.AION_YOLO === "1",
     provider: modes.modelFor().provider,
@@ -204,13 +207,16 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     pushStatus,
   };
 
+  // port #30: custom command dispatch context (submit = the plain user-turn path, defined below)
+  const cmdCtx: CustomCommandCtx = { renderer, modes, state, pushStatus, submit: (t) => submit(t) };
+
   const handleSlash = (text: string): boolean => {
     const [cmd, ...rest] = text.slice(1).split(/\s+/);
     const arg = rest.join(" ").trim();
     switch (cmd) {
       case "exit": case "quit": close(); return true;
       case "help":
-        renderer.addSystemNote(TUI_COMMANDS.map((c) => `/${c.name} — ${c.description}`).join("\n"));
+        renderer.addSystemNote(TUI_COMMANDS.map((c) => `/${c.name} — ${c.description}`).join("\n") + helpForCommands(custom.commands));
         return true;
       case "yolo":
         state.yolo = !state.yolo;
@@ -286,7 +292,8 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
         return true;
       }
       default:
-        renderer.addSystemNote(`unknown command: /${cmd} (try /help)`, "warn");
+        // port #30: a discovered custom command renders its template and submits it as a user turn
+        if (!dispatchCustomCommand(cmdCtx, custom.commands, cmd ?? "", arg)) renderer.addSystemNote(`unknown command: /${cmd} (try /help)`, "warn");
         return true;
     }
   };
@@ -362,17 +369,18 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     }
   };
 
-  renderer.setCommands(TUI_COMMANDS);
+  /** A plain user turn — also the path custom commands submit their rendered prompt through (port #30). */
+  const submit = (text: string): Promise<void> => {
+    renderer.addUser(text);
+    // port #20: a pending mode switch becomes a durable session entry on the next
+    // submit (round-trip cancellation: toggling back before submitting records nothing)
+    flushModeSwitch(modes, store);
+    if (state.busy) { steering.push(text); renderer.addSystemNote("queued as steering (applies before the next model turn)"); return Promise.resolve(); }
+    return startRun(text);
+  };
+  renderer.setCommands([...TUI_COMMANDS, ...commandsForPalette(custom.commands)]);
   renderer.start({
-    onSubmit: (text) => {
-      if (text.startsWith("/")) { handleSlash(text); return; }
-      renderer.addUser(text);
-      // port #20: a pending mode switch becomes a durable session entry on the next
-      // submit (round-trip cancellation: toggling back before submitting records nothing)
-      flushModeSwitch(modes, store);
-      if (state.busy) { steering.push(text); renderer.addSystemNote("queued as steering (applies before the next model turn)"); return; }
-      void startRun(text);
-    },
+    onSubmit: (text) => { if (text.startsWith("/")) handleSlash(text); else void submit(text); },
     // port #21: abort FIRST (kills in-flight fetch/subprocesses), then return() settles the generator
     onInterrupt: () => { runAbort?.abort(); void run?.return(undefined as never); renderer.addSystemNote("run interrupted", "warn"); },
     onExit: close,
@@ -384,6 +392,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     (rt.stream ? "" : "\nno provider configured — run `aion auth set <provider>`, or set AION_BASE_URL/AION_API_KEY or a <NAME>_API_KEY"),
   );
   if (bootWarn) renderer.addSystemNote(bootWarn, "warn");
+  for (const w of custom.warnings) renderer.addSystemNote(w, "warn"); // port #30: skipped/shadowed command files
   pushStatus();
   // port #27: an unavailable configured rung (probe failed) is a clean one-line startup
   // error — stop the renderer first so the terminal is restored, then exit 2

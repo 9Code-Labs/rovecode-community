@@ -7,13 +7,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { SessionStore } from "../../src/core/session.ts";
+import { partsText } from "../../src/core/loop.ts";
 import { VirtualTerminal } from "../../vendor/pi-tui/test/virtual-terminal.ts";
 import { PiTuiRenderer } from "../../src/tui/pi-renderer.ts";
 import { runTui, buildCostNote } from "../../src/tui/app.ts";
 import { anthropicStream, mockStream, textTurn, toolTurn } from "../../src/providers/stream.ts";
 import { ModelCatalog } from "../../src/providers/catalog.ts";
 import { fileTag, lineHash } from "../../src/coding/hashline.ts";
-import type { Message, TokenUsage } from "../../src/core/types.ts";
+import type { Message, StreamFn, TokenUsage } from "../../src/core/types.ts";
 
 async function until(term: VirtualTerminal, pred: (screen: string) => boolean, ms = 8000): Promise<string> {
   const deadline = Date.now() + ms;
@@ -469,3 +470,65 @@ test("relative tool paths resolve against runTui({cwd}), not process.cwd(): the 
   await app;
   rmSync(cwd, { recursive: true, force: true });
 }, 20_000);
+// ---------- port #30: custom slash commands (.aion/commands/*.md) ----------
+
+test("custom commands e2e: palette + /help list /hello, dispatch submits the rendered $ARGUMENTS prompt as the user turn, mode: plan flips the indicator, model: overrides per run", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const home = mkdtempSync(join(tmpdir(), "aion-tuiapp-home-"));
+  const savedHome = process.env.AION_HOME;
+  process.env.AION_HOME = home; // hermetic user scope: the host's real ~/.aion/commands must not leak in
+  mkdirSync(join(cwd, ".aion", "commands"), { recursive: true });
+  writeFileSync(join(cwd, ".aion", "commands", "hello.md"), "---\ndescription: Say hello to someone\n---\nSay hi to $ARGUMENTS\n", "utf8");
+  writeFileSync(join(cwd, ".aion", "commands", "plan-it.md"), "---\ndescription: Plan a change\nmode: plan\nmodel: fast-model\n---\nPlan: $ARGUMENTS\n", "utf8");
+  writeFileSync(join(cwd, ".aion", "commands", "help.md"), "must lose to the built-in\n", "utf8");
+  const term = new VirtualTerminal(80, 24);
+  const renderer = new PiTuiRenderer({ terminal: term, cwd });
+  // capture what the loop actually sends: the ModelRef and the latest user message text
+  const seen: { model: string; user: string }[] = [];
+  const inner = mockStream({ turns: [textTurn("hello-answer"), textTurn("plan-answer")] });
+  const stream: StreamFn = (model, messages, options) => {
+    const last = [...messages].reverse().find((m) => m.role === "user");
+    seen.push({ model: model.model, user: last ? partsText(last.parts) : "" });
+    return inner(model, messages, options);
+  };
+  try {
+    const app = runTui({ renderer, stream, cwd, yolo: true, exitOnClose: false, model: "scripted" });
+    // boot: the built-in collision is reported, the built-in kept
+    const booted = await until(term, (s) => s.includes("built-in kept"));
+    expect(booted).toContain("/help is a built-in command");
+
+    // autocomplete palette: the custom command sits next to the built-ins
+    term.sendInput("/hel");
+    const palette = await until(term, (s) => s.includes("Say hello to someone"));
+    expect(palette).toContain("hello");
+    // finish the line; the space ends command matching (no argument completions) so the popup
+    // closes, then Enter submits "/hello world" through onSubmit → handleSlash → default
+    term.sendInput("lo world");
+    await until(term, (s) => !s.includes("Say hello to someone"));
+    term.sendInput("\r");
+    const answered = await until(term, (s) => s.includes("hello-answer"));
+    expect(answered).toContain("> Say hi to world");   // the rendered prompt IS the echoed user turn
+    expect(seen).toEqual([{ model: "scripted", user: "Say hi to world" }]); // the model saw the rendered text, not "/hello world"
+
+    // /help lists it under the custom header, with its placeholder hint and scope
+    term.sendInput("/help"); term.sendInput("\r");
+    const help = await until(term, (s) => s.includes("custom:"));
+    expect(help).toContain("/hello $ARGUMENTS — Say hello to someone (project)");
+
+    // mode: plan switches the indicator (and stays); model: fast-model is used for THIS run only
+    term.sendInput("/plan-it the thing"); term.sendInput("\r");
+    const planned = await until(term, (s) => s.includes("plan-answer") && s.includes("/scripted ·") && !s.includes("thinking"));
+    expect(planned).toContain("plan · ");               // status line carries the switched mode
+    expect(planned).toContain("read-only tools");        // switched through the /plan path (its note)
+    expect(planned).toContain("> Plan: the thing");
+    expect(seen[1]).toEqual({ model: "fast-model", user: "Plan: the thing" }); // the run used the command's model…
+    expect(planned).toContain("/scripted ·");            // …and the status line is back on the session model
+
+    term.sendInput("\x03");
+    await app;
+  } finally {
+    if (savedHome === undefined) delete process.env.AION_HOME; else process.env.AION_HOME = savedHome;
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(home, { recursive: true, force: true });
+  }
+}, 30_000);
