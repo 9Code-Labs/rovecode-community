@@ -8,18 +8,20 @@
 
 import { partsText } from "../core/loop.ts";
 import { listSessions, type SessionStore } from "../core/session.ts";
+import { userTurnLine } from "./attach.ts";
 import { replayLabel } from "./modes-cmd.ts";
 import type { Renderer } from "./renderer.ts";
 import { randomUUID } from "node:crypto";
 
 /** Re-render the whole transcript from the active session path (boot replay, /resume, /rewind,
  *  /new, checkpoint restores). Tool calls replay as start+end card pairs; mode switches render
- *  as a human line (port #20 LOW-3), never the raw <mode_notice> XML the entry carries. */
+ *  as a human line (port #20 LOW-3), never the raw <mode_notice> XML the entry carries; user
+ *  turns carry their image chips (port #34), so an image-only turn is not a blank line. */
 export function replayTranscript(renderer: Renderer, store: SessionStore): void {
   renderer.clearTranscript();
   for (const m of store.messages()) {
     const text = partsText(m.parts);
-    if (m.role === "user") { if (text) renderer.addUser(text); }
+    if (m.role === "user") { const line = userTurnLine(text, m.parts); if (line) renderer.addUser(line); }
     else if (m.role === "assistant") {
       if (text) { const v = renderer.beginAssistant(); v.append(text); v.done(); }
       for (const p of m.parts) {

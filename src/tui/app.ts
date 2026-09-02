@@ -17,6 +17,7 @@ import { togglePlanAct, applyModeToRun, flushModeSwitch } from "./modes-cmd.ts";
 import { cmdCheckpoints, cmdRestore, type CheckpointCmdCtx } from "./checkpoints-cmd.ts";
 import { cmdRewind, cmdSessions, cmdNew, replayTranscript, usageOf, resolveBootSession, type SessionCmdCtx } from "./session-cmd.ts";
 import { cmdHelp, cmdStatus, cmdCost, cmdSkills, cmdMemory, cmdExport, cmdTodos, cmdTasks, todoLabel, type InfoCmdCtx } from "./info-cmd.ts";
+import { cmdAttach, carryOverAttachments, queuedAttachNote, userTurnLine, ATTACH_COMMAND, type AttachCtx } from "./attach.ts";
 import { previewDiff } from "../coding/diff.ts";
 import { discoverCommands, commandsForPalette, dispatchCustomCommand, type CustomCommandCtx } from "./commands.ts";
 import type { Renderer, AssistantView, StatusInfo } from "./renderer.ts";
@@ -64,6 +65,7 @@ export const TUI_COMMANDS = [
   { name: "export", description: "Export this session: /export [--json] [path] [--force]" },
   { name: "todos", description: "Show this session's todo list (agent-maintained via todo_write)" },
   { name: "tasks", description: "Background tasks: /tasks [cancel <id>|cancel all]" },
+  ATTACH_COMMAND, // port #34: /attach <path> · /attach (list) · /attach clear — attach.ts
 ];
 
 interface TuiState {
@@ -152,9 +154,12 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   // both read the ACTIVE store live — /sessions and a root /rewind swap it (session-cmd.ts helpers)
   const refreshUsage = () => { const u = usageOf(store); state.tokensIn = u.tokensIn; state.tokensOut = u.tokensOut; };
   const replayHistory = () => replayTranscript(renderer, store);
+  // port #34: /attach context — the stage lives on the ACTIVE store (read live); the vision check uses the current mode's model
+  const attachCtx: AttachCtx = { renderer, cwd: rt.cwd, store: () => store, modelRef: () => modes.modelFor() };
 
   const switchSession = (id: string, announce = true) => {
     flushModeSwitch(modes, store); // port #20 MED-2: don't discard a pending switch on /sessions away
+    const pending = store.stagedAttachments; // port #34: the stage lives on the instance — re-staged on the new one below
     store = new SessionStore(sessionsDir, id);
     blocks = new BlockStore(join(sessionsDir, id, "memory"));
     // rebind BOTH consumers: the memory tool AND the system prompt's memory block
@@ -170,6 +175,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     refreshUsage();
     pushStatus();
     if (announce) renderer.addSystemNote(`session ${id.slice(0, 8)} (${store.messages().length} messages)`);
+    carryOverAttachments(attachCtx, pending); // port #34: a swap must never lose staged images silently
   };
 
   // port #11: checkpoint command context (store/busy read live via closures)
@@ -238,6 +244,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
         if (arg) void cmdSessions(sessCtx, arg); else void cmdSessions(sessCtx);
         return true;
       case "export": cmdExport(infoCtx, arg); return true;
+      case "attach": cmdAttach(attachCtx, arg); return true; // port #34
       default:
         // port #30: a discovered custom command renders its template and submits it as a user turn.
         // MED-2: it gets the RAW remainder of the line (whitespace runs and pasted newlines intact —
@@ -324,11 +331,11 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
 
   /** A plain user turn — also the path custom commands submit their rendered prompt through (port #30). */
   const submit = (text: string): Promise<void> => {
-    renderer.addUser(text);
+    renderer.addUser(userTurnLine(text, store.stagedAttachments)); // port #34: image chips under the text — the stage folds into this message
     // port #20: a pending mode switch becomes a durable session entry on the next
     // submit (round-trip cancellation: toggling back before submitting records nothing)
     flushModeSwitch(modes, store);
-    if (state.busy) { steering.push(text); renderer.addSystemNote("queued as steering (applies before the next model turn)"); return Promise.resolve(); }
+    if (state.busy) { steering.push(text); renderer.addSystemNote(`queued as steering (applies before the next model turn)${queuedAttachNote(store)}`); return Promise.resolve(); }
     return startRun(text);
   };
   renderer.setCommands([...TUI_COMMANDS, ...commandsForPalette(custom.commands)]);

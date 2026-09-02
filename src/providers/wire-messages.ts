@@ -11,7 +11,10 @@
  *    provider/transform.ts:409-441 unsupportedParts);
  *  - a sidecar that cannot be read lowers to a placeholder too — a request body never throws.
  *  Images on assistant/tool messages are nothing this harness produces (tool results with images
- *  are out of scope for #34); they lower to placeholders rather than to blocks. */
+ *  are out of scope for #34): an assistant message WITHOUT tool calls lowers them to placeholder
+ *  text (lowerContent's non-user branch); a tool-role message emits its tool_result parts only and
+ *  an assistant message WITH tool calls emits partsText + tool_calls, so image parts on those two
+ *  shapes are dropped from the request — never turned into blocks. */
 
 import type { Message, ImagePart } from "../core/types.ts";
 import { partsText } from "../core/loop.ts";

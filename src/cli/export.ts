@@ -20,7 +20,8 @@ import { SessionStore, listSessions, type Entry } from "../core/session.ts";
 import { modeSwitchOf } from "../core/modes.ts";
 import { ModelCatalog } from "../providers/catalog.ts";
 import { buildCostNote } from "../tui/cost.ts";
-import type { Message, ToolCallPart, ToolResultPart } from "../core/types.ts";
+import { describeImage } from "../core/images.ts";
+import type { ImagePart, Message, ToolCallPart, ToolResultPart } from "../core/types.ts";
 
 /** Tool output cap (chars) per card. Clipped output gets an explicit marker line. */
 export const TOOL_OUTPUT_CAP = 2000;
@@ -148,7 +149,11 @@ export function renderSessionMarkdown(entries: readonly Entry[], sessionId: stri
     if (sw) { blocks.push(`> mode → ${sw.to}`); continue; } // replay convention, never the raw XML
     const text = textOf(e);
     if (e.role === "user") {
-      if (text) blocks.push("## User", text);
+      // port #34: image parts render as one chip line each under the text (name, WxH, size), the
+      // same describeImage text the TUI notes use; the bytes stay in the session's attachments
+      // dir (header) so no image link that would dangle next to the export is emitted
+      const chips = e.parts.filter((p): p is ImagePart => p.kind === "image").map((p) => `[image: ${describeImage(p)}]`);
+      if (text || chips.length > 0) blocks.push("## User", ...(text ? [text] : []), ...chips);
     } else if (e.role === "assistant") {
       blocks.push("## Assistant");
       if (text) blocks.push(text);

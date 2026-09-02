@@ -182,13 +182,15 @@ export function imageData(part: ImagePart): string | undefined {
   try { return readFileSync(part.path).toString("base64"); } catch { return undefined; }
 }
 
-/** Decoded byte size when knowable without reading a sidecar (inline: from the base64 length). */
+/** Decoded byte size when knowable without reading a sidecar (inline: from the base64 length).
+ *  Same path rule as imageData(): only an absolute (store-hydrated) path is stat'ed — a persisted
+ *  relative path must never touch the process cwd (session.ts F2 confinement). */
 export function imageByteSize(part: ImagePart): number | undefined {
   if (part.bytes !== undefined) {
     const pad = part.bytes.endsWith("==") ? 2 : part.bytes.endsWith("=") ? 1 : 0;
     return Math.floor((part.bytes.length * 3) / 4) - pad;
   }
-  if (part.path === undefined) return undefined;
+  if (part.path === undefined || !isAbsolute(part.path)) return undefined;
   try { return statSync(part.path).size; } catch { return undefined; }
 }
 

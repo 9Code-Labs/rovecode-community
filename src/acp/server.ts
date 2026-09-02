@@ -3,7 +3,11 @@
  *  Apache-2.0), mapped onto the ONE agentLoop (ADR-003).
  *
  *  Mapping:
- *    initialize            → protocol v1 + capabilities (no loadSession, text-only prompts)
+ *    initialize            → protocol v1 + capabilities (no loadSession; text + image prompts, port #34)
+ *    prompt image blocks   → ImagePart via imageFromBase64 (the bytes decide the type; the TUI's
+ *                            per-image size cap and ≤8-per-message count cap apply), staged on the
+ *                            session store so the loop's user message carries them (no loop change);
+ *                            any bad block → JSON-RPC invalid params {error} before a run starts
  *    session/new           → bootRuntime (same stores/tools/config as repl/tui); a sandbox
  *                            misconfig / unavailable rung in the client's cwd (port #27)
  *                            → JSON-RPC invalid params {cwd, error: one-line message}
@@ -32,11 +36,13 @@ import {
   type ContentBlock, type SessionNotification, type ToolCallContent,
   type ToolKind as AcpToolKind,
 } from "@zed-industries/agent-client-protocol";
+import { basename } from "node:path";
 import { Readable, Writable } from "node:stream";
 import { agentLoop, SteeringQueue } from "../core/loop.ts";
 import { bootRuntime, type Runtime } from "../cli/runtime.ts";
+import { checkImageCount, imageFromBase64 } from "../core/images.ts";
 import { SandboxConfigError } from "../core/sandbox-config.ts";
-import type { ApprovalFn, RunEvent, StreamFn } from "../core/types.ts";
+import type { ApprovalFn, ImagePart, RunEvent, StreamFn } from "../core/types.ts";
 
 export interface AcpOptions {
   /** test/dev override threaded into createRuntime; undefined = provider from env */
@@ -67,19 +73,42 @@ interface AcpSessionState {
 
 // ---------- translation helpers (RunEvent / house shapes → ACP shapes) ----------
 
-/** Flatten a prompt's content blocks to the loop's goal text. Baseline blocks
- *  (text, resource_link) per spec; embedded text resources are inlined. */
-export function promptText(blocks: ContentBlock[]): string {
+export interface PromptParts {
+  /** the loop's goal text: text blocks, resource links, inlined embedded text resources */
+  goal: string;
+  /** port #34: decoded image blocks, in prompt order */
+  images: ImagePart[];
+  /** the FIRST problem (unsupported/mismatched mime, oversize, more than 8 images) — the caller
+   *  rejects the whole prompt, nothing is half-sent */
+  error?: string;
+}
+
+/** Prompt content blocks → goal text + image parts. Baseline blocks (text, resource_link) per
+ *  spec; embedded text resources are inlined; image blocks decode through imageFromBase64 (the
+ *  bytes decide the type — a disagreeing mimeType is an error, like the TUI's loader) under the
+ *  same per-image size cap and per-message count cap as /attach; audio stays unsupported. */
+export function promptParts(blocks: ContentBlock[]): PromptParts {
   const parts: string[] = [];
+  const images: ImagePart[] = [];
+  let error: string | undefined;
   for (const b of blocks) {
     if (b.type === "text") parts.push(b.text);
     else if (b.type === "resource_link") parts.push(`[resource: ${b.uri}]`);
     else if (b.type === "resource" && "text" in b.resource) {
       parts.push(`<context uri="${b.resource.uri}">\n${b.resource.text}\n</context>`);
+    } else if (b.type === "image") {
+      const name = b.uri && !b.uri.startsWith("data:") ? basename(b.uri) : undefined; // display name: the file the client sent
+      const res = imageFromBase64(b.data, b.mimeType, name !== undefined ? { name } : {});
+      if ("error" in res) error ??= res.error; else images.push(res);
     } else parts.push(`[unsupported ${b.type} content omitted]`);
   }
-  return parts.join("\n");
+  error ??= checkImageCount(images.length);
+  const goal = parts.join("\n");
+  return error === undefined ? { goal, images } : { goal, images, error };
 }
+
+/** Text-only view of a prompt (image blocks travel separately — promptParts). */
+export function promptText(blocks: ContentBlock[]): string { return promptParts(blocks).goal; }
 
 const TOOL_KINDS: Record<string, AcpToolKind> = {
   read: "read", edit: "edit", write: "edit", bash: "execute",
@@ -154,7 +183,7 @@ export class AionAcpAgent implements Agent {
       protocolVersion: PROTOCOL_VERSION,
       agentCapabilities: {
         loadSession: false,
-        promptCapabilities: { image: false, audio: false, embeddedContext: true },
+        promptCapabilities: { image: true, audio: false, embeddedContext: true }, // image: port #34 (promptParts)
       },
       authMethods: [],
     };
@@ -194,7 +223,11 @@ export class AionAcpAgent implements Agent {
     const stream = s.rt.stream;
     if (!stream) throw RequestError.authRequired();
 
-    const goal = promptText(params.prompt);
+    const { goal, images, error } = promptParts(params.prompt);
+    // port #34: a bad image block (not png/jpeg/gif/webp, mime disagrees with the bytes, oversize,
+    // 9+ images) rejects the prompt as invalid params BEFORE any run — same "nothing staged" outcome
+    // as the TUI's error note; the session stays usable for the corrected prompt
+    if (error !== undefined) throw RequestError.invalidParams({ error });
     const model = { provider: s.rt.provider?.id ?? "mock", model: s.rt.defaultModel || "default" };
     const def = s.rt.buildDef(model);
     const cfg = s.rt.buildCfg(this.opts.yolo ?? false, this.approvalFor(params.sessionId, s));
@@ -208,6 +241,10 @@ export class AionAcpAgent implements Agent {
       signal: abort.signal, // port #21: session/cancel kills in-flight fetch/tools mid-turn
     };
 
+    // port #34: the store folds the staged images into the loop's user message when it lands in
+    // append() — the same seam TUI /attach uses; the active guard above means no other user entry
+    // can slip in between (task steers drain AFTER the goal message, loop.ts)
+    if (images.length > 0) s.rt.store.stageAttachments(images);
     const gen = agentLoop(def, goal, {}, cfg, deps, s.steering);
     let fireCancel: () => void = () => {};
     const onCancel = new Promise<null>((resolve) => { fireCancel = () => resolve(null); });

@@ -6,11 +6,13 @@
 import { test, expect } from "bun:test";
 import {
   ClientSideConnection, ndJsonStream, PROTOCOL_VERSION,
-  type Client, type SessionNotification,
+  type Client, type ContentBlock, type SessionNotification,
   type RequestPermissionRequest, type RequestPermissionResponse,
 } from "@zed-industries/agent-client-protocol";
-import { serveAcp, promptText, updateForEvent, kindFor, titleFor, type AcpOptions, type AionAcpAgent } from "../../src/acp/server.ts";
-import type { StreamEvent, StreamFn } from "../../src/core/types.ts";
+import { serveAcp, promptText, promptParts, updateForEvent, kindFor, titleFor, type AcpOptions, type AionAcpAgent } from "../../src/acp/server.ts";
+import type { Message, StreamEvent, StreamFn } from "../../src/core/types.ts";
+import { PNG_1x1, PNG_1x1_B64 } from "../fixtures/images.ts";
+import { createHash } from "node:crypto";
 import { textTurn, toolTurn } from "../../src/providers/stream.ts";
 import { McpManager } from "../../src/mcp/client.ts";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from "node:fs";
@@ -74,7 +76,7 @@ test("initialize negotiates v1 and advertises capabilities honestly", async () =
     const init = await conn.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} });
     expect(init.protocolVersion).toBe(1);
     expect(init.agentCapabilities?.loadSession).toBe(false);
-    expect(init.agentCapabilities?.promptCapabilities).toEqual({ image: false, audio: false, embeddedContext: true });
+    expect(init.agentCapabilities?.promptCapabilities).toEqual({ image: true, audio: false, embeddedContext: true }); // image: port #34
     expect(init.authMethods).toEqual([]);
     const s1 = await conn.newSession({ cwd, mcpServers: [] });
     const s2 = await conn.newSession({ cwd, mcpServers: [] });
@@ -513,18 +515,66 @@ async function until(pred: () => boolean, ms: number, what: string): Promise<voi
 
 // ---------- pure translation helpers ----------
 
-test("promptText flattens baseline blocks and marks unsupported ones", () => {
-  expect(promptText([
+test("promptText flattens baseline blocks and marks unsupported ones; image blocks travel as parts (promptParts), not as text", () => {
+  const blocks: ContentBlock[] = [
     { type: "text", text: "fix the bug" },
     { type: "resource_link", uri: "file:///a.ts", name: "a.ts" },
     { type: "resource", resource: { uri: "file:///b.ts", text: "const b = 1;" } },
-    { type: "image", data: "AAAA", mimeType: "image/png" },
-  ])).toBe([
+    { type: "image", data: PNG_1x1_B64, mimeType: "image/png", uri: "file:///shots/dot.png" },
+    { type: "audio", data: "AAAA", mimeType: "audio/wav" },
+  ];
+  const goal = [
     "fix the bug",
     "[resource: file:///a.ts]",
     '<context uri="file:///b.ts">\nconst b = 1;\n</context>',
-    "[unsupported image content omitted]",
-  ].join("\n"));
+    "[unsupported audio content omitted]",
+  ].join("\n");
+  expect(promptText(blocks)).toBe(goal);
+  expect(promptParts(blocks)).toEqual({ goal, images: [{ kind: "image", mime: "image/png", bytes: PNG_1x1_B64, width: 1, height: 1, name: "dot.png" }] });
+  // a nameless image keeps no name (chip falls back to the mime); a data: uri is not a file name
+  expect(promptParts([{ type: "image", data: PNG_1x1_B64, mimeType: "image/png", uri: `data:image/png;base64,${PNG_1x1_B64}` }]).images[0]!.name).toBeUndefined();
+  // the FIRST problem is the error; nothing is thrown from here
+  expect(promptParts([{ type: "image", data: PNG_1x1_B64, mimeType: "image/jpeg", uri: "file:///x/dot.png" }]).error).toBe("dot.png: declared image/jpeg but the bytes are image/png");
+  expect(promptParts(Array.from({ length: 9 }, () => ({ type: "image" as const, data: PNG_1x1_B64, mimeType: "image/png" }))).error).toBe("at most 8 images per message (9 attached)");
+});
+
+test("port #34: image prompt blocks → ImagePart on the loop's user message (the store fold TUI /attach uses), sidecar in the session dir, no base64 in the JSONL; a non-image mime, a mismatched mime and 9 images reject the prompt as invalid params BEFORE any run, and the session stays usable", async () => {
+  const cwd = tmpCwd();
+  try {
+    const seen: Message[][] = [];
+    const stream: StreamFn = async function* (_m, messages) { seen.push(messages); yield { type: "turn", turn: textTurn("a dot") }; };
+    const { conn } = connect({ stream });
+    const sessionId = await handshake(conn, cwd);
+    const resp = await conn.prompt({ sessionId, prompt: [
+      { type: "text", text: "what is this?" },
+      { type: "image", data: PNG_1x1_B64, mimeType: "image/png", uri: "file:///shots/dot.png" },
+    ] });
+    expect(resp.stopReason).toBe("end_turn");
+    const user = seen[0]!.filter((m) => m.role === "user").at(-1)!;
+    expect(user.parts).toEqual([{ kind: "text", text: "what is this?" }, { kind: "image", mime: "image/png", bytes: PNG_1x1_B64, width: 1, height: 1, name: "dot.png" }]);
+    const sha = createHash("sha256").update(PNG_1x1).digest("hex");
+    const raw = readFileSync(join(cwd, ".aion", "sessions", sessionId, "entries.jsonl"), "utf8");
+    expect(raw).toContain(`attachments/${sha}.png`);
+    expect(raw).not.toContain(PNG_1x1_B64);
+    expect(existsSync(join(cwd, ".aion", "sessions", sessionId, "attachments", `${sha}.png`))).toBe(true);
+
+    const rejects: [ContentBlock[], RegExp][] = [
+      [[{ type: "text", text: "read this" }, { type: "image", data: Buffer.from("hello").toString("base64"), mimeType: "text/plain" }], /^image: not a png\/jpeg\/gif\/webp image \(magic bytes: 68 65 6c 6c\)$/],
+      [[{ type: "image", data: PNG_1x1_B64, mimeType: "image/jpeg", uri: "file:///x/dot.png" }], /^dot\.png: declared image\/jpeg but the bytes are image\/png$/],
+      [Array.from({ length: 9 }, () => ({ type: "image" as const, data: PNG_1x1_B64, mimeType: "image/png" })), /^at most 8 images per message \(9 attached\)$/],
+    ];
+    for (const [prompt, re] of rejects) {
+      type RpcErr = { code: number; data?: { error?: string } };
+      let err: RpcErr | null = null;
+      try { await conn.prompt({ sessionId, prompt }); } catch (e) { err = e as RpcErr; }
+      expect(err?.code).toBe(-32602);                 // invalid params — the house shape for "this parameter cannot be served"
+      expect(String(err?.data?.error)).toMatch(re);
+    }
+    expect(seen.length).toBe(1);                      // no run started for any rejected prompt
+    expect(readFileSync(join(cwd, ".aion", "sessions", sessionId, "entries.jsonl"), "utf8").split("\n").filter(Boolean).length).toBe(2); // user + assistant only
+    expect((await conn.prompt(textPrompt(sessionId, "still here"))).stopReason).toBe("end_turn");
+    expect(seen[1]!.filter((m) => m.role === "user").at(-1)!.parts).toEqual([{ kind: "text", text: "still here" }]); // nothing leaked from the rejected prompts
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 
 test("lifecycle-only RunEvents have no ACP counterpart", () => {

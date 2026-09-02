@@ -279,3 +279,69 @@ test("hash chain valid after restart → branch → append: zero corruption, per
   }
   rmSync(dir, { recursive: true, force: true });
 });
+
+// ── port #34 hardening (wiring pass): F1 corrupt-shape tolerance, F2 sidecar path confinement ──
+
+import { appendFileSync } from "node:fs";
+import { entryShape } from "../../src/core/session.ts";
+import { toAnthropicMessages } from "../../src/providers/wire-messages.ts";
+
+/** Hand-write a chain-consistent wrapped line after `prev`, so ONLY the entry shape/paths are wrong. */
+function wrap(prev: { id: string; hash: string }, id: string, entry: unknown) {
+  const w = { id, parentId: prev.id, createdAt: 1, prevHash: prev.hash, hash: "", entry };
+  w.hash = chainHash(prev.hash, w);
+  return w;
+}
+
+test("F1 (ADR-004): foreign/corrupt entry shapes — entry null, a scalar entry, parts:[null], parts not an array, a bare {} and a scalar LINE — load without throwing, are reported as unknown-shape, and messages()/turnPoints()/path()/listSessions carry on with the good entry (9261dc1: the constructor threw TypeError from hydrateImages; c4ac431: loaded, but messages() threw on the null entry)", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-test-"));
+  const s = new SessionStore(dir, "shapes");
+  const good = msg("good"); s.append(good);
+  const f = join(dir, "shapes", "entries.jsonl");
+  const lines = readFileSync(f, "utf8").split("\n").filter(Boolean);
+  let prev = JSON.parse(lines[0]!) as { id: string; hash: string };
+  const foreign: unknown[] = [null, 5, { role: "user", parts: [null] }, { role: "user", parts: "nope" }, {}];
+  foreign.forEach((entry, i) => { const w = wrap(prev, `f${i}`, entry); lines.push(JSON.stringify(w)); prev = w; });
+  lines.push("7"); // a scalar LINE: valid JSON, not an entry object
+  writeFileSync(f, lines.join("\n") + "\n");
+
+  const s2 = new SessionStore(dir, "shapes");                       // must not throw
+  const corrupt = s2.reload();
+  expect(corrupt.map((c) => [c.kind, c.entryId ?? c.line])).toEqual([
+    ["unknown-shape", "f0"], ["unknown-shape", "f1"], ["unknown-shape", "f2"], ["unknown-shape", "f3"], ["unknown-shape", "f4"], ["unknown-shape", 6],
+  ]);
+  expect(s2.messages().map((m) => m.parts)).toEqual([[{ kind: "text", text: "good" }]]);
+  expect(s2.turnPoints().map((t) => t.text)).toEqual(["good"]);
+  expect(s2.path().length).toBe(1);
+  expect(listSessions(dir).find((x) => x.id === "shapes")?.preview).toBe("good");
+  // still appendable: the loop parents on the last GOOD message and the chain follows that parent
+  s2.append(msg("after", good.id));
+  expect(new SessionStore(dir, "shapes").messages().map((m) => (m.parts[0] as { text: string }).text)).toEqual(["good", "after"]);
+  // the predicate itself
+  expect(entryShape({ role: "user", parts: [{ kind: "text", text: "x" }] })).toBe("message");
+  expect(entryShape({ kind: "event", event: { type: "steer", text: "t" } })).toBe("event");
+  for (const bad of [null, 5, "x", {}, { role: "user" }, { role: "user", parts: [null] }, { role: "user", parts: [{}] }, { role: "user", parts: "x" }]) expect(entryShape(bad)).toBeUndefined();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("F2: a persisted image path hydrates ONLY as attachments/<file> — `../outside.png` (a real PNG next to the session dir that the old join resolved to), attachments/../x.png, a nested path, a backslash form, `attachments/..` and `attachments/` stay unhydrated → imageData declines them → the wire sends placeholders; the canonical form still resolves", () => {
+  const dir = mkdtempSync(join(tmpdir(), "aion-test-"));
+  writeFileSync(join(dir, "outside.png"), PNG_1x1);                 // readable PNG OUTSIDE the session dir (= join(sessionDir, "../outside.png"))
+  const s = new SessionStore(dir, "f2");
+  s.append(imsg("ok", dot()));
+  const f = join(dir, "f2", "entries.jsonl");
+  const first = JSON.parse(readFileSync(f, "utf8").trim()) as { id: string; hash: string };
+  const bad = ["../outside.png", "attachments/../outside.png", "attachments/sub/x.png", "attachments\\..\\x.png", "attachments/..", "attachments/"];
+  const parts = bad.map((path, i) => ({ kind: "image", mime: "image/png", path, name: `b${i}.png` }));
+  appendFileSync(f, JSON.stringify(wrap(first, "f2-bad", { id: "f2-bad", role: "user", parts, parentId: first.id, createdAt: 1 })) + "\n");
+
+  const s2 = new SessionStore(dir, "f2");
+  expect(s2.reload()).toEqual([]);                                   // well-formed lines: the PATHS are the problem, not the shape
+  const [okMsg, badMsg] = s2.messages();
+  expect((okMsg!.parts[1] as ImagePart).path).toBe(join(dir, "f2", "attachments", `${PNG_SHA}.png`));
+  expect(imageData(okMsg!.parts[1] as ImagePart)).toBe(PNG_1x1_B64);
+  expect(badMsg!.parts.map((p) => (p as ImagePart).path)).toEqual(bad); // untouched: still relative, never joined onto the session dir
+  for (const p of badMsg!.parts) expect(imageData(p as ImagePart)).toBeUndefined(); // ../outside.png EXISTS and is still not read
+  expect(toAnthropicMessages([badMsg!])[0]!.content).toEqual(bad.map((_, i) => ({ type: "text", text: `[image: b${i}.png — file unavailable]` })));
+  rmSync(dir, { recursive: true, force: true });
+});

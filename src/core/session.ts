@@ -5,7 +5,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, existsSync, readFileSync, writeFileSync, appendFileSync, readdirSync, renameSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
-import type { ImagePart, Message, RunEvent, TextPart } from "./types.ts";
+import type { ImagePart, Message, MessagePart, RunEvent, TextPart } from "./types.ts";
 import { imageExt } from "./images.ts";
 
 export type Entry = Message | ({ id: string; kind: "event"; parentId: string | null; createdAt: number; event: RunEvent });
@@ -49,10 +49,30 @@ function sortKeys(v: unknown): unknown {
 
 interface Wrapped { id: string; parentId: string | null; createdAt: number; prevHash: string; hash: string; entry: Entry }
 
+/** Shape of a loaded entry (ADR-004: classify foreign/corrupt lines, never crash on them):
+ *  "event" = kind "event"; "message" = a role plus a parts ARRAY whose members are objects with a
+ *  string kind; undefined = anything else (null, a scalar, `parts: [null]`, `parts: "x"`, `{}`) —
+ *  reload reports it as unknown-shape, path()/turnPoints() skip it, hydration leaves it alone. */
+export function entryShape(e: unknown): "message" | "event" | undefined {
+  if (!e || typeof e !== "object") return undefined;
+  if ((e as { kind?: unknown }).kind === "event") return "event";
+  const m = e as { role?: unknown; parts?: unknown };
+  if (!("role" in m) || !Array.isArray(m.parts)) return undefined;
+  return m.parts.every((p: unknown) => !!p && typeof p === "object" && typeof (p as { kind?: unknown }).kind === "string") ? "message" : undefined;
+}
+
 /** Event entry (kind "event") vs message — tolerant of foreign/corrupt entry shapes. */
-function isEventWrapped(w: Wrapped): boolean {
-  const e: unknown = w.entry;
-  return !!e && typeof e === "object" && (e as { kind?: unknown }).kind === "event";
+function isEventWrapped(w: Wrapped): boolean { return entryShape(w.entry) === "event"; }
+
+/** F2 (port #34 hardening): the only persisted sidecar form is `attachments/<file>` — one segment,
+ *  no separators, not `.`/`..`. Anything else stays unhydrated (relative): imageData() declines a
+ *  relative path, so the part lowers to a "file unavailable" placeholder instead of a read outside
+ *  the session dir (`../outside.png` used to hydrate to <sessions>/outside.png). */
+function sidecarFile(persisted: string): string | undefined {
+  const prefix = `${ATTACHMENTS_DIR}/`;
+  if (!persisted.startsWith(prefix)) return undefined;
+  const file = persisted.slice(prefix.length);
+  return file !== "" && file !== "." && file !== ".." && !/[\\/]/.test(file) ? file : undefined;
 }
 
 /** Single-line preview of a message's text parts; ≤80 chars, "" when no text. */
@@ -93,7 +113,7 @@ export function listSessions(rootDir: string): SessionSummary[] {
           entryCount++;
           if (typeof w.createdAt === "number" && w.createdAt > updatedAt) updatedAt = w.createdAt;
           const e: unknown = w.entry;
-          if (!preview && e && typeof e === "object" && "role" in e && (e as Message).role === "user") {
+          if (!preview && entryShape(e) === "message" && (e as Message).role === "user") {
             preview = previewText(e as Message);
           }
         }
@@ -168,6 +188,8 @@ export class SessionStore {
         corrupt.push({ kind: "malformed-json", line: i, detail: `unparseable line ${i}` });
         return;
       }
+      // F1: a line that parses but is not an entry object (null, a number, a string) is reported, never dereferenced
+      if (!w || typeof w !== "object") { corrupt.push({ kind: "unknown-shape", line: i, detail: "line is not an entry object" }); return; }
       if (seen.has(w.id)) corrupt.push({ kind: "duplicate-id", entryId: w.id, line: i, detail: "duplicate id" });
       seen.add(w.id);
       if (w.parentId !== null && !seen.has(w.parentId)) {
@@ -181,6 +203,9 @@ export class SessionStore {
         corrupt.push({ kind: "chain-broken", entryId: w.id, line: i, detail: `prevHash disagrees with parent ${w.parentId ?? "(root)"}` });
       }
       if (!byLine.has(w.id)) byLine.set(w.id, w);
+      // F1: a foreign/corrupt entry (null, a scalar, parts:[null], …) is reported and kept in the tree
+      // for chain/leaf purposes; path()/turnPoints() skip it and hydrateImages leaves it untouched
+      if (entryShape(w.entry) === undefined) corrupt.push({ kind: "unknown-shape", entryId: w.id, line: i, detail: "entry is neither a message nor an event" });
       w.entry = this.hydrateImages(w.entry); // session-relative sidecar paths → absolute (in memory only)
       this.cache.push(w);
     });
@@ -248,7 +273,7 @@ export class SessionStore {
    *  keeps its bytes inline, so nothing is ever dropped. Returns the same object when there is
    *  nothing to do. */
   private sidecarImages(entry: Entry): Entry {
-    if (!("role" in entry) || !entry.parts.some((p) => p.kind === "image" && p.bytes !== undefined)) return entry;
+    if (entryShape(entry) !== "message" || !("role" in entry) || !entry.parts.some((p) => p.kind === "image" && p.bytes !== undefined)) return entry;
     const parts = entry.parts.map((p) => {
       if (p.kind !== "image" || p.bytes === undefined) return p;
       const buf = Buffer.from(p.bytes, "base64");
@@ -271,13 +296,13 @@ export class SessionStore {
 
   /** In-memory form: session-relative sidecar paths → absolute under this session's dir, so
    *  core/images.ts imageData() can read them without knowing the session. Same object when
-   *  there is nothing to resolve. */
+   *  there is nothing to resolve. Only the canonical `attachments/<file>` form resolves (F2,
+   *  sidecarFile); a foreign/corrupt entry shape passes through untouched (F1, entryShape). */
   private hydrateImages(entry: Entry): Entry {
-    if (!("role" in entry) || !Array.isArray(entry.parts)) return entry;
-    if (!entry.parts.some((p) => p.kind === "image" && p.path !== undefined && !isAbsolute(p.path))) return entry;
-    const parts = entry.parts.map((p) =>
-      p.kind === "image" && p.path !== undefined && !isAbsolute(p.path) ? { ...p, path: join(this.dir, ...p.path.split("/")) } : p,
-    );
+    if (entryShape(entry) !== "message" || !("role" in entry)) return entry;
+    const file = (p: MessagePart): string | undefined => (p.kind === "image" && p.path !== undefined && !isAbsolute(p.path) ? sidecarFile(p.path) : undefined);
+    if (!entry.parts.some((p) => file(p) !== undefined)) return entry;
+    const parts = entry.parts.map((p) => { const f = file(p); return f === undefined ? p : { ...p, path: join(this.dir, ATTACHMENTS_DIR, f) }; });
     return { ...entry, parts };
   }
 
@@ -296,8 +321,8 @@ export class SessionStore {
     return entry;
   }
 
-  /** Active path = root → leaf (omp buildSessionContext). */
-  path(): Entry[] { return this.wrappedPath().map((w) => w.entry); }
+  /** Active path = root → leaf (omp buildSessionContext); unknown-shape entries (reload F1) are skipped. */
+  path(): Entry[] { return this.wrappedPath().filter((w) => entryShape(w.entry) !== undefined).map((w) => w.entry); }
 
   private wrappedPath(): Wrapped[] {
     const byId = new Map(this.cache.map((w) => [w.id, w]));
@@ -328,7 +353,7 @@ export class SessionStore {
     const out: TurnPoint[] = [];
     for (const w of this.wrappedPath()) {
       const e = w.entry;
-      if (!("role" in e) || e.role !== "user") continue;
+      if (entryShape(e) !== "message" || !("role" in e) || e.role !== "user") continue; // F1: foreign shapes skipped
       out.push({
         entryId: w.id,
         index: out.length + 1,

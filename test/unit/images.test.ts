@@ -4,7 +4,7 @@
  *  the wire block helpers both adapters use, and the transport (base64) form. */
 
 import { test, expect } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -128,6 +128,13 @@ test("imageData: inline bytes as-is, an absolute sidecar path read back, a relat
   expect(imageData({ kind: "image", mime: "image/png", path: "attachments/dot.png" })).toBeUndefined();
   expect(imageData({ kind: "image", mime: "image/png" })).toBeUndefined();
   expect(imageByteSize({ kind: "image", mime: "image/png" })).toBeUndefined();
+  // F2 parity: a RELATIVE path that does reach a real file from the process cwd is still not stat'ed
+  // (describeImage must not leak a size for a path the store refused to hydrate). package.json is
+  // always present in the test cwd; path.relative(cwd, tmpfile) is NOT usable here — on Windows it
+  // returns an absolute path when cwd and the temp dir sit on different drives.
+  const rel = "package.json";
+  expect(statSync(rel).size).toBeGreaterThan(0);
+  expect(imageByteSize({ kind: "image", mime: "image/png", path: rel })).toBeUndefined();
   rmSync(dir, { recursive: true, force: true });
 });
 
