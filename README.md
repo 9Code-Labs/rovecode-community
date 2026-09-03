@@ -1,10 +1,12 @@
-# Aion — Research-Derived Agent Harness
+# Rovecode
 
-A best-of-OSS agent harness in TypeScript on Bun. Instead of inventing architecture, aion ports
-evidence-based patterns from open-source harnesses (pi, opencode, codex, cline, aider, gemini-cli,
-oh-my-pi, hermes-agent, senpi, prime-agent, OpenHands) — every port traces to file:line in a
-snapshotted source and lands only after an independent fresh-context critic verifies it against a
-pre-written bar (ledger: `PORTS.md` at the workspace root).
+A coding agent for the terminal. The cockpit is a panelled TUI called sextant; the mascot is a
+weather cloud whose mood follows the run. Under the hood, rovecode is a research-derived harness in
+TypeScript on Bun: instead of inventing architecture it ports evidence-based patterns from open-source
+harnesses (pi, opencode, codex, cline, aider, gemini-cli, oh-my-pi, hermes-agent, senpi, prime-agent,
+OpenHands) — every port traces to file:line in a snapshotted source and lands only after an independent
+fresh-context critic verifies it against a pre-written bar (ledger: `PORTS.md`, kept outside this
+repository for now).
 
 ## Status (2026-09-02, post wave 3)
 
@@ -23,15 +25,15 @@ Requires [Bun](https://bun.sh) ≥ 1.3.14 (the CLI entry is TypeScript, executed
 
 ```bash
 # from source
-cd aion && bun install
-bun run src/cli/main.ts --help          # or: bun link  → `aion` on PATH
+git clone https://github.com/9Code-Labs/rovecode.git && cd rovecode && bun install
+bun run src/cli/main.ts --help          # or: bun link  → `rovecode` on PATH
 
 # single binary (~110 MB: bun runtime + bundled deps + embedded native addons)
-bun run build                           # scripts/build.ts → dist/aion(.exe) + smoke
-dist/aion.exe --version
+bun run build                           # scripts/build.ts → dist/rovecode(.exe) + smoke
+dist/rovecode.exe --version
 
 # from an npm tarball (npm pack) — global install shims to bun via the shebang
-npm install -g ./aion-0.2.0.tgz
+npm install -g ./rovecode-0.2.0.tgz
 ```
 
 Not yet published to the npm registry (name availability unverified; no self-update — rebuild or
@@ -40,50 +42,110 @@ reinstall to update).
 ## Quickstart
 
 ```bash
-aion                        # TUI chat — the sextant surface on a truecolor TTY ≥ 100×30, else the classic pi-tui chat
-aion --classic              # force the classic chat; --plain = readline REPL; --pet <name> names the sextant pet
-aion "fix the failing test" # one-shot task
-aion run "<prompt>" --yolo  # one-shot, all tool approvals granted
-aion run "<prompt>" --output json    # ONE result object on stdout (ndjson: one line per RunEvent + a result line)
-aion run "/review src/x.ts" # a leading /name expands .aion/commands/<name>.md (custom slash command) headlessly
-aion gauntlet               # adversarial eval suite (offline, deterministic, 10 tasks)
-aion bench                  # cross-harness micro-benchmarks
-aion tools                  # registered tool listing
-aion auth set <provider>    # store an API key (prompted on the terminal, never echoed); auth list / auth remove
-aion trace <session-id>     # replay a session's JSONL tree
-aion acp                    # Agent Client Protocol v1 over stdio (Zed/JetBrains)
-aion serve                  # headless HTTP + SSE server (AION_PORT, loopback-only)
+rovecode connect                # connect a model, step by step: pick a provider, paste the key (hidden), one test call
+rovecode connect anthropic      # the same in one line — see Providers for the flags (rovecode setup = the wizard)
+rovecode                        # TUI chat — the sextant surface on a truecolor TTY ≥ 100×30, else the classic pi-tui chat
+rovecode --classic              # force the classic chat; --plain = readline REPL; --pet <name> names the sextant pet
+rovecode "fix the failing test" # one-shot task
+rovecode run "<prompt>" --yolo  # one-shot in auto mode (never asks)
+rovecode --effort high          # how hard the model thinks first: off | low | medium | high (/effort in the
+                              # TUI, ROVECODE_EFFORT=…). Anthropic takes output_config.effort or a thinking
+                              # budget depending on the model — rovecode learns which from the endpoint's own
+                              # 400 and remembers it; OpenAI takes reasoning_effort. Billed as output tokens.
+rovecode --accept-edits         # middle tier: writes INSIDE this folder stop asking; shell, subagents,
+/yolo --save                  # make it stick: the level is written to ~/.rovecode/settings.json and the
+/accept-edits --save --project  # next launch starts there. --project pins it to this checkout instead.
+                              # Ladder: CLI flag > ROVECODE_PERMISSION > .rovecode/settings.json (project)
+                              # > ~/.rovecode/settings.json (user) > ask. Without --save a toggle lasts one session.
+                              # network and writes outside it still ask (/accept-edits · ROVECODE_ACCEPT_EDITS=1
+                              # · or the `all edits` button on a write approval card)
+rovecode run "<prompt>" --output json    # ONE result object on stdout (ndjson: one line per RunEvent + a result line)
+rovecode run "/review src/x.ts" # a leading /name expands .rovecode/commands/<name>.md (custom slash command) headlessly
+rovecode gauntlet               # adversarial eval suite (offline, deterministic, 10 tasks)
+rovecode gauntlet --live        # 9 of those tasks against the configured REAL model, through the real prompt
+                                # (--model provider/model, --effort …): the before/after instrument for prompt work
+rovecode bench                  # cross-harness micro-benchmarks
+rovecode tools                  # registered tool listing
+rovecode auth set <provider>    # store an API key (prompted on the terminal, never echoed); auth list / auth remove
+rovecode provider add <id> <url> # register any OpenAI-compatible or Anthropic endpoint — live, no restart; provider list|test
+rovecode model                # pick from a numbered menu of every configured provider's models
+rovecode models               # just list them (* = current); alias for `model list`
+rovecode model use <provider/model>  # persist the default model directly (--project pins it to this repo)
+rovecode trace <session-id>     # replay a session's JSONL tree
+rovecode acp                    # Agent Client Protocol v1 over stdio (Zed/JetBrains)
+rovecode serve                  # headless HTTP + SSE server (ROVECODE_PORT, loopback-only)
 ```
 
-Without a provider configured, one-shot runs use a scripted mock provider (also how the packaging
-smoke works). For a real model, store a key once:
+Without a provider configured, one-shot runs answer from a scripted mock (also how the packaging
+smoke works), and the TUI opens with a card pointing at `/setup`. The quickest way to a real model is
+`rovecode connect` (or `/setup` in the TUI). Give it a provider id and it stops asking — the whole
+sitting becomes one line that fits in a README, a Dockerfile or a CI step:
 
 ```bash
-aion auth set anthropic                  # prompts for ANTHROPIC_API_KEY — never echoed, never logged
-aion auth set kaesra --key MY_PROXY_KEY  # override the key name recorded for a provider
-aion auth list                           # stored providers + key names, values redacted (first 4 chars)
-aion auth remove anthropic
-aion auth set openai < key.txt           # piped stdin: reads one line, no prompt (scripts)
+rovecode connect                             # no arguments: the step-by-step wizard (rovecode setup)
+rovecode connect anthropic                   # a built-in: key from the env, else one hidden prompt
+rovecode connect anthropic --model claude-opus-5   # pin the model too
+rovecode connect ollama --no-key             # a local server: nothing to store
+rovecode connect gw https://gw.corp/v1 --protocol anthropic --key --project   # your own endpoint
+echo "$KEY" | rovecode connect groq --key-stdin    # scripts and CI: no terminal needed
 ```
 
-Keys live in `~/.aion/credentials.json` (`AION_HOME` overrides the directory). On POSIX the file is
+It registers the endpoint, stores the key, picks the model, makes one tiny real call and persists the
+default. A key is never a flag *value* — that would sit in the shell history and in every `ps` listing
+— so `--key` prompts (hidden), `--key-stdin` reads one piped line and `--key-env NAME` names an env var
+to read at call time. Exit codes: `0` connected, `1` the test call failed (**the config is still
+written** — `rovecode provider test <id>` retries it), `2` a usage error.
+
+By hand, store a key once — built-in providers need nothing else:
+
+```bash
+rovecode auth set anthropic                  # prompts for ANTHROPIC_API_KEY — never echoed, never logged
+rovecode auth set kaesra --key MY_PROXY_KEY  # override the key name recorded for a provider
+rovecode auth list                           # stored providers + key names, values redacted (first 4 chars)
+rovecode auth remove anthropic
+rovecode auth set openai < key.txt           # piped stdin: reads one line, no prompt (scripts)
+```
+
+Any other OpenAI-compatible or Anthropic endpoint — a proxy, a gateway, a local server — is one line
+away, and every change is **live**: a running TUI, `rovecode serve` or `rovecode acp` picks it up on the
+next model call, no restart:
+
+```bash
+rovecode provider add myproxy https://llm.example.com/v1 --model gpt-5 --key   # --key prompts (never echoed)
+rovecode provider add ollama http://127.0.0.1:11434/v1 --no-key                # local server, no key
+rovecode provider add gw https://gw.corp/v1 --protocol anthropic --key-env GW_TOKEN --project  # ./.rovecode
+rovecode provider list                       # configured providers + the default provider/model (key SOURCES only)
+rovecode provider test myproxy               # one tiny real call: url + key + model
+rovecode model list myproxy                  # ids from providers.json or the endpoint's /models
+rovecode model use myproxy/gpt-5             # persist the default (running TUIs switch live)
+```
+
+In the TUI the same surface is `/connect` (bare: the guided cards, same as `/setup`; with an id: the
+one-liner above, minus the key flags — there is no hidden prompt in there, so a missing key is handed
+over to `rovecode auth set <id>` or `/provider key <id> <secret>` and the command finishes itself the
+moment the key lands), `/provider list|add|remove|use|test|key <id> <secret>`, `/models
+[provider]` and `/model <provider/model> [--save]`; the agent itself has `provider_list` (read-only) and
+`provider_edit` (add/remove/use — asks for approval, **never accepts a key**: the human stores it with
+`rovecode auth set <id>` or `/provider key`, or names an env var with `keyEnv`).
+
+Keys live in `~/.rovecode/credentials.json` (`ROVECODE_HOME` overrides the directory). On POSIX the file is
 written 0600 inside a 0700 directory. On Windows, mode bits are not enforced — the file is protected
-by the NTFS ACL of your user profile (`%USERPROFILE%`, which `~/.aion` inherits), not by permission
-bits. Stored keys beat `<NAME>_API_KEY` env vars; an explicit `AION_BASE_URL`/`AION_API_KEY` pair
-beats both.
+by the NTFS ACL of your user profile (`%USERPROFILE%`, which `~/.rovecode` inherits), not by permission
+bits. Stored keys beat `<NAME>_API_KEY` env vars; an explicit `ROVECODE_BASE_URL`/`ROVECODE_API_KEY` pair
+beats both. Endpoints live in `providers.json` (see Configuration → Providers) — never keys.
 
 Or configure by env:
 
 ```bash
-AION_BASE_URL=... AION_API_KEY=...   # any OpenAI-compatible or Anthropic endpoint (always wins)
+ROVECODE_BASE_URL=... ROVECODE_API_KEY=...   # any OpenAI-compatible or Anthropic endpoint (always wins)
 OPENAI_API_KEY=... / ANTHROPIC_API_KEY=... / DEEPSEEK_API_KEY=... / GROQ_API_KEY=...  # named providers
-AION_MODEL=zai-org/glm-5.3           # model id
-AION_MODEL_DEFAULT=prov/a,prov/b     # role fallback chains (DEFAULT SMOL PLAN COMMIT TASK); advance on 429/5xx
+ROVECODE_MODEL=zai-org/glm-5.3           # model id
+ROVECODE_MODEL_DEFAULT=prov/a,prov/b     # role fallback chains (DEFAULT SMOL PLAN COMMIT TASK); advance on 429/5xx
 ```
 
-TUI slash commands: `/help /status /cost /model /yolo /plan /act /rewind /sessions /resume /new
+TUI slash commands: `/help /setup /status /cost /model /yolo /plan /act /rewind /sessions /resume /new
 /checkpoints /restore /skills /memory /export /todos /tasks /exit`, plus one `/name` per custom command
-file in `.aion/commands/` (project) or `~/.aion/commands/` (user scope). The sextant surface adds its own
+file in `.rovecode/commands/` (project) or `~/.rovecode/commands/` (user scope). The sextant surface adds its own
 renderer-local `/theme night|ember|contrast`, `/open <file>`, `/diff [file]`, `/focus messages|code|files`
 and `/agents` (they never reach the agent; the names are reserved against custom commands).
 
@@ -93,39 +155,39 @@ a panelled cockpit instead of a chat log — `files` (git tree with M/A/D, touch
 approval preview before it, `$` run output with PASS/FAIL chips, `∷` the crew board over background tasks)
 · `messages` (compact tool rows `· read x … N lines` `~ edit x +a −b` `$ run cmd`, the ONE modal card for
 approvals and `ask_user`, the prompt with `/` suggestions and `@file` mentions) · `plan` (the session's
-todos + crew) · `usage` (tokens, context bar, cost) · `nimbus`, the weather-cloud pet whose mood follows
-the run. `aion` picks it when stdout is a TTY of at least 100×30 that renders truecolor (`COLORTERM`,
+todos + crew) · `usage` (tokens, context bar, cost) · `rovecode`, the weather-cloud pet whose mood follows
+the run. `rovecode` picks it when stdout is a TTY of at least 100×30 that renders truecolor (`COLORTERM`,
 `WT_SESSION`, `TERM_PROGRAM` vscode/iTerm/WezTerm/ghostty, kitty/`-direct` `TERM`) or 256 colors (a
-`*-256color` `TERM` with no `COLORTERM`, painted through the xterm-256 quantizer); `AION_TUI=sextant|classic`
+`*-256color` `TERM` with no `COLORTERM`, painted through the xterm-256 quantizer); `ROVECODE_TUI=sextant|classic`
 overrides the heuristics (a non-TTY never gets sextant, nor does a TTY under the 40×12 floor), `--classic`
 beats both. After an edit the `code` panel's diff is the ONE change that landed — captured before an
 approved edit, rebuilt from the edit's own anchors after an ungated one — and falls back to a `vs HEAD`
 view (every uncommitted change) only when neither is possible. Git runs beside the frame loop: a slow
 `git status` never stalls the spinner or the keys. Keys: `⏎` send · `tab`
 complete/cycle focus · `esc esc` stop the run · `⌃c` quit (interrupts first) · `⌃k` palette · `⌃s ⌃d ⌃r ⌃a`
-code/diff/run/agents · `⌃e` files · `⌃t` theme · mouse clicks/wheel. `aion smoke-tui --sextant` renders a
+code/diff/run/agents · `⌃e` files · `⌃t` theme · mouse clicks/wheel. `rovecode smoke-tui --sextant` renders a
 160×44 frame through the real pipeline and prints PASS.
 
 ## Features beyond the 20 ports (wave 3, verified per port in `PORTS.md`)
 
-- **Custom slash commands** (#30) — `.aion/commands/<name>.md` (project shadows `~/.aion/commands/`):
+- **Custom slash commands** (#30) — `.rovecode/commands/<name>.md` (project shadows `~/.rovecode/commands/`):
   optional frontmatter `description:` / `model:` (per-run override, restored after) / `mode: plan|act`
   (durable switch), body = prompt template with `$ARGUMENTS`, `$1..$9`, `$$`; autocomplete + `/help`
-  list them; a built-in name always wins (boot warning). `aion run "/name args"` expands the same files
+  list them; a built-in name always wins (boot warning). `rovecode run "/name args"` expands the same files
   headlessly (model:/mode: are TUI-only there). Arguments reach the template raw — whitespace runs and
   pasted newlines survive.
 - **Todo list** (#32) — `todo_write`/`todo_read` keep one `todos.json` per session (whole-list replace,
   one `in_progress` at a time, bounded); `/todos` renders it as checkboxes and the status bar shows
   `todos done/total`. Plan mode keeps `todo_write` (the plan's own artifact) while denying every other write.
 - **Background tasks** (#26) — the `task` tool starts child agent sessions as bounded FIFO jobs
-  (`AION_TASKS_MAX`, default 3) through the ONE agent loop; completion notes land on the parent's next
-  turn as steering; `/tasks` lists them, `/tasks cancel <id>|all` cancels; quitting the TUI, `aion serve`
-  `stop()` and `aion acp` shutdown cancel every live child; `GET /session/:id/tasks` over HTTP.
+  (`ROVECODE_TASKS_MAX`, default 3) through the ONE agent loop; completion notes land on the parent's next
+  turn as steering; `/tasks` lists them, `/tasks cancel <id>|all` cancels; quitting the TUI, `rovecode serve`
+  `stop()` and `rovecode acp` shutdown cancel every live child; `GET /session/:id/tasks` over HTTP.
 - **ask_user** (#33) — the model asks a question through a modal overlay (options or free text) on
   interactive surfaces; headless surfaces fail the tool closed.
 - **web_fetch** (#31) — bounded, SSRF-guarded HTTP fetch (`net.fetch <host>` policy action; prompt by
-  default; `AION_WEBFETCH_TIMEOUT_MS`, `AION_WEBFETCH_ALLOW_PRIVATE=1`).
-- **Output modes** (#35) — `aion run --output text|json|ndjson`: `json` = exactly ONE result object
+  default; `ROVECODE_WEBFETCH_TIMEOUT_MS`, `ROVECODE_WEBFETCH_ALLOW_PRIVATE=1`).
+- **Output modes** (#35) — `rovecode run --output text|json|ndjson`: `json` = exactly ONE result object
   `{status, summary, sessionId, model, origin, usage, costUsd, toolCalls, durationMs, exitCode}` on stdout;
   `ndjson` = every RunEvent as a JSON line then a final `{type:"result"}` line; stdout is JSON-only
   (progress → stderr; the guard is up before the runtime boots, so even a `session_open` hook's prints land
@@ -133,18 +195,18 @@ code/diff/run/agents · `⌃e` files · `⌃t` theme · mouse clicks/wheel. `aio
   error (one stderr line, nothing on stdout — validated before the runtime boots) · 130 aborted.
 - **Reflection** (#28, aider pattern) — a failed `edit`/`write` (or one that introduces LSP diagnostics)
   gets ONE `reflection: …` nudge on the next turn with the error in context, capped at 2 per run
-  (`AION_REFLECTION_MAX`; `AION_REFLECTION=0` disables); identical repeat failures are not re-nudged and
+  (`ROVECODE_REFLECTION_MAX`; `ROVECODE_REFLECTION=0` disables); identical repeat failures are not re-nudged and
   the loop guard still fires. Nudges serve the active session's runs only — a background-task child gets
   none (its loop guard still bounds repeats; its failure text reaches the parent through the task note).
   Failed edits now report the anchor line's current text and hash, the lines
   that do match, and the read-then-retry remedy; `write` into a missing directory says so.
 - Also landed: first-class `glob`/`grep`/`ls` tools (#22), same-model retry with backoff (#23), diff
   previews in approval overlays (#24), compaction strategies (#25), per-project sandbox rung (#27),
-  `aion export` (#38), `aion auth` credential onboarding (#37), packaging (#36).
+  `rovecode export` (#38), `rovecode auth` credential onboarding (#37), packaging (#36).
 
 ## What's ported (the 20 landed ports)
 
-Full ledger with bars, critic verdicts, and evidence: workspace `PORTS.md`. Sources are MIT or
+Full ledger with bars, critic verdicts, and evidence: `PORTS.md` (not yet published with this repository). Sources are MIT or
 Apache-2.0 only; Apache attributions in `THIRD_PARTY_NOTICES.md`.
 
 **Surfaces**
@@ -172,14 +234,14 @@ Apache-2.0 only; Apache attributions in `THIRD_PARTY_NOTICES.md`.
 **Safety & execution**
 - #4 tool-loop guardrails: repeat-signature loop break, duplicate-result stubs (hermes-agent, MIT)
 - #9 execpolicy: declarative command policy, strictest-wins, forbidden never executes (openai/codex, Apache-2.0)
-- #10 executor sandbox ladder: direct/WSL2/Docker rungs behind one `Executor` seam, probed not assumed (codex + OpenHands patterns); #27 makes the rung selectable per project (`.aion/sandbox.json` / `AION_SANDBOX`)
+- #10 executor sandbox ladder: direct/WSL2/Docker rungs behind one `Executor` seam, probed not assumed (codex + OpenHands patterns); #27 makes the rung selectable per project (`.rovecode/sandbox.json` / `ROVECODE_SANDBOX`)
 
 **Memory & context**
 - #3 MCP client, stdio + HTTP, lazy disclosure (two registry tools, ~0 idle token cost) (MIT)
 - #8 config inheritance: AGENTS.md / CLAUDE.md / .claude / .cursor / .github instructions harvested into capped chunks (oh-my-pi, MIT)
 - #16 versioned memory/skill edits with optimistic concurrency + one-call rollback (prime-agent, MIT)
 - #17 cross-session recall: FTS over past session JSONL (hermes-agent, MIT)
-- #18 persistent eval cell / code-mode, feature-flagged `AION_EVAL_CELL=1` (OMP/prime/codex patterns)
+- #18 persistent eval cell / code-mode, feature-flagged `ROVECODE_EVAL_CELL=1` (OMP/prime/codex patterns)
 
 ## Architecture
 
@@ -208,43 +270,130 @@ eval/                  scripted-provider gauntlet + deterministic benches
 
 Defaults < project config chunks (harvested, capped) < env < CLI flags.
 
-- `.aion/mcp.json` (+ harvested `.mcp.json`) — MCP servers
-- `.aion/modes.json` — per-mode model config (TUI-scoped; see limitations)
-- `.aion/sandbox.json` — `{"rung": "direct"|"wsl"|"docker", "dockerImage"?: "…"}` selects where `bash` runs (#27);
-  `AION_SANDBOX=<rung>` / `AION_SANDBOX_IMAGE=<image>` override it; default `direct`
-- `.aion/commands/*.md` — custom slash commands (project scope); `~/.aion/commands/*.md` (user scope,
-  `AION_HOME`-aware) is scanned first and shadowed by the project's (#30)
-- `.aion/` also holds sessions (each with its `todos.json`), checkpoints, repo-map cache
-- Permission rules: deny-by-default, last-match wildcard (`file.read/write`, `shell.exec`, `spawn`, `memory.write`, `net.fetch`, `tool.*`); `--yolo`/`AION_YOLO=1` bypasses prompts but not deny rules in plan mode
-- `.aion/hooks.ts` (+ `~/.aion/hooks.ts`, `AION_HOME`-aware) — typed hook set (#29; see Extending → Hooks);
-  `AION_NO_HOOKS=1` skips the files, `AION_HOOK_TIMEOUT_MS` bounds every call
+- `~/.rovecode/providers.json` (user) and `.rovecode/providers.json` (project) — model providers and the
+  default model; see Providers below
+- `.rovecode/mcp.json` (+ harvested `.mcp.json`) — MCP servers
+- `.rovecode/modes.json` — per-mode model config (TUI-scoped; see limitations)
+- `.rovecode/sandbox.json` — `{"rung": "direct"|"wsl"|"docker", "dockerImage"?: "…"}` selects where `bash` runs (#27);
+  `ROVECODE_SANDBOX=<rung>` / `ROVECODE_SANDBOX_IMAGE=<image>` override it; default `direct`
+- `.rovecode/commands/*.md` — custom slash commands (project scope); `~/.rovecode/commands/*.md` (user scope,
+  `ROVECODE_HOME`-aware) is scanned first and shadowed by the project's (#30)
+- `.rovecode/profiles/<id>.md` (project) / `~/.rovecode/profiles/<id>.md` (user) — replaces a model profile's
+  prompt section (see Model profiles below); `ROVECODE_PROFILE=off|<id>` turns profiles off or forces one
+- `.rovecode/` also holds sessions (each with its `todos.json`), checkpoints, repo-map cache
+- Permission rules: deny-by-default, last-match wildcard (`file.read/write`, `shell.exec`, `spawn`, `memory.write`, `net.fetch`, `tool.*`). Two permission modes, as the screen names them: **ask first** (default — I ask before every write, shell command and subagent) and **auto (never asks)** (`--yolo` / `ROVECODE_YOLO=1` / `/yolo` in the TUI); auto skips the prompts, never the deny rules or plan mode
+- `.rovecode/hooks.ts` (+ `~/.rovecode/hooks.ts`, `ROVECODE_HOME`-aware) — typed hook set (#29; see Extending → Hooks);
+  `ROVECODE_NO_HOOKS=1` skips the files, `ROVECODE_HOOK_TIMEOUT_MS` bounds every call
 
-Environment knobs (`aion help` prints the same list):
+### Providers
 
-- `AION_BASE_URL` / `AION_API_KEY` — any OpenAI-compatible or Anthropic endpoint; always wins over stored and named keys
-- `AION_MODEL` — model id; `AION_MODEL_<ROLE>` — fallback chain per role (DEFAULT SMOL PLAN COMMIT TASK), comma-separated
-  `provider/model`, advancing on 429/5xx (#14)
-- `AION_RETRY_MAX` (default 3; 0 = off) / `AION_RETRY_BASE_MS` (default 2000) — same-model retries on 429/5xx/transport
+Providers are data, merged per id in this order (later wins): the built-in table (kaesra, openai,
+anthropic, deepseek, groq, openrouter, ollama, lmstudio, together, mistral, cerebras, fireworks,
+perplexity, xai, moondream, vllm) < `~/.rovecode/providers.json` < `<project>/.rovecode/providers.json` <
+the `ROVECODE_BASE_URL`/`ROVECODE_API_KEY` pair (provider id `custom`, always the default). Both files share
+one shape:
+
+```json
+{
+  "default": "myproxy/gpt-5",
+  "providers": {
+    "myproxy": { "baseUrl": "https://llm.example.com/v1", "protocol": "openai", "keyEnv": "MYPROXY_API_KEY",
+                 "defaultModel": "gpt-5", "models": ["gpt-5", "gpt-5-mini"], "headers": { "x-org": "9code" } },
+    "ollama":  { "baseUrl": "http://127.0.0.1:11434/v1", "noKey": true }
+  }
+}
+```
+
+- `protocol` is `openai` (chat/completions) or `anthropic` (messages); omitted, it is inferred from the URL.
+- Keys are never in this file. A provider's key is its stored credential (`rovecode auth set <id>`) else
+  `process.env[keyEnv]` (default: the models.dev name, e.g. `ANTHROPIC_API_KEY`, else `<ID>_API_KEY`);
+  `noKey: true` marks local servers. `headers` are sent on every request (the protocol's own auth header wins).
+- `default` is `provider/model` (split on the first slash, so model ids keep their slashes) or a bare provider
+  id (→ its `defaultModel`); the project file's `default` beats the user's, `ROVECODE_MODEL` beats both.
+  Without a `default`: the first stored credential in table order, else the first env key, else a keyless
+  file provider.
+- **Hot reload.** The runtime keeps ONE live registry (`src/providers/registry.ts`) whose stream resolves
+  `model.provider` on every call and re-reads the two `providers.json` files and `credentials.json` when
+  their mtime changes. `rovecode provider add …` / `rovecode auth set …` in another terminal, `/provider …` in
+  the TUI, and the agent's `provider_edit` tool all take effect on the next model call — no restart. A call
+  to an unknown provider, or one without a key, ends the turn with ONE `config:` error naming the fix; the
+  router/retry layers treat that prefix as non-retryable.
+- Because routing is per call, `/model other/model` switches providers mid-session and cross-provider
+  fallback chains (`ROVECODE_MODEL_<ROLE>=a/x,b/y`) really fail over to the other endpoint.
+- Surface: `rovecode provider list [--all] | add <id> <baseUrl> [--protocol openai|anthropic] [--key-env NAME]
+  [--model <id>] [--no-key] [--project] [--key] | remove <id> | test <id> [model]`, `rovecode model list [provider]
+  | use <provider/model> [--project]`; TUI `/provider …`, `/models [provider]`, `/model <provider/model | model>
+  [--save]`; agent tools `provider_list` (kind read: list/models/test) and `provider_edit` (kind custom →
+  `tool.provider_edit`, prompted in ask-first mode, denied in plan mode; add/remove/use; refuses API keys).
+
+Environment knobs (`rovecode help` prints the same list):
+
+- `ROVECODE_BASE_URL` / `ROVECODE_API_KEY` — any OpenAI-compatible or Anthropic endpoint; always wins over stored and named keys
+- `ROVECODE_MODEL` — model id (beats the providers.json `default`); `ROVECODE_MODEL_<ROLE>` — fallback chain per role
+  (DEFAULT SMOL PLAN COMMIT TASK), comma-separated `provider/model`, advancing on 429/5xx (#14); each candidate
+  is served by its own provider's endpoint
+- `ROVECODE_RETRY_MAX` (default 3; 0 = off) / `ROVECODE_RETRY_BASE_MS` (default 2000) — same-model retries on 429/5xx/transport
   failures with exponential backoff, full jitter and `Retry-After` honored; wired INSIDE the router so retries exhaust
   before the chain advances (#23); each retry is reported like a router note
-- `AION_WEBFETCH_TIMEOUT_MS` (default 30000) / `AION_WEBFETCH_ALLOW_PRIVATE=1` — `web_fetch` timeout and the SSRF-guard
+- `ROVECODE_WEBFETCH_TIMEOUT_MS` (default 30000) / `ROVECODE_WEBFETCH_ALLOW_PRIVATE=1` — `web_fetch` timeout and the SSRF-guard
   escape for loopback/private hosts (local dev servers) (#31)
-- `AION_COMPACTION` — `head-summarize` (default) | `keep-window` | `provider-native` (#25)
-- `AION_TASKS_MAX` (default 3) — concurrent background tasks; extra `task start`s queue FIFO (#26)
-- `AION_OTEL_ENDPOINT` (e.g. `http://host:4318`) — OTLP/HTTP collector; exports one trace per run (`aion.run` ⊃
-  `aion.turn` ⊃ `aion.tool`) with token/latency/cost attributes; unset = off, the exporter is never constructed (#39);
-  `AION_OTEL_HEADERS=k=v,k2=v2` — extra OTLP headers (e.g. `authorization=Bearer …`)
-- `AION_REFLECTION=0` disables the reflection nudges; `AION_REFLECTION_MAX` (default 2) caps them per run (#28)
-- `AION_SANDBOX` / `AION_SANDBOX_IMAGE` — executor rung for `bash` and the docker image (#27)
-- `--output text|json|ndjson` (flag, `aion run` only) — output mode (#35); `AION_YOLO=1` — allow all tool actions;
-  `AION_STREAM=sse` — raw SSE adapter; `AION_HOME` — credentials + user-scope commands dir (default `~/.aion`)
-- `AION_TUI=sextant|classic` — force the TUI surface (#44; sextant still needs a TTY of at least 40×12,
-  `--classic` wins); `AION_THEME=night|ember|contrast` — the sextant palette at boot (`/theme` switches it
-  live); `AION_PET=0` — hide the sextant pet panel (`--pet <name>` renames it); the surface picks itself
-  at ≥ 100×30 cells with truecolor or a 256-color `TERM` — below that, or on a pipe, `aion` opens the
+- `ROVECODE_COMPACTION` — `head-summarize` (default) | `keep-window` | `provider-native` (#25)
+- `ROVECODE_TASKS_MAX` (default 3) — concurrent background tasks; extra `task start`s queue FIFO (#26)
+- `ROVECODE_OTEL_ENDPOINT` (e.g. `http://host:4318`) — OTLP/HTTP collector; exports one trace per run (`rovecode.run` ⊃
+  `rovecode.turn` ⊃ `rovecode.tool`) with token/latency/cost attributes; unset = off, the exporter is never constructed (#39);
+  `ROVECODE_OTEL_HEADERS=k=v,k2=v2` — extra OTLP headers (e.g. `authorization=Bearer …`)
+- `ROVECODE_REFLECTION=0` disables the reflection nudges; `ROVECODE_REFLECTION_MAX` (default 2) caps them per run (#28)
+- `ROVECODE_SANDBOX` / `ROVECODE_SANDBOX_IMAGE` — executor rung for `bash` and the docker image (#27)
+- `--output text|json|ndjson` (flag, `rovecode run` only) — output mode (#35); `ROVECODE_YOLO=1` — allow all tool actions;
+  `ROVECODE_STREAM` — streaming is ON by default for both protocols; `off`/`json` falls back to the one-shot
+  JSON adapters (a proxy with no SSE route), `sse` still means "stream"; `ROVECODE_HOME` — credentials +
+  user-scope commands dir (default `~/.rovecode`)
+- `ROVECODE_TUI=sextant|classic` — force the TUI surface (#44; sextant still needs a TTY of at least 40×12,
+  `--classic` wins); `ROVECODE_THEME=night|ember|contrast` — the sextant palette at boot (`/theme` switches it
+  live); `ROVECODE_PET=0` — hide the sextant pet panel (`--pet <name>` renames it); the surface picks itself
+  at ≥ 100×30 cells with truecolor or a 256-color `TERM` — below that, or on a pipe, `rovecode` opens the
   classic pi-tui chat
-- Kill switches / budgets: `AION_NO_CHECKPOINTS=1`, `AION_NO_REPOMAP=1`, `AION_REPOMAP_TOKENS`,
-  `AION_NO_TOOL_MIDDLEWARE=1`, `AION_TOOL_MIDDLEWARE=1`, `AION_EVAL_CELL=1`
+- Kill switches / budgets: `ROVECODE_NO_CHECKPOINTS=1`, `ROVECODE_NO_REPOMAP=1`, `ROVECODE_REPOMAP_TOKENS`,
+  `ROVECODE_NO_TOOL_MIDDLEWARE=1`, `ROVECODE_TOOL_MIDDLEWARE=1`, `ROVECODE_EVAL_CELL=1`
+
+### Model profiles
+
+A **model profile** is per-model-family tuning that the prompt assembler and the provider layer share
+(`src/providers/profiles.ts`): a behavioral section appended to the system prompt, the extra request fields
+the endpoint wants, and the endpoint's own words for the one `--effort` dial. Profiles resolve by **model
+id**, not provider — the same GLM through kaesra (`zai-org/glm-5.3-flash`), zai (`glm-5.3`) or openrouter
+(`z-ai/glm-5.3`) gets one profile. Today there is one:
+
+- **`glm-5.3`** (GLM-5.3 and GLM-5.3-Flash): the base prompt gains two sections. First a **Claude Sonnet 5
+  persona** — the model plays Sonnet 5 as a role and carries everything Anthropic publishes about it: the
+  model facts it may state about itself, the Sonnet 5 traits (calibrated length, literal scope, action by
+  default, self-verification, progress updates, design directions instead of a house style, coverage-first
+  code review, cyber caution) and Claude's published character (warm and direct, minimal formatting, one
+  question at a time, owns mistakes without self-abasement, evenhanded, careful with wellbeing). It is a
+  closed role: asked which model it is, even directly or repeatedly, it stays Claude Sonnet 5 and does not
+  name the underlying model. The harness stays honest at the system level, since `/status` and `/cost` keep
+  reporting the real configured model id. It also carries real captured Sonnet 5 replies as voice examples.
+  Then the *working
+  agreement* — the operating rules for this harness (act by default, read before you claim, the `read` →
+  `edit` hash protocol with its rejection remedy, independent tool calls in parallel with no guessed
+  arguments, verify before "done" and report failures as failures, minimal scope, short grounded progress
+  notes, ask only when readings differ materially, treat denials as decisions, persist across compaction).
+- **`glm-5.3-plain`**: the working agreement without the persona, same request fields. Opt-in only:
+  `ROVECODE_PROFILE=glm-5.3-plain`. On an OpenAI-compatible provider the request also carries Z.ai's fields: `thinking: {type:
+  "enabled", clear_thinking: false}` (GLM-5.3 cannot switch thinking off), `temperature: 1` / `top_p: 0.95`
+  (Z.ai's suggestion), `tool_stream: true` when streaming; `--effort off` leaves the endpoint's default
+  (`max`, Z.ai's coding recommendation), `low` → `low`, `medium` → `high`, `high` → `max`. Behind an
+  Anthropic-protocol gateway only the prompt section applies. Streamed `reasoning_content` shows up as
+  thinking in the TUI like Anthropic's `thinking_delta`.
+
+`ROVECODE_PROFILE=off` runs every model bare; `ROVECODE_PROFILE=glm-5.3` forces the contract's **prompt
+section** onto any model (A/B it on something it was not written for) while the request fields keep
+following the model id, so gpt-5 never receives `thinking` or `max`. `.rovecode/profiles/glm-5.3.md` (project) or
+`~/.rovecode/profiles/glm-5.3.md` (user) **replaces** the built-in section text — edit, restart the run,
+no rebuild; an empty file drops the section and keeps the wire tuning. The persona is a role, not a
+relabeling: the harness keeps reporting the real model id in `/status` and `/cost`, and you can loosen the
+closed role in the override file. Measure a change with `rovecode gauntlet
+--live` before and after (pass count, tool calls, tokens per task).
 
 ## Safety model (stacked, honest)
 
@@ -254,8 +403,8 @@ Environment knobs (`aion help` prints the same list):
 4. **Runtime** — bash denylist + cwd lock + output truncation
 
 This is **not an OS sandbox**. Where `bash` runs is selectable (#10 seam + #27 config):
-`.aion/sandbox.json` `{"rung": "direct"|"wsl"|"docker", "dockerImage"?: "…"}`, or `AION_SANDBOX=<rung>`
-(+ `AION_SANDBOX_IMAGE`; env beats file; default `direct`). Every rung is **delegation, not isolation**:
+`.rovecode/sandbox.json` `{"rung": "direct"|"wsl"|"docker", "dockerImage"?: "…"}`, or `ROVECODE_SANDBOX=<rung>`
+(+ `ROVECODE_SANDBOX_IMAGE`; env beats file; default `direct`). Every rung is **delegation, not isolation**:
 `direct` is in-process bash with the denylist + cwd lock; `wsl` runs each command through `wsl.exe` in the
 default distro, which must contain bash (Docker Desktop's `docker-desktop` distro has none — set a real
 distro as default); `docker` runs each command in `docker run --rm -v <cwd>:/workspace <image>` and needs a
@@ -268,18 +417,18 @@ active rung. Use a container/microVM for untrusted work.
 
 ## Observability
 
-**OTel spans** (#39, `telemetry/otel.ts`): set `AION_OTEL_ENDPOINT` and every run exports one trace as
-OTLP/HTTP JSON — `aion.run` ⊃ `aion.turn` (one per model step) ⊃ `aion.tool`, with per-span tokens, latency,
+**OTel spans** (#39, `telemetry/otel.ts`): set `ROVECODE_OTEL_ENDPOINT` and every run exports one trace as
+OTLP/HTTP JSON — `rovecode.run` ⊃ `rovecode.turn` (one per model step) ⊃ `rovecode.tool`, with per-span tokens, latency,
 served model and cost (omitted when unpriced), compaction and never-dispatched calls as span events; ids, sizes
 and outcomes only (no goal, args, output or headers). Batched once per run, 5 s timeout, a failed export is one
 `hooks:` warning and never blocks a run. Cancelled runs export too (Esc, `session/cancel`, HTTP DELETE or a
-client disconnect → status `stopped`); `aion.tool_calls` counts issued calls, the `--output json` `toolCalls`
+client disconnect → status `stopped`); `rovecode.tool_calls` counts issued calls, the `--output json` `toolCalls`
 count — both per issuing turn, so a call id a provider reuses across turns counts once per turn; the one gap is a
 run aborted while a call awaited approval after its `pre_tool` hook (a span, never an event). Unset = zero cost:
 the exporter is never constructed; a malformed endpoint is one warning, not a stall.
 
 Typed `RunEvent` stream (run/turn/tool/compaction events) persisted with the session tree;
-`aion trace <id>` replays any session with corruption findings. `/cost` and `/status` surface
+`rovecode trace <id>` replays any session with corruption findings. `/cost` and `/status` surface
 tokens, cache hits, and catalog-priced spend.
 
 ## Known limitations
@@ -302,49 +451,54 @@ tokens, cache hits, and catalog-priced spend.
   process tree terminated on abort]`, exit 143.
 - **Sandbox rungs delegate, they do not isolate.** `wsl`/`docker` (#27) isolate only as well as the
   wrapped runtime does; `direct` (the default) is denylist + cwd lock. The executor seam is process-wide:
-  `aion serve`/`aion acp` sessions booted from different project dirs share the most recently booted
-  session's rung. `aion gauntlet` always runs `direct` (it never builds a runtime).
-- **ACP is the one surface that mixes cwds.** `aion acp` boots a runtime per `session/new` cwd on that
+  `rovecode serve`/`rovecode acp` sessions booted from different project dirs share the most recently booted
+  session's rung. The offline `rovecode gauntlet` always runs `direct` (it never builds a runtime); `gauntlet --live`
+  boots the runtime and honors the configured rung like any other run.
+- **ACP is the one surface that mixes cwds.** `rovecode acp` boots a runtime per `session/new` cwd on that
   process-wide seam: a `session/new` REFUSED because its cwd asks for a rung this machine cannot provide
   (JSON-RPC error) still leaves the seam holding that unmet rung, so existing sessions' `bash` calls fail
   with the rung error until a later `session/new` boots successfully. Keep one editor window per project,
   or every project on the same rung.
-- **Plan/Act modes are TUI-scoped.** `run`/`acp`/`serve` ignore `.aion/modes.json` including
+- **Plan/Act modes are TUI-scoped.** `run`/`acp`/`serve` ignore `.rovecode/modes.json` including
   `defaultMode`.
-- **Server sessions are in-memory.** `aion serve` loses its session routing table on restart
+- **Server sessions are in-memory.** `rovecode serve` loses its session routing table on restart
   (JSONL trees persist on disk).
 - **Windows-first.** Developed and gated on Windows 11 + Git Bash; POSIX paths exercised in tests
   but Linux/macOS are not CI-verified.
-- **Packaging**: no LICENSE file yet — the package.json `license` field is intentionally unset
-  pending an owner decision; not published to npm; compiled binary is ~110 MB (bun runtime).
+- **Packaging**: not published to npm; compiled binary is ~110 MB (bun runtime).
 
 ## Extending
 
 - **Tool**: implement `Tool` (schema + kind + execute), `registry.register(t)`; kind maps to a policy action.
 - **Provider**: implement `StreamFn` — must not throw; failures become `{stopReason: "error"}`.
-- **Hooks** (`core/hooks.ts`, port #29): drop a `.aion/hooks.ts` (or `.js`; user scope `~/.aion/hooks.*`)
+- **Hooks** (`core/hooks.ts`, port #29): drop a `.rovecode/hooks.ts` (or `.js`; user scope `~/.rovecode/hooks.*`)
   exporting `{ version: 1, hooks: {…} }` — plain `import`, no build step. Nine typed hooks, all optional,
   sync or async: `pre_run`, `post_run` (also fired, as `stopped`, when the consumer cancels a run mid-way),
   `pre_tool` (return `{deny: reason}` to block), `post_tool` (return
   `{output}` to annotate what the model sees, growth-bounded), `approval` (return `"allow"`/`"deny"` to
   pre-answer a prompt), `compaction`, `session_open`, `session_close`, `on_event` (every RunEvent, not
-  awaited). Every call is timeout-bounded (`AION_HOOK_TIMEOUT_MS`, default 5000) and isolated — a throwing
+  awaited). Every call is timeout-bounded (`ROVECODE_HOOK_TIMEOUT_MS`, default 5000) and isolated — a throwing
   or hanging hook is one warning note, never a dead run. Policy wins: rules run before `pre_tool` (a hook
-  can only deny, in every mode incl. yolo, and the same hooks govern background-task children); the
+  can only deny, in every mode incl. auto (`--yolo`), and the same hooks govern background-task children); the
   approval hook sits where the human would, INSIDE the execpolicy wrap (rules → execpolicy → hook →
   human): forbidden argv is denied before any hook sees it, allow-listed argv runs without asking one, and
   a hook `"allow"` is exactly a human's one-shot yes (never cached). Hooks receive copies of args and
   results — only a returned value counts. Hooks are trusted code run in-process (same class as
-  `.aion/mcp.json`); loaded once per process, restart to pick up edits; `AION_NO_HOOKS=1` skips the files.
+  `.rovecode/mcp.json`); loaded once per process, restart to pick up edits; `ROVECODE_NO_HOOKS=1` skips the files.
   The programmatic `ExtensionHooks.reviseToolArgs` still rewrites args before policy + approval (approval
   sees revised args).
-- **MCP**: add servers to `.aion/mcp.json`; tools arrive lazily through `mcp_list`/`mcp_call` under the same policy pipeline.
+- **MCP**: add servers to `.rovecode/mcp.json`; tools arrive lazily through `mcp_list`/`mcp_call` under the same policy pipeline.
 
 ## License & notices
 
+Rovecode is free software under the GNU Affero General Public License v3.0 — see `LICENSE`.
+Copyright (C) 2026 9Code Labs. You may use, study, modify and redistribute it; every copy and every
+derivative must keep this license and its copyright notices, and if you run a modified rovecode as a
+network service you must offer its complete source to the users of that service.
+
 Third-party attributions (Apache-2.0 NOTICE entries + MIT credits): `THIRD_PARTY_NOTICES.md`
-(shipped in the npm tarball; source of truth lives at the workspace root). No code from crush
-(FSL), claw-code, nanocoder, iflow, or the Claude Agent SDK. Aion's own license: not yet declared.
+(shipped in the npm tarball). No code from crush (FSL), claw-code, nanocoder, iflow, or the Claude
+Agent SDK.
 
 ## Roadmap (wave 3, `PORTS.md` §Wave-3)
 
