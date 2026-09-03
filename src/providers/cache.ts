@@ -6,7 +6,7 @@
  *  Therefore boundaries only pay off on STABLE prefixes — a boundary after content that changes
  *  every turn is a wasted breakpoint (Anthropic allows at most 4 per request).
  *
- *  Pattern reference (hermes-agent snapshot, E:\9code\research\source_snapshots\hermes-agent):
+ *  Pattern reference (hermes-agent snapshot, research/source_snapshots/hermes-agent):
  *  - agent/prompt_caching.py:1-8 — "The default layout uses 4 cache_control breakpoints: the static
  *    system prefix, the end of the system prompt, and the last 2 non-system messages."
  *  - agent/prompt_caching.py:157-162 (_build_marker) — the marker is `{"type": "ephemeral"}`.

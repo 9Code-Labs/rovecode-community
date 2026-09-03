@@ -1,4 +1,4 @@
-/** Provider credential store (port #37): backing for `aion auth set/list/remove`.
+/** Provider credential store (port #37): backing for `rovecode auth set/list/remove`.
  *
  *  Ported from opencode packages/opencode/src/auth/index.ts @ ebece6e (MIT):
  *  - one JSON object keyed by provider id, entries discriminated by `type` (index.ts:14-36)
@@ -7,13 +7,13 @@
  *  - file written with mode 0o600 (index.ts:79,88)
  *  - a missing/corrupt file reads as {} and malformed entries are dropped per-entry, never
  *    fatal (index.ts:65-66, Record.filterMap over the schema decode)
- *  Deviations: the file lives at ~/.aion/credentials.json (bar) instead of opencode's
- *  <data>/auth.json; entries carry an aion-only optional `keyName` (which env var the
+ *  Deviations: the file lives at ~/.rovecode/credentials.json (bar) instead of opencode's
+ *  <data>/auth.json; entries carry an rovecode-only optional `keyName` (which env var the
  *  secret stands in for); only the "api" variant is implemented — entries with other
  *  `type` values (a future oauth port) round-trip through save/remove unharmed but are
  *  not listed or resolved.
  *
- *  Also home to readSecret (the `aion auth set` prompt) so its TTY path is unit-testable
+ *  Also home to readSecret (the `rovecode auth set` prompt) so its TTY path is unit-testable
  *  in-process — main.ts cannot be imported by tests (it dispatches on load).
  *
  *  SECRETS ARE NEVER LOGGED from this module: the only terminal output is readSecret's
@@ -22,7 +22,7 @@
  *  via listProviders()/redactSecret().
  */
 
-import { readFileSync, writeFileSync, mkdirSync, chmodSync, rmSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, chmodSync, cpSync, existsSync, rmSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { Writable } from "node:stream";
 import { join } from "node:path";
@@ -33,19 +33,45 @@ export interface StoredCredential {
   type: "api";
   /** the secret itself (upstream field name — auth/index.ts:24) */
   key: string;
-  /** aion extension: env var name this secret stands in for (e.g. ANTHROPIC_API_KEY) */
+  /** rovecode extension: env var name this secret stands in for (e.g. ANTHROPIC_API_KEY) */
   keyName?: string;
 }
 
-/** User-scope aion dir: AION_HOME overrides ~/.aion wholesale (tests point it at a temp
+/** User-scope rovecode dir: ROVECODE_HOME overrides ~/.rovecode wholesale (tests point it at a temp
  *  dir). homedir() already respects HOME on POSIX and USERPROFILE on Windows. Mirrors the
- *  skills store's user-scope default (skills/index.ts: join(homedir(), ".aion", ...)). */
-export function aionHome(): string {
-  return process.env.AION_HOME ?? join(homedir(), ".aion");
+ *  skills store's user-scope default (skills/index.ts: join(homedir(), ".rovecode", ...)). */
+export function rovecodeHome(): string {
+  const home = process.env.ROVECODE_HOME ?? join(homedir(), ".rovecode");
+  migrateLegacyHome(home);
+  return home;
+}
+
+/** The config directory used to be `~/.cumulus` (the project was called nimbus). A rename must not
+ *  cost anyone their stored API keys and providers, so the first call that resolves the new home
+ *  COPIES the old one into it — copy, not move: the old directory is left exactly as it was, so
+ *  downgrading to an older build keeps working and nothing is destroyed if this goes wrong.
+ *
+ *  Runs once per process, only when the new home does not exist yet and the old one does. An
+ *  explicit ROVECODE_HOME is honoured the same way, which is what makes it testable. Any failure is
+ *  swallowed: a migration that cannot run must not stop the agent from starting — the user simply
+ *  sees "no provider configured" and runs `rovecode connect`. */
+let migrated = false;
+function migrateLegacyHome(home: string): void {
+  if (migrated) return;
+  migrated = true;
+  try {
+    if (existsSync(home)) return;                        // already living in the new place
+    const legacy = join(homedir(), ".cumulus");
+    if (home === legacy || !existsSync(legacy)) return;
+    cpSync(legacy, home, { recursive: true });
+    // the credentials file carries the 0600 the old one had only on POSIX; re-assert it here
+    const creds = join(home, "credentials.json");
+    if (existsSync(creds) && process.platform !== "win32") chmodSync(creds, 0o600);
+  } catch { /* best effort: a failed migration is a fresh config, never a crash */ }
 }
 
 export function credentialsPath(): string {
-  return join(aionHome(), "credentials.json");
+  return join(rovecodeHome(), "credentials.json");
 }
 
 /** Raw file contents: every entry as stored, including unknown `type`s. Missing file,
@@ -82,13 +108,13 @@ export function loadCredentials(): Record<string, StoredCredential> {
  *
  *  Windows honesty note: fs mode bits on win32 map only onto the FILE_ATTRIBUTE_READONLY
  *  flag — 0o600 does NOT create owner-only protection there. Real isolation on Windows
- *  comes from the NTFS ACL on %USERPROFILE% (inherited by ~/.aion), which by default
+ *  comes from the NTFS ACL on %USERPROFILE% (inherited by ~/.rovecode), which by default
  *  denies other non-admin users. So this is best-effort hardening on POSIX (where the
  *  0o600/0o700 bits are enforced) and effectively a no-op on Windows beyond the profile
  *  ACL it inherits — we do not claim otherwise. */
 function writeStore(data: Record<string, unknown>): void {
   const path = credentialsPath();
-  mkdirSync(aionHome(), { recursive: true, mode: 0o700 });
+  mkdirSync(rovecodeHome(), { recursive: true, mode: 0o700 });
   writeFileSync(path, JSON.stringify(data, null, 2) + "\n", { mode: 0o600 });
   try {
     chmodSync(path, 0o600); // `mode` above only applies on create; re-assert on rewrites
@@ -132,7 +158,7 @@ export function redactSecret(secret: string): string {
   return secret.length > 8 ? secret.slice(0, 4) + "…" : "…";
 }
 
-/** Redacted listing for `aion auth list`: provider + key NAME + redacted prefix.
+/** Redacted listing for `rovecode auth list`: provider + key NAME + redacted prefix.
  *  The full secret value never appears in the returned records. */
 export function listProviders(): { provider: string; keyName: string; redacted: string }[] {
   return Object.entries(loadCredentials())
@@ -144,7 +170,7 @@ export function listProviders(): { provider: string; keyName: string; redacted: 
     .sort((a, b) => a.provider.localeCompare(b.provider));
 }
 
-/** aion provider id -> models.dev provider key, mirroring catalog.ts PROVIDER_MAP for the
+/** rovecode provider id -> models.dev provider key, mirroring catalog.ts PROVIDER_MAP for the
  *  non-identity ids (together -> "togetherai", fireworks -> "fireworks-ai") plus an
  *  auth-only alias: moonshot -> "moonshotai" (models.dev has no bare "moonshot" key — the
  *  catalog reaches it via VENDOR_PREFIX_MAP on model ids instead, which auth cannot use).
@@ -168,7 +194,7 @@ export function keyNameFor(providerId: string): string {
   return providerId.toUpperCase().replace(/[^A-Z0-9]+/g, "_") + "_API_KEY";
 }
 
-// ---------- secret prompt (`aion auth set`) ----------
+// ---------- secret prompt (`rovecode auth set`) ----------
 
 type SecretInput = NodeJS.ReadableStream & { isTTY?: boolean; isRaw?: boolean };
 type SecretOutput = NodeJS.WritableStream & { columns?: number };
@@ -186,7 +212,7 @@ export function echoScrubSequence(promptLen: number, lineLen: number, columns: n
   return "\x1b[1A\x1b[2K".repeat(rows) + "\r";
 }
 
-/** Read one secret line for `aion auth set`. What is guaranteed:
+/** Read one secret line for `rovecode auth set`. What is guaranteed:
  *  - TTY stdin: the prompt goes to stderr and readline runs in terminal mode, which calls
  *    setRawMode(true): the terminal driver's echo is OFF and readline's own echo goes to a
  *    sink, so the keystrokes are never written to the terminal at all. Verified on a real

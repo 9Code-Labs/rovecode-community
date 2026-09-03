@@ -18,7 +18,7 @@
  *    (model-resolver.ts:1051-1055 normalizeModelPatternList); per-role ordered chains as in
  *    OMP's priority.json:2-23 (rolePriorityDefaults, model-resolver.ts:1110-1113).
  *  - NOT ported: OMP's fuzzy/glob matching, thinking-level suffixes, custom role aliases and
- *    alias cycle guard (aion chains are flat ModelRefs — no aliases, so no cycles).
+ *    alias cycle guard (rovecode chains are flat ModelRefs — no aliases, so no cycles).
  *
  *  Fallback chains (gemini-cli, Apache-2.0 @0bd1d43 — research/source_snapshots/
  *  google-gemini-gemini-cli, packages/core/src):
@@ -33,15 +33,15 @@
  *  - On failure the handler picks the FIRST AVAILABLE later candidate and never falls back
  *    to the failed model itself (fallback/handler.ts:59-76); the switch is STICKY for the
  *    session via activateFallbackMode (handler.ts:163-169). Sticky here = per wrapped
- *    StreamFn, reset when a chain exhausts (aion simplification: gemini-cli instead tracks
+ *    StreamFn, reset when a chain exhausts (rovecode simplification: gemini-cli instead tracks
  *    per-model health and marks models healthy again on success, retry.ts:330-334).
  *  - gemini-cli retries the new model immediately (retry.ts:404, :459 `attempt = 0; continue`)
- *    inside its retryWithBackoff loop; aion tries each candidate ONCE per invocation — no
+ *    inside its retryWithBackoff loop; rovecode tries each candidate ONCE per invocation — no
  *    delays, no attempt reset (ADR-003: no second loop). Status is read from the seam's
  *    error TEXT ("HTTP <status>: <body>" — built by src/providers/stream-errors.ts httpErrorTurn), the same
  *    message-sniffing fallback gemini-cli itself uses (retry.ts:553-558).
  *  - Mid-stream failure: gemini-cli re-streams and signals the consumer with a RETRY event
- *    (core/geminiChat.ts:655-679). Aion's StreamEvent grammar (core/types.ts:47-50) has no
+ *    (core/geminiChat.ts:655-679). Rovecode's StreamEvent grammar (core/types.ts:47-50) has no
  *    such variant and is shared/untouchable, so forwarded text_delta events from a failed
  *    attempt simply stand; canonical content is the terminal turn only (core/loop.ts
  *    collectTurn:219-226), so the final message is never corrupted. The "note" on each
@@ -126,14 +126,14 @@ export function parseModelChain(selectors: string, defaultProvider: string): Mod
 }
 
 const ROLE_ENV: Record<ModelRole, string> = {
-  default: "AION_MODEL_DEFAULT",
-  smol: "AION_MODEL_SMOL",
-  plan: "AION_MODEL_PLAN",
-  commit: "AION_MODEL_COMMIT",
-  task: "AION_MODEL_TASK",
+  default: "ROVECODE_MODEL_DEFAULT",
+  smol: "ROVECODE_MODEL_SMOL",
+  plan: "ROVECODE_MODEL_PLAN",
+  commit: "ROVECODE_MODEL_COMMIT",
+  task: "ROVECODE_MODEL_TASK",
 };
 
-/** Role table from env (AION_MODEL_DEFAULT/SMOL/PLAN/COMMIT/TASK, each a comma-separated
+/** Role table from env (ROVECODE_MODEL_DEFAULT/SMOL/PLAN/COMMIT/TASK, each a comma-separated
  *  "provider/model" chain). Unset default → [fallback] (the provider-derived model). */
 export function roleTableFromEnv(
   fallback: ModelRef,
@@ -150,7 +150,7 @@ export function roleTableFromEnv(
   return { ...roles, default: roles.default ?? [fallback] };
 }
 
-// ---------- failure classification (gemini-cli retry.ts:170-209; aion stream.ts:78,109,171) ----------
+// ---------- failure classification (gemini-cli retry.ts:170-209; rovecode stream.ts:78,109,171) ----------
 
 export interface StreamErrorClass {
   /** HTTP status parsed from the seam's "HTTP <status>: ..." error text, if present. */
@@ -165,6 +165,9 @@ export function classifyStreamError(error: string | undefined): StreamErrorClass
     const status = Number(m[1]);
     return { status, retryable: status === 429 || (status >= 500 && status < 600) };
   }
+  // `config: …` (providers/registry.ts dispatcher: unknown provider, missing key) — a configuration
+  // mistake neither a retry nor the next chain candidate can fix; the human can. Never retryable.
+  if ((error ?? "").startsWith("config: ")) return { retryable: false };
   // No HTTP prefix → the fetch itself failed (network/SSL/parse) — retryable per
   // gemini-cli retry.ts:49-62,122-123,141-147,180-189.
   return { retryable: true };
