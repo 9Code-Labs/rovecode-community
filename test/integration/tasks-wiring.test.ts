@@ -72,7 +72,7 @@ const toolEnd = (events: RunEvent[], callId: string) => {
 };
 
 test("parent loop: `task start` returns at once, `task result` collects the child's text, and the completion steer reaches the parent's NEXT model turn", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tasks-wire-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tasks-wire-"));
   const recorded: Recorded[] = [];
   const stream: StreamFn = async function* (_m: ModelRef, messages: Message[]): AsyncGenerator<StreamEvent> {
     const goal = goalOf(messages);
@@ -122,7 +122,7 @@ test("parent loop: `task start` returns at once, `task result` collects the chil
 }, 30_000);
 
 test("nested chain: child → grandchild runs (depth 2), the grandchild's own start is refused at the depth cap, and each note lands in ITS parent's queue", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tasks-nest-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tasks-nest-"));
   const recorded: Recorded[] = [];
   try {
     const { rt, events } = await runParent(cwd, chainStream(recorded), true, "PARENT nest");
@@ -171,7 +171,7 @@ async function until(pred: () => boolean, ms: number, what: string): Promise<voi
 }
 
 test("parent-run ownership: a NORMAL run end leaves its background task running; a parent ABORT (the surface's controller) cancels the tasks that run started", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tasks-own-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tasks-own-"));
   const parked: string[] = [];
   const stream: StreamFn = async function* (_m: ModelRef, messages: Message[], opts?: StreamOptions): AsyncGenerator<StreamEvent> {
     const goal = goalOf(messages);
@@ -190,7 +190,7 @@ test("parent-run ownership: a NORMAL run end leaves its background task running;
   const cfg = rt.buildCfg(true);
   // one fresh session store per run: the script keys on a run's FIRST user message (its goal)
   const deps = (signal: AbortSignal) => ({
-    stream, registry: rt.registry, store: new SessionStore(join(cwd, ".aion", "sessions"), randomUUID()),
+    stream, registry: rt.registry, store: new SessionStore(join(cwd, ".rovecode", "sessions"), randomUUID()),
     tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, cwd: rt.cwd, signal,
   });
   try {
@@ -230,7 +230,7 @@ test("parent-run ownership: a NORMAL run end leaves its background task running;
 }, 30_000);
 
 test("cascade through the runtime's child registry: cancelling a task cancels the grandchild it started", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tasks-cascade-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tasks-cascade-"));
   const parked: string[] = [];
   const stream: StreamFn = async function* (_m: ModelRef, messages: Message[], opts?: StreamOptions): AsyncGenerator<StreamEvent> {
     const goal = goalOf(messages);
@@ -261,7 +261,7 @@ test("cascade through the runtime's child registry: cancelling a task cancels th
 }, 30_000);
 
 test("MED-2 split: under gated rules `task start` prompts exactly ONCE while task_status status/result/list run with ZERO prompts; approver-less (headless) the reads still run; the start output tells the approver the child is read-only", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tasks-split-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tasks-split-"));
   const stream: StreamFn = async function* (_m: ModelRef, messages: Message[]): AsyncGenerator<StreamEvent> {
     const goal = goalOf(messages);
     const tools = messages.filter((m) => m.role === "tool").length;
@@ -298,7 +298,7 @@ test("MED-2 split: under gated rules `task start` prompts exactly ONCE while tas
     expect(toolEnd(events, "s4")?.output).toContain("t1   done");
     // headless: no approver at all — the reads still run (a start would fail closed, pinned below)
     const evs2: RunEvent[] = [];
-    const store2 = new SessionStore(join(cwd, ".aion", "sessions"), randomUUID()); // fresh store: the script keys on the run's first user message
+    const store2 = new SessionStore(join(cwd, ".rovecode", "sessions"), randomUUID()); // fresh store: the script keys on the run's first user message
     for await (const ev of agentLoop(def, "PARENT headless", {}, rt.buildCfg(false), { ...deps, store: store2 }, rt.steering)) evs2.push(ev);
     expect(evs2.at(-1)).toMatchObject({ type: "run_end", status: "done", summary: "HEADLESS-DONE" });
     expect(evs2.filter((e) => e.type === "tool_call_failed")).toEqual([]);
@@ -316,7 +316,7 @@ test("MED-2 split: under gated rules `task start` prompts exactly ONCE while tas
 }, 40_000);
 
 test("task_status is a READ at the registry seam: gated rules run it approver-less, and a smuggled `path` cannot re-aim a deny targeted at the tool (its schema declares no path)", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tasks-read-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tasks-read-"));
   try {
     const rt = createRuntime({ cwd, stream: null });
     const gated = rt.buildCfg(false).permissionRules;
@@ -344,7 +344,7 @@ test("task_status is a READ at the registry seam: gated rules run it approver-le
 });
 
 test("children run the PARENT's model: the child stream receives the ModelRef of the run that started it (fix-wave L5 pin)", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tasks-model-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tasks-model-"));
   const childModels: ModelRef[] = [];
   const stream: StreamFn = async function* (m: ModelRef, messages: Message[]): AsyncGenerator<StreamEvent> {
     const goal = goalOf(messages);
@@ -363,14 +363,15 @@ test("children run the PARENT's model: the child stream receives the ModelRef of
     expect(events.at(-1)).toMatchObject({ type: "run_end", status: "done", summary: "PARENT-DONE" });
     // mutation target: delete `activeModel = model` in runtime.ts buildDef → the child runs fallbackRef
     // (mock/default, or the env provider's default model), never the parent's pin
-    expect(childModels).toEqual([pin]);
+    // buildDef also stamps the runtime's thinking dial, so the child inherits the parent's effort too
+    expect(childModels).toEqual([{ ...pin, effort: "off" }]);
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
 }, 30_000);
 
 test("gated (non-yolo) parent without an approver: the spawn door is policy — `task start` fails closed and nothing runs", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tasks-gated-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tasks-gated-"));
   const stream: StreamFn = async function* (_m: ModelRef, messages: Message[]): AsyncGenerator<StreamEvent> {
     if (messages.some((m) => m.role === "tool")) { yield turn(textTurn("after")); return; }
     yield turn(toolCall("g1", { action: "start", goal: "CHILD never" }));

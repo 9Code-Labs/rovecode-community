@@ -1,4 +1,4 @@
-/** Aion core type contracts. Single source of truth for the runtime. */
+/** Rovecode core type contracts. Single source of truth for the runtime. */
 
 import type { ContextChunk } from "./context.ts";
 import type { CompactionStrategy, CompactionTrigger } from "./compaction.ts";
@@ -66,10 +66,27 @@ export interface StreamFn {
 
 export type StreamEvent =
   | { type: "text_delta"; text: string }
+  /** a slice of the model's reasoning (Anthropic thinking_delta): counted for the live status
+   *  line, never part of the answer — the terminal turn's parts carry text and tool calls only */
+  | { type: "reasoning_delta"; text: string }
   | { type: "tool_call_delta"; id: string; tool: string; argsDelta: string }
   | { type: "turn"; turn: AssistantTurn };
 
-export interface ModelRef { provider: string; model: string; maxTokens?: number }
+/** How hard the model is asked to think before it answers. `off` is the plain request; the three
+ *  levels map to each protocol's own dial — an Anthropic thinking budget in tokens, an OpenAI
+ *  `reasoning_effort` string (providers/stream.ts thinkingBudget). A model with no reasoning mode
+ *  ignores it: the field is sent, the endpoint drops it. */
+export type ThinkingEffort = "off" | "low" | "medium" | "high";
+export const THINKING_EFFORTS: readonly ThinkingEffort[] = ["off", "low", "medium", "high"];
+
+/** a level from a flag/env word; undefined when it names nothing (the caller keeps its default,
+ *  rather than silently reading a typo as "off") */
+export function parseEffort(v: string | undefined): ThinkingEffort | undefined {
+  const w = (v ?? "").trim().toLowerCase();
+  return (THINKING_EFFORTS as readonly string[]).includes(w) ? (w as ThinkingEffort) : undefined;
+}
+
+export interface ModelRef { provider: string; model: string; maxTokens?: number; effort?: ThinkingEffort }
 
 // ---------- Tools (ADR-005: validate → revise → policy → approve → sandbox → execute) ----------
 
@@ -123,6 +140,12 @@ export type PermissionDecision =
 
 export type ApprovalFn = (req: ApprovalRequest) => Promise<"once" | "always" | "deny">;
 
+/** How much the human is asked. `ask` prompts for every write, command and subagent; `accept-edits`
+ *  stops asking for writes INSIDE the workspace (shell, spawn, network and writes outside it still
+ *  ask); `auto` never asks. Deny rules, plan mode and the execpolicy forbidden-argv stop hold at
+ *  every level — this dial only moves the prompt branch. */
+export type PermissionLevel = "ask" | "accept-edits" | "auto";
+
 export interface ApprovalRequest {
   tool: string;
   args: unknown;
@@ -136,6 +159,10 @@ export type RunEvent =
   | { type: "run_start"; runId: string; sessionId: string; goal: string }
   | { type: "turn_start"; turn: number }
   | { type: "message_update"; messageId: string; delta: string }
+  /** the provider turn is reasoning: `tokens` = estimated reasoning tokens so far this turn,
+   *  CUMULATIVE (a dropped event costs nothing). Only the count leaves the loop — the reasoning text
+   *  is not the answer and neither the transcript nor a client should carry it. */
+  | { type: "reasoning_update"; messageId: string; tokens: number }
   | { type: "tool_execution_start"; callId: string; tool: string; args: unknown }
   | { type: "tool_execution_update"; callId: string; note: string }
   | { type: "tool_execution_end"; callId: string; ok: boolean; output: string; durationMs: number }
@@ -182,7 +209,7 @@ export interface RunConfig {
   maxTurns: number;
   contextBudgetTokens: number;
   compactionThreshold: number;   // fraction of budget triggering compaction
-  /** port #25: history compaction strategy (core/compaction.ts; env AION_COMPACTION); default head-summarize */
+  /** port #25: history compaction strategy (core/compaction.ts; env ROVECODE_COMPACTION); default head-summarize */
   compactionStrategy?: CompactionStrategy;
   /** port #25 keep-window: user turns kept BEFORE the current one (default 2; an emergency keeps 0) */
   compactionKeepTurns?: number;

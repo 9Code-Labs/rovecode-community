@@ -29,7 +29,7 @@ const baseDef: AgentDefinition = {
 };
 
 test("loop completes a plain turn", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-loop-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-loop-"));
   const store = new SessionStore(dir, randomUUID());
   const events: string[] = [];
   for await (const ev of agentLoop(baseDef, "hi", {}, cfg(), {
@@ -47,7 +47,7 @@ test("loop completes a plain turn", async () => {
 });
 
 test("loop executes tool then finishes (multi-turn)", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-loop-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-loop-"));
   const ws = join(dir, "ws"); writeFileSync(join(ws + ".txt", ""), ""); // noop
   writeFileSync(join(dir, "note.txt"), "value=42");
   const store = new SessionStore(dir, randomUUID());
@@ -70,7 +70,7 @@ test("loop executes tool then finishes (multi-turn)", async () => {
 });
 
 test("truncated stopReason fails tool calls unexecuted", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-loop-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-loop-"));
   const store = new SessionStore(dir, randomUUID());
   const reg = new ToolRegistry();
   let executed = 0;
@@ -95,7 +95,7 @@ test("truncated stopReason fails tool calls unexecuted", async () => {
 });
 
 test("budget stop when maxTurns exceeded", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-loop-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-loop-"));
   const store = new SessionStore(dir, randomUUID());
   const reg = new ToolRegistry();
   const echoTool: Tool = {
@@ -115,7 +115,7 @@ test("budget stop when maxTurns exceeded", async () => {
 });
 
 test("write tool actually writes through the pipeline", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-loop-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-loop-"));
   const store = new SessionStore(dir, randomUUID());
   const reg = new ToolRegistry();
   reg.register(writeTool);
@@ -130,7 +130,7 @@ test("write tool actually writes through the pipeline", async () => {
 // regression (port #6 (b)): the compaction trigger counts ALL parts — a tool-result-heavy
 // history whose PROSE is tiny must still trip it (text-only counting reads ~0 forever)
 test("compaction triggers on tool-result-heavy history, not just prose", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-loop-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-loop-"));
   const store = new SessionStore(dir, randomUUID());
   const reg = new ToolRegistry();
   const bigTool: Tool = {
@@ -166,7 +166,7 @@ test("compaction triggers on tool-result-heavy history, not just prose", async (
 
 // regression: plan.keep projections must be mapped back to real messages (loop.ts compaction)
 test("compaction rebuilds history from real messages, not projections", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-loop-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-loop-"));
   const store = new SessionStore(dir, randomUUID());
   // pre-seed long user/assistant history so the first token reduce exceeds budget * threshold
   let parent: string | null = null;
@@ -235,8 +235,8 @@ function seedLongHistory(store: SessionStore): void {
 
 // port #25: the compaction event names strategy + trigger, and a REAL session carries the marker —
 // persisted as an event entry annotating the leaf, on the active path after reload, rendered by export
-test("compaction event carries strategy+trigger; the marker is persisted, survives reload, and `aion export` renders it", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-loop-"));
+test("compaction event carries strategy+trigger; the marker is persisted, survives reload, and `rovecode export` renders it", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-loop-"));
   const sid = randomUUID();
   const store = new SessionStore(dir, sid);
   seedLongHistory(store);
@@ -259,7 +259,7 @@ test("compaction event carries strategy+trigger; the marker is persisted, surviv
   expect(re.reload()).toEqual([]);
   expect(re.path().map((e) => e.id)).toEqual(path.map((e) => e.id));
   expect(re.messages().length).toBe(6); // 4 seeded + goal + reply
-  const out = mkdtempSync(join(tmpdir(), "aion-loop-export-"));
+  const out = mkdtempSync(join(tmpdir(), "rovecode-loop-export-"));
   const res = exportSession(dir, sid, { cwd: out });
   const c0 = comp[0] as { tokensBefore: number; tokensAfter: number };
   expect(readFileSync(res.path, "utf8")).toContain(`> compacted (head-summarize): ${c0.tokensBefore} → ${c0.tokensAfter} tokens`);
@@ -267,7 +267,7 @@ test("compaction event carries strategy+trigger; the marker is persisted, surviv
 });
 
 test("cfg.compactionStrategy=keep-window compacts without a summarizer: deterministic marker on the wire, seeded head gone, event names the strategy", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-loop-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-loop-"));
   const store = new SessionStore(dir, randomUUID());
   seedLongHistory(store);
   const recorded: Message[][] = [];
@@ -286,5 +286,48 @@ test("cfg.compactionStrategy=keep-window compacts without a summarizer: determin
   expect(wire).toContain("compact this run");
   expect(events.at(-1)).toMatchObject({ type: "run_end", status: "done" });
   expect(store.path().some((e) => "kind" in e && e.kind === "event")).toBe(true);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+// ---------- port #32: the plan reminder rides the request, not the transcript ----------
+
+test("planReminder is appended to EVERY request as the last message, is never stored, and a null keeps the request untouched", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-loop-plan-"));
+  const store = new SessionStore(dir, randomUUID());
+  const sent: Message[][] = [];
+  const capture: StreamFn = async function* (_m: ModelRef, msgs: Message[]): AsyncGenerator<StreamEvent> {
+    sent.push(msgs);
+    yield { type: "turn", turn: textTurn("done") };
+  };
+  let calls = 0;
+  const seenHistories: number[] = [];
+  for await (const _ev of agentLoop(baseDef, "go", {}, cfg(), {
+    stream: capture,
+    registry: new ToolRegistry(),
+    store,
+    planReminder: (h) => { calls++; seenHistories.push(h.length); return "<plan-reminder>\n[ ] a: ship it\n</plan-reminder>"; },
+  }, new SteeringQueue())) { /* drain */ }
+
+  expect(calls).toBe(1);
+  expect(seenHistories[0]).toBeGreaterThan(0); // it sees the history that is about to be sent
+  const last = sent[0]!.at(-1)!;
+  expect(last.role).toBe("user");
+  expect(last.parts).toEqual([{ kind: "text", text: "<plan-reminder>\n[ ] a: ship it\n</plan-reminder>" }]);
+  // the user's actual goal is still the message BEFORE it — the reminder does not displace it
+  expect(sent[0]!.at(-2)!.parts).toEqual([{ kind: "text", text: "go" }]);
+  // and it never reaches the session store: the transcript has no copy of the plan
+  expect(store.messages().some((m) => m.parts.some((p) => p.kind === "text" && p.text.includes("plan-reminder")))).toBe(false);
+
+  // a runtime with no open plan returns null, and the request is exactly the history
+  const store2 = new SessionStore(dir, randomUUID());
+  const sent2: Message[][] = [];
+  const capture2: StreamFn = async function* (_m: ModelRef, msgs: Message[]): AsyncGenerator<StreamEvent> {
+    sent2.push(msgs);
+    yield { type: "turn", turn: textTurn("done") };
+  };
+  for await (const _ev of agentLoop(baseDef, "go", {}, cfg(), {
+    stream: capture2, registry: new ToolRegistry(), store: store2, planReminder: () => null,
+  }, new SteeringQueue())) { /* drain */ }
+  expect(sent2[0]!.at(-1)!.parts).toEqual([{ kind: "text", text: "go" }]);
   rmSync(dir, { recursive: true, force: true });
 });

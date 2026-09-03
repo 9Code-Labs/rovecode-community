@@ -1,4 +1,4 @@
-/** Hand-authored OpenAPI 3.1 document for the aion server surface (port #19).
+/** Hand-authored OpenAPI 3.1 document for the rovecode server surface (port #19).
  *  opencode serves its spec at GET /doc — packages/opencode/src/server/routes/
  *  instance/httpapi/server.ts:190 (route) + :188 (lazy OpenApi.fromApi(PublicApi))
  *  — and generates its client SDK from that spec (packages/sdk/js, @hey-api/openapi-ts).
@@ -19,7 +19,7 @@ export const APPROVALS_NOTE =
 /** RunEvent discriminator values (src/core/types.ts RunEvent union). Hand-listed:
  *  types are erased at runtime, and the doc is hand-authored by design. */
 export const RUN_EVENT_TYPES = [
-  "run_start", "turn_start", "message_update",
+  "run_start", "turn_start", "message_update", "reasoning_update",
   "tool_execution_start", "tool_execution_update", "tool_execution_end",
   "tool_call_failed", "compaction", "turn_end", "steer", "run_end",
 ] as const;
@@ -34,10 +34,10 @@ export function buildOpenApiDoc(serverUrl: string): Record<string, unknown> {
   return {
     openapi: "3.1.0",
     info: {
-      title: "aion server",
+      title: "rovecode server",
       version: "0.1.0",
       description:
-        "Headless HTTP surface over the one aion agent loop (ADR-003). " +
+        "Headless HTTP surface over the one rovecode agent loop (ADR-003). " +
         "Five routes: create a session, prompt it (SSE stream of typed run events; " +
         "DELETE the same path cancels the in-flight run mid-turn), " +
         "list its background tasks, list sessions, and this document. " + APPROVALS_NOTE,
@@ -105,7 +105,7 @@ export function buildOpenApiDoc(serverUrl: string): Record<string, unknown> {
             "400": errorResponse("Body is not JSON or lacks a string `text`"),
             "404": errorResponse("Unknown session id"),
             "409": errorResponse("A run is already in progress for this session"),
-            "503": errorResponse("No provider configured (run `aion auth set <provider>`, or set AION_BASE_URL/AION_API_KEY or a named provider key)"),
+            "503": errorResponse("No provider configured — run `rovecode setup` (or rovecode provider add + rovecode auth set, or set ROVECODE_BASE_URL/ROVECODE_API_KEY)"),
           },
         },
         delete: {

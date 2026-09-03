@@ -245,7 +245,7 @@ describe("json mode", () => {
 
 // ---------- LOW-B (#39): toolCalls keyed per issuing turn ----------
 
-describe("toolCalls per ISSUED call (LOW-B, #39: the aion.tool_calls equality)", () => {
+describe("toolCalls per ISSUED call (LOW-B, #39: the rovecode.tool_calls equality)", () => {
   /** turn `n` issues call id `same` (the SSE adapter's `tc<idx>` fallback shape) and executes it */
   const issue = (n: number, tool: string, ok: boolean, ms: number): RunEvent[] => [
     { type: "turn_start", turn: n }, { type: "turn_end", turn: n, stopReason: "tool_use" },
@@ -422,11 +422,11 @@ describe("guardStdout (pi output-guard takeOverStdout)", () => {
 
 describe("buildRunDeps (LOW-2: the hand-merged cmdRun LoopDeps, now one testable function)", () => {
   test("threads sink.signal and the runtime's hooks/guard/cwd/registry/store by IDENTITY, lists the registry's tool schemas, and nothing else; the signal is LIVE — the sink's SIGINT is the abort the loop sees (mutation: drop `signal` → deps.signal undefined)", () => {
-    const root = mkdtempSync(join(tmpdir(), "aion-deps-"));
+    const root = mkdtempSync(join(tmpdir(), "rovecode-deps-"));
     try {
       const registry = new ToolRegistry();
       registry.register(readTool);
-      const rt = { registry, store: new SessionStore(root, "s1"), guard: new ToolGuard(), cwd: root, hooks: new HookRunner({ cwd: root, sessionId: "s1" }) };
+      const rt = { registry, store: new SessionStore(root, "s1"), guard: new ToolGuard(), planReminder: () => null, cwd: root, hooks: new HookRunner({ cwd: root, sessionId: "s1" }) };
       const stream = mockStream({ turns: [textTurn("unused")] });
       let fire: (() => void) | undefined;
       const sink = createOutputSink("json", { stdout: capture(), stderr: capture(), model, messages: () => [], onInterrupt: (h) => { fire = h; return () => {}; } });
@@ -440,7 +440,8 @@ describe("buildRunDeps (LOW-2: the hand-merged cmdRun LoopDeps, now one testable
       expect(deps.store).toBe(rt.store);
       expect(deps.tools).toEqual(registry.list().map((t) => t.schema));
       expect(deps.tools!.map((s) => s.name)).toEqual(["read"]);
-      expect(Object.keys(deps).sort()).toEqual(["cwd", "guard", "hooks", "registry", "signal", "store", "stream", "tools"]);
+      expect(Object.keys(deps).sort()).toEqual(["cwd", "guard", "hooks", "planReminder", "registry", "signal", "store", "stream", "tools"]);
+      expect(deps.planReminder).toBe(rt.planReminder); // port #32: the open plan rides every headless turn too
       expect(deps.signal!.aborted).toBe(false);
       fire!();
       expect(deps.signal!.aborted).toBe(true);

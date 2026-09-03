@@ -10,7 +10,7 @@ import { test, expect } from "bun:test";
 import { mkdtempSync, rmSync, readdirSync, readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import {
+import { planReminder,
   todoTools, todoWriteTool, todoReadTool, loadTodos, saveTodos, renderTodos, validateTodos,
   todoStatusLabel, todoCounts, MAX_TODOS, MAX_ID_CHARS, MAX_CONTENT_CHARS, TODOS_FILE, type TodoItem,
 } from "../../src/tools/todo.ts";
@@ -32,7 +32,7 @@ const call = (tool: string, args: unknown): ToolCallPart => ({ kind: "tool_call"
 
 /** Real registry over a fresh sessions root; `run` dispatches with allow-all rules and NO approver. */
 function harness() {
-  const root = mkdtempSync(join(tmpdir(), "aion-todo-"));
+  const root = mkdtempSync(join(tmpdir(), "rovecode-todo-"));
   const registry = new ToolRegistry();
   registry.register(...todoTools(root));
   const run = (tool: string, args: unknown, sessionId = "sess-a"): Promise<ToolOutput> =>
@@ -113,7 +113,12 @@ test("todo_read on a fresh session: empty message, ok:true, and NO file or sessi
 
 // ---------- validation: precise messages, nothing written ----------
 
-const BAD: { name: string; todos: unknown; msg: string }[] = [
+/** Two layers reject a bad list and they divide cleanly (core/validate.ts, added after the write-tool
+ *  crash): the SCHEMA owns structure — wrong type, missing required key, a value outside a declared
+ *  enum — and dispatch refuses those before the tool runs; the TOOL owns meaning — emptiness, lengths,
+ *  duplicate ids, one in_progress, the item cap — which no JSON Schema expresses. `schema: true` marks
+ *  the cases the first layer now answers, so this test pins the BOUNDARY, not just the rejection. */
+const BAD: { name: string; todos: unknown; msg: string; schema?: true }[] = [
   { name: "empty content", todos: [{ id: "a", content: "", status: "pending" }], msg: 'todos[0] ("a"): content must be a non-empty string' },
   { name: "whitespace-only content", todos: [{ id: "a", content: "  \n ", status: "pending" }], msg: 'todos[0] ("a"): content must be a non-empty string' },
   { name: "content too long", todos: [{ id: "a", content: "x".repeat(MAX_CONTENT_CHARS + 1), status: "pending" }], msg: `todos[0] ("a"): content exceeds ${MAX_CONTENT_CHARS} chars` },
@@ -121,14 +126,14 @@ const BAD: { name: string; todos: unknown; msg: string }[] = [
   { name: "duplicate ids after trim", todos: [{ id: "a", content: "one", status: "pending" }, { id: " a ", content: "two", status: "pending" }], msg: 'duplicate id "a" at todos[1]' },
   { name: "two in_progress", todos: [{ id: "a", content: "one", status: "in_progress" }, { id: "b", content: "two", status: "pending" }, { id: "c", content: "three", status: "in_progress" }], msg: "only one todo may be in_progress at a time (found 2: a, c)" },
   { name: "too many items", todos: Array.from({ length: MAX_TODOS + 1 }, (_, i) => ({ id: `t${i}`, content: `step ${i}`, status: "pending" })), msg: `too many todos: ${MAX_TODOS + 1} (max ${MAX_TODOS})` },
-  { name: "bad status", todos: [{ id: "a", content: "one", status: "done" }], msg: 'todos[0] ("a"): status must be one of pending, in_progress, completed (got "done")' },
-  { name: "cancelled is not a status here", todos: [{ id: "a", content: "one", status: "cancelled" }], msg: "status must be one of pending, in_progress, completed" },
-  { name: "bad priority", todos: [{ id: "a", content: "one", status: "pending", priority: "urgent" }], msg: 'todos[0] ("a"): priority must be one of high, medium, low (got "urgent")' },
-  { name: "missing id", todos: [{ content: "one", status: "pending" }], msg: "todos[0].id must be a non-empty string" },
+  { name: "bad status", todos: [{ id: "a", content: "one", status: "done" }], schema: true, msg: 'todos.0.status expected one of "pending" | "in_progress" | "completed", got "done"' },
+  { name: "cancelled is not a status here", todos: [{ id: "a", content: "one", status: "cancelled" }], schema: true, msg: 'todos.0.status expected one of "pending" | "in_progress" | "completed", got "cancelled"' },
+  { name: "bad priority", todos: [{ id: "a", content: "one", status: "pending", priority: "urgent" }], schema: true, msg: 'todos.0.priority expected one of "high" | "medium" | "low", got "urgent"' },
+  { name: "missing id", todos: [{ content: "one", status: "pending" }], schema: true, msg: "todos.0.id is required but was not provided" },
   { name: "id too long", todos: [{ id: "i".repeat(MAX_ID_CHARS + 1), content: "one", status: "pending" }], msg: `todos[0].id exceeds ${MAX_ID_CHARS} chars` },
-  { name: "item not an object", todos: ["write tests"], msg: "todos[0] must be an object" },
-  { name: "todos not an array", todos: { id: "a" }, msg: "`todos` must be an array" },
-  { name: "todos missing", todos: undefined, msg: "`todos` must be an array" },
+  { name: "item not an object", todos: ["write tests"], schema: true, msg: "todos.0 expected object, got string" },
+  { name: "todos not an array", todos: { id: "a" }, schema: true, msg: "todos expected array, got object" },
+  { name: "todos missing", todos: undefined, schema: true, msg: "todos is required but was not provided" },
 ];
 
 test("validation: every invalid list is rejected with a precise message and the file stays byte-identical", async () => {
@@ -139,9 +144,10 @@ test("validation: every invalid list is rejected with a precise message and the 
     for (const c of BAD) {
       const out = await h.run("todo_write", { todos: c.todos });
       expect(out.ok, c.name).toBe(false);
-      expect(out.output, c.name).toStartWith("todo_write failed: ");
+      expect(out.output, c.name).toStartWith(c.schema ? "Invalid arguments for todo_write: " : "todo_write failed: ");
       expect(out.output, c.name).toContain(c.msg);
-      expect(out.output, c.name).toContain("the list was not changed");
+      // the tool's own refusal promises the list survived; the schema layer never reached the store
+      if (!c.schema) expect(out.output, c.name).toContain("the list was not changed");
       expect(readFileSync(h.file(), "utf8"), c.name).toBe(before);
     }
     // the surviving list is still the original
@@ -262,7 +268,7 @@ test("session id must be a plain directory name: traversal / separators are refu
   // the sessions root sits INSIDE a private outer dir so an escaping write ("../escape")
   // would land in outer/, not the shared OS tmpdir — the assertion stays hermetic and
   // a failing (mutated) run cannot pollute later runs
-  const outer = mkdtempSync(join(tmpdir(), "aion-todo-esc-"));
+  const outer = mkdtempSync(join(tmpdir(), "rovecode-todo-esc-"));
   try {
     const root = join(outer, "sessions");
     mkdirSync(root);
@@ -286,7 +292,7 @@ test("session id must be a plain directory name: traversal / separators are refu
 // ---------- policy ----------
 
 test("policy: under the runtime's default gated rules with NO approver, todo_write (kind memory → memory.write allow) and todo_read (kind read → file.read allow) auto-run; deny-default blocks both", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-todo-rt-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-todo-rt-"));
   try {
     const rt = createRuntime({ cwd, sessionId: "sess-p", stream: null });
     const write = rt.registry.list().find((t) => t.schema.name === "todo_write")!;
@@ -304,7 +310,7 @@ test("policy: under the runtime's default gated rules with NO approver, todo_wri
     expect(r.ok).toBe(true);
     expect(dataItems(r)).toEqual(items());
     // bound to the runtime's sessions dir
-    expect(existsSync(join(cwd, ".aion", "sessions", "sess-p", TODOS_FILE))).toBe(true);
+    expect(existsSync(join(cwd, ".rovecode", "sessions", "sess-p", TODOS_FILE))).toBe(true);
     // deny-default: with no rules neither runs
     for (const name of ["todo_write", "todo_read"]) {
       const denied = await rt.registry.dispatch(call(name, name === "todo_write" ? { todos: [] } : {}), c, undefined, [], undefined, () => {});
@@ -316,7 +322,7 @@ test("policy: under the runtime's default gated rules with NO approver, todo_wri
 });
 
 test("policy: plan mode ALLOWS todo_write (the plan's own artifact — modes.ts re-allows `memory.write todo_write` after the memory deny) and todo_read; memory_edit, file.write and shell.exec stay denied, even over yolo's allow-all", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-todo-plan-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-todo-plan-"));
   try {
     const rt = createRuntime({ cwd, sessionId: "sess-plan", stream: null });
     const cfg = rt.buildCfg(false);
@@ -324,7 +330,7 @@ test("policy: plan mode ALLOWS todo_write (the plan's own artifact — modes.ts 
     const plan = applyModeRules("plan", cfg.permissionRules);
     const w = await rt.registry.dispatch(call("todo_write", { todos: items() }), c, undefined, plan, cfg.approval, () => {});
     expect(w.ok).toBe(true); // mutation: drop the `memory.write todo_write allow` in planModeRules → Permission denied
-    expect(existsSync(join(cwd, ".aion", "sessions", "sess-plan", TODOS_FILE))).toBe(true);
+    expect(existsSync(join(cwd, ".rovecode", "sessions", "sess-plan", TODOS_FILE))).toBe(true);
     const r = await rt.registry.dispatch(call("todo_read", {}), c, undefined, plan, cfg.approval, () => {});
     expect(r.ok).toBe(true);
     expect(dataItems(r)).toEqual(items());
@@ -345,7 +351,7 @@ test("policy: plan mode ALLOWS todo_write (the plan's own artifact — modes.ts 
     const planYolo = applyModeRules("plan", rt.buildCfg(true).permissionRules);
     expect((await rt.registry.dispatch(call("write", { path: join(cwd, "leak2.txt"), content: "x" }), c, undefined, planYolo, undefined, () => {})).ok).toBe(false);
     expect((await rt.registry.dispatch(call("todo_write", { todos: [] }), c, undefined, planYolo, undefined, () => {})).ok).toBe(true);
-    expect(loadTodos(join(cwd, ".aion", "sessions", "sess-plan"))).toEqual({ items: [] }); // the plan-mode clear ran
+    expect(loadTodos(join(cwd, ".rovecode", "sessions", "sess-plan"))).toEqual({ items: [] }); // the plan-mode clear ran
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 
@@ -443,4 +449,40 @@ test("todoCounts / todoStatusLabel: counts by status; label is completed/total, 
   expect(todoStatusLabel(items())).toBe("todos 1/3");
   expect(todoStatusLabel([])).toBe("");
   expect(todoStatusLabel([{ id: "a", content: "x", status: "completed" }])).toBe("todos 1/1");
+});
+
+// ---------- the plan reminder (loop.ts LoopDeps.planReminder) ----------
+
+test("planReminder: nothing to chase — an empty list and a finished one both stay quiet", () => {
+  expect(planReminder([])).toBeNull();
+  expect(planReminder([
+    { id: "a", content: "one", status: "completed" },
+    { id: "b", content: "two", status: "completed" },
+  ])).toBeNull();
+});
+
+test("planReminder: an open list comes back with the checkboxes and the next move", () => {
+  const r = planReminder([
+    { id: "a", content: "read the config", status: "completed" },
+    { id: "b", content: "fix the parser", status: "in_progress" },
+    { id: "c", content: "run the tests", status: "pending" },
+  ]);
+  expect(r).not.toBeNull();
+  expect(r).toContain("<plan-reminder>");
+  expect(r).toContain("todos: 3 total · 1 completed · 1 in progress · 1 pending");
+  expect(r).toContain("[x] a: read the config");
+  expect(r).toContain("[>] b: fix the parser");
+  expect(r).toContain("[ ] c: run the tests");
+  expect(r).toContain("Mark the in_progress item completed");
+  expect(r).toContain("not a message from the user"); // it must not read as the human speaking
+  expect(r).toContain("Never mention this reminder");
+});
+
+test("planReminder: with nothing in progress it asks for the next item to be claimed first", () => {
+  const r = planReminder([
+    { id: "a", content: "one", status: "completed" },
+    { id: "b", content: "two", status: "pending" },
+  ]);
+  expect(r).toContain("Nothing is in progress. Mark the next item in_progress");
+  expect(r).not.toContain("Mark the in_progress item completed");
 });

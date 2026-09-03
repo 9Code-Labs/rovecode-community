@@ -1,9 +1,9 @@
-/** PORT #35 — machine-readable output for `aion run`: --output text | json | ndjson.
+/** PORT #35 — machine-readable output for `rovecode run`: --output text | json | ndjson.
  *
  *  Ported shape decisions (pi @ 853a80d, packages/coding-agent/src):
  *  - modes/print-mode.ts:108-111 — `--mode json` writes ONE JSON line per session event
  *    (`JSON.stringify(toJsonEvent(event)) + "\n"` through writeRawStdout); the RPC protocol
- *    frames its output identically (modes/rpc/rpc-mode.ts:60-62, :355-356). aion's ndjson mode
+ *    frames its output identically (modes/rpc/rpc-mode.ts:60-62, :355-356). rovecode's ndjson mode
  *    emits every RunEvent VERBATIM that way (no reformatting: the loop's events are already
  *    deltas — pi's toJsonEvent only strips its cumulative partials, json-event.ts:40-45) and
  *    closes with one {type:"result", …} line.
@@ -17,7 +17,7 @@
  *    serves embedders that pass process.stdout itself.
  *  - print-mode.ts:139-156 — text mode prints only the final assistant text; error/aborted →
  *    message on stderr, exit 1 (:145-147); signals exit 128+n (:57-61: 143 SIGTERM, 129 SIGHUP).
- *    aion keeps its text mode byte-identical to the pre-port cmdRun (progress lines + summary on
+ *    rovecode keeps its text mode byte-identical to the pre-port cmdRun (progress lines + summary on
  *    stdout) and maps an ABORTED run to 130 by the same 128+signal convention: the sink's signal
  *    aborts on the first SIGINT and rides into LoopDeps.signal (port #21), so Ctrl-C ends the run
  *    "stopped" with a well-formed result instead of a hard kill (Windows: exit 0xC000013A, no output).
@@ -26,7 +26,7 @@
  *    status     "done" | "stopped" | "error" | "budget" — run_end.status ("error" when the loop
  *               ended without a run_end)
  *    summary    run_end.summary: the final assistant text, or the error text
- *    sessionId  run_start.sessionId (null if never seen) — the store under .aion/sessions
+ *    sessionId  run_start.sessionId (null if never seen) — the store under .rovecode/sessions
  *    model      { provider, model } requested
  *    origin     { provider, model } that SERVED the last turn (router fallback may differ), or null
  *    usage      { input, output, cacheRead, cacheWrite } summed over the run's assistant messages
@@ -35,7 +35,7 @@
  *    toolCalls  [{ tool, ok, ms? }] in event order, one entry per ISSUED call — keyed per
  *               `<turn>:<callId>`, so a call id a provider reuses across turns (the SSE adapter's
  *               `tc<idx>` fallback, providers/stream.ts) is one entry PER TURN, the telemetry/otel.ts
- *               aion.tool_calls count (LOW-B, #39); ms absent for calls that never executed
+ *               rovecode.tool_calls count (LOW-B, #39); ms absent for calls that never executed
  *               (permission_denied / truncated / not_found → ok:false)
  *    durationMs sink construction → finish
  *    exitCode   the process exit code below
@@ -118,7 +118,7 @@ function isOutputMode(v: string): v is OutputMode {
  *  value from being taken for the command). Missing or unknown value → one-line stderr usage
  *  error, exit 2 (the usage/startup-error class; `fail` is injectable for tests). Last one wins.
  *  cmdRun calls this FIRST — before bootRuntime — so a usage error leaves no trace: no
- *  .aion/sessions/<id> (meta.json, memory dir), no sandbox probe, no MCP children to reap. */
+ *  .rovecode/sessions/<id> (meta.json, memory dir), no sandbox probe, no MCP children to reap. */
 export function parseOutputMode(argv: readonly string[], fail: (msg: string) => never = usageExit): OutputMode {
   const args = argv.slice(2);
   let mode: string | undefined;
@@ -138,7 +138,7 @@ export function parseOutputMode(argv: readonly string[], fail: (msg: string) => 
 
 /** The one-shot prompt words for cmdRun. parseCli's `rest` keeps a POST-command value flag's
  *  value (its contract — owners drop their own, like cmdAuth's --key and export.ts's --out), so
- *  `aion run "hi" --output json` arrives as rest ["hi", "json"]. The token that followed --output
+ *  `rovecode run "hi" --output json` arrives as rest ["hi", "json"]. The token that followed --output
  *  is removed by POSITION, never by value (a prompt may legitimately contain the word "json"). A
  *  pre-command --output value never enters rest; a dangling --output is parseOutputMode's error. */
 export function runPromptWords(cli: { cmd: string; rest: string[] }, argv: readonly string[]): string[] {
@@ -214,7 +214,7 @@ export function createOutputSink(mode: OutputMode, opts: OutputSinkOptions): Out
   let turn = 0; // the issuing turn: a turn's tool events follow its turn_end (loop.ts:232 → :295)
   // issued calls by `<turn>:<callId>` in event order (the telemetry/otel.ts toolKey idiom): a call id a
   // provider reuses across turns is one call PER TURN, never a merge — keyed by callId alone, `same`
-  // issued by 3 turns was ONE toolCall while aion.tool_calls said 3 (LOW-B, #39)
+  // issued by 3 turns was ONE toolCall while rovecode.tool_calls said 3 (LOW-B, #39)
   const calls = new Map<string, CallRecord>();
   const call = (id: string): CallRecord => {
     const key = `${turn}:${id}`;
@@ -269,8 +269,8 @@ export function createOutputSink(mode: OutputMode, opts: OutputSinkOptions): Out
  *  registry/store/tools, guard (port #4), cwd (port #26) and hooks (port #29), with the sink's
  *  SIGINT signal (port #21) — the fields agentLoop reads. Same object literal cmdRun used to inline,
  *  evaluated at the same argument position (tools listed at call time). */
-export function buildRunDeps(rt: Pick<Runtime, "registry" | "store" | "guard" | "cwd" | "hooks">, stream: StreamFn, sink: Pick<OutputSink, "signal">): LoopDeps {
-  return { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, cwd: rt.cwd, signal: sink.signal, hooks: rt.hooks };
+export function buildRunDeps(rt: Pick<Runtime, "registry" | "store" | "guard" | "planReminder" | "cwd" | "hooks">, stream: StreamFn, sink: Pick<OutputSink, "signal">): LoopDeps {
+  return { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, planReminder: rt.planReminder, cwd: rt.cwd, signal: sink.signal, hooks: rt.hooks };
 }
 
 function summarize(

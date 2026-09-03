@@ -28,6 +28,7 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { bootRuntime, type Runtime } from "../cli/runtime.ts";
+import { noModelHint } from "../core/voice.ts";
 import { SandboxConfigError } from "../core/sandbox-config.ts";
 import { agentLoop, SteeringQueue } from "../core/loop.ts";
 import { listSessions } from "../core/session.ts";
@@ -48,7 +49,7 @@ export interface ServerOptions {
   port?: number;
   /** bind address; default 127.0.0.1 (loopback-only, opencode cli/network.ts:15) */
   hostname?: string;
-  /** project root; sessions live in <cwd>/.aion/sessions */
+  /** project root; sessions live in <cwd>/.rovecode/sessions */
   cwd?: string;
   /** injectable provider stream (tests); undefined = resolve from env; null = no stream */
   stream?: StreamFn | null;
@@ -57,7 +58,7 @@ export interface ServerOptions {
   yolo?: boolean;
 }
 
-export interface AionServer {
+export interface RovecodeServer {
   port: number;
   hostname: string;
   url: string;
@@ -151,10 +152,10 @@ function bodyModel(body: unknown): ModelRef | null {
   return null;
 }
 
-export function startServer(opts: ServerOptions = {}): AionServer {
+export function startServer(opts: ServerOptions = {}): RovecodeServer {
   const hostname = opts.hostname ?? DEFAULT_HOSTNAME;
   const cwd = opts.cwd ?? process.cwd();
-  const sessionsRoot = join(cwd, ".aion", "sessions");
+  const sessionsRoot = join(cwd, ".rovecode", "sessions");
   const yolo = opts.yolo ?? false;
   const sessions = new Map<string, SessionEntry>();
 
@@ -190,7 +191,9 @@ export function startServer(opts: ServerOptions = {}): AionServer {
     if (entry.running) return json({ error: "a run is already in progress for this session" }, 409);
     const rt = entry.runtime;
     const stream = rt.stream;
-    if (!stream) return json({ error: "no provider configured (run `aion auth set <provider>`, or set AION_BASE_URL/AION_API_KEY or a named provider key)" }, 503);
+    // live: a provider added after boot (rovecode provider add / auth set) serves the next request
+    const noProvider = rt.noProviderReason();
+    if (!stream || noProvider !== null) return json({ error: noProvider ?? noModelHint("cli") }, 503);
     const model: ModelRef = bodyModel(body) ?? { provider: rt.provider?.id ?? "mock", model: rt.defaultModel || "default" };
     const def = rt.buildDef(model);
     // no interactive ApprovalFn — buildCfg installs the port-#9 exec-policy wrapper:
@@ -201,8 +204,8 @@ export function startServer(opts: ServerOptions = {}): AionServer {
     rt.tasks.bindRun(ac.signal); // port #26: DELETE / disconnect / stop() also cancel the run's background tasks
     const run = agentLoop(def, text, {}, cfg, {
       stream, registry: rt.registry, store: rt.store,
-      tools: rt.registry.list().map((t) => t.schema), guard: rt.guard,
-      hooks: rt.hooks, // port #29: .aion/hooks.{ts,js} of the server cwd
+      tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, planReminder: rt.planReminder,
+      hooks: rt.hooks, // port #29: .rovecode/hooks.{ts,js} of the server cwd
       cwd: rt.cwd, // session cwd reaches ToolContext (same gap as ACP HIGH-G1)
       signal: ac.signal, // port #21: DELETE / disconnect / stop() kill in-flight work
     }, rt.steering); // port #26: the session's queue — background-task notes land on the next prompt
@@ -262,7 +265,7 @@ export function startServer(opts: ServerOptions = {}): AionServer {
     },
   });
 
-  const api: AionServer = {
+  const api: RovecodeServer = {
     port: server.port ?? 0,
     hostname,
     url: `http://${hostname}:${server.port}`,

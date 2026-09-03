@@ -1,11 +1,11 @@
-/** PORT #35 — `aion run --output text|json|ndjson` through the REAL CLI. Hermetic: AION_* and
- *  *_API_KEY scrubbed, AION_HOME → an empty temp dir (a stored credential would otherwise steer
+/** PORT #35 — `rovecode run --output text|json|ndjson` through the REAL CLI. Hermetic: ROVECODE_* and
+ *  *_API_KEY scrubbed, ROVECODE_HOME → an empty temp dir (a stored credential would otherwise steer
  *  the run onto a real endpoint — PORTS.md #6 lesson), cwd → a temp workspace. Provider paths:
  *  the mock cmdRun auto-selects when nothing is configured, and a loopback OpenAI-compatible
  *  server (tool call → text; HTTP 400 → error run). Bar items: one JSON result / NDJSON RunEvent
  *  stream, stdout purity (progress → stderr), meaningful exit codes (0 done · 1 error · 2 usage),
  *  schema pins, text mode unchanged. Critic closes: a usage error exits BEFORE the runtime boots —
- *  a pristine cwd gets no .aion at all (MED-1); purity is STRUCTURAL — a project hook's stray
+ *  a pristine cwd gets no .rovecode at all (MED-1); purity is STRUCTURAL — a project hook's stray
  *  console.log / process.stdout.write mid-run lands on stderr (LOW-1, real fd 1). */
 
 import { describe, test, expect, beforeAll, afterAll } from "bun:test";
@@ -25,8 +25,8 @@ const T = 60_000;
 
 let work = "", home = "", note = "";
 beforeAll(() => {
-  work = mkdtempSync(join(tmpdir(), "aion-out-"));
-  home = mkdtempSync(join(tmpdir(), "aion-out-home-"));
+  work = mkdtempSync(join(tmpdir(), "rovecode-out-"));
+  home = mkdtempSync(join(tmpdir(), "rovecode-out-home-"));
   note = join(work, "note.txt");
   writeFileSync(note, "hello from note\n");
 });
@@ -37,22 +37,22 @@ afterAll(() => {
   for (const d of scratch) rmSync(d, { recursive: true, force: true });
 });
 
-/** A pristine cwd for tests that assert on what the CLI leaves behind (`work` accumulates .aion). */
+/** A pristine cwd for tests that assert on what the CLI leaves behind (`work` accumulates .rovecode). */
 function fresh(): string {
-  const d = mkdtempSync(join(tmpdir(), "aion-out-fresh-"));
+  const d = mkdtempSync(join(tmpdir(), "rovecode-out-fresh-"));
   scratch.push(d);
   return d;
 }
 
-/** Spawn the real CLI with a scrubbed env + empty AION_HOME; `extra` adds this test's provider.
+/** Spawn the real CLI with a scrubbed env + empty ROVECODE_HOME; `extra` adds this test's provider.
  *  ASYNC on purpose: the loopback provider below is a Bun.serve in THIS process — a spawnSync
  *  would block the event loop and the child's fetch could never be answered. */
 async function cli(args: string[], extra: Record<string, string> = {}, cwd = work): Promise<{ code: number; stdout: string; stderr: string }> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
-    if (v !== undefined && !/^AION_/i.test(k) && !/_API_KEY$/i.test(k)) env[k] = v;
+    if (v !== undefined && !/^ROVECODE_/i.test(k) && !/_API_KEY$/i.test(k)) env[k] = v;
   }
-  env.AION_HOME = home;
+  env.ROVECODE_HOME = home;
   Object.assign(env, extra);
   const p = Bun.spawn([process.execPath, MAIN, ...args], { cwd, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
@@ -97,7 +97,7 @@ function fakeProvider(opts: { fail?: number } = {}) {
     },
   });
   return {
-    env: { AION_BASE_URL: `http://127.0.0.1:${server.port}`, AION_API_KEY: "test-key", AION_MODEL: MODEL },
+    env: { ROVECODE_BASE_URL: `http://127.0.0.1:${server.port}`, ROVECODE_API_KEY: "test-key", ROVECODE_MODEL: MODEL },
     prompts,
     stop: () => { server.stop(true); },
   };
@@ -115,9 +115,9 @@ describe("output modes: mock provider", () => {
       status: "done", model: { provider: "mock", model: "default" }, origin: { provider: "mock", model: "default" },
       usage: { input: 0, output: 1, cacheRead: 0, cacheWrite: 0 }, costUsd: null, toolCalls: [], exitCode: 0,
     });
-    expect(res.summary).toContain("Aion mock provider");
+    expect(res.summary).toContain("Rovecode mock provider");
     expect(typeof res.sessionId).toBe("string");
-    expect(existsSync(join(work, ".aion", "sessions", res.sessionId!, "entries.jsonl"))).toBe(true);
+    expect(existsSync(join(work, ".rovecode", "sessions", res.sessionId!, "entries.jsonl"))).toBe(true);
   }, T);
 
   test("--output ndjson: every stdout line parses; first is run_start, last is the result; the loop's exact event sequence", async () => {
@@ -150,8 +150,8 @@ describe("output modes: mock provider", () => {
 describe("output modes: stdout guard over the real fd 1", () => {
   test("a project hook that console.logs AND process.stdout.writes mid-run: both strays land on stderr; json stdout stays ONE object, ndjson stays all-JSON (mutation: skip the guard install → the stray lines reach stdout)", async () => {
     const cwd = fresh();
-    mkdirSync(join(cwd, ".aion"));
-    writeFileSync(join(cwd, ".aion", "hooks.ts"), 'export default { version: 1, hooks: {\n  pre_run() { console.log("STRAY-LOG"); process.stdout.write("STRAY-WRITE\\n"); },\n} };\n');
+    mkdirSync(join(cwd, ".rovecode"));
+    writeFileSync(join(cwd, ".rovecode", "hooks.ts"), 'export default { version: 1, hooks: {\n  pre_run() { console.log("STRAY-LOG"); process.stdout.write("STRAY-WRITE\\n"); },\n} };\n');
     const j = await cli(["run", "say hi", "--output", "json"], {}, cwd);
     expect(j.code).toBe(0);
     expect(single(j.stdout).status).toBe("done");
@@ -166,8 +166,8 @@ describe("output modes: stdout guard over the real fd 1", () => {
 
   test("MED-C: a session_open hook that prints DURING BOOT (before the sink exists): json stdout is still exactly ONE object, ndjson every line parses — both leaks land on stderr; text mode is untouched (mutation: guard installed by the sink after bootRuntime → 3 stdout lines, whole-stdout JSON.parse throws)", async () => {
     const cwd = fresh();
-    mkdirSync(join(cwd, ".aion"));
-    writeFileSync(join(cwd, ".aion", "hooks.ts"), 'export default { version: 1, hooks: {\n  session_open() { console.log("BOOT-LEAK-LOG"); process.stdout.write("BOOT-LEAK-WRITE\\n"); },\n} };\n');
+    mkdirSync(join(cwd, ".rovecode"));
+    writeFileSync(join(cwd, ".rovecode", "hooks.ts"), 'export default { version: 1, hooks: {\n  session_open() { console.log("BOOT-LEAK-LOG"); process.stdout.write("BOOT-LEAK-WRITE\\n"); },\n} };\n');
     const j = await cli(["run", "say hi", "--output", "json"], {}, cwd);
     expect(j.code).toBe(0);
     expect(() => JSON.parse(j.stdout)).not.toThrow();
@@ -226,7 +226,7 @@ describe("output modes: tool-calling run (loopback provider)", () => {
     } finally { p.stop(); }
   }, T);
 
-  test("--output before the command (`aion --output json run …`): VALUE_FLAGS keeps 'json' from becoming the command, so the provider receives the prompt alone (mutation: drop the entry → cmd 'json', prompt 'json run …' — the mode itself still parses, only the prompt betrays it)", async () => {
+  test("--output before the command (`rovecode --output json run …`): VALUE_FLAGS keeps 'json' from becoming the command, so the provider receives the prompt alone (mutation: drop the entry → cmd 'json', prompt 'json run …' — the mode itself still parses, only the prompt betrays it)", async () => {
     const p = fakeProvider();
     try {
       const r = await cli(["--output", "json", "run", "read the note"], p.env);
@@ -270,25 +270,25 @@ describe("output modes: exit codes", () => {
     } finally { p.stop(); }
   }, T);
 
-  test("invalid --output value → exit 2, empty stdout, exactly one stderr line naming the value — validated BEFORE the runtime boots: a pristine cwd gets NO .aion (no sessions dir, meta.json or memory dir) (mutation: parse after bootRuntime → .aion/sessions/<id> exists)", async () => {
+  test("invalid --output value → exit 2, empty stdout, exactly one stderr line naming the value — validated BEFORE the runtime boots: a pristine cwd gets NO .rovecode (no sessions dir, meta.json or memory dir) (mutation: parse after bootRuntime → .rovecode/sessions/<id> exists)", async () => {
     const cwd = fresh();
     const r = await cli(["run", "hi", "--output", "xml"], {}, cwd);
     expect(r.code).toBe(2);
     expect(r.stdout).toBe("");
     expect(r.stderr.trimEnd().split("\n")).toHaveLength(1);
     expect(r.stderr).toContain('unknown --output mode "xml"');
-    expect(existsSync(join(cwd, ".aion", "sessions"))).toBe(false);
-    expect(existsSync(join(cwd, ".aion"))).toBe(false);
+    expect(existsSync(join(cwd, ".rovecode", "sessions"))).toBe(false);
+    expect(existsSync(join(cwd, ".rovecode"))).toBe(false);
   }, T);
 
   test("help documents exit 2 as usage/startup error with NOTHING on stdout, and the --output=<mode> form (DOC item; mutation: drop the sentence)", async () => {
-    const r = await cli(["help"]);
+    const r = await cli(["help", "all"]); // the full reference page
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/^\s*exit 2 = usage\/startup error .*:\s*$/m);
     expect(r.stdout).toContain("one stderr line, nothing on stdout; --output=<mode> is accepted as well");
   }, T);
 
-  test("dangling --output (end of argv, or followed by a flag) → exit 2 with a one-line usage error (never a silent default), and no .aion left behind", async () => {
+  test("dangling --output (end of argv, or followed by a flag) → exit 2 with a one-line usage error (never a silent default), and no .rovecode left behind", async () => {
     for (const args of [["run", "hi", "--output"], ["run", "hi", "--output", "--yolo"]]) {
       const cwd = fresh();
       const r = await cli(args, {}, cwd);
@@ -296,7 +296,7 @@ describe("output modes: exit codes", () => {
       expect(r.stdout).toBe("");
       expect(r.stderr.trimEnd().split("\n")).toHaveLength(1);
       expect(r.stderr).toContain("--output needs a value");
-      expect(existsSync(join(cwd, ".aion"))).toBe(false);
+      expect(existsSync(join(cwd, ".rovecode"))).toBe(false);
     }
   }, T);
 });

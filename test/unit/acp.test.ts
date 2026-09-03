@@ -9,7 +9,7 @@ import {
   type Client, type ContentBlock, type SessionNotification,
   type RequestPermissionRequest, type RequestPermissionResponse,
 } from "@zed-industries/agent-client-protocol";
-import { serveAcp, promptText, promptParts, updateForEvent, kindFor, titleFor, type AcpOptions, type AionAcpAgent } from "../../src/acp/server.ts";
+import { serveAcp, promptText, promptParts, updateForEvent, kindFor, titleFor, type AcpOptions, type RovecodeAcpAgent } from "../../src/acp/server.ts";
 import type { Message, StreamEvent, StreamFn } from "../../src/core/types.ts";
 import { PNG_1x1, PNG_1x1_B64 } from "../fixtures/images.ts";
 import { createHash } from "node:crypto";
@@ -40,7 +40,7 @@ class TestClient implements Client {
 }
 
 /** In-process duplex: agent and client each get an ndJsonStream over two pipes. */
-function connect(opts: AcpOptions): { conn: ClientSideConnection; client: TestClient; agent: AionAcpAgent } {
+function connect(opts: AcpOptions): { conn: ClientSideConnection; client: TestClient; agent: RovecodeAcpAgent } {
   const agentToClient = new TransformStream<Uint8Array, Uint8Array>();
   const clientToAgent = new TransformStream<Uint8Array, Uint8Array>();
   const { agent } = serveAcp(ndJsonStream(agentToClient.writable, clientToAgent.readable), opts);
@@ -55,7 +55,7 @@ function scriptedStream(script: StreamEvent[][]): StreamFn {
   return async function* () { yield* script[Math.min(i++, script.length - 1)]!; };
 }
 
-function tmpCwd(): string { return mkdtempSync(join(tmpdir(), "aion-acp-")); }
+function tmpCwd(): string { return mkdtempSync(join(tmpdir(), "rovecode-acp-")); }
 
 async function handshake(conn: ClientSideConnection, cwd: string): Promise<string> {
   const init = await conn.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} });
@@ -104,11 +104,11 @@ test("session/new without a provider fails auth_required (-32000)", async () => 
 test("port #27: session/new in a cwd with a broken sandbox config → JSON-RPC error carrying the one-line message; the agent stays alive", async () => {
   const bad = tmpCwd();
   const good = tmpCwd();
-  const savedSandbox = process.env.AION_SANDBOX; // a host AION_SANDBOX would override the file under test
-  delete process.env.AION_SANDBOX;
+  const savedSandbox = process.env.ROVECODE_SANDBOX; // a host ROVECODE_SANDBOX would override the file under test
+  delete process.env.ROVECODE_SANDBOX;
   try {
-    mkdirSync(join(bad, ".aion"), { recursive: true });
-    writeFileSync(join(bad, ".aion", "sandbox.json"), JSON.stringify({ rung: "bubblewrap" }));
+    mkdirSync(join(bad, ".rovecode"), { recursive: true });
+    writeFileSync(join(bad, ".rovecode", "sandbox.json"), JSON.stringify({ rung: "bubblewrap" }));
     const { conn } = connect({ stream: scriptedStream([[{ type: "turn", turn: textTurn("hi") }]]) });
     await conn.initialize({ protocolVersion: PROTOCOL_VERSION, clientCapabilities: {} });
     let err: { code: number; data?: { cwd?: string; error?: string } } | null = null;
@@ -125,7 +125,7 @@ test("port #27: session/new in a cwd with a broken sandbox config → JSON-RPC e
     const s = await conn.newSession({ cwd: good, mcpServers: [] });
     expect(s.sessionId.length).toBeGreaterThan(0);
   } finally {
-    if (savedSandbox === undefined) delete process.env.AION_SANDBOX; else process.env.AION_SANDBOX = savedSandbox;
+    if (savedSandbox === undefined) delete process.env.ROVECODE_SANDBOX; else process.env.ROVECODE_SANDBOX = savedSandbox;
     rmSync(bad, { recursive: true, force: true });
     rmSync(good, { recursive: true, force: true });
   }
@@ -319,7 +319,11 @@ test("max-turns budget maps to stopReason max_turn_requests", async () => {
 /** Stream whose FIRST call parks inside the provider turn (after one delta)
  *  until released — deterministic control over run timing. Later calls answer
  *  immediately. */
-function gatedTextStream(): { stream: StreamFn; release: () => void; reached: Promise<void> } {
+/** `afterGate` is what makes the cancelled-break pin bite: deltas stream LIVE now, so a delta
+ *  emitted BEFORE the gate legitimately reaches the client and cannot distinguish a working break
+ *  from a deleted one. Only a delta produced AFTER cancel landed can — without it the assertion
+ *  passes either way (verified by deleting the break: the test stayed green). */
+function gatedTextStream(opts: { afterGate?: string } = {}): { stream: StreamFn; release: () => void; reached: Promise<void> } {
   let release!: () => void;
   const gate = new Promise<void>((r) => { release = r; });
   let sawGate!: () => void;
@@ -330,6 +334,7 @@ function gatedTextStream(): { stream: StreamFn; release: () => void; reached: Pr
       yield { type: "text_delta", text: "before-cancel" };
       sawGate();
       await gate;
+      if (opts.afterGate !== undefined) yield { type: "text_delta", text: opts.afterGate };
     }
     yield { type: "turn", turn: textTurn("done") };
   };
@@ -379,19 +384,25 @@ test("HIGH-G2: session/cancel interrupts an outstanding request_permission → d
 
 test("session/cancel mid-run → stopReason cancelled; nothing forwarded after cancel", async () => {
   const cwd = tmpCwd();
-  const { stream, release, reached } = gatedTextStream();
+  // the stream keeps producing after the gate: that later delta is the one the break must swallow
+  const { stream, release, reached } = gatedTextStream({ afterGate: "AFTER-CANCEL" });
   try {
     const { conn, client } = connect({ stream });
     const sessionId = await handshake(conn, cwd);
     const p = conn.prompt(textPrompt(sessionId, "run"));
     await reached;                     // run parked inside the provider turn
+    // deltas stream LIVE through the loop (they used to be buffered until the turn ended), so the
+    // "before-cancel" chunk is on the client before cancel lands — that is the point of live
+    expect(client.ofType("agent_message_chunk")).toHaveLength(1);
     await conn.cancel({ sessionId });
     release();
     const resp = await p;
     expect(resp.stopReason).toBe("cancelled"); // pin: cancelled, not end_turn
-    // cancelled-break pin: the buffered "before-cancel" delta must NOT be
-    // forwarded once cancel landed (delete the break → this leaks through)
-    expect(client.ofType("agent_message_chunk")).toHaveLength(0);
+    // cancelled-break pin: NOTHING is forwarded once cancel landed — the count is frozen at what
+    // streamed before it (mutation target: delete `if (active.cancelled) break` in acp/server.ts
+    // and AFTER-CANCEL leaks through as a second chunk)
+    expect(client.ofType("agent_message_chunk")).toHaveLength(1);
+    expect(JSON.stringify(client.ofType("agent_message_chunk"))).not.toContain("AFTER-CANCEL");
   } finally { release(); rmSync(cwd, { recursive: true, force: true }); }
 });
 
@@ -460,7 +471,7 @@ test("HIGH-G1: session cwd reaches tools — bash pwd runs in the SESSION cwd, n
 
 test("MED-G3: shutdown() closes every session runtime's MCP manager (stdin-close reap seam)", async () => {
   const cwd = tmpCwd();
-  writeFileSync(join(cwd, ".mcp.json"), JSON.stringify({ mcpServers: { toy: { command: "aion-not-a-real-binary-acp" } } }));
+  writeFileSync(join(cwd, ".mcp.json"), JSON.stringify({ mcpServers: { toy: { command: "rovecode-not-a-real-binary-acp" } } }));
   const closed: McpManager[] = [];
   const orig = McpManager.prototype.close;
   McpManager.prototype.close = async function (this: McpManager) { closed.push(this); return orig.call(this); };
@@ -553,10 +564,10 @@ test("port #34: image prompt blocks → ImagePart on the loop's user message (th
     const user = seen[0]!.filter((m) => m.role === "user").at(-1)!;
     expect(user.parts).toEqual([{ kind: "text", text: "what is this?" }, { kind: "image", mime: "image/png", bytes: PNG_1x1_B64, width: 1, height: 1, name: "dot.png" }]);
     const sha = createHash("sha256").update(PNG_1x1).digest("hex");
-    const raw = readFileSync(join(cwd, ".aion", "sessions", sessionId, "entries.jsonl"), "utf8");
+    const raw = readFileSync(join(cwd, ".rovecode", "sessions", sessionId, "entries.jsonl"), "utf8");
     expect(raw).toContain(`attachments/${sha}.png`);
     expect(raw).not.toContain(PNG_1x1_B64);
-    expect(existsSync(join(cwd, ".aion", "sessions", sessionId, "attachments", `${sha}.png`))).toBe(true);
+    expect(existsSync(join(cwd, ".rovecode", "sessions", sessionId, "attachments", `${sha}.png`))).toBe(true);
 
     const rejects: [ContentBlock[], RegExp][] = [
       [[{ type: "text", text: "read this" }, { type: "image", data: Buffer.from("hello").toString("base64"), mimeType: "text/plain" }], /^image: not a png\/jpeg\/gif\/webp image \(magic bytes: 68 65 6c 6c\)$/],
@@ -571,7 +582,7 @@ test("port #34: image prompt blocks → ImagePart on the loop's user message (th
       expect(String(err?.data?.error)).toMatch(re);
     }
     expect(seen.length).toBe(1);                      // no run started for any rejected prompt
-    expect(readFileSync(join(cwd, ".aion", "sessions", sessionId, "entries.jsonl"), "utf8").split("\n").filter(Boolean).length).toBe(2); // user + assistant only
+    expect(readFileSync(join(cwd, ".rovecode", "sessions", sessionId, "entries.jsonl"), "utf8").split("\n").filter(Boolean).length).toBe(2); // user + assistant only
     expect((await conn.prompt(textPrompt(sessionId, "still here"))).stopReason).toBe("end_turn");
     expect(seen[1]!.filter((m) => m.role === "user").at(-1)!.parts).toEqual([{ kind: "text", text: "still here" }]); // nothing leaked from the rejected prompts
   } finally { rmSync(cwd, { recursive: true, force: true }); }

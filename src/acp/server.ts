@@ -1,4 +1,4 @@
-/** ACP agent endpoint (port #15): `aion acp` speaks Agent Client Protocol v1
+/** ACP agent endpoint (port #15): `rovecode acp` speaks Agent Client Protocol v1
  *  over stdio via the official SDK (@zed-industries/agent-client-protocol@0.4.5,
  *  Apache-2.0), mapped onto the ONE agentLoop (ADR-003).
  *
@@ -37,6 +37,7 @@ import {
   type ToolKind as AcpToolKind,
 } from "@zed-industries/agent-client-protocol";
 import { basename } from "node:path";
+import { noModelHint } from "../core/voice.ts";
 import { Readable, Writable } from "node:stream";
 import { agentLoop, SteeringQueue } from "../core/loop.ts";
 import { bootRuntime, type Runtime } from "../cli/runtime.ts";
@@ -47,7 +48,7 @@ import type { ApprovalFn, ImagePart, RunEvent, StreamFn } from "../core/types.ts
 export interface AcpOptions {
   /** test/dev override threaded into createRuntime; undefined = provider from env */
   stream?: StreamFn | null;
-  /** allow-all permissions: no ACP permission round-trips (AION_YOLO parity) */
+  /** allow-all permissions: no ACP permission round-trips (ROVECODE_YOLO parity) */
   yolo?: boolean;
 }
 
@@ -172,7 +173,7 @@ export function updateForEvent(ev: RunEvent): SessionUpdate | null {
 
 // ---------- the ACP agent ----------
 
-export class AionAcpAgent implements Agent {
+export class RovecodeAcpAgent implements Agent {
   private readonly sessions = new Map<string, AcpSessionState>();
 
   constructor(private readonly conn: AgentSideConnection, private readonly opts: AcpOptions = {}) {}
@@ -195,7 +196,7 @@ export class AionAcpAgent implements Agent {
 
   async newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
     // v1 scope: params.mcpServers is not wired into the runtime — the runtime
-    // already loads project-level .aion/mcp.json + .mcp.json (port #3)
+    // already loads project-level .rovecode/mcp.json + .mcp.json (port #3)
     let rt: Runtime;
     try {
       rt = await bootRuntime({ cwd: params.cwd, stream: this.opts.stream });
@@ -207,9 +208,12 @@ export class AionAcpAgent implements Agent {
       if (e instanceof SandboxConfigError) throw RequestError.invalidParams({ cwd: params.cwd, error: e.message });
       throw e;
     }
-    if (!rt.stream) {
+    // live registry: once the user runs `rovecode provider add` / `rovecode auth set`, the next
+    // session/new succeeds without restarting the agent process
+    const noProvider = rt.noProviderReason();
+    if (!rt.stream || noProvider !== null) {
       throw RequestError.authRequired({
-        details: "no provider configured: run `aion auth set <provider>`, or set AION_BASE_URL/AION_API_KEY or a <NAME>_API_KEY",
+        details: noProvider ?? noModelHint("cli"),
       });
     }
     this.sessions.set(rt.sessionId, { rt, steering: rt.steering, active: null, permSeq: 0 }); // port #26: runtime queue → task notes reach the next prompt
@@ -221,7 +225,8 @@ export class AionAcpAgent implements Agent {
     if (!s) throw RequestError.invalidParams({ sessionId: params.sessionId, error: "unknown session" });
     if (s.active) throw RequestError.invalidRequest({ error: "a prompt is already running for this session" });
     const stream = s.rt.stream;
-    if (!stream) throw RequestError.authRequired();
+    const noProvider = s.rt.noProviderReason();
+    if (!stream || noProvider !== null) throw RequestError.authRequired(noProvider !== null ? { details: noProvider } : undefined);
 
     const { goal, images, error } = promptParts(params.prompt);
     // port #34: a bad image block (not png/jpeg/gif/webp, mime disagrees with the bytes, oversize,
@@ -236,7 +241,7 @@ export class AionAcpAgent implements Agent {
     const deps = {
       stream, registry: s.rt.registry, store: s.rt.store,
       tools: s.rt.registry.list().map((t) => t.schema), guard: s.rt.guard,
-      hooks: s.rt.hooks, // port #29: .aion/hooks.{ts,js} of the session cwd
+      hooks: s.rt.hooks, // port #29: .rovecode/hooks.{ts,js} of the session cwd
       cwd: s.rt.cwd, // HIGH-G1: the client's authoritative session cwd reaches ToolContext
       signal: abort.signal, // port #21: session/cancel kills in-flight fetch/tools mid-turn
     };
@@ -289,7 +294,7 @@ export class AionAcpAgent implements Agent {
   }
 
   /** MED-G3: close every session runtime's MCP children. runAcpStdio calls this
-   *  when stdin closes — without it, `aion acp` in an MCP-configured project
+   *  when stdin closes — without it, `rovecode acp` in an MCP-configured project
    *  outlives the client (children keep running until the parent is killed). */
   async shutdown(): Promise<void> {
     const closing: Promise<unknown>[] = [];
@@ -342,13 +347,13 @@ export class AionAcpAgent implements Agent {
 /** Attach an ACP agent to a bidirectional message stream (tests use an
  *  in-process duplex; the CLI uses stdio via runAcpStdio). The agent handle is
  *  returned alongside the connection so callers can shutdown() its sessions. */
-export function serveAcp(io: Stream, opts: AcpOptions = {}): { conn: AgentSideConnection; agent: AionAcpAgent } {
-  let agent!: AionAcpAgent; // the factory runs synchronously inside the ctor
-  const conn = new AgentSideConnection((c) => (agent = new AionAcpAgent(c, opts)), io);
+export function serveAcp(io: Stream, opts: AcpOptions = {}): { conn: AgentSideConnection; agent: RovecodeAcpAgent } {
+  let agent!: RovecodeAcpAgent; // the factory runs synchronously inside the ctor
+  const conn = new AgentSideConnection((c) => (agent = new RovecodeAcpAgent(c, opts)), io);
   return { conn, agent };
 }
 
-/** `aion acp`: serve ACP v1 over stdio until the client closes stdin.
+/** `rovecode acp`: serve ACP v1 over stdio until the client closes stdin.
  *  stdout carries protocol frames only — nothing else may print there. */
 export function runAcpStdio(opts: AcpOptions = {}): Promise<void> {
   // node:stream/web and lib.dom stream types diverge on getReader() overloads;

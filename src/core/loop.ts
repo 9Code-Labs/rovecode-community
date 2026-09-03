@@ -6,7 +6,7 @@
 
 import { randomUUID } from "node:crypto";
 import type {
-  AgentDefinition, Message, MessagePart, RunEvent, RunConfig, StreamFn,
+  AgentDefinition, Message, MessagePart, RunEvent, RunConfig, StreamEvent, StreamFn,
   ModelRef, ToolCallPart, AgentVars, ToolContext, ToolOutput, ToolSchema,
   StopReason, TokenUsage,
 } from "./types.ts";
@@ -24,13 +24,20 @@ export interface LoopDeps {
   hooks?: ExtensionHooks;
   summarize?: (texts: string[]) => Promise<string>;  // weak-model head summarizer
   /** port #25 provider-native compaction capability — set ONLY when the active provider does
-   *  server-side compaction (none of aion's adapters do today; compaction.ts header) */
+   *  server-side compaction (none of rovecode's adapters do today; compaction.ts header) */
   compactNative?: NativeCompactor;
   tools?: ToolSchema[];
   /** orchestrator seam: run a child agent; receives parent depth + 1 */
   childRunner?: (agent: string, goal: string, vars: AgentVars | undefined, depth: number) => Promise<{ ok: boolean; summary: string; usage: TokenUsage }>;
   /** tool-loop guardrails (port #4): loop signatures + duplicate-result stubs */
   guard?: ToolGuard;
+  /** The plan reminder: called once per turn with the history that is about to be sent, it returns a
+   *  line the model should see again — the live todo list — or null. The result rides as ONE extra user
+   *  message on this request only: it is never appended to `history` and never persisted, so the plan
+   *  cannot pile up copies of itself in the transcript, and the system prefix (and its prompt cache)
+   *  is untouched. Without it a list written 20 turns ago is buried under tool results and the model
+   *  stops maintaining it. */
+  planReminder?: (history: readonly Message[]) => string | null;
   /** ToolContext cwd for this run — surfaces with a session cwd (ACP, server)
    *  pass it here; default is the agent process dir */
   cwd?: string;
@@ -216,13 +223,23 @@ async function* runLoop(
     let turnResult: TurnOutcome;
     const sysMsg: Message = { id: "sys", role: "system", parts: [{ kind: "text", text: promptText }], parentId: null, createdAt: 0 };
     try {
-      turnResult = await collectTurn(
-        deps.stream, model,
-        systemKept ? [sysMsg, ...history] : history,
-        (delta) => { events.push({ type: "message_update", messageId: msgId, delta }); },
-        deps.tools,
-        runAc.signal,
-      );
+      // request-only: appended to what goes on the wire, never to `history` or the store
+      const reminder = deps.planReminder?.(history) ?? null;
+      const withReminder: Message[] = reminder === null
+        ? history
+        : [...history, { id: `reminder-${turn}`, role: "user", parts: [{ kind: "text", text: reminder }], parentId: history.at(-1)?.id ?? null, createdAt: Date.now() }];
+      // deltas yield LIVE, one RunEvent each, while the provider streams. The old shape awaited the
+      // whole turn and flushed the buffered message_updates afterwards — a generator cannot yield
+      // from a callback — so a 15 s reasoning phase (claude-opus-5 at --effort high, measured) put
+      // nothing on screen and read as a hang. Order is unchanged: every delta still precedes turn_end.
+      const live = collectTurn(deps.stream, model, systemKept ? [sysMsg, ...withReminder] : withReminder, deps.tools, runAc.signal);
+      let reasoning = ""; // the reasoning text stays here: only its estimated size leaves the loop
+      for (;;) {
+        const step = await live.next();
+        if (step.done) { turnResult = step.value; break; }
+        if (step.value.type === "text_delta") yield { type: "message_update", messageId: msgId, delta: step.value.text };
+        else { reasoning += step.value.text; yield { type: "reasoning_update", messageId: msgId, tokens: estimateTokens(reasoning) }; }
+      }
     } catch (e) {
       turnResult = { parts: [], stopReason: "error", usage: { input: 0, output: 0 }, error: e instanceof Error ? e.message : String(e) };
     }
@@ -356,10 +373,12 @@ export interface TurnOutcome {
   origin?: ModelRef;
 }
 
-async function collectTurn(stream: StreamFn, model: ModelRef, messages: Message[], onText?: (delta: string) => void, tools?: ToolSchema[], signal?: AbortSignal): Promise<TurnOutcome> {
+/** Drive one provider turn: yields the text and reasoning deltas as they arrive (the caller turns
+ *  them into RunEvents), returns the terminal turn as the outcome. tool_call_delta is not surfaced. */
+async function* collectTurn(stream: StreamFn, model: ModelRef, messages: Message[], tools?: ToolSchema[], signal?: AbortSignal): AsyncGenerator<Extract<StreamEvent, { type: "text_delta" | "reasoning_delta" }>, TurnOutcome> {
   let outcome: TurnOutcome = { parts: [], stopReason: "end_turn", usage: { input: 0, output: 0 } };
   for await (const ev of stream(model, messages, { tools, signal })) {
-    if (ev.type === "text_delta") onText?.(ev.text);
+    if (ev.type === "text_delta" || ev.type === "reasoning_delta") yield ev;
     else if (ev.type === "turn") { outcome = { parts: ev.turn.parts, stopReason: ev.turn.stopReason, usage: ev.turn.usage, error: ev.turn.error, origin: servedBy(ev.turn) }; }
   }
   return outcome;

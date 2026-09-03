@@ -4,7 +4,7 @@ import { ToolRegistry } from "../../src/core/tools.ts";
 import { SessionStore } from "../../src/core/session.ts";
 import { textTurn, toolTurn } from "../../src/providers/stream.ts";
 import type { AgentDefinition, RunConfig, Tool, Message, StreamFn, AssistantTurn, ModelRef } from "../../src/core/types.ts";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -37,7 +37,7 @@ function toolResults(store: SessionStore): Message[] {
 }
 
 test("error stopReason ends run with status error and error text in summary", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-loop-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-loop-"));
   const store = new SessionStore(dir, randomUUID());
   const reg = new ToolRegistry();
   const stream = script([{ parts: [], stopReason: "error", usage: { input: 0, output: 0 }, error: "boom: provider 500" }]);
@@ -51,7 +51,7 @@ test("error stopReason ends run with status error and error text in summary", as
 });
 
 test("truncated turn appends role:tool message with ok:false tool_result", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-loop-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-loop-"));
   const store = new SessionStore(dir, randomUUID());
   const reg = new ToolRegistry();
   const stream = script([
@@ -72,7 +72,7 @@ test("truncated turn appends role:tool message with ok:false tool_result", async
 });
 
 test("failed call (not_found) leaves a role:tool ok:false result per call", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-loop-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-loop-"));
   const store = new SessionStore(dir, randomUUID());
   const reg = new ToolRegistry(); // nothing registered → not_found
   const stream = script([
@@ -98,7 +98,7 @@ test("failed call (not_found) leaves a role:tool ok:false result per call", asyn
 });
 
 test("permission_denied call produces ok:false tool_result message", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-loop-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-loop-"));
   const store = new SessionStore(dir, randomUUID());
   const reg = new ToolRegistry();
   const guarded: Tool = {
@@ -127,7 +127,7 @@ test("permission_denied call produces ok:false tool_result message", async () =>
 });
 
 test("follow-up queue drains at stop: run continues instead of ending", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-loop-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-loop-"));
   const store = new SessionStore(dir, randomUUID());
   const reg = new ToolRegistry();
   const followUps = new SteeringQueue();
@@ -165,7 +165,7 @@ function spawnTool(): Tool {
 }
 
 test("depth threads into childRunner as depth + 1 (contract #1)", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-loop-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-loop-"));
   const store = new SessionStore(dir, randomUUID());
   const reg = new ToolRegistry();
   reg.register(spawnTool());
@@ -186,7 +186,7 @@ test("depth threads into childRunner as depth + 1 (contract #1)", async () => {
 });
 
 test("default depth 0 threads as 1 into childRunner", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-loop-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-loop-"));
   const store = new SessionStore(dir, randomUUID());
   const reg = new ToolRegistry();
   reg.register(spawnTool());
@@ -207,7 +207,7 @@ test("default depth 0 threads as 1 into childRunner", async () => {
 });
 
 test("text_delta streams surface as message_update events", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-loop-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-loop-"));
   const store = new SessionStore(dir, randomUUID());
   const reg = new ToolRegistry();
   const stream: StreamFn = async function* () {
@@ -226,7 +226,7 @@ test("text_delta streams surface as message_update events", async () => {
 });
 
 test("consumer .return() aborts the in-flight tool batch signal", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-loop-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-loop-"));
   const store = new SessionStore(dir, randomUUID());
   const reg = new ToolRegistry();
   let observed: AbortSignal | undefined;
@@ -263,7 +263,7 @@ test("consumer .return() aborts the in-flight tool batch signal", async () => {
 });
 
 test("over-budget context drops system and reports it via compaction event", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-loop-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-loop-"));
   const store = new SessionStore(dir, randomUUID());
   const reg = new ToolRegistry();
   const tinyBudget = cfg({ contextBudgetTokens: 8, compactionThreshold: 0.8 });
@@ -275,5 +275,53 @@ test("over-budget context drops system and reports it via compaction event", asy
   expect(drops.length).toBe(1);
   expect(drops[0]!.strategy).toBe("context-drop");
   expect(drops[0]!.before).toBeGreaterThan(drops[0]!.after);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("deltas are LIVE: a message_update reaches the consumer while the provider stream is still open (not flushed after the turn)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-loop-"));
+  const store = new SessionStore(dir, randomUUID());
+  let consumerSawDelta = false;
+  let liveWhenTurnBuilt = false;
+  const stream: StreamFn = async function* () {
+    yield { type: "text_delta", text: "Hi" };
+    await Promise.resolve();
+    liveWhenTurnBuilt = consumerSawDelta; // the old shape awaited the whole turn first: this was always false
+    yield { type: "turn", turn: textTurn("Hi") };
+  };
+  for await (const ev of agentLoop(baseDef, "hi", {}, cfg(), { stream, registry: new ToolRegistry(), store }, new SteeringQueue())) {
+    if (ev.type === "message_update") consumerSawDelta = true;
+  }
+  expect(liveWhenTurnBuilt).toBe(true);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("reasoning_delta streams surface as CUMULATIVE reasoning_update counts between turn_start and the first message_update; the thinking text never reaches the store", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-loop-"));
+  const store = new SessionStore(dir, randomUUID());
+  const SECRET = "the-user-cannot-see-this-reasoning"; // 34 chars → estimateTokens 9
+  const stream: StreamFn = async function* () {
+    yield { type: "reasoning_delta", text: SECRET };
+    yield { type: "reasoning_delta", text: " and more of it here" }; // +20 → 54 chars → 14 (cumulative, not 9 + 5)
+    yield { type: "text_delta", text: "Hello" };
+    yield { type: "turn", turn: textTurn("Hello") };
+  };
+  const seen: string[] = [];
+  const counts: number[] = [];
+  const ids = new Set<string>();
+  for await (const ev of agentLoop(baseDef, "hi", {}, cfg(), { stream, registry: new ToolRegistry(), store }, new SteeringQueue())) {
+    seen.push(ev.type);
+    if (ev.type === "reasoning_update") { counts.push(ev.tokens); ids.add(ev.messageId); }
+    if (ev.type === "message_update") ids.add(ev.messageId);
+  }
+  expect(counts).toEqual([9, 14]);
+  expect(ids.size).toBe(1); // the count names the message the answer will stream into
+  expect(seen.indexOf("reasoning_update")).toBeGreaterThan(seen.indexOf("turn_start"));
+  expect(seen.lastIndexOf("reasoning_update")).toBeLessThan(seen.indexOf("message_update"));
+  expect(seen.indexOf("message_update")).toBeLessThan(seen.indexOf("turn_end"));
+  expect(JSON.stringify(store.messages())).not.toContain(SECRET);
+  const files = readdirSync(dir, { recursive: true }).map(String).filter((f) => statSync(join(dir, f)).isFile());
+  expect(files.length).toBeGreaterThan(0);
+  for (const f of files) expect(readFileSync(join(dir, f), "utf8")).not.toContain(SECRET);
   rmSync(dir, { recursive: true, force: true });
 });

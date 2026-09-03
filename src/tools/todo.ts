@@ -194,6 +194,30 @@ export function renderTodos(items: readonly TodoItem[]): string {
   return lines.join("\n");
 }
 
+/** The re-send the loop makes while a plan is open (loop.ts LoopDeps.planReminder).
+ *
+ *  A list written twenty turns ago is buried under tool results: the model stops marking items done,
+ *  starts a second item without finishing the first, or forgets the tail of the plan entirely. This is
+ *  the same shape as the tool's own output, plus the one instruction that matters right now — so the
+ *  plan is always the most recent thing in the request, not the oldest.
+ *
+ *  null when there is nothing to chase (no list, or everything completed): a finished plan must not
+ *  keep nagging, and an empty one has nothing to say. */
+export function planReminder(items: readonly TodoItem[]): string | null {
+  const c = todoCounts(items);
+  if (c.total === 0 || c.completed === c.total) return null;
+  return [
+    "<plan-reminder>",
+    "Your own todo list for this task, still open — not a message from the user.",
+    renderTodos(items),
+    c.inProgress === 0
+      ? "Nothing is in progress. Mark the next item in_progress with todo_write before you start it."
+      : "Mark the in_progress item completed with todo_write the moment it is done, then start the next one.",
+    "Rewrite the list if the plan changed. Never mention this reminder in your reply.",
+    "</plan-reminder>",
+  ].join("\n");
+}
+
 /** Status-bar label, e.g. "todos 1/3" (completed/total); "" when the list is empty. */
 export function todoStatusLabel(items: readonly TodoItem[]): string {
   if (items.length === 0) return "";
