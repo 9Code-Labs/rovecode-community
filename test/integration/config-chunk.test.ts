@@ -28,7 +28,7 @@ function cfg(budget: number): RunConfig {
 }
 
 async function runOnce(def: AgentDefinition, budget: number): Promise<{ seen: Message[][]; events: RunEvent[] }> {
-  const dir = mkdtempSync(join(tmpdir(), "aion-configchunk-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-configchunk-"));
   const seen: Message[][] = [];
   const stream: StreamFn = async function* (_model, messages) {
     seen.push(messages);
@@ -110,7 +110,7 @@ class NoteRenderer implements Renderer {
 }
 
 test("/status lists a total-cap-dropped source as '(dropped)' and file-cap skips as '+N skipped'", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-status-prov-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-status-prov-"));
   mkdirSync(join(cwd, ".git")); // hermetic: stop the ancestor walk at the tmp dir
   const write = (rel: string, content: string) => {
     const abs = join(cwd, rel);

@@ -1,11 +1,11 @@
 <!-- Shipped copy (npm files[] can only reference files inside this package).
-     Source of truth: THIRD_PARTY_NOTICES.md at the aion WORKSPACE root — the
+     Source of truth: THIRD_PARTY_NOTICES.md at the rovecode WORKSPACE root — the
      directory above this repo that holds BLUEPRINT.md/PORTS.md. Edit there,
      then re-copy here; nothing syncs it automatically. -->
 
-# Third-party notices — aion
+# Third-party notices — rovecode
 
-aion ports behavior from open-source agent harnesses. MIT-licensed sources (earendil-works/pi,
+rovecode ports behavior from open-source agent harnesses. MIT-licensed sources (earendil-works/pi,
 oh-my-pi, hermes-agent, senpi, opencode, prime-agent, models.dev/@opencode-ai/models,
 @modelcontextprotocol/sdk) are credited in module headers and, where files are vendored
 (vendor/pi-tui), ship with their upstream LICENSE and copyright headers intact. Apache-2.0
@@ -40,21 +40,21 @@ Source: https://github.com/openai/codex, © 2025 OpenAI. Snapshot
   request is wire-well-formed (`codex-rs/core/src/context_manager/normalize.rs:51-67`, the
   "aborted" FunctionCallOutput). The per-run AbortSignal threading follows opencode (MIT,
   credited in the module header); the Windows Job-Object tree kill (`src/core/win-job.ts`) is
-  aion's own.
+  rovecode's own.
 - **sandbox rung config (port #27)** — `src/core/sandbox-config.ts` follows AT PATTERN LEVEL (no
   code copied) codex's sandbox-mode selection: the tier as a config choice layered file <
   override (`codex-rs/app-server/tests/common/config.rs:140` `sandbox_mode`;
   `codex-rs/utils/cli/src/shared_options.rs:40-41` `--sandbox`;
   `codex-rs/utils/cli/src/sandbox_mode_cli_arg.rs:14-25`), and an explicitly requested but
   unprovidable tier as a hard error (`codex-rs/sandboxing/src/manager.rs:203-222`
-  SandboxTransformError). Here `.aion/sandbox.json` < `AION_SANDBOX`; rungs direct/wsl/docker only.
+  SandboxTransformError). Here `.rovecode/sandbox.json` < `ROVECODE_SANDBOX`; rungs direct/wsl/docker only.
 
 ## cline (Apache-2.0)
 
 Source: https://github.com/cline/cline. Snapshot `research/source_snapshots/cline-cline` @ 8eb5f3d.
 
 - **shadow-git checkpoints (port #11)** — `src/coding/checkpoints.ts` ports cline's shadow-git
-  checkpoint design (a second git repository with git-dir under `.aion/checkpoints/<session>`
+  checkpoint design (a second git repository with git-dir under `.rovecode/checkpoints/<session>`
   and the workspace as work-tree; the user's `.git` is never written): init/worktree/identity
   setup (`apps/vscode/src/integrations/checkpoints/CheckpointGitOperations.ts:88-94`), git-dir
   and worktree-mismatch reuse checks (`CheckpointUtils.ts:20-23`, `GitOperations.ts:70-73`),
@@ -64,7 +64,7 @@ Source: https://github.com/cline/cline. Snapshot `research/source_snapshots/clin
   (it rewrites the user's HEAD).
 - **Plan/Act modes (port #20)** — `src/core/modes.ts` ports cline's Plan/Act mode design: mode
   semantics and defaults, per-mode provider/model configuration with the separate-models
-  write-sync gate, plan-mode read-only tool restriction (mapped onto aion's deny-default
+  write-sync gate, plan-mode read-only tool restriction (mapped onto rovecode's deny-default
   permission rules), no-op same-mode toggles, and durable mode-switch notices. Mostly
   pattern-level; code/text-level translations: createModeSwitchNoticeTracker and
   formatModeSwitchNotice (near-verbatim from `sdk/packages/shared/src/prompt/format.ts:41-80`),
@@ -74,7 +74,7 @@ Source: https://github.com/cline/cline. Snapshot `research/source_snapshots/clin
   AT PATTERN LEVEL (no code copied) cline's image handling: the supported media-type set and
   5 MiB cap (`sdk/packages/shared/src/llms/media.ts:73-78, :80`), the request-time placeholder
   for models without vision while the stored history keeps the real image (`media.ts:6-12`;
-  aion's wording is its own), the media-type mismatch rule, and the base64 source ↔
+  rovecode's wording is its own), the media-type mismatch rule, and the base64 source ↔
   `data:<mime>;base64,<data>` URL mapping (`apps/vscode/src/shared/messages/content.ts:140-153`).
   Sniffing, header dimensions and the sidecar store follow opencode (MIT, module header).
   Snapshot `cline-cline` @ 8eb5f3d.
@@ -156,7 +156,7 @@ header); html-to-text/htmlparser2/turndown are replaced by `src/tools/html-text.
 `src/tools/todo.ts` ports the todo-list validation contract from gemini-cli
 `packages/core/src/tools/write-todos.ts:100-129` (validateToolParamValues: array check, per-item
 object / non-empty description / status-enum checks, and the "only one task can be in_progress at
-a time" rule :120-126), translated into aion's ok/error result shape with ids and size bounds
+a time" rule :120-126), translated into rovecode's ok/error result shape with ids and size bounds
 added; the "Cleared todo list" wording (:52, :68) is gemini's. Snapshot
 `research/source_snapshots/google-gemini-gemini-cli` @ 0bd1d43. Tool contract (whole-list replace,
 content/status/priority) and when-to-use guidance follow opencode (MIT, module header).
@@ -173,7 +173,7 @@ opencode (MIT, credited in the module header).
 ### Port #33 — ask_user tool
 `src/tools/ask-user.ts` follows AT PATTERN LEVEL (no code copied) gemini-cli's headless rule for
 user-facing questions: with no human present the ask-user tool is excluded and ASK_USER decisions
-translate to DENY (`packages/cli/src/config/config.ts:794-803`); aion keeps the tool registered on
+translate to DENY (`packages/cli/src/config/config.ts:794-803`); rovecode keeps the tool registered on
 every surface and fails closed at execute time instead. Snapshot
 `research/source_snapshots/google-gemini-gemini-cli` @ 0bd1d43. The tool contract (option labels,
 typed answer, dismissed question = error) follows opencode (MIT, credited in the module header).

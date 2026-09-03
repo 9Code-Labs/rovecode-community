@@ -58,7 +58,7 @@ const NOT_POLLING =
   "continue other non-overlapping work or end your turn. Use `task_status result` to wait for it when you need its output.";
 /** one-shot policy (cli/main.ts cmdRun exit): tasks never outlive the process that started them */
 const ONE_SHOT =
-  "In a one-shot run (`aion run`) background tasks do not outlive the run: collect what you need with " +
+  "In a one-shot run (`rovecode run`) background tasks do not outlive the run: collect what you need with " +
   "`task_status result` before ending your turn.";
 
 interface Args {

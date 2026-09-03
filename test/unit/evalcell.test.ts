@@ -1,5 +1,5 @@
 /**
- * PORT #18 — persistent eval cell (feature-flagged, AION_EVAL_CELL=1).
+ * PORT #18 — persistent eval cell (feature-flagged, ROVECODE_EVAL_CELL=1).
  *
  * Bar coverage, each test discriminating (fails if the property is faked):
  *   - flag OFF ⇒ tool ABSENT from the registry (unknown-tool dispatch), not erroring;
@@ -50,7 +50,7 @@ afterAll(async () => { await disposeEvalCells(); });
 
 // ---------- flag gate: OFF by default, UNREGISTERED when off ----------
 
-test("factory returns null unless AION_EVAL_CELL is exactly '1'", () => {
+test("factory returns null unless ROVECODE_EVAL_CELL is exactly '1'", () => {
   expect(createEvalCellTool({})).toBeNull();
   expect(createEvalCellTool({ [EVAL_CELL_FLAG]: "0" })).toBeNull();
   expect(createEvalCellTool({ [EVAL_CELL_FLAG]: "true" })).toBeNull(); // strict opt-in, not truthiness
@@ -226,12 +226,12 @@ test("background crash with NO call in flight is reported as a note on the next 
 test("unref is load-bearing: an idle cell timer must not hold the HOST process open (round 2 MED-2)", async () => {
   // Deleting the worker.unref() call leaves every in-process test green while the
   // host hangs forever on exit — so the proof is a SUBPROCESS that must exit alone.
-  const dir = mkdtempSync(join(tmpdir(), "aion-evalcell-unref-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-evalcell-unref-"));
   const script = join(dir, "unref-probe.ts");
   const evalcellUrl = pathToFileURL(join(import.meta.dir, "..", "..", "src", "tools", "evalcell.ts")).href;
   writeFileSync(script, [
     `import { createEvalCellTool } from ${JSON.stringify(evalcellUrl)};`,
-    `const tool = createEvalCellTool({ AION_EVAL_CELL: "1" })!;`,
+    `const tool = createEvalCellTool({ ROVECODE_EVAL_CELL: "1" })!;`,
     `const out = await tool.execute(`,
     `  { code: "setInterval(() => {}, 1000); 'armed'" },`,
     `  { sessionId: "unref-probe", cwd: process.cwd(), signal: new AbortController().signal, permissions: { effect: "allow" } },`,
@@ -264,7 +264,7 @@ test("unref is load-bearing: an idle cell timer must not hold the HOST process o
 // read any file on disk, exactly like the bash tool can run `bun -e`; the execute-
 // kind policy gate is the control for that, not the worker boundary.
 
-test("cell code cannot reach bootstrap internals or any aion/gauntlet host state", async () => {
+test("cell code cannot reach bootstrap internals or any rovecode/gauntlet host state", async () => {
   const tool = createEvalCellTool(ON)!;
   // bootstrap closure must not leak: capture buffer, transpiler, caps are unreachable
   const closure = await tool.execute(
@@ -272,11 +272,11 @@ test("cell code cannot reach bootstrap internals or any aion/gauntlet host state
     ctx("p18-ouro"),
   );
   expect(closure.output).toBe('=> "undefined,undefined,undefined,undefined"');
-  // and no host handle was parked on the worker's globalThis under an aion/gauntlet
+  // and no host handle was parked on the worker's globalThis under an rovecode/gauntlet
   // name — the weaker "not pre-exposed" property, per the section note above
   // (NB: /registry/ would false-positive on the builtin FinalizationRegistry)
   const globals = await tool.execute(
-    { code: "JSON.stringify(Object.getOwnPropertyNames(globalThis).filter((k) => /aion|gauntlet|grader/i.test(k)))" },
+    { code: "JSON.stringify(Object.getOwnPropertyNames(globalThis).filter((k) => /rovecode|gauntlet|grader/i.test(k)))" },
     ctx("p18-ouro"),
   );
   expect(globals.output).toBe('=> "[]"');

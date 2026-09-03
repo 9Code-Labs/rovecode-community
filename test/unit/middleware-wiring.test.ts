@@ -3,11 +3,11 @@
  *  A local Bun.serve stub plays an OpenAI-compatible /chat/completions endpoint whose "model"
  *  has no native tool calling — it answers with hermes markup in message.content. Asserts:
  *  - createRuntime wraps provider streams in withToolCallParsing (markup → tool_call parts)
- *  - AION_NO_TOOL_MIDDLEWARE=1 disables the wrap (raw markup text passes through)
+ *  - ROVECODE_NO_TOOL_MIDDLEWARE=1 disables the wrap (raw markup text passes through)
  *  - the SECOND hop's real request body (stream.ts toOpenAiMessages) carries no native tool
  *    artifacts: no `tools`, no `tool_calls`, no role:"tool" — history is lowered to protocol text
  *  - buildDef injects toolPromptBlock for catalog-known non-native models (and on
- *    AION_TOOL_MIDDLEWARE=1), and NOT for native models. */
+ *    ROVECODE_TOOL_MIDDLEWARE=1), and NOT for native models. */
 
 import { test, expect, beforeAll, afterAll } from "bun:test";
 import { createRuntime } from "../../src/cli/runtime.ts";
@@ -42,18 +42,18 @@ const server = Bun.serve({
 // ---------- env harness (bun runs test files in one process — always restore) ----------
 
 const ENV_KEYS = [
-  "AION_BASE_URL", "AION_API_KEY", "AION_MODEL",
-  "AION_NO_TOOL_MIDDLEWARE", "AION_TOOL_MIDDLEWARE",
+  "ROVECODE_BASE_URL", "ROVECODE_API_KEY", "ROVECODE_MODEL",
+  "ROVECODE_NO_TOOL_MIDDLEWARE", "ROVECODE_TOOL_MIDDLEWARE",
 ] as const;
 const savedEnv = new Map<string, string | undefined>();
 const tmpDirs: string[] = [];
 
 beforeAll(() => {
   for (const k of ENV_KEYS) savedEnv.set(k, process.env[k]);
-  delete process.env.AION_NO_TOOL_MIDDLEWARE;
-  delete process.env.AION_TOOL_MIDDLEWARE;
-  process.env.AION_BASE_URL = `http://127.0.0.1:${server.port}/v1`;
-  process.env.AION_API_KEY = "test-key";
+  delete process.env.ROVECODE_NO_TOOL_MIDDLEWARE;
+  delete process.env.ROVECODE_TOOL_MIDDLEWARE;
+  process.env.ROVECODE_BASE_URL = `http://127.0.0.1:${server.port}/v1`;
+  process.env.ROVECODE_API_KEY = "test-key";
 });
 
 afterAll(() => {
@@ -69,7 +69,7 @@ afterAll(() => {
 // ---------- helpers ----------
 
 function tmpCwd(): string {
-  const d = mkdtempSync(join(tmpdir(), "aion-mw-wiring-"));
+  const d = mkdtempSync(join(tmpdir(), "rovecode-mw-wiring-"));
   tmpDirs.push(d);
   return d;
 }
@@ -117,8 +117,8 @@ test("real wiring: provider stream is wrapped — hermes markup becomes tool_cal
   expect(turn.parts[0]).toEqual({ kind: "text", text: "On it." });
 });
 
-test("real wiring: AION_NO_TOOL_MIDDLEWARE=1 leaves the raw stream unwrapped", async () => {
-  process.env.AION_NO_TOOL_MIDDLEWARE = "1";
+test("real wiring: ROVECODE_NO_TOOL_MIDDLEWARE=1 leaves the raw stream unwrapped", async () => {
+  process.env.ROVECODE_NO_TOOL_MIDDLEWARE = "1";
   try {
     const rt = createRuntime({ cwd: tmpCwd() });
     const turn = await driveTurn(rt, [mkMsg("user", [{ kind: "text", text: "read a.ts" }])]);
@@ -126,7 +126,7 @@ test("real wiring: AION_NO_TOOL_MIDDLEWARE=1 leaves the raw stream unwrapped", a
     expect(turn.parts.some((p) => p.kind === "tool_call")).toBe(false);
     expect(turn.parts).toEqual([{ kind: "text", text: reply }]); // markup stays raw text
   } finally {
-    delete process.env.AION_NO_TOOL_MIDDLEWARE;
+    delete process.env.ROVECODE_NO_TOOL_MIDDLEWARE;
   }
 });
 
@@ -178,7 +178,7 @@ test("buildDef: catalog-known non-native model gets the toolPromptBlock", () => 
   expect(def.systemPrompt).toContain('"name": "read"'); // registry tools rendered
 });
 
-test("buildDef: native model gets NO toolPromptBlock; AION_TOOL_MIDDLEWARE=1 forces it", () => {
+test("buildDef: native model gets NO toolPromptBlock; ROVECODE_TOOL_MIDDLEWARE=1 forces it", () => {
   const rt = createRuntime({ cwd: tmpCwd(), stream: null });
   const native = rt.buildDef({ provider: "openai", model: "gpt-4o" }); // snapshot: tool_call true
   if (typeof native.systemPrompt !== "string") throw new Error("expected string systemPrompt");
@@ -189,13 +189,13 @@ test("buildDef: native model gets NO toolPromptBlock; AION_TOOL_MIDDLEWARE=1 for
   if (typeof unknown.systemPrompt !== "string") throw new Error("expected string systemPrompt");
   expect(unknown.systemPrompt).not.toContain("# Tool calling");
 
-  process.env.AION_TOOL_MIDDLEWARE = "1";
+  process.env.ROVECODE_TOOL_MIDDLEWARE = "1";
   try {
     const forced = rt.buildDef({ provider: "openai", model: "gpt-4o" });
     if (typeof forced.systemPrompt !== "string") throw new Error("expected string systemPrompt");
     expect(forced.systemPrompt).toContain("# Tool calling");
     expect(forced.systemPrompt).toContain("<tool_call>");
   } finally {
-    delete process.env.AION_TOOL_MIDDLEWARE;
+    delete process.env.ROVECODE_TOOL_MIDDLEWARE;
   }
 });

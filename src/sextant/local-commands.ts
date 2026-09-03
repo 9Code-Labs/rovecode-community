@@ -12,7 +12,7 @@ import type { KeyCtx } from "./keys.ts";
 import { parseInput, resolveFile } from "./overlays.ts";
 import { THEME_ORDER, type CodeMode, type Focus, type SextantState, type ThemeName } from "./types.ts";
 
-/** prototype commands with an aion equivalent: a toast instead of a submission — unless
+/** prototype commands with an rovecode equivalent: a toast instead of a submission — unless
  *  setCommands lists a custom command of that name, which then runs like any other */
 export const ALIAS_NOTE: Record<string, string> = {
   undo: "/undo → use /checkpoints + /restore",

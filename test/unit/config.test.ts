@@ -7,7 +7,7 @@ import { loadProjectContext, type ProjectContext } from "../../src/core/config.t
 /** Hermetic root: the `.git` marker stops the ancestor walk at the tmp dir,
  *  so nothing above it (real machine dirs) can leak into assertions. */
 function tmpDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "aion-config-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-config-test-"));
   mkdirSync(join(dir, ".git"));
   return dir;
 }
@@ -22,10 +22,10 @@ function cleanup(dir: string): void {
   rmSync(dir, { recursive: true, force: true });
 }
 
-test("full harvest: every candidate path (incl. bare AION.md and .claude/CLAUDE.md) in precedence order, with rendered headers", () => {
+test("full harvest: every candidate path (incl. bare ROVECODE.md and .claude/CLAUDE.md) in precedence order, with rendered headers", () => {
   const dir = tmpDir();
-  write(dir, ".aion/AION.md", "aion content");
-  write(dir, "AION.md", "bare aion content");
+  write(dir, ".rovecode/ROVECODE.md", "rovecode content");
+  write(dir, "ROVECODE.md", "bare rovecode content");
   write(dir, "AGENTS.md", "agents content");
   write(dir, "CLAUDE.md", "claude content");
   write(dir, ".claude/CLAUDE.md", "dot-claude content");
@@ -37,8 +37,8 @@ test("full harvest: every candidate path (incl. bare AION.md and .claude/CLAUDE.
   const result = loadProjectContext(dir);
 
   const expectedOrder = [
-    { path: ".aion/AION.md", family: "aion", content: "aion content" },
-    { path: "AION.md", family: "aion", content: "bare aion content" },
+    { path: ".rovecode/ROVECODE.md", family: "rovecode", content: "rovecode content" },
+    { path: "ROVECODE.md", family: "rovecode", content: "bare rovecode content" },
     { path: "AGENTS.md", family: "agents", content: "agents content" },
     { path: "CLAUDE.md", family: "claude", content: "claude content" },
     { path: ".claude/CLAUDE.md", family: "claude", content: "dot-claude content" },
@@ -310,7 +310,7 @@ test("mdc frontmatter is stripped from .cursor/rules/*.mdc, body content is kept
 });
 
 test("missing cwd returns an empty result without throwing", () => {
-  const missing = join(tmpdir(), `aion-config-missing-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+  const missing = join(tmpdir(), `rovecode-config-missing-${Date.now()}-${Math.random().toString(36).slice(2)}`);
 
   let result: ProjectContext | undefined;
   expect(() => {

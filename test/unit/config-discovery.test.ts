@@ -9,7 +9,7 @@ import { loadProjectContext } from "../../src/core/config.ts";
 
 /** Hermetic root: `.git` stops the walk at the tmp dir (see module doc). */
 function tmpRoot(): string {
-  const dir = mkdtempSync(join(tmpdir(), "aion-config-walk-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-config-walk-"));
   mkdirSync(join(dir, ".git"));
   return dir;
 }

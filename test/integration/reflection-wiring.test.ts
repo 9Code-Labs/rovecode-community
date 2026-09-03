@@ -4,7 +4,7 @@
  *  request's user message, and the mock heals the edit FROM THAT MESSAGE in one retry. Unfixable:
  *  different failures stop nudging at the cap; the identical failure is deduped and the loop guard's
  *  stub ends the run; a nudge left undrained at run end is swept and never opens the next run.
- *  AION_HOME is pinned to a temp dir (no real ~/.aion hooks); every run has a deadline. */
+ *  ROVECODE_HOME is pinned to a temp dir (no real ~/.rovecode hooks); every run has a deadline. */
 
 import { test, expect } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -40,18 +40,18 @@ const endsWithReflection = (messages: Message[]): boolean => {
   return last !== undefined && last.role === "user" && text(last).startsWith(REFLECTION_PREFIX);
 };
 
-const ENV_KEYS = ["AION_HOME", "AION_NO_CHECKPOINTS", "AION_NO_REPOMAP", "AION_REFLECTION", "AION_REFLECTION_MAX"] as const;
+const ENV_KEYS = ["ROVECODE_HOME", "ROVECODE_NO_CHECKPOINTS", "ROVECODE_NO_REPOMAP", "ROVECODE_REFLECTION", "ROVECODE_REFLECTION_MAX"] as const;
 interface Rig { cwd: string; file: string; tag: string; done: () => void }
 function rig(): Rig {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-refl-w-"));
-  const home = mkdtempSync(join(tmpdir(), "aion-refl-whome-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-refl-w-"));
+  const home = mkdtempSync(join(tmpdir(), "rovecode-refl-whome-"));
   const saved: Record<string, string | undefined> = {};
   for (const k of ENV_KEYS) saved[k] = process.env[k];
-  process.env.AION_HOME = home; // hermetic user scope: the developer's real ~/.aion/hooks.* must not load
-  process.env.AION_NO_CHECKPOINTS = "1"; // no shadow-git spawns in the temp workspace
-  process.env.AION_NO_REPOMAP = "1";
-  delete process.env.AION_REFLECTION;
-  delete process.env.AION_REFLECTION_MAX;
+  process.env.ROVECODE_HOME = home; // hermetic user scope: the developer's real ~/.rovecode/hooks.* must not load
+  process.env.ROVECODE_NO_CHECKPOINTS = "1"; // no shadow-git spawns in the temp workspace
+  process.env.ROVECODE_NO_REPOMAP = "1";
+  delete process.env.ROVECODE_REFLECTION;
+  delete process.env.ROVECODE_REFLECTION_MAX;
   const file = join(cwd, "notes.txt"); // .txt: the LSP gate short-circuits (no server probe)
   writeFileSync(file, CONTENT);
   return {

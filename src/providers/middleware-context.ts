@@ -11,11 +11,11 @@
  *  - options.tools              → stripped (provider sees a tool-free request;
  *                                 context-transformer.ts:170)
  *
- *  Aion split vs upstream: transformContext also injects the tools system prompt; aion does
+ *  Rovecode split vs upstream: transformContext also injects the tools system prompt; rovecode does
  *  that in runtime.buildDef (toolPromptBlock), so this module only lowers messages + options.
  *
  *  Activation: upstream applies transformContext whenever a text protocol is configured for
- *  the model. Aion wraps every provider stream, so default is AUTO-DETECT — middleware mode is
+ *  the model. Rovecode wraps every provider stream, so default is AUTO-DETECT — middleware mode is
  *  observable exactly when history contains a tool call the middleware itself minted (ids are
  *  prefixed "textcall_"; native providers never produce that prefix because native turns pass
  *  through byte-identical). `lowerContext: true|false` in MiddlewareOptions overrides. */
@@ -54,7 +54,7 @@ export function lowerNonNativeContext(
   if (!active) return { messages, options };
 
   // callId → tool name, so tool results can be rendered under the NAME hermes expects
-  // (aion ToolResultPart carries only callId; upstream ToolResultMessage carries toolName).
+  // (rovecode ToolResultPart carries only callId; upstream ToolResultMessage carries toolName).
   const toolNames = new Map<string, string>();
   for (const m of messages) {
     for (const p of m.parts) if (p.kind === "tool_call") toolNames.set(p.id, p.tool);

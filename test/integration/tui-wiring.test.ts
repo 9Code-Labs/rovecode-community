@@ -92,12 +92,12 @@ class FakeRenderer implements Renderer {
   warns(): string[] { return this.notes.filter((n) => n.tone === "warn").map((n) => n.text); }
 }
 
-/** Hermetic user scope for the custom-command tests: the host's ~/.aion/commands must not leak in. */
+/** Hermetic user scope for the custom-command tests: the host's ~/.rovecode/commands must not leak in. */
 function scopedHome(): { home: string; restore: () => void } {
-  const home = mkdtempSync(join(tmpdir(), "aion-tuiwire-home-"));
-  const saved = process.env.AION_HOME;
-  process.env.AION_HOME = home;
-  return { home, restore: () => { if (saved === undefined) delete process.env.AION_HOME; else process.env.AION_HOME = saved; rmSync(home, { recursive: true, force: true }); } };
+  const home = mkdtempSync(join(tmpdir(), "rovecode-tuiwire-home-"));
+  const saved = process.env.ROVECODE_HOME;
+  process.env.ROVECODE_HOME = home;
+  return { home, restore: () => { if (saved === undefined) delete process.env.ROVECODE_HOME; else process.env.ROVECODE_HOME = saved; rmSync(home, { recursive: true, force: true }); } };
 }
 
 const TODOS = [
@@ -109,7 +109,7 @@ const TODOS = [
 // ---------- port #32: /todos + status-bar label ----------
 
 test("/todos: empty → hint; after a scripted todo_write the checkbox rows render and the status bar shows `todos 1/3`; a corrupt todos.json warns and the TUI stays alive", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiwire-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiwire-"));
   const sid = randomUUID();
   const term = new VirtualTerminal(80, 24);
   const renderer = new PiTuiRenderer({ terminal: term, cwd });
@@ -129,7 +129,7 @@ test("/todos: empty → hint; after a scripted todo_write the checkbox rows rend
   expect(listed).toContain("[x] t1: write tests");
   expect(listed).toContain("[>] t2: implement tool (high)");
 
-  writeFileSync(join(cwd, ".aion", "sessions", sid, "todos.json"), "{not json");
+  writeFileSync(join(cwd, ".rovecode", "sessions", sid, "todos.json"), "{not json");
   term.sendInput("/todos"); term.sendInput("\r");
   const corrupt = await until(term, (s) => s.includes("not valid JSON"));
   expect(corrupt).toContain("todos.json is not valid JSON");   // warning above…
@@ -140,7 +140,7 @@ test("/todos: empty → hint; after a scripted todo_write the checkbox rows rend
 }, 20_000);
 
 test("status seam: the `todos` key is OMITTED while the list is empty and reads `todos 1/3` once the run that wrote it settles — pushStatus at turn_start and in the run's finally recompute todoLabel, no per-tool bookkeeping (FakeRenderer pin)", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiwire-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiwire-"));
   const fake = new FakeRenderer();
   const stream = mockStream({ turns: [toolTurn([{ id: "w1", tool: "todo_write", args: { todos: TODOS } }]), textTurn("planned.")] });
   const app = runTui({ renderer: fake, stream, cwd, yolo: true, exitOnClose: false, model: "scripted" });
@@ -177,7 +177,7 @@ function taskStream(childSignals: Map<string, AbortSignal>): StreamFn {
 }
 
 test("/tasks: empty list, a scripted task runs to done with ONE settlement note, list rows, cancel on done/unknown/nothing, usage; the completion steer reaches the NEXT model turn (rt.steering)", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiwire-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiwire-"));
   const term = new VirtualTerminal(80, 24);
   const renderer = new PiTuiRenderer({ terminal: term, cwd });
   const app = runTui({ renderer, stream: taskStream(new Map()), cwd, yolo: true, exitOnClose: false, model: "scripted" });
@@ -211,7 +211,7 @@ test("/tasks: empty list, a scripted task runs to done with ONE settlement note,
 }, 30_000);
 
 test("/tasks cancel <id> on a RUNNING task: acknowledges, aborts the child's run, ONE 'cancelled' note; quitting the TUI cancels the remaining live task (close → cancelAll)", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiwire-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiwire-"));
   const term = new VirtualTerminal(80, 24);
   const renderer = new PiTuiRenderer({ terminal: term, cwd });
   const childSignals = new Map<string, AbortSignal>();
@@ -242,10 +242,10 @@ test("/tasks cancel <id> on a RUNNING task: acknowledges, aborts the child's run
 // ---------- port #30 critic: raw $ARGUMENTS, /quit reserved ----------
 
 test("custom command args reach the model RAW (MED-2): whitespace runs, a tab and a newline survive $ARGUMENTS; built-ins still get the collapsed arg", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiwire-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiwire-"));
   const { restore } = scopedHome();
-  mkdirSync(join(cwd, ".aion", "commands"), { recursive: true });
-  writeFileSync(join(cwd, ".aion", "commands", "hello.md"), "Say hi to $ARGUMENTS\n", "utf8");
+  mkdirSync(join(cwd, ".rovecode", "commands"), { recursive: true });
+  writeFileSync(join(cwd, ".rovecode", "commands", "hello.md"), "Say hi to $ARGUMENTS\n", "utf8");
   const seen: string[] = [];
   const stream: StreamFn = async function* (_m: ModelRef, messages: Message[]): AsyncGenerator<StreamEvent> {
     seen.push(userTexts(messages).at(-1) ?? "");
@@ -269,10 +269,10 @@ test("custom command args reach the model RAW (MED-2): whitespace runs, a tab an
 }, 20_000);
 
 test("custom command args via the real editor: a bracketed paste with a newline reaches the model verbatim through onSubmit → handleSlash", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiwire-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiwire-"));
   const { restore } = scopedHome();
-  mkdirSync(join(cwd, ".aion", "commands"), { recursive: true });
-  writeFileSync(join(cwd, ".aion", "commands", "hello.md"), "Say hi to $ARGUMENTS\n", "utf8");
+  mkdirSync(join(cwd, ".rovecode", "commands"), { recursive: true });
+  writeFileSync(join(cwd, ".rovecode", "commands", "hello.md"), "Say hi to $ARGUMENTS\n", "utf8");
   const term = new VirtualTerminal(80, 24);
   const renderer = new PiTuiRenderer({ terminal: term, cwd });
   const seen: string[] = [];
@@ -282,7 +282,7 @@ test("custom command args via the real editor: a bracketed paste with a newline 
   };
   try {
     const app = runTui({ renderer, stream, cwd, yolo: true, exitOnClose: false, model: "scripted" });
-    await until(term, (s) => s.includes("aion"));
+    await until(term, (s) => s.includes("rovecode"));
     term.sendInput("/hello ");
     await until(term, (s) => !s.includes("Say hi to"));                       // the space closed the command palette
     term.sendInput("\x1b[200~x  y\nz\x1b[201~");                                // bracketed paste: two spaces + a newline
@@ -298,14 +298,14 @@ test("custom command args via the real editor: a bracketed paste with a newline 
 }, 20_000);
 
 test("LOW-1: a custom quit.md loses to the /quit alias — boot warning names it and /quit still exits (never submits a turn)", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiwire-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiwire-"));
   const { restore } = scopedHome();
-  mkdirSync(join(cwd, ".aion", "commands"), { recursive: true });
-  writeFileSync(join(cwd, ".aion", "commands", "quit.md"), "bye from the impostor\n", "utf8");
+  mkdirSync(join(cwd, ".rovecode", "commands"), { recursive: true });
+  writeFileSync(join(cwd, ".rovecode", "commands", "quit.md"), "bye from the impostor\n", "utf8");
   const fake = new FakeRenderer();
   try {
     const app = runTui({ renderer: fake, stream: mockStream({ turns: [textTurn("x")] }), cwd, yolo: true, exitOnClose: false, model: "scripted" });
-    expect(fake.warns()).toContain(`${join(cwd, ".aion", "commands", "quit.md")}: /quit is a built-in command — built-in kept`); // mutation: "quit" not reserved → no warning
+    expect(fake.warns()).toContain(`${join(cwd, ".rovecode", "commands", "quit.md")}: /quit is a built-in command — built-in kept`); // mutation: "quit" not reserved → no warning
     fake.hooks.onSubmit("/quit");
     await deadline(app, 4000, "runTui after /quit");         // close() ran (an impostor dispatch would leave the app open)
     expect(fake.users).toEqual([]);                          // nothing was submitted as a user turn
@@ -318,12 +318,12 @@ test("LOW-1: a custom quit.md loses to the /quit alias — boot warning names it
 // ---------- port #27 critic MED-1 / LOW-3: probe failure through the TUI ----------
 
 test("wsl rung + failing fake probe: runTui({exitOnClose:false}) rejects with SandboxConfigError, reaps MCP children, and a keystroke sent RIGHT AFTER runTui() is still handled (no await before the handlers)", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiwire-"));
-  mkdirSync(join(cwd, ".aion"), { recursive: true });
-  writeFileSync(join(cwd, ".aion", "sandbox.json"), JSON.stringify({ rung: "wsl" }));
-  writeFileSync(join(cwd, ".mcp.json"), JSON.stringify({ mcpServers: { toy: { command: "aion-not-a-real-binary-tui" } } }));
-  const savedSandbox = process.env.AION_SANDBOX;
-  delete process.env.AION_SANDBOX;                          // a host AION_SANDBOX would override the file under test
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiwire-"));
+  mkdirSync(join(cwd, ".rovecode"), { recursive: true });
+  writeFileSync(join(cwd, ".rovecode", "sandbox.json"), JSON.stringify({ rung: "wsl" }));
+  writeFileSync(join(cwd, ".mcp.json"), JSON.stringify({ mcpServers: { toy: { command: "rovecode-not-a-real-binary-tui" } } }));
+  const savedSandbox = process.env.ROVECODE_SANDBOX;
+  delete process.env.ROVECODE_SANDBOX;                          // a host ROVECODE_SANDBOX would override the file under test
   const closed: McpManager[] = [];
   const origClose = McpManager.prototype.close;
   McpManager.prototype.close = async function (this: McpManager) { closed.push(this); return origClose.call(this); };
@@ -336,12 +336,12 @@ test("wsl rung + failing fake probe: runTui({exitOnClose:false}) rejects with Sa
     await expect(deadline(app, 8000, "runTui with a failing probe")).rejects.toBeInstanceOf(SandboxConfigError);
     const status = fake.notes.find((n) => n.text.includes("sandbox:"))?.text ?? "";
     expect(status).toContain("model=m1");                    // the keystroke landed (mutation: an early await above renderer.start → lost)
-    expect(status).toContain("sandbox: wsl (.aion/sandbox.json)");
+    expect(status).toContain("sandbox: wsl (.rovecode/sandbox.json)");
     expect(calls).toEqual([["wsl.exe", "--exec", "bash", "-c", "true"]]); // the probe went through the injected runner (mutation: spawnRunner not threaded → a REAL wsl.exe probe, calls [])
     expect(closed).toHaveLength(1);                          // LOW-3: MCP children reaped before the rejection (mutation: drop rt.mcp?.close() → 0)
   } finally {
     McpManager.prototype.close = origClose;
-    if (savedSandbox !== undefined) process.env.AION_SANDBOX = savedSandbox;
+    if (savedSandbox !== undefined) process.env.ROVECODE_SANDBOX = savedSandbox;
     rmSync(cwd, { recursive: true, force: true });
   }
 }, 20_000);

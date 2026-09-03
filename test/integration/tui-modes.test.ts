@@ -33,14 +33,14 @@ function userMsg(text: string, parentId: string | null): Message {
 }
 
 function entriesOf(cwd: string, sid: string): Message[] {
-  return new SessionStore(join(cwd, ".aion", "sessions"), sid).messages();
+  return new SessionStore(join(cwd, ".rovecode", "sessions"), sid).messages();
 }
 
 // The critic-designed core case: yolo boot → /plan → scripted write turn.
 // (a) kills M1 (delete the applyModeRules assignment → the write lands),
 // (b) kills M8 (status-line mode indicator), (c) kills M4 (durable entry).
 test("plan under yolo: scripted write is denied end-to-end, status shows plan, switch is durable", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuimodes-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuimodes-"));
   const sid = randomUUID();
   const term = new VirtualTerminal(80, 24);
   const renderer = new PiTuiRenderer({ terminal: term, cwd });
@@ -52,7 +52,7 @@ test("plan under yolo: scripted write is denied end-to-end, status shows plan, s
     ],
   });
   const app = runTui({ renderer, stream, cwd, sessionId: sid, yolo: true, exitOnClose: false, model: "scripted" });
-  await until(term, (s) => s.includes("aion"));
+  await until(term, (s) => s.includes("rovecode"));
 
   term.sendInput("/plan"); term.sendInput("\r");
   await until(term, (s) => s.includes("read-only tools"));
@@ -70,7 +70,7 @@ test("plan under yolo: scripted write is denied end-to-end, status shows plan, s
 }, 20_000);
 
 test("busy gate: /plan mid-run is refused, mode stays act, nothing lands in the session (M2)", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuimodes-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuimodes-"));
   const sid = randomUUID();
   const term = new VirtualTerminal(80, 24);
   const renderer = new PiTuiRenderer({ terminal: term, cwd });
@@ -79,7 +79,7 @@ test("busy gate: /plan mid-run is refused, mode stays act, nothing lands in the 
     yield { type: "turn" as const, turn: textTurn("slow-done") };
   };
   const app = runTui({ renderer, stream: slow, cwd, sessionId: sid, yolo: true, exitOnClose: false, model: "scripted" });
-  await until(term, (s) => s.includes("aion"));
+  await until(term, (s) => s.includes("rovecode"));
 
   term.sendInput("go"); term.sendInput("\r");
   await until(term, (s) => s.includes("> go"));      // run is in flight (busy set synchronously)
@@ -97,10 +97,10 @@ test("busy gate: /plan mid-run is refused, mode stays act, nothing lands in the 
   rmSync(cwd, { recursive: true, force: true });
 }, 20_000);
 
-test("per-mode model: the NEXT run streams with the plan slot's model from .aion/modes.json (M7)", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuimodes-"));
-  mkdirSync(join(cwd, ".aion"), { recursive: true });
-  writeFileSync(join(cwd, ".aion", "modes.json"), JSON.stringify({
+test("per-mode model: the NEXT run streams with the plan slot's model from .rovecode/modes.json (M7)", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuimodes-"));
+  mkdirSync(join(cwd, ".rovecode"), { recursive: true });
+  writeFileSync(join(cwd, ".rovecode", "modes.json"), JSON.stringify({
     planActSeparateModels: true, plan: { model: "plan-o1" },
   }));
   const term = new VirtualTerminal(80, 24);
@@ -111,7 +111,7 @@ test("per-mode model: the NEXT run streams with the plan slot's model from .aion
     yield { type: "turn" as const, turn: textTurn(`ok-${seen.length}`) };
   };
   const app = runTui({ renderer, stream, cwd, yolo: true, exitOnClose: false, model: "base-m" });
-  await until(term, (s) => s.includes("aion"));
+  await until(term, (s) => s.includes("rovecode"));
 
   term.sendInput("one"); term.sendInput("\r");
   await until(term, (s) => s.includes("ok-1"));
@@ -130,13 +130,13 @@ test("per-mode model: the NEXT run streams with the plan slot's model from .aion
 
 // MED-2: a switch must survive WITHOUT a submit in between — quit path.
 test("/plan then quit: reopening the session resumes in plan (MED-2 flush on close)", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuimodes-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuimodes-"));
   const sid = randomUUID();
   {
     const term = new VirtualTerminal(80, 24);
     const renderer = new PiTuiRenderer({ terminal: term, cwd });
     const app = runTui({ renderer, stream: mockStream({ turns: [textTurn("x")] }), cwd, sessionId: sid, yolo: true, exitOnClose: false, model: "scripted" });
-    await until(term, (s) => s.includes("aion"));
+    await until(term, (s) => s.includes("rovecode"));
     term.sendInput("/plan"); term.sendInput("\r");
     await until(term, (s) => s.includes("read-only tools"));
     term.sendInput("\x03");                          // quit with the switch still pending
@@ -156,15 +156,15 @@ test("/plan then quit: reopening the session resumes in plan (MED-2 flush on clo
 
 // MED-2: switching away used to DISCARD the pending switch via modes.restore.
 test("/plan then /resume away and back: the session keeps plan (MED-2 flush on switchSession)", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuimodes-"));
-  const sessionsDir = join(cwd, ".aion", "sessions");
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuimodes-"));
+  const sessionsDir = join(cwd, ".rovecode", "sessions");
   const aId = randomUUID();
   const bId = randomUUID();
   new SessionStore(sessionsDir, bId).append(userMsg("b-anchor", null)); // target to switch away to
   const term = new VirtualTerminal(80, 24);
   const renderer = new PiTuiRenderer({ terminal: term, cwd });
   const app = runTui({ renderer, stream: mockStream({ turns: [textTurn("x")] }), cwd, sessionId: aId, yolo: true, exitOnClose: false, model: "scripted" });
-  await until(term, (s) => s.includes("aion"));
+  await until(term, (s) => s.includes("rovecode"));
 
   term.sendInput("/plan"); term.sendInput("\r");
   await until(term, (s) => s.includes("read-only tools"));
@@ -186,9 +186,9 @@ test("/plan then /resume away and back: the session keeps plan (MED-2 flush on s
 
 // LOW-3: replay must render the switch as a human line, not the raw XML notice.
 test("replay renders modeSwitch entries as 'mode → plan', never raw <mode_notice> XML (LOW-3)", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuimodes-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuimodes-"));
   const sid = randomUUID();
-  const fixture = new SessionStore(join(cwd, ".aion", "sessions"), sid);
+  const fixture = new SessionStore(join(cwd, ".rovecode", "sessions"), sid);
   const u1 = userMsg("hello there", null);
   fixture.append(u1);
   fixture.append(buildModeChangeEntry({ from: "act", to: "plan" }, u1.id));

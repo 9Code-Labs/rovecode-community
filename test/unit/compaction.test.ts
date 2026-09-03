@@ -192,7 +192,7 @@ test("provider-native: delegates to the advertised capability (summarize untouch
   expect(out.history).toBe(replacement);
   expect(nativeCalls).toBe(1);
   expect(summarized).toBe(0);
-  // no capability (every aion adapter today): the plan falls back and records where from
+  // no capability (every rovecode adapter today): the plan falls back and records where from
   const noNative = ctx({ summarize });
   const plan2 = planCompaction(history, conf, noNative)!;
   expect(plan2).toMatchObject({ strategy: "head-summarize", fallbackFrom: "provider-native", summaryNeeded: true });
@@ -268,13 +268,13 @@ test("isContextOverflow: provider overflow phrasings and 413 count; 429/5xx/tran
 
 // ---------- config surface ----------
 
-test("parseCompactionStrategy + AION_COMPACTION: known names (any case) select the RunConfig strategy in buildCfg; unknown → head-summarize + ONE stderr note; unset/blank → head-summarize silently", () => {
+test("parseCompactionStrategy + ROVECODE_COMPACTION: known names (any case) select the RunConfig strategy in buildCfg; unknown → head-summarize + ONE stderr note; unset/blank → head-summarize silently", () => {
   const spy = spyOn(console, "error").mockImplementation(() => {});
-  const prev = process.env.AION_COMPACTION;
-  const prevHome = process.env.AION_HOME;
-  const cwd = mkdtempSync(join(tmpdir(), "aion-compaction-rt-"));
-  const home = mkdtempSync(join(tmpdir(), "aion-compaction-home-"));
-  process.env.AION_HOME = home; // pinned: createRuntime must never load the developer's ~/.aion/hooks.ts
+  const prev = process.env.ROVECODE_COMPACTION;
+  const prevHome = process.env.ROVECODE_HOME;
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-compaction-rt-"));
+  const home = mkdtempSync(join(tmpdir(), "rovecode-compaction-home-"));
+  process.env.ROVECODE_HOME = home; // pinned: createRuntime must never load the developer's ~/.rovecode/hooks.ts
   try {
     expect(parseCompactionStrategy("keep-window")).toBe("keep-window");
     expect(parseCompactionStrategy("KEEP-WINDOW")).toBe("keep-window");
@@ -286,20 +286,20 @@ test("parseCompactionStrategy + AION_COMPACTION: known names (any case) select t
     expect(parseCompactionStrategy(bogus)).toBeUndefined();
     expect(parseCompactionStrategy(` ${bogus.toUpperCase()} `)).toBeUndefined();
     expect(spy).toHaveBeenCalledTimes(1);                       // ONE note for the two parses of the same unknown value
-    expect(String(spy.mock.calls[0]![0])).toContain(`unknown AION_COMPACTION "${bogus}"`);
+    expect(String(spy.mock.calls[0]![0])).toContain(`unknown ROVECODE_COMPACTION "${bogus}"`);
     expect(String(spy.mock.calls[0]![0])).toContain("using head-summarize");
-    process.env.AION_COMPACTION = "Keep-Window";
+    process.env.ROVECODE_COMPACTION = "Keep-Window";
     expect(createRuntime({ cwd, stream: null }).buildCfg(true).compactionStrategy).toBe("keep-window");
-    process.env.AION_COMPACTION = bogus;
+    process.env.ROVECODE_COMPACTION = bogus;
     expect(createRuntime({ cwd, stream: null }).buildCfg(true).compactionStrategy).toBe("head-summarize");
     expect(spy).toHaveBeenCalledTimes(1);                       // buildCfg re-parses per run: still the one note
-    delete process.env.AION_COMPACTION;
+    delete process.env.ROVECODE_COMPACTION;
     expect(createRuntime({ cwd, stream: null }).buildCfg(false).compactionStrategy).toBe("head-summarize");
     expect(spy).toHaveBeenCalledTimes(1);
   } finally {
     spy.mockRestore();
-    if (prev === undefined) delete process.env.AION_COMPACTION; else process.env.AION_COMPACTION = prev;
-    if (prevHome === undefined) delete process.env.AION_HOME; else process.env.AION_HOME = prevHome;
+    if (prev === undefined) delete process.env.ROVECODE_COMPACTION; else process.env.ROVECODE_COMPACTION = prev;
+    if (prevHome === undefined) delete process.env.ROVECODE_HOME; else process.env.ROVECODE_HOME = prevHome;
     rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
   }
 });
@@ -322,7 +322,7 @@ function scripted(turns: AssistantTurn[]): { stream: StreamFn; calls: Message[][
 
 /** Store pre-seeded with two long user/assistant turns (4 × 50 tokens) — something to drop. */
 function seeded(): { dir: string; store: SessionStore } {
-  const dir = mkdtempSync(join(tmpdir(), "aion-compaction-loop-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-compaction-loop-"));
   const store = new SessionStore(dir, randomUUID());
   let parent: string | null = null;
   for (let i = 0; i < 4; i++) {
@@ -406,7 +406,7 @@ test("overflow on the LAST permitted turn ends the run in error with the provide
 });
 
 test("no-op emergency: a fresh session whose only turn overflows makes exactly ONE provider call and ends in error — nothing is droppable, so the identical request is not re-driven", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-compaction-loop-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-compaction-loop-"));
   const store = new SessionStore(dir, randomUUID());   // empty store: the goal IS the whole history
   const { stream, calls } = scripted([overflowTurn, textTurn("never")]);
   const events: RunEvent[] = [];
@@ -418,7 +418,7 @@ test("no-op emergency: a fresh session whose only turn overflows makes exactly O
 });
 
 test("head-summarize with a single oversized turn keeps the store's chain intact: the reply parents on a REAL message, reload reports no corruption, messages() keeps every real message", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-compaction-loop-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-compaction-loop-"));
   const sid = randomUUID();
   const store = new SessionStore(dir, sid);
   store.append({ id: randomUUID(), role: "user", parts: [{ kind: "text", text: "hi" }], parentId: null, createdAt: Date.now() });
@@ -438,7 +438,7 @@ test("head-summarize with a single oversized turn keeps the store's chain intact
 // ---------- persisted marker (SessionStore.appendEvent) ----------
 
 test("appendEvent annotates the leaf: folded into path() right after its message, invisible to messages(), no phantom branch, survives reload corruption-free", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-compaction-store-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-compaction-store-"));
   const s = new SessionStore(dir, "ev");
   s.append(user("U1", "u1"));
   s.append({ ...asst("A1", "a1"), parentId: "u1" });
@@ -458,7 +458,7 @@ test("appendEvent annotates the leaf: folded into path() right after its message
 });
 
 test("chain-linked event entries (export fixture convention) stay single on the path; a root annotation leads it", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-compaction-store-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-compaction-store-"));
   const s = new SessionStore(dir, "link");
   s.append(user("U1", "u1"));
   s.append({ id: "e1", kind: "event", parentId: "u1", createdAt: 1, event: { type: "steer", text: "s" } });

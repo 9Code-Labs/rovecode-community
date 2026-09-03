@@ -1,5 +1,5 @@
 /** MCP server configuration loading (port #3).
- *  Merges `.aion/mcp.json` (ours) with `.mcp.json` (harvested, claude-code
+ *  Merges `.rovecode/mcp.json` (ours) with `.mcp.json` (harvested, claude-code
  *  format `{ mcpServers: { name: {command,args,env,url,type} } }`); ours wins
  *  on a name clash. Malformed files/entries are skipped with a warning — this
  *  loader never throws. */
@@ -150,11 +150,11 @@ function parseConfigFile(path: string, warnings: string[]): McpServerConfig[] {
   return out;
 }
 
-/** Merge `.aion/mcp.json` (ours) with `.mcp.json` (harvest). Ours wins on a
+/** Merge `.rovecode/mcp.json` (ours) with `.mcp.json` (harvest). Ours wins on a
  *  name clash. Pass a `warnings` array to collect human-readable skip reasons. */
 export function loadMcpConfig(cwd: string, warnings: string[] = []): McpServerConfig[] {
   const harvest = parseConfigFile(join(cwd, ".mcp.json"), warnings);
-  const ours = parseConfigFile(join(cwd, ".aion", "mcp.json"), warnings);
+  const ours = parseConfigFile(join(cwd, ".rovecode", "mcp.json"), warnings);
   const byName = new Map<string, McpServerConfig>();
   for (const c of harvest) byName.set(c.name, c);
   for (const c of ours) byName.set(c.name, c); // ours wins

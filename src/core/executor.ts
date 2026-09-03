@@ -19,7 +19,7 @@
  *    (SandboxTransformError::{SeatbeltUnavailable,…}, manager.rs:203-222,410).
  *  Deliberately NOT ported: codex's silent `unwrap_or(SandboxType::None)`
  *  degrade (manager.rs:305) — codex recovers via its approval layer
- *  (core/src/exec_policy.rs:753-771); aion has no compensator at this seam,
+ *  (core/src/exec_policy.rs:753-771); rovecode has no compensator at this seam,
  *  so per the bar an unavailable rung is a loud RungUnavailableError and
  *  NEVER a silent fallback DOWN the ladder. The docker rung follows the
  *  OpenHands runtime-boundary shape (execute inside a container with the

@@ -1,7 +1,7 @@
 /** MCP client with LAZY tool disclosure (port #3).
  *
  *  Design goal: idle token cost ~0. pi rejected MCP because tool schemas bloat
- *  every prompt (a Playwright server costs ~13.7k tokens idle). Aion's answer:
+ *  every prompt (a Playwright server costs ~13.7k tokens idle). Rovecode's answer:
  *  exactly TWO house tools are ever advertised — mcp_list and mcp_call (tools.ts).
  *  Real server schemas stay here, fetched on demand and cached with a TTL.
  *
@@ -94,7 +94,7 @@ export class McpManager {
 
   private async open(config: McpServerConfig): Promise<Client> {
     const transport = await this.buildTransport(config);
-    const client = new Client({ name: "aion", version: "0.1.0" });
+    const client = new Client({ name: "rovecode", version: "0.1.0" });
     try {
       await withTimeout(
         client.connect(transport, { timeout: this.connectTimeout }),

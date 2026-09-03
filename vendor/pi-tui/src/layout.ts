@@ -1,4 +1,4 @@
-// @ts-nocheck -- vendored by aion: upstream-checked at pinned SHA 853a80d2; see ../PATCHES.md
+// @ts-nocheck -- vendored by rovecode: upstream-checked at pinned SHA 853a80d2; see ../PATCHES.md
 import type { ScrollView } from "./components/scroll-view.ts";
 import { allocateStackSizes, visibleStackEntries } from "./components/stack.ts";
 import { getLayoutNode } from "./layout-node.ts";

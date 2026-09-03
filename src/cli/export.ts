@@ -3,7 +3,7 @@
  *  their export emits the raw session data verbatim to stdout, which maps to --json here
  *  (verbatim byte copy of entries.jsonl, the whole tree incl. abandoned branches). The
  *  cloud-share half of opencode's feature (share/session.ts) is explicitly deferred
- *  (PORTS.md wave-3 ledger: "export stays local"), and the markdown layout is aion-native:
+ *  (PORTS.md wave-3 ledger: "export stays local"), and the markdown layout is rovecode-native:
  *  the snapshot has no session→markdown renderer at ebece6e.
  *
  *  Markdown walks the ACTIVE path only (store.path()), mirroring TUI replayHistory:
@@ -28,7 +28,7 @@ export const TOOL_OUTPUT_CAP = 2000;
 /** One-line args summary cap — same 120-char clip the TUI uses for tool cards. */
 const ARGS_CAP = 120;
 /** CLI usage line — thrown (exit 1 via cmdExport) on a missing id or a dangling --out. */
-const USAGE = "usage: aion export <session-id|prefix> [--json] [--out <path>] [--force]";
+const USAGE = "usage: rovecode export <session-id|prefix> [--json] [--out <path>] [--force]";
 
 export interface ExportOptions {
   /** raw JSONL copy (verbatim bytes) instead of markdown */
@@ -133,7 +133,7 @@ export function renderSessionMarkdown(entries: readonly Entry[], sessionId: stri
     if (!origins.includes(key)) origins.push(key);
   }
   const blocks: string[] = [
-    `# aion session ${sessionId.slice(0, 8)}`,
+    `# rovecode session ${sessionId.slice(0, 8)}`,
     [`- id: ${inlineCode(sessionId)}`, `- range: ${range}`, `- models: ${origins.length > 0 ? origins.join(", ") : "(none)"}`].join("\n"),
   ];
 
@@ -231,11 +231,11 @@ export function exportSession(sessionsRoot: string, idOrPrefix: string, opts: Ex
   return { path: target, format };
 }
 
-// ---------- CLI glue (aion export …) ----------
+// ---------- CLI glue (rovecode export …) ----------
 
 export interface ExportCliArgs { idOrPrefix?: string; json: boolean; out?: string; force: boolean }
 
-/** Parse `aion export` argv. Flags may sit anywhere — parseCli accepts `aion --json
+/** Parse `rovecode export` argv. Flags may sit anywhere — parseCli accepts `rovecode --json
  *  export <id>` for every subcommand — so the whole argv after the script path is
  *  scanned and the single `export` command token skipped. parseCli strips flags but
  *  leaves flag VALUES in rest, so --out is consumed here (same reason main.ts hand-
@@ -261,11 +261,11 @@ export function parseExportArgs(argv: readonly string[]): ExportCliArgs {
   return parsed;
 }
 
-/** `aion export <session> [--json] [--out <path>] [--force]` — errors exit 1. */
+/** `rovecode export <session> [--json] [--out <path>] [--force]` — errors exit 1. */
 export function cmdExport(argv: readonly string[]): void {
   try {
     const a = parseExportArgs(argv); // inside: a dangling --out is a usage error too
-    const res = exportSession(join(process.cwd(), ".aion", "sessions"), a.idOrPrefix ?? "", a);
+    const res = exportSession(join(process.cwd(), ".rovecode", "sessions"), a.idOrPrefix ?? "", a);
     console.log(`exported ${res.format} → ${res.path}`);
   } catch (e) {
     console.error(`error: ${e instanceof Error ? e.message : String(e)}`);

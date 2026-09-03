@@ -14,7 +14,7 @@
  *  task.ts) injects a synthetic message into the PARENT session when the job settles
  *  (:227-265 inject/notify) and tells the model not to poll (:31-35).
  *  Departures: opencode starts every job at once (no bound); here a FIFO queue bounds
- *  concurrency (default 3, env AION_TASKS_MAX) and a RUNNING task that waits on a QUEUED
+ *  concurrency (default 3, env ROVECODE_TASKS_MAX) and a RUNNING task that waits on a QUEUED
  *  one lends it its slot so nested pools cannot deadlock. Their notification is a new
  *  prompt on the parent session; ours is a push into the parent's SteeringQueue, which
  *  the loop drains before its next model call (loop.ts:136) — the loop stays untouched. */
@@ -89,9 +89,9 @@ export interface TaskManagerOptions {
 
 export const DEFAULT_TASKS_MAX = 3;
 
-/** AION_TASKS_MAX: positive integer, else the default. */
+/** ROVECODE_TASKS_MAX: positive integer, else the default. */
 export function tasksMaxFromEnv(env: Record<string, string | undefined> = process.env): number {
-  const n = Number(env["AION_TASKS_MAX"] ?? "");
+  const n = Number(env["ROVECODE_TASKS_MAX"] ?? "");
   return Number.isInteger(n) && n >= 1 ? n : DEFAULT_TASKS_MAX;
 }
 

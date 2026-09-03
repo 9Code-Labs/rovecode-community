@@ -23,9 +23,9 @@ const deadline = <T>(p: Promise<T>, ms: number) => Promise.race([p, sleep(ms).th
 let seq = 0;
 interface Rig { cwd: string; home: string; key: string; log: unknown[]; done: () => void }
 function rig(): Rig {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-hooks-cwd-"));
-  const home = mkdtempSync(join(tmpdir(), "aion-hooks-home-"));
-  const key = `__aionHooksTest_${process.pid}_${++seq}`;
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-hooks-cwd-"));
+  const home = mkdtempSync(join(tmpdir(), "rovecode-hooks-home-"));
+  const key = `__rovecodeHooksTest_${process.pid}_${++seq}`;
   const log: unknown[] = [];
   (globalThis as Record<string, unknown>)[key] = log;
   return {
@@ -42,8 +42,8 @@ function moduleText(key: string, hooksBody: string, version: string | number = H
   return `const log = globalThis[${JSON.stringify(key)}];\nexport default { version: ${version}, hooks: { ${hooksBody} } };\n`;
 }
 function project(cwd: string, text: string, ext = "ts"): string {
-  mkdirSync(join(cwd, ".aion"), { recursive: true });
-  const p = join(cwd, ".aion", `hooks.${ext}`);
+  mkdirSync(join(cwd, ".rovecode"), { recursive: true });
+  const p = join(cwd, ".rovecode", `hooks.${ext}`);
   writeFileSync(p, text);
   return p;
 }
@@ -144,7 +144,7 @@ test("version gate: version 2, a missing version, and a missing default export a
     const ok = project(r.cwd, moduleText(r.key, `pre_run() { log.push("ok"); }`));
     const loaded = await loadHooks(r.cwd, { home: r.home });
     expect(loaded.sources).toEqual([ok]);
-    expect(loaded.warnings).toEqual([`${v2}: hooks API version 2 is not supported (this aion speaks 1) — skipped`]);
+    expect(loaded.warnings).toEqual([`${v2}: hooks API version 2 is not supported (this rovecode speaks 1) — skipped`]);
     await loaded.hooks[0]!.pre_run!(ctx);
     expect(r.log).toEqual(["ok"]); // the v2 file's hooks never ran
   } finally { r.done(); }
@@ -155,7 +155,7 @@ test("version gate: version 2, a missing version, and a missing default export a
     const loaded = await loadHooks(r2.cwd, { home: r2.home });
     expect(loaded.hooks).toEqual([]);
     expect(loaded.warnings).toEqual([
-      `${noVersion}: hooks API version missing is not supported (this aion speaks 1) — skipped`,
+      `${noVersion}: hooks API version missing is not supported (this rovecode speaks 1) — skipped`,
       `${noDefault}: default export must be { version: 1, hooks: {…} } — skipped`,
     ]);
   } finally { r2.done(); }
@@ -177,15 +177,15 @@ test("loadHooks: unknown hook names, non-function members and a non-object `hook
   } finally { r.done(); }
 });
 
-test("AION_NO_HOOKS=1 skips the files silently", async () => {
+test("ROVECODE_NO_HOOKS=1 skips the files silently", async () => {
   const r = rig();
-  const saved = process.env.AION_NO_HOOKS;
+  const saved = process.env.ROVECODE_NO_HOOKS;
   try {
     project(r.cwd, moduleText(r.key, `pre_run() {}`));
-    process.env.AION_NO_HOOKS = "1";
+    process.env.ROVECODE_NO_HOOKS = "1";
     expect(await loadHooks(r.cwd, { home: r.home })).toEqual({ hooks: [], sources: [], warnings: [] });
   } finally {
-    if (saved === undefined) delete process.env.AION_NO_HOOKS; else process.env.AION_NO_HOOKS = saved;
+    if (saved === undefined) delete process.env.ROVECODE_NO_HOOKS; else process.env.ROVECODE_NO_HOOKS = saved;
     r.done();
   }
 });
@@ -196,7 +196,7 @@ test("version gate shows a STRING version quoted: `version: \"1\"` is refused as
     const strV = project(r.cwd, moduleText(r.key, `pre_run() { log.push("never"); }`, '"1"'));
     const loaded = await loadHooks(r.cwd, { home: r.home });
     expect(loaded.hooks).toEqual([]);
-    expect(loaded.warnings).toEqual([`${strV}: hooks API version "1" is not supported (this aion speaks 1) — skipped`]);
+    expect(loaded.warnings).toEqual([`${strV}: hooks API version "1" is not supported (this rovecode speaks 1) — skipped`]);
     expect(r.log).toEqual([]);
   } finally { r.done(); }
 });
@@ -361,13 +361,13 @@ test("warnings: bounded to 50 notes of ≤300 chars; onWarning replays the buffe
   expect(runner.warnings).toEqual([]);
 });
 
-test("hookTimeoutMs: AION_HOOK_TIMEOUT_MS parses; blank/invalid/zero fall back to 5000; the option overrides", () => {
+test("hookTimeoutMs: ROVECODE_HOOK_TIMEOUT_MS parses; blank/invalid/zero fall back to 5000; the option overrides", () => {
   expect(DEFAULT_HOOK_TIMEOUT_MS).toBe(5000);
   expect(hookTimeoutMs({})).toBe(5000);
-  expect(hookTimeoutMs({ AION_HOOK_TIMEOUT_MS: "" })).toBe(5000);
-  expect(hookTimeoutMs({ AION_HOOK_TIMEOUT_MS: "abc" })).toBe(5000);
-  expect(hookTimeoutMs({ AION_HOOK_TIMEOUT_MS: "0" })).toBe(5000);
-  expect(hookTimeoutMs({ AION_HOOK_TIMEOUT_MS: "250.9" })).toBe(250);
+  expect(hookTimeoutMs({ ROVECODE_HOOK_TIMEOUT_MS: "" })).toBe(5000);
+  expect(hookTimeoutMs({ ROVECODE_HOOK_TIMEOUT_MS: "abc" })).toBe(5000);
+  expect(hookTimeoutMs({ ROVECODE_HOOK_TIMEOUT_MS: "0" })).toBe(5000);
+  expect(hookTimeoutMs({ ROVECODE_HOOK_TIMEOUT_MS: "250.9" })).toBe(250);
   expect(new HookRunner(ctx, { timeoutMs: 7 }).timeoutMs).toBe(7);
 });
 

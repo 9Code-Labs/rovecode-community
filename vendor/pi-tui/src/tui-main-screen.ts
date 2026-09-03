@@ -1,4 +1,4 @@
-// @ts-nocheck -- vendored by aion: upstream-checked at pinned SHA 853a80d2; see ../PATCHES.md
+// @ts-nocheck -- vendored by rovecode: upstream-checked at pinned SHA 853a80d2; see ../PATCHES.md
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { deleteKittyImage, isImageLine } from "./terminal-image.ts";

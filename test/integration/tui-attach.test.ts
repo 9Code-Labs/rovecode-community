@@ -88,7 +88,7 @@ class FakeRenderer implements Renderer {
 
 /** A cwd with dot.png (the 70-byte 1x1 PNG) and notes.txt (text under an image-looking name too). */
 function cwdWithImage(): string {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-attach-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-attach-"));
   writeFileSync(join(cwd, "dot.png"), PNG_1x1);
   writeFileSync(join(cwd, "notes.txt"), "hello, plain text");
   writeFileSync(join(cwd, "fake.png"), "hello, i am text pretending to be an image");
@@ -127,7 +127,7 @@ test("(a) /attach dot.png → the run's user message carries [text, image] (inli
   expect(screen).toContain("> what is this?");
   expect(screen).toContain("[image: dot.png]");                           // the chip under the user line
   expect(lastUser(seen[0]!).parts).toEqual([{ kind: "text", text: "what is this?" }, IMAGE_PART]); // what the model got
-  const sessionDir = join(cwd, ".aion", "sessions", sid);
+  const sessionDir = join(cwd, ".rovecode", "sessions", sid);
   const raw = readFileSync(join(sessionDir, "entries.jsonl"), "utf8");
   expect(raw).toContain(`attachments/${PNG_SHA}.png`);
   expect(raw).not.toContain(PNG_1x1_B64);
@@ -167,11 +167,11 @@ test("(a2) image-only submit is not a thing: Enter on an empty editor with a sta
 
 test("(a3) a custom command that renders to \"\" (`/ask` on a bare `$ARGUMENTS`) reaches submit(\"\"): with a staged image it starts no run, warns that text is required and keeps the stage — the next real /ask carries the image; with nothing staged it starts no run either (empty text never runs)", async () => {
   const cwd = cwdWithImage();
-  const home = mkdtempSync(join(tmpdir(), "aion-attach-home-"));
-  const savedHome = process.env.AION_HOME;
-  process.env.AION_HOME = home;                          // hermetic user scope
-  mkdirSync(join(cwd, ".aion", "commands"), { recursive: true });
-  writeFileSync(join(cwd, ".aion", "commands", "ask.md"), "$ARGUMENTS\n", "utf8");
+  const home = mkdtempSync(join(tmpdir(), "rovecode-attach-home-"));
+  const savedHome = process.env.ROVECODE_HOME;
+  process.env.ROVECODE_HOME = home;                          // hermetic user scope
+  mkdirSync(join(cwd, ".rovecode", "commands"), { recursive: true });
+  writeFileSync(join(cwd, ".rovecode", "commands", "ask.md"), "$ARGUMENTS\n", "utf8");
   try {
     const fake = new FakeRenderer();
     const { stream, seen } = capturing([textTurn("x")]);
@@ -197,7 +197,7 @@ test("(a3) a custom command that renders to \"\" (`/ask` on a bare `$ARGUMENTS`)
     expect(fake.users).toEqual(["what is this?\n[image: dot.png]"]);
     fake.hooks.onExit(); await app;
   } finally {
-    if (savedHome === undefined) delete process.env.AION_HOME; else process.env.AION_HOME = savedHome;
+    if (savedHome === undefined) delete process.env.ROVECODE_HOME; else process.env.ROVECODE_HOME = savedHome;
     rmSync(cwd, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
   }
@@ -308,7 +308,7 @@ test("(e) /attach while a run is busy → the queued steer carries the image whe
 
 test("(f) /attach then /resume <other>: the stage is carried to the new store with a note and rides on the next message THERE; a same-store /new keeps it; nothing is written under the old session", async () => {
   const cwd = cwdWithImage();
-  const root = join(cwd, ".aion", "sessions");
+  const root = join(cwd, ".rovecode", "sessions");
   new SessionStore(root, "other-sess");                  // pre-existing target
   const fake = new FakeRenderer();
   const { stream, seen } = capturing([textTurn("x")]);
@@ -345,8 +345,8 @@ function seedImageSession(root: string, id: string): void {
 }
 
 test("(g) resume replay renders user turns with chips — an image-only turn is a chip line, not blank", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-attach-"));
-  seedImageSession(join(cwd, ".aion", "sessions"), "img-sess");
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-attach-"));
+  seedImageSession(join(cwd, ".rovecode", "sessions"), "img-sess");
   const fake = new FakeRenderer();
   const app = runTui({ renderer: fake, stream: mockStream({ turns: [textTurn("x")] }), cwd, sessionId: "img-sess", yolo: true, exitOnClose: false, model: "scripted" });
   await waitFor(() => fake.assistants.includes("a dot"), 8000, "boot replay");
@@ -356,8 +356,8 @@ test("(g) resume replay renders user turns with chips — an image-only turn is 
 }, 20_000);
 
 test("(h) export markdown shows one chip line per image under ## User (describeImage text); an image-only turn is not dropped; --json stays byte-verbatim", () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-attach-"));
-  const root = join(cwd, ".aion", "sessions");
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-attach-"));
+  const root = join(cwd, ".rovecode", "sessions");
   seedImageSession(root, "img-export");
   const md = readFileSync(exportSession(root, "img-export", { cwd }).path, "utf8");
   expect(md).toContain("## User\n\nwhat\n\n[image: dot.png, 1x1, 70 B]\n\n## Assistant\n\na dot\n\n## User\n\n[image: dot.png, 1x1, 70 B]\n\n## Costs");
@@ -371,11 +371,11 @@ test("(h) export markdown shows one chip line per image under ## User (describeI
 
 test("(k) /attach is a built-in: it is in the palette, a custom attach.md is refused (built-in kept), and /attach clear on an empty stage is honest", async () => {
   const cwd = cwdWithImage();
-  const home = mkdtempSync(join(tmpdir(), "aion-attach-home-"));
-  const savedHome = process.env.AION_HOME;
-  process.env.AION_HOME = home;                          // hermetic user scope
-  mkdirSync(join(cwd, ".aion", "commands"), { recursive: true });
-  writeFileSync(join(cwd, ".aion", "commands", "attach.md"), "must lose to the built-in\n", "utf8");
+  const home = mkdtempSync(join(tmpdir(), "rovecode-attach-home-"));
+  const savedHome = process.env.ROVECODE_HOME;
+  process.env.ROVECODE_HOME = home;                          // hermetic user scope
+  mkdirSync(join(cwd, ".rovecode", "commands"), { recursive: true });
+  writeFileSync(join(cwd, ".rovecode", "commands", "attach.md"), "must lose to the built-in\n", "utf8");
   try {
     const fake = new FakeRenderer();
     const app = runTui({ renderer: fake, stream: mockStream({ turns: [textTurn("x")] }), cwd, yolo: true, exitOnClose: false, model: "scripted" });
@@ -388,7 +388,7 @@ test("(k) /attach is a built-in: it is in the palette, a custom attach.md is ref
     expect(fake.texts().at(-1)).toBe("no images attached");
     fake.hooks.onExit(); await app;
   } finally {
-    if (savedHome === undefined) delete process.env.AION_HOME; else process.env.AION_HOME = savedHome;
+    if (savedHome === undefined) delete process.env.ROVECODE_HOME; else process.env.ROVECODE_HOME = savedHome;
     rmSync(cwd, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
   }

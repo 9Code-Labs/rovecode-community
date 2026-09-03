@@ -45,7 +45,7 @@ function buildScriptedSession(root: string, id = "goldsess"): SessionStore {
 }
 
 const GOLDEN = [
-  "# aion session goldsess",
+  "# rovecode session goldsess",
   "",
   "- id: `goldsess`",
   "- range: 2026-09-01T10:00:00.000Z → 2026-09-01T10:05:00.000Z",
@@ -99,8 +99,8 @@ const GOLDEN = [
 ].join("\n") + "\n";
 
 test("golden markdown for a scripted session — full-string pin, default <short>.md path", () => {
-  const root = mkdtempSync(join(tmpdir(), "aion-export-"));
-  const out = mkdtempSync(join(tmpdir(), "aion-export-out-"));
+  const root = mkdtempSync(join(tmpdir(), "rovecode-export-"));
+  const out = mkdtempSync(join(tmpdir(), "rovecode-export-out-"));
   buildScriptedSession(root);
   const res = exportSession(root, "goldsess", { cwd: out });
   expect(res.format).toBe("markdown");
@@ -110,7 +110,7 @@ test("golden markdown for a scripted session — full-string pin, default <short
 });
 
 test("mode switches render as the replay-convention line, never raw <mode_notice> XML", () => {
-  const root = mkdtempSync(join(tmpdir(), "aion-export-"));
+  const root = mkdtempSync(join(tmpdir(), "rovecode-export-"));
   const s = buildScriptedSession(root);
   const md = renderSessionMarkdown(s.path(), "goldsess", new ModelCatalog());
   expect(md).toContain("> mode → plan");
@@ -119,8 +119,8 @@ test("mode switches render as the replay-convention line, never raw <mode_notice
 });
 
 test("--json copies the session JSONL byte-verbatim (whole tree, not a re-serialization)", () => {
-  const root = mkdtempSync(join(tmpdir(), "aion-export-"));
-  const out = mkdtempSync(join(tmpdir(), "aion-export-out-"));
+  const root = mkdtempSync(join(tmpdir(), "rovecode-export-"));
+  const out = mkdtempSync(join(tmpdir(), "rovecode-export-out-"));
   const s = buildScriptedSession(root);
   s.branch("t1"); // moved leaf: markdown would shrink, but the raw copy keeps EVERY line
   const src = readFileSync(join(root, "goldsess", "entries.jsonl"));
@@ -134,7 +134,7 @@ test("--json copies the session JSONL byte-verbatim (whole tree, not a re-serial
 });
 
 test("prefix resolution: exact id wins over longer siblings; unique prefix resolves", () => {
-  const root = mkdtempSync(join(tmpdir(), "aion-export-"));
+  const root = mkdtempSync(join(tmpdir(), "rovecode-export-"));
   for (const id of ["abc", "abc-one", "abd-two"]) {
     new SessionStore(root, id).append({ id: `${id}-m`, role: "user", parts: [{ kind: "text", text: id }], parentId: null, createdAt: T0 });
   }
@@ -145,7 +145,7 @@ test("prefix resolution: exact id wins over longer siblings; unique prefix resol
 });
 
 test("ambiguous prefix errors listing candidates (mirrors /resume: never picks silently)", () => {
-  const root = mkdtempSync(join(tmpdir(), "aion-export-"));
+  const root = mkdtempSync(join(tmpdir(), "rovecode-export-"));
   for (const id of ["abc", "abc-one", "abd-two"]) {
     new SessionStore(root, id).append({ id: `${id}-m`, role: "user", parts: [{ kind: "text", text: id }], parentId: null, createdAt: T0 });
   }
@@ -156,8 +156,8 @@ test("ambiguous prefix errors listing candidates (mirrors /resume: never picks s
 });
 
 test("never overwrites an existing file without --force; --force replaces it", () => {
-  const root = mkdtempSync(join(tmpdir(), "aion-export-"));
-  const out = mkdtempSync(join(tmpdir(), "aion-export-out-"));
+  const root = mkdtempSync(join(tmpdir(), "rovecode-export-"));
+  const out = mkdtempSync(join(tmpdir(), "rovecode-export-out-"));
   buildScriptedSession(root);
   const first = exportSession(root, "goldsess", { cwd: out });
   expect(existsSync(first.path)).toBe(true);
@@ -173,8 +173,8 @@ test("never overwrites an existing file without --force; --force replaces it", (
 });
 
 test("--out overrides the target path (relative resolves against cwd)", () => {
-  const root = mkdtempSync(join(tmpdir(), "aion-export-"));
-  const out = mkdtempSync(join(tmpdir(), "aion-export-out-"));
+  const root = mkdtempSync(join(tmpdir(), "rovecode-export-"));
+  const out = mkdtempSync(join(tmpdir(), "rovecode-export-out-"));
   buildScriptedSession(root);
   const rel = exportSession(root, "goldsess", { cwd: out, out: "transcript.md" });
   expect(rel.path).toBe(join(out, "transcript.md"));
@@ -186,7 +186,7 @@ test("--out overrides the target path (relative resolves against cwd)", () => {
 });
 
 test(`tool output is clipped at ${TOOL_OUTPUT_CAP} chars with an explicit marker`, () => {
-  const root = mkdtempSync(join(tmpdir(), "aion-export-"));
+  const root = mkdtempSync(join(tmpdir(), "rovecode-export-"));
   const s = new SessionStore(root, "bigout");
   const big = "A".repeat(TOOL_OUTPUT_CAP) + "TAIL_SENTINEL";
   s.append({ id: "u1", role: "user", parts: [{ kind: "text", text: "go" }], parentId: null, createdAt: T0 });
@@ -200,7 +200,7 @@ test(`tool output is clipped at ${TOOL_OUTPUT_CAP} chars with an explicit marker
 });
 
 test("tool output containing ``` gets a longer fence (block cannot be broken out of)", () => {
-  const root = mkdtempSync(join(tmpdir(), "aion-export-"));
+  const root = mkdtempSync(join(tmpdir(), "rovecode-export-"));
   const s = new SessionStore(root, "fency");
   s.append({ id: "u1", role: "user", parts: [{ kind: "text", text: "go" }], parentId: null, createdAt: T0 });
   s.append({ id: "a1", role: "assistant", parts: [{ kind: "tool_call", id: "c1", tool: "read", args: { path: "x.md" } }], parentId: "u1", createdAt: T0 + 1 });
@@ -211,7 +211,7 @@ test("tool output containing ``` gets a longer fence (block cannot be broken out
 });
 
 test("args containing a `` run get a longer inline-code delimiter (span cannot be closed early)", () => {
-  const root = mkdtempSync(join(tmpdir(), "aion-export-"));
+  const root = mkdtempSync(join(tmpdir(), "rovecode-export-"));
   const s = new SessionStore(root, "ticky");
   s.append({ id: "u1", role: "user", parts: [{ kind: "text", text: "go" }], parentId: null, createdAt: T0 });
   s.append({ id: "a1", role: "assistant", parts: [{ kind: "tool_call", id: "c1", tool: "bash", args: { cmd: "echo ``x``" } }], parentId: "u1", createdAt: T0 + 1 });
@@ -225,7 +225,7 @@ test("args containing a `` run get a longer inline-code delimiter (span cannot b
 });
 
 test("markdown walks the ACTIVE path only (branched-away turns excluded); empty session renders", () => {
-  const root = mkdtempSync(join(tmpdir(), "aion-export-"));
+  const root = mkdtempSync(join(tmpdir(), "rovecode-export-"));
   const s = buildScriptedSession(root);
   s.branch("t1"); // rewind before the mode switch — later entries leave the active path
   const md = renderSessionMarkdown(new SessionStore(root, "goldsess").path(), "goldsess", new ModelCatalog());
@@ -248,7 +248,7 @@ test("parseExportArgs: --out value never becomes the session id; flags parsed", 
 });
 
 test("parseExportArgs: flags before the command are honored; a dangling or flag-shaped --out is a usage error", () => {
-  // parseCli dispatches `aion --json export <id>` to export — the parser must see that flag too
+  // parseCli dispatches `rovecode --json export <id>` to export — the parser must see that flag too
   expect(parseExportArgs(["bun", "main.ts", "--json", "export", "abc1"])).toEqual({ idOrPrefix: "abc1", json: true, force: false });
   expect(parseExportArgs(["bun", "main.ts", "--force", "--json", "export", "abc1", "--out", "o.jsonl"]))
     .toEqual({ idOrPrefix: "abc1", out: "o.jsonl", json: true, force: true });
@@ -259,33 +259,33 @@ test("parseExportArgs: flags before the command are honored; a dangling or flag-
   expect(() => parseExportArgs(["bun", "main.ts", "export", "abc1", "--out", "--force"])).toThrow(/--out needs a path/);
 });
 
-// CLI wiring e2e: the `aion export` subcommand end-to-end through main.ts (known set +
+// CLI wiring e2e: the `rovecode export` subcommand end-to-end through main.ts (known set +
 // dispatch case). spawnSync — no async stdout readers (the --resume flake class).
 const MAIN = join(import.meta.dir, "..", "..", "src", "cli", "main.ts");
 
-test("aion export e2e: prefix resolves, file lands in cwd, exit 0; unknown id exits 1", () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-export-e2e-"));
-  const sessionsRoot = join(cwd, ".aion", "sessions");
+test("rovecode export e2e: prefix resolves, file lands in cwd, exit 0; unknown id exits 1", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-export-e2e-"));
+  const sessionsRoot = join(cwd, ".rovecode", "sessions");
   mkdirSync(sessionsRoot, { recursive: true });
   buildScriptedSession(sessionsRoot, "e2e-fixed-id");
   const ok = Bun.spawnSync([process.execPath, MAIN, "export", "e2e-f"], { cwd, stdout: "pipe", stderr: "pipe" });
   expect(ok.exitCode).toBe(0);
   expect(ok.stdout.toString()).toContain("exported markdown →");
   expect(existsSync(join(cwd, "e2e-fixe.md"))).toBe(true);
-  expect(readFileSync(join(cwd, "e2e-fixe.md"), "utf8")).toContain("# aion session e2e-fixe");
+  expect(readFileSync(join(cwd, "e2e-fixe.md"), "utf8")).toContain("# rovecode session e2e-fixe");
   const bad = Bun.spawnSync([process.execPath, MAIN, "export", "nope"], { cwd, stdout: "pipe", stderr: "pipe" });
   expect(bad.exitCode).toBe(1);
   expect(bad.stderr.toString()).toContain('no session matching "nope"');
   rmSync(cwd, { recursive: true, force: true });
 }, 30_000); // two synchronous main.ts boots (~1.4s each idle) overran Bun's 5s default under suite load
 
-test("aion export e2e: --json before the command is honored; dangling --out exits 1 and writes nothing", () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-export-e2e-"));
-  const sessionsRoot = join(cwd, ".aion", "sessions");
+test("rovecode export e2e: --json before the command is honored; dangling --out exits 1 and writes nothing", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-export-e2e-"));
+  const sessionsRoot = join(cwd, ".rovecode", "sessions");
   mkdirSync(sessionsRoot, { recursive: true });
   buildScriptedSession(sessionsRoot, "e2e-fixed-id");
   const src = readFileSync(join(sessionsRoot, "e2e-fixed-id", "entries.jsonl"));
-  // parseCli routes `aion --json export …` to export; the flag must not be lost on the
+  // parseCli routes `rovecode --json export …` to export; the flag must not be lost on the
   // way (it used to write MARKDOWN into o.jsonl with exit 0)
   const pre = Bun.spawnSync([process.execPath, MAIN, "--json", "export", "e2e-f", "--out", "o.jsonl"], { cwd, stdout: "pipe", stderr: "pipe" });
   expect(pre.exitCode).toBe(0);

@@ -10,7 +10,7 @@ import { join } from "node:path";
 // (core.ts) defines symbols referenced across the repo, one (loner.ts) defines
 // a symbol nobody references.
 function makeFixture(): string {
-  const dir = mkdtempSync(join(tmpdir(), "aion-rm-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-rm-"));
   writeFileSync(join(dir, "core.ts"),
     "export function centralHelper(x: number) { return x + 1; }\n" +
     "export class DataStore { save(): void { centralHelper(0); } }\n");
@@ -127,7 +127,7 @@ test("budget truncates by rank: tight budget keeps top-ranked defs, drops loner"
 });
 
 test("empty/unusable inputs yield no chunk", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-rm-empty-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-rm-empty-"));
   expect(buildRepoMapChunk(dir, 1000)).toBeNull();
   const fx = makeFixture();
   expect(buildRepoMapChunk(fx, 0)).toBeNull(); // aider get_repo_map L111-112
@@ -138,7 +138,7 @@ test("empty/unusable inputs yield no chunk", () => {
 // --- mtime cache (bar: cache keyed by file mtimes + invalidation) ---
 
 test("tags cache: same mtime is a hit, changed mtime re-extracts (repomap.py L233-264)", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-rm-cache-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-rm-cache-"));
   const p = join(dir, "x.ts");
   writeFileSync(p, "export function firstThing() { return 1; }\n");
   const rm = new RepoMap(dir);
@@ -163,7 +163,7 @@ test("tags cache: same mtime is a hit, changed mtime re-extracts (repomap.py L23
 });
 
 test("cache invalidation flows through to the built map", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-rm-flow-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-rm-flow-"));
   writeFileSync(join(dir, "m.ts"), "export function originalName() { return 1; }\n");
   const rm = new RepoMap(dir);
   const before = rm.rankedTagsMap([], findSrcFiles(dir), 500);
@@ -192,7 +192,7 @@ test("buildRepoMapChunk returns a well-formed repo-map ContextChunk", () => {
 // --- pagerank transitivity (round-2 F4: uniform-rank mutant must fail) ---
 
 test("pagerank: multi-hop rank propagation, not raw in-degree (repomap.py L519-550)", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-rm-pr-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-rm-pr-"));
   // hub.ts is referenced by THREE leaves -> high PageRank; its single outbound
   // reference passes that mass to midThing. popThing has MORE raw referencers
   // (two), but both are rank-poor leaf files nothing links to. PageRank ranks
@@ -217,7 +217,7 @@ test("pagerank: multi-hop rank propagation, not raw in-degree (repomap.py L519-5
 // --- persistent tags cache (round-2 F1; aider .aider.tags.cache.v4) ---
 
 test("persistent tags cache: a fresh RepoMap reuses saved tags across 'launches' (repomap.py L217-222)", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-rm-disk-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-rm-disk-"));
   const p1 = join(dir, "one.ts"), p2 = join(dir, "two.ts");
   writeFileSync(p1, "export function oneThing() { return 1; }\n");
   writeFileSync(p2, "export function twoThing() { return oneThing(); }\n");
@@ -226,7 +226,7 @@ test("persistent tags cache: a fresh RepoMap reuses saved tags across 'launches'
   rm1.getTags(p2, "two.ts");
   expect(rm1.extractCount).toBe(2);
   rm1.saveCache();
-  expect(existsSync(join(dir, ".aion", "cache", "repomap.json"))).toBe(true);
+  expect(existsSync(join(dir, ".rovecode", "cache", "repomap.json"))).toBe(true);
   // "second launch": brand-new instance, warm disk -> ZERO extractions
   const rm2 = new RepoMap(dir);
   expect(rm2.getTags(p1, "one.ts")).toEqual(t1);
@@ -244,11 +244,11 @@ test("persistent tags cache: a fresh RepoMap reuses saved tags across 'launches'
 });
 
 test("persistent tags cache: corrupt cache file degrades to cold and heals on save", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-rm-corrupt-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-rm-corrupt-"));
   const p = join(dir, "c.ts");
   writeFileSync(p, "export function cThing() { return 1; }\n");
-  mkdirSync(join(dir, ".aion", "cache"), { recursive: true });
-  writeFileSync(join(dir, ".aion", "cache", "repomap.json"), "{not json!!");
+  mkdirSync(join(dir, ".rovecode", "cache"), { recursive: true });
+  writeFileSync(join(dir, ".rovecode", "cache", "repomap.json"), "{not json!!");
   const rm = new RepoMap(dir);
   expect(rm.getTags(p, "c.ts").map((t) => t.name)).toContain("cThing");
   expect(rm.extractCount).toBe(1); // corrupt -> cold, no crash (aider recreates, L241-264)
@@ -262,7 +262,7 @@ test("persistent tags cache: corrupt cache file degrades to cold and heals on sa
 // --- bounded enumeration (round-2 F2) ---
 
 test("findSrcFiles: file-count cap stops enumeration and reports capping", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-rm-cap-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-rm-cap-"));
   for (const n of ["a", "b", "c", "d", "e"]) writeFileSync(join(dir, `${n}.ts`), `export function ${n}Fn() {}\n`);
   const stats: SrcScanStats = { capped: false, viaGit: false };
   const files = findSrcFiles(dir, stats, 3);
@@ -277,7 +277,7 @@ test("findSrcFiles: file-count cap stops enumeration and reports capping", () =>
 });
 
 test("findSrcFiles: oversized files are skipped (minified-bundle parse guard)", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-rm-size-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-rm-size-"));
   writeFileSync(join(dir, "small.ts"), "export function smallFn() {}\n");
   writeFileSync(join(dir, "huge.ts"), `export const blob = "${"x".repeat(300 * 1024)}";\n`);
   const files = findSrcFiles(dir).map((f) => f.replaceAll("\\", "/"));
@@ -287,7 +287,7 @@ test("findSrcFiles: oversized files are skipped (minified-bundle parse guard)", 
 });
 
 test("findSrcFiles: git repo enumerates via ls-files and honors .gitignore", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-rm-git-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-rm-git-"));
   const init = spawnSync("git", ["-C", dir, "init", "-q"], { encoding: "utf8" });
   expect(init.status).toBe(0);
   writeFileSync(join(dir, ".gitignore"), "gen/\nvendored.ts\n");
@@ -317,7 +317,7 @@ test("buildRepoMapChunk: cap appends a deterministic truncation note inside the 
 // --- special entries vs source files (round-2 F5) ---
 
 test("readme.ts is a SOURCE file: its definitions survive instead of a bare special entry", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-rm-readme-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-rm-readme-"));
   writeFileSync(join(dir, "readme.ts"), "export function readmeHelperFn() { return 1; }\n");
   writeFileSync(join(dir, "use.ts"), "readmeHelperFn();\n");
   writeFileSync(join(dir, "README.md"), "# docs\n");
@@ -331,7 +331,7 @@ test("readme.ts is a SOURCE file: its definitions survive instead of a bare spec
 // --- docs-only repos (round-2 F6; aider returns early, repomap.py L113-114) ---
 
 test("docs-only repo yields NO chunk instead of a junk specials-only map", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-rm-docs-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-rm-docs-"));
   writeFileSync(join(dir, "README.md"), "# just docs\n");
   writeFileSync(join(dir, "package.json"), "{}\n");
   expect(buildRepoMapChunk(dir, 1000)).toBeNull();
@@ -339,7 +339,7 @@ test("docs-only repo yields NO chunk instead of a junk specials-only map", () =>
 });
 
 test("walker skips node_modules and dot/output dirs, sorted deterministic", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-rm-walk-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-rm-walk-"));
   mkdirSync(join(dir, "src"));
   mkdirSync(join(dir, "node_modules", "pkg"), { recursive: true });
   mkdirSync(join(dir, ".git"));

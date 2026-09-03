@@ -17,7 +17,7 @@ function msg(text: string, parentId: string | null, role: "user" | "assistant" =
 // ── MED-1b: explicit parentId must drive the hash chain ──
 
 test("append after a leaf move chains prevHash off the SUPPLIED parent, not the moved leaf", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-chain-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-chain-"));
   const s = new SessionStore(dir, "c1");
   const a = msg("A", null); s.append(a);
   const b = msg("B", a.id, "assistant"); s.append(b);
@@ -34,7 +34,7 @@ test("append after a leaf move chains prevHash off the SUPPLIED parent, not the 
 });
 
 test("append with parentId null (new root) chains off the empty hash", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-chain-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-chain-"));
   const s = new SessionStore(dir, "c2");
   const a = msg("A", null); s.append(a);
   const b = msg("B", a.id, "assistant"); s.append(b);
@@ -48,7 +48,7 @@ test("append with parentId null (new root) chains off the empty hash", () => {
 });
 
 test("reload flags chain-broken when prevHash disagrees with the parent's hash", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-chain-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-chain-"));
   const s = new SessionStore(dir, "c3");
   const a = msg("A", null); s.append(a);
   const b = msg("B", a.id, "assistant"); s.append(b);
@@ -65,7 +65,7 @@ test("reload flags chain-broken when prevHash disagrees with the parent's hash",
 });
 
 test("reload flags chain-broken for a root entry with a non-empty prevHash", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-chain-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-chain-"));
   const s = new SessionStore(dir, "c4");
   const a = msg("A", null); s.append(a);
   const la = readFileSync(join(dir, "c4", "entries.jsonl"), "utf8").split("\n").filter(Boolean)[0]!;
@@ -79,7 +79,7 @@ test("reload flags chain-broken for a root entry with a non-empty prevHash", () 
 });
 
 test("orphan parents do not double-report as chain-broken", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-chain-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-chain-"));
   const s = new SessionStore(dir, "c5");
   s.append(msg("A", null));
   const orphan = { id: randomUUID(), parentId: "no-such-entry", createdAt: Date.now(), prevHash: "whatever", hash: "", entry: msg("O", "no-such-entry") };
@@ -94,7 +94,7 @@ test("orphan parents do not double-report as chain-broken", () => {
 // ── LOW-4: listSessions guard fixtures ──
 
 test("listSessions skips bad-shape meta.json (array, string, wrong field types)", () => {
-  const root = mkdtempSync(join(tmpdir(), "aion-ls-"));
+  const root = mkdtempSync(join(tmpdir(), "rovecode-ls-"));
   const good = new SessionStore(root, "good-one");
   good.append(msg("real question", null));
   for (const [name, content] of [
@@ -112,7 +112,7 @@ test("listSessions skips bad-shape meta.json (array, string, wrong field types)"
 });
 
 test("listSessions survives bad JSONL lines and counts only object entries", () => {
-  const root = mkdtempSync(join(tmpdir(), "aion-ls-"));
+  const root = mkdtempSync(join(tmpdir(), "rovecode-ls-"));
   const s = new SessionStore(root, "noisy");
   s.append(msg("only valid entry", null));
   appendFileSync(join(root, "noisy", "entries.jsonl"), "not json at all\n42\n\"bare string\"\n");
@@ -124,7 +124,7 @@ test("listSessions survives bad JSONL lines and counts only object entries", () 
 });
 
 test("listSessions reports the DIRECTORY name, never a lying meta.id", () => {
-  const root = mkdtempSync(join(tmpdir(), "aion-ls-"));
+  const root = mkdtempSync(join(tmpdir(), "rovecode-ls-"));
   const s = new SessionStore(root, "honest-dir");
   s.append(msg("hi", null));
   const metaP = join(root, "honest-dir", "meta.json");

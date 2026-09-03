@@ -7,10 +7,10 @@ import {
   type CommitResult, type RollbackResult,
 } from "../../src/skills/versioned.ts";
 
-// A UNIQUE root per process: the old fixed `aion-versioned-test` path was shared by every
+// A UNIQUE root per process: the old fixed `rovecode-versioned-test` path was shared by every
 // concurrent `bun test` (several worktrees run suites at once here) and beforeAll's rm -rf wiped
 // another process's ledgers mid-test — the "version-conflict … current version 0" load flake.
-const root = mkdtempSync(join(tmpdir(), "aion-versioned-"));
+const root = mkdtempSync(join(tmpdir(), "rovecode-versioned-"));
 let caseId = 0;
 
 /** Fresh target path per test so cases stay independent. */

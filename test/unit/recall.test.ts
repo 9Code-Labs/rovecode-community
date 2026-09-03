@@ -48,7 +48,7 @@ function writeSession(root: string, sid: string, lines: string[]): void {
   writeFileSync(join(root, sid, "entries.jsonl"), lines.join("\n") + "\n");
 }
 
-function tmpRoot(): string { return mkdtempSync(join(tmpdir(), "aion-recall-")); }
+function tmpRoot(): string { return mkdtempSync(join(tmpdir(), "rovecode-recall-")); }
 
 function hitsOf(out: { data?: unknown }): RecallHit[] {
   return (out.data as { hits: RecallHit[] }).hits;

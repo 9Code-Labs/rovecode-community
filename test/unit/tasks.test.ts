@@ -70,8 +70,8 @@ function gatedChildren() {
 }
 
 function makeManager(stream: StreamFn, over: Partial<ChildRunnerDeps> = {}, opts: { max?: number; run?: TaskManagerOptions["run"]; maxDepth?: number } = {}) {
-  const root = mkdtempSync(join(tmpdir(), "aion-tasks-root-"));
-  const sessions = mkdtempSync(join(tmpdir(), "aion-tasks-sess-"));
+  const root = mkdtempSync(join(tmpdir(), "rovecode-tasks-root-"));
+  const sessions = mkdtempSync(join(tmpdir(), "rovecode-tasks-sess-"));
   const deps: ChildRunnerDeps = {
     defs: new Map([["worker", worker]]), stream, registryFactory: () => new ToolRegistry(),
     rootDir: root, sessionsDir: sessions, baseConfig: cfg, ...over,
@@ -480,7 +480,7 @@ async function waitUntil(pred: () => boolean): Promise<boolean> {
 }
 
 function tempGitRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), "aion-tasks-git-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-tasks-git-"));
   writeFileSync(join(dir, "tracked.txt"), "tracked\n");
   Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
   Bun.spawnSync(["git", "add", "."], { cwd: dir });
@@ -504,11 +504,11 @@ test("isolated task in a git repo (worktree isolation): a NEW file the child cre
     expect(info?.patchLines ?? 0).toBeGreaterThan(0);
     expect(existsSync(join(root, file))).toBe(true);
     expect(existsSync(join(process.cwd(), file))).toBe(false);
-    expect(existsSync(join(root, ".aion", "worktrees"))).toBe(true); // it WAS the worktree path
+    expect(existsSync(join(root, ".rovecode", "worktrees"))).toBe(true); // it WAS the worktree path
     // fix-wave L3: the isolation worktree is a DETACHED checkout — `worktree remove` leaves no
-    // `aion/task/<id>` branch behind in the root repo (mutation: `-b aion/task/${id}` → one stray
+    // `rovecode/task/<id>` branch behind in the root repo (mutation: `-b rovecode/task/${id}` → one stray
     // branch per isolated task), and the root is the only worktree left
-    expect(gitOut(["branch", "--list", "aion/task/*"], root)).toBe("");
+    expect(gitOut(["branch", "--list", "rovecode/task/*"], root)).toBe("");
     expect(gitOut(["worktree", "list", "--porcelain"], root).split("\n").filter((l) => l.startsWith("worktree ")).length).toBe(1);
   } finally {
     rmSync(join(process.cwd(), file), { force: true });
@@ -620,13 +620,13 @@ test("task_status result: a numeric-string timeout_ms is honored; garbage is a c
 
 // ---------- env + formatting ----------
 
-test("AION_TASKS_MAX: positive integers win, anything else falls back to the default", () => {
+test("ROVECODE_TASKS_MAX: positive integers win, anything else falls back to the default", () => {
   expect(DEFAULT_TASKS_MAX).toBe(3);
-  expect(tasksMaxFromEnv({ AION_TASKS_MAX: "5" })).toBe(5);
-  expect(tasksMaxFromEnv({ AION_TASKS_MAX: "0" })).toBe(3);
-  expect(tasksMaxFromEnv({ AION_TASKS_MAX: "-2" })).toBe(3);
-  expect(tasksMaxFromEnv({ AION_TASKS_MAX: "abc" })).toBe(3);
-  expect(tasksMaxFromEnv({ AION_TASKS_MAX: "2.5" })).toBe(3);
+  expect(tasksMaxFromEnv({ ROVECODE_TASKS_MAX: "5" })).toBe(5);
+  expect(tasksMaxFromEnv({ ROVECODE_TASKS_MAX: "0" })).toBe(3);
+  expect(tasksMaxFromEnv({ ROVECODE_TASKS_MAX: "-2" })).toBe(3);
+  expect(tasksMaxFromEnv({ ROVECODE_TASKS_MAX: "abc" })).toBe(3);
+  expect(tasksMaxFromEnv({ ROVECODE_TASKS_MAX: "2.5" })).toBe(3);
   expect(tasksMaxFromEnv({})).toBe(3);
   expect(new TaskManager({ deps: () => null, maxConcurrent: 0 }).maxConcurrent).toBe(1);
 });

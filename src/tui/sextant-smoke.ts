@@ -1,4 +1,4 @@
-/** `aion smoke-tui --sextant` (port #44): the sextant surface end-to-end through the real pipeline —
+/** `rovecode smoke-tui --sextant` (port #44): the sextant surface end-to-end through the real pipeline —
  *  agentLoop → SextantRenderer → Screen → an in-memory TerminalIO at 160×44 (no @xterm/headless, so it
  *  also runs from an installed tree or the compiled binary). Gated session: a scripted write, then an
  *  anchored edit of that file, each raise the approval card and are allowed once the card is on
@@ -34,9 +34,9 @@ const LEAVE: readonly string[] = ["\x1b[?1049l", "\x1b[?25h", "\x1b[?1006l", "\x
 
 /** drive the surface headlessly and report; never exits the process (runSextantSmoke does) */
 export async function sextantSmoke(opts: { cols?: number; rows?: number; deadlineMs?: number } = {}): Promise<SextantSmokeResult> {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-sextant-smoke-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-sextant-smoke-"));
   const io = new MemoryIO(opts.cols ?? 160, opts.rows ?? 44, { COLORTERM: "truecolor" });
-  const renderer = new SextantRenderer({ io, cwd, pet: "nimbus" });
+  const renderer = new SextantRenderer({ io, cwd, pet: "rovecode" });
   const probe = join(cwd, "smoke.txt");
   const written = "smoke-ok\n";
   const stream = mockStream({
@@ -48,7 +48,7 @@ export async function sextantSmoke(opts: { cols?: number; rows?: number; deadlin
   });
   const reasons: string[] = [];
   const app = runTui({ renderer, stream, cwd, yolo: false, exitOnClose: false, model: "scripted" });
-  io.feed("hello aion\r");
+  io.feed("hello rovecode\r");
   const deadline = Date.now() + (opts.deadlineMs ?? 15_000);
   const cardFrames: string[] = [];
   let frame = "", done = false;
@@ -63,7 +63,7 @@ export async function sextantSmoke(opts: { cols?: number; rows?: number; deadlin
   if (!done) reasons.push(`final frame not reached (approval cards seen ${cardFrames.length}/${CARDS.length})`);
   if (!/~ edit\s+smoke\.txt/.test(frame)) reasons.push("no `~ edit smoke.txt` tool row in the messages panel");
   if (!/\+ write\s+smoke\.txt/.test(frame)) reasons.push("no `+ write smoke.txt` tool row in the messages panel");
-  for (const p of ["─ files ─", "─ code ─", "─ messages ─", "─ plan ─", "─ usage ─", "─ nimbus ─"]) if (!frame.includes(p) && !(p === "─ code ─" && frame.includes("─ diff ─"))) reasons.push(`panel ${p.trim()} missing at ${io.cols}×${io.rows}`);
+  for (const p of ["─ files ─", "─ code ─", "─ messages ─", "─ plan ─", "─ usage ─", "─ rovecode ─"]) if (!frame.includes(p) && !(p === "─ code ─" && frame.includes("─ diff ─"))) reasons.push(`panel ${p.trim()} missing at ${io.cols}×${io.rows}`);
   const wasActive = renderer.active;
   io.feed("\x03");
   await app;
@@ -83,7 +83,7 @@ export async function runSextantSmoke(): Promise<void> {
   console.log(r.frame);
   console.log("─────────────────────────────────────────────────────────────────────────────────");
   console.log(r.ok
-    ? "smoke-tui --sextant: PASS (files · code · messages · plan · usage · nimbus + two approval cards through the full pipeline; terminal restored on quit)"
+    ? "smoke-tui --sextant: PASS (files · code · messages · plan · usage · rovecode + two approval cards through the full pipeline; terminal restored on quit)"
     : `smoke-tui --sextant: FAIL — ${r.reasons.join("; ")}`);
   process.exit(r.ok ? 0 : 1);
 }

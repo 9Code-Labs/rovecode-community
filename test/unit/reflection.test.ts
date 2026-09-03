@@ -3,7 +3,7 @@
  *  identical-consecutive dedupe (with and without the loop guard's warn suffix), no nudge for aborted
  *  results / non-mutating tools / clean successes, the LSP diagnostics path (against the REAL gate
  *  formatter), pre_run reset + run-boundary sweep, the env knobs, and the runtime registration door
- *  (AION_HOME pinned to a temp dir: the developer's real ~/.aion/hooks.* must never load here). */
+ *  (ROVECODE_HOME pinned to a temp dir: the developer's real ~/.rovecode/hooks.* must never load here). */
 
 import { test, expect } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -83,8 +83,8 @@ test("identical consecutive failure → not re-pushed; the loop guard's warn suf
   const X = "Edit rejected: anchor mismatch at /w/f.txt:2 — same thing";
   r.post("edit", fail(X));
   r.post("edit", fail(X));
-  r.post("edit", fail(`${X}\n\n[loop-guard] [aion loop guard: this is the 3rd consecutive call to edit with identical arguments. This looks like a loop — change arguments, use a different tool, or proceed with what you have.]`));
-  r.post("edit", fail(`${X}\n\n[loop-guard] [aion loop guard: this is the 4th consecutive call to edit with identical arguments. …]`));
+  r.post("edit", fail(`${X}\n\n[loop-guard] [rovecode loop guard: this is the 3rd consecutive call to edit with identical arguments. This looks like a loop — change arguments, use a different tool, or proceed with what you have.]`));
+  r.post("edit", fail(`${X}\n\n[loop-guard] [rovecode loop guard: this is the 4th consecutive call to edit with identical arguments. …]`));
   expect(r.nudges.length).toBe(1);
   r.post("edit", ok("applied 1 edit(s); new TAG abcd")); // clean success ends the streak
   r.post("edit", fail(X));
@@ -188,11 +188,11 @@ test("ownership (#26 MED-A): with `owns`, a run the set does not own gets no nud
 });
 
 test("runtime door (#26 MED-A): the built-in set owns the ACTIVE session store's runs only — a child-shaped ctx (another store id, the same hooks) lands nothing and sweeps nothing; setSessionStore re-points ownership (TUI session switch)", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-refl-own-"));
-  const home = mkdtempSync(join(tmpdir(), "aion-refl-ownhome-"));
-  const savedHome = process.env.AION_HOME, savedRefl = process.env.AION_REFLECTION;
-  process.env.AION_HOME = home;
-  delete process.env.AION_REFLECTION;
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-refl-own-"));
+  const home = mkdtempSync(join(tmpdir(), "rovecode-refl-ownhome-"));
+  const savedHome = process.env.ROVECODE_HOME, savedRefl = process.env.ROVECODE_REFLECTION;
+  process.env.ROVECODE_HOME = home;
+  delete process.env.ROVECODE_REFLECTION;
   try {
     const rt = createRuntime({ cwd, stream: null });
     await rt.hooks.ready;
@@ -204,7 +204,7 @@ test("runtime door (#26 MED-A): the built-in set owns the ACTIVE session store's
     expect(rt.steering.size).toBe(1); // a child's boundary sweeps nothing
     await rt.hooks.run("post_run", { cwd, sessionId: rt.sessionId, runId: "r1" }, { status: "budget", summary: "" });
     expect(rt.steering.size).toBe(0);
-    const other = new SessionStore(join(cwd, ".aion", "sessions"), randomUUID());
+    const other = new SessionStore(join(cwd, ".rovecode", "sessions"), randomUUID());
     rt.setSessionStore(other);
     await rt.hooks.run("post_tool", { cwd, sessionId: other.id, runId: "r2" }, call("edit"), fail(REJECTED));
     expect(rt.steering.size).toBe(1); // the switched-to session owns the queue now…
@@ -214,8 +214,8 @@ test("runtime door (#26 MED-A): the built-in set owns the ACTIVE session store's
     await rt.hooks.close();
     await rt.mcp?.close();
   } finally {
-    if (savedHome === undefined) delete process.env.AION_HOME; else process.env.AION_HOME = savedHome;
-    if (savedRefl === undefined) delete process.env.AION_REFLECTION; else process.env.AION_REFLECTION = savedRefl;
+    if (savedHome === undefined) delete process.env.ROVECODE_HOME; else process.env.ROVECODE_HOME = savedHome;
+    if (savedRefl === undefined) delete process.env.ROVECODE_REFLECTION; else process.env.ROVECODE_REFLECTION = savedRefl;
     rmSync(cwd, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
   }
@@ -237,34 +237,34 @@ test("through a HookRunner: the set runs as a post_tool hook with no decision an
   expect(runner.warnings).toEqual([]);
 });
 
-test("env knobs: AION_REFLECTION=0 disables; AION_REFLECTION_MAX parses a non-negative integer, blank/invalid/negative fall back to 2; createReflectionHooks reads it when no max is given", () => {
+test("env knobs: ROVECODE_REFLECTION=0 disables; ROVECODE_REFLECTION_MAX parses a non-negative integer, blank/invalid/negative fall back to 2; createReflectionHooks reads it when no max is given", () => {
   expect(reflectionEnabled({})).toBe(true);
-  expect(reflectionEnabled({ AION_REFLECTION: "1" })).toBe(true);
-  expect(reflectionEnabled({ AION_REFLECTION: "0" })).toBe(false);
+  expect(reflectionEnabled({ ROVECODE_REFLECTION: "1" })).toBe(true);
+  expect(reflectionEnabled({ ROVECODE_REFLECTION: "0" })).toBe(false);
   expect(reflectionMax({})).toBe(2);
-  expect(reflectionMax({ AION_REFLECTION_MAX: "" })).toBe(2);
-  expect(reflectionMax({ AION_REFLECTION_MAX: "abc" })).toBe(2);
-  expect(reflectionMax({ AION_REFLECTION_MAX: "-1" })).toBe(2);
-  expect(reflectionMax({ AION_REFLECTION_MAX: "0" })).toBe(0);
-  expect(reflectionMax({ AION_REFLECTION_MAX: "3.7" })).toBe(3);
-  const saved = process.env.AION_REFLECTION_MAX;
-  process.env.AION_REFLECTION_MAX = "1";
+  expect(reflectionMax({ ROVECODE_REFLECTION_MAX: "" })).toBe(2);
+  expect(reflectionMax({ ROVECODE_REFLECTION_MAX: "abc" })).toBe(2);
+  expect(reflectionMax({ ROVECODE_REFLECTION_MAX: "-1" })).toBe(2);
+  expect(reflectionMax({ ROVECODE_REFLECTION_MAX: "0" })).toBe(0);
+  expect(reflectionMax({ ROVECODE_REFLECTION_MAX: "3.7" })).toBe(3);
+  const saved = process.env.ROVECODE_REFLECTION_MAX;
+  process.env.ROVECODE_REFLECTION_MAX = "1";
   try {
     const r = rig();
     r.post("edit", fail("Edit rejected: A"));
     r.post("edit", fail("Edit rejected: B"));
     expect(r.nudges.length).toBe(1);
   } finally {
-    if (saved === undefined) delete process.env.AION_REFLECTION_MAX; else process.env.AION_REFLECTION_MAX = saved;
+    if (saved === undefined) delete process.env.ROVECODE_REFLECTION_MAX; else process.env.ROVECODE_REFLECTION_MAX = saved;
   }
 });
 
-test("runtime door: createRuntime attaches the built-in set once (a failed edit through rt.hooks lands in rt.steering); AION_REFLECTION=0 → not attached", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-refl-rt-"));
-  const home = mkdtempSync(join(tmpdir(), "aion-refl-rthome-"));
-  const savedHome = process.env.AION_HOME, savedRefl = process.env.AION_REFLECTION;
-  process.env.AION_HOME = home; // hermetic user scope
-  delete process.env.AION_REFLECTION;
+test("runtime door: createRuntime attaches the built-in set once (a failed edit through rt.hooks lands in rt.steering); ROVECODE_REFLECTION=0 → not attached", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-refl-rt-"));
+  const home = mkdtempSync(join(tmpdir(), "rovecode-refl-rthome-"));
+  const savedHome = process.env.ROVECODE_HOME, savedRefl = process.env.ROVECODE_REFLECTION;
+  process.env.ROVECODE_HOME = home; // hermetic user scope
+  delete process.env.ROVECODE_REFLECTION;
   try {
     const rt = createRuntime({ cwd, stream: null });
     await rt.hooks.ready;
@@ -278,7 +278,7 @@ test("runtime door: createRuntime attaches the built-in set once (a failed edit 
     expect(rt.hooks.warnings).toEqual([]);
     await rt.hooks.close();
     await rt.mcp?.close();
-    process.env.AION_REFLECTION = "0";
+    process.env.ROVECODE_REFLECTION = "0";
     const off = createRuntime({ cwd, stream: null });
     await off.hooks.ready;
     expect(off.hooks.size).toBe(0);
@@ -288,8 +288,8 @@ test("runtime door: createRuntime attaches the built-in set once (a failed edit 
     await off.hooks.close();
     await off.mcp?.close();
   } finally {
-    if (savedHome === undefined) delete process.env.AION_HOME; else process.env.AION_HOME = savedHome;
-    if (savedRefl === undefined) delete process.env.AION_REFLECTION; else process.env.AION_REFLECTION = savedRefl;
+    if (savedHome === undefined) delete process.env.ROVECODE_HOME; else process.env.ROVECODE_HOME = savedHome;
+    if (savedRefl === undefined) delete process.env.ROVECODE_REFLECTION; else process.env.ROVECODE_REFLECTION = savedRefl;
     rmSync(cwd, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
   }

@@ -45,7 +45,7 @@ export function usageOf(store: SessionStore): { tokensIn: number; tokensOut: num
   return { tokensIn, tokensOut };
 }
 
-/** `aion --resume <id>` boot resolution, the /resume rule applied before the runtime exists:
+/** `rovecode --resume <id>` boot resolution, the /resume rule applied before the runtime exists:
  *  an exact id or a brand-new id passes through, a UNIQUE prefix resolves, an AMBIGUOUS prefix
  *  must not silently pick one — start fresh (id undefined) and say so in `warn`. */
 export function resolveBootSession(sessionsDir: string, id: string | undefined): { id: string | undefined; warn?: string } {
@@ -60,7 +60,7 @@ export function resolveBootSession(sessionsDir: string, id: string | undefined):
 
 export interface SessionCmdCtx {
   renderer: Renderer;
-  /** <cwd>/.aion/sessions — where listSessions looks */
+  /** <cwd>/.rovecode/sessions — where listSessions looks */
   sessionsDir: string;
   busy(): boolean;
   /** the ACTIVE session store, read live: /sessions and a root /rewind swap it */

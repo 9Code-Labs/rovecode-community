@@ -49,7 +49,7 @@ test("plan: empty list → 'no plan yet', no counts in the title, no next block"
 });
 
 test("plan follows a REAL todos.json through loadTodos; a corrupt file renders its note and never throws", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-sx-plan-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-sx-plan-"));
   try {
     const s = state();
     setPlan(s, loadTodos(dir)); // missing file: empty, no note

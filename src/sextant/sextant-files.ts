@@ -24,7 +24,7 @@ export const MAX_FILES = 2000;
 export const MAX_FILE_BYTES = 512 * 1024;
 /** git's binary heuristic: a NUL within the first 8000 bytes */
 const BINARY_SNIFF = 8000;
-const SKIP_DIRS = new Set(["node_modules", ".git", ".aion", "dist", "build", "out", "coverage", ".cache"]);
+const SKIP_DIRS = new Set(["node_modules", ".git", ".rovecode", "dist", "build", "out", "coverage", ".cache"]);
 const DIFF_CONTEXT = 3;
 
 export interface RepoSnapshot {

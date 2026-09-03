@@ -1,5 +1,5 @@
 /** Port #44 — sextant-io.ts: the surface choice (truecolor / 256-color heuristics, the 100×30 floor, the
- *  40×12 Screen floor even when forced, the TTY gate, AION_TUI / --classic overrides), MemoryIO, ProcessIO
+ *  40×12 Screen floor even when forced, the TTY gate, ROVECODE_TUI / --classic overrides), MemoryIO, ProcessIO
  *  raw-mode ordering incl. the Windows VT-input helper (win32 only, AFTER setRawMode), utf8 decoding of
  *  Buffer chunks, resize, and pickRenderer (incl. the SGR mode it hands the renderer). */
 
@@ -82,7 +82,7 @@ test("fitsFloor(): the 40×12 Screen floor, inclusive; an unknown size counts as
   expect(fitsFloor({ isTTY: true, columns: 200 })).toBe(true);
 });
 
-test("chooseSurface() matrix: heuristics by default (truecolor or 256); AION_TUI overrides both ways but a forced sextant still needs a TTY at or above 40×12; a non-TTY never gets sextant; --classic wins over everything", () => {
+test("chooseSurface() matrix: heuristics by default (truecolor or 256); ROVECODE_TUI overrides both ways but a forced sextant still needs a TTY at or above 40×12; a non-TTY never gets sextant; --classic wins over everything", () => {
   const tc = { COLORTERM: "truecolor" };
   expect(chooseSurface({ classic: false }, tc, tty(160, 44))).toBe("sextant");
   expect(chooseSurface({ classic: false }, { TERM: "xterm-256color" }, tty(160, 44))).toBe("sextant");      // 256-color terminal
@@ -90,25 +90,25 @@ test("chooseSurface() matrix: heuristics by default (truecolor or 256); AION_TUI
   expect(chooseSurface({ classic: false }, {}, tty(160, 44))).toBe("classic");
   expect(chooseSurface({ classic: false }, { TERM: "xterm" }, tty(160, 44))).toBe("classic");
   expect(chooseSurface({ classic: false }, tc, { isTTY: false, columns: 160, rows: 44 })).toBe("classic");
-  expect(chooseSurface({ classic: false }, { ...tc, AION_TUI: "classic" }, tty(160, 44))).toBe("classic");   // forced classic on a capable TTY
-  expect(chooseSurface({ classic: false }, { AION_TUI: "sextant" }, tty(99, 20))).toBe("sextant");           // forced sextant skips the 100×30 + color rules
-  expect(chooseSurface({ classic: false }, { AION_TUI: " Sextant " }, tty(80, 24))).toBe("sextant");         // trimmed, case-insensitive
-  expect(chooseSurface({ classic: false }, { AION_TUI: "sextant" }, tty(40, 12))).toBe("sextant");           // exactly the Screen floor
-  expect(chooseSurface({ classic: false }, { AION_TUI: "sextant" }, tty(39, 12))).toBe("classic");           // under the floor the buffer would outgrow the terminal
-  expect(chooseSurface({ classic: false }, { AION_TUI: "sextant" }, tty(40, 11))).toBe("classic");
-  expect(chooseSurface({ classic: false }, { AION_TUI: "sextant" }, tty(30, 10))).toBe("classic");           // the critic's 30×10 case
-  expect(chooseSurface({ classic: false }, { AION_TUI: "sextant" }, { isTTY: true })).toBe("sextant");       // unknown size = the 80×24 fallback
-  expect(chooseSurface({ classic: false }, { AION_TUI: "sextant" }, { isTTY: false, columns: 160, rows: 44 })).toBe("classic"); // never on a pipe
-  expect(chooseSurface({ classic: true }, { ...tc, AION_TUI: "sextant" }, tty(160, 44))).toBe("classic");   // --classic wins
-  expect(chooseSurface({ classic: false }, { ...tc, AION_TUI: "bogus" }, tty(160, 44))).toBe("sextant");    // an unknown value = heuristics
+  expect(chooseSurface({ classic: false }, { ...tc, ROVECODE_TUI: "classic" }, tty(160, 44))).toBe("classic");   // forced classic on a capable TTY
+  expect(chooseSurface({ classic: false }, { ROVECODE_TUI: "sextant" }, tty(99, 20))).toBe("sextant");           // forced sextant skips the 100×30 + color rules
+  expect(chooseSurface({ classic: false }, { ROVECODE_TUI: " Sextant " }, tty(80, 24))).toBe("sextant");         // trimmed, case-insensitive
+  expect(chooseSurface({ classic: false }, { ROVECODE_TUI: "sextant" }, tty(40, 12))).toBe("sextant");           // exactly the Screen floor
+  expect(chooseSurface({ classic: false }, { ROVECODE_TUI: "sextant" }, tty(39, 12))).toBe("classic");           // under the floor the buffer would outgrow the terminal
+  expect(chooseSurface({ classic: false }, { ROVECODE_TUI: "sextant" }, tty(40, 11))).toBe("classic");
+  expect(chooseSurface({ classic: false }, { ROVECODE_TUI: "sextant" }, tty(30, 10))).toBe("classic");           // the critic's 30×10 case
+  expect(chooseSurface({ classic: false }, { ROVECODE_TUI: "sextant" }, { isTTY: true })).toBe("sextant");       // unknown size = the 80×24 fallback
+  expect(chooseSurface({ classic: false }, { ROVECODE_TUI: "sextant" }, { isTTY: false, columns: 160, rows: 44 })).toBe("classic"); // never on a pipe
+  expect(chooseSurface({ classic: true }, { ...tc, ROVECODE_TUI: "sextant" }, tty(160, 44))).toBe("classic");   // --classic wins
+  expect(chooseSurface({ classic: false }, { ...tc, ROVECODE_TUI: "bogus" }, tty(160, 44))).toBe("sextant");    // an unknown value = heuristics
 });
 
-test("pickRenderer(): undefined for classic (runTui builds the PiTuiRenderer) and for a forced sextant under the floor; a SextantRenderer when sextant is chosen, carrying AION_THEME and the SGR mode — truecolor on a truecolor terminal, the 256 quantizer on a 256-color one", () => {
-  expect(pickRenderer({ classic: true }, { AION_TUI: "sextant" }, new FakeStdout())).toBeUndefined();
+test("pickRenderer(): undefined for classic (runTui builds the PiTuiRenderer) and for a forced sextant under the floor; a SextantRenderer when sextant is chosen, carrying ROVECODE_THEME and the SGR mode — truecolor on a truecolor terminal, the 256 quantizer on a 256-color one", () => {
+  expect(pickRenderer({ classic: true }, { ROVECODE_TUI: "sextant" }, new FakeStdout())).toBeUndefined();
   expect(pickRenderer({ classic: false }, {}, new FakeStdout())).toBeUndefined();               // no color evidence → classic
   const tiny = new FakeStdout(); tiny.columns = 30; tiny.rows = 10;
-  expect(pickRenderer({ classic: false }, { AION_TUI: "sextant" }, tiny)).toBeUndefined();     // (mutation: forced ignores the floor → a renderer)
-  const r = pickRenderer({ classic: false, pet: "stormy" }, { AION_TUI: "sextant", AION_THEME: "ember" }, new FakeStdout());
+  expect(pickRenderer({ classic: false }, { ROVECODE_TUI: "sextant" }, tiny)).toBeUndefined();     // (mutation: forced ignores the floor → a renderer)
+  const r = pickRenderer({ classic: false, pet: "stormy" }, { ROVECODE_TUI: "sextant", ROVECODE_THEME: "ember" }, new FakeStdout());
   expect(r).toBeInstanceOf(SextantRenderer);
   const sx = r as SextantRenderer;
   expect(sx.themeName).toBe("ember");
@@ -177,11 +177,11 @@ test("vtInputCandidates(): pi-tui's prebuilt console-mode helper resolves from s
   expect(c.some((p) => /vendor[\\/]pi-tui[\\/]native[\\/]win32[\\/]prebuilds[\\/]win32-x64[\\/]win32-console-mode\.node$/.test(p))).toBe(true);
   expect(c.some((p) => existsSync(p))).toBe(true);
   expect(vtInputCandidates("arm64").some((p) => p.includes("win32-arm64"))).toBe(true);
-  expect(vtInputCandidates("x64", "C:/bin/aion.exe").some((p) => p.replace(/\\/g, "/").startsWith("C:/bin/native/"))).toBe(true); // beside a compiled binary
+  expect(vtInputCandidates("x64", "C:/bin/rovecode.exe").some((p) => p.replace(/\\/g, "/").startsWith("C:/bin/native/"))).toBe(true); // beside a compiled binary
 });
 
 test("MemoryIO: records writes, replays fed input to subscribers, emulates resizes, tracks raw + listeners", () => {
-  const io = new MemoryIO(100, 30, { AION_PET: "0" });
+  const io = new MemoryIO(100, 30, { ROVECODE_PET: "0" });
   const got: string[] = [];
   const sizes: [number, number][] = [];
   const off = io.onInput((c) => got.push(c));
@@ -198,5 +198,5 @@ test("MemoryIO: records writes, replays fed input to subscribers, emulates resiz
   expect(io.writes).toEqual(["a", "b"]);
   off(); offR();
   expect(io.listeners).toBe(0);
-  expect(io.env.AION_PET).toBe("0");
+  expect(io.env.ROVECODE_PET).toBe("0");
 });

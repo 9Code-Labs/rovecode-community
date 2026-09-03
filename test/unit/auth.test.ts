@@ -1,6 +1,6 @@
-/** Provider credential store tests (port #37): CRUD in a temp AION_HOME, env-vs-stored
+/** Provider credential store tests (port #37): CRUD in a temp ROVECODE_HOME, env-vs-stored
  *  precedence pinned in BOTH directions, redaction (a canary secret must never surface —
- *  in-process AND through the real `aion auth list` CLI), key-name resolution from the
+ *  in-process AND through the real `rovecode auth list` CLI), key-name resolution from the
  *  models.dev snapshot, file location, and error paths. Discriminating by construction:
  *  reverting the redactSecret body or swapping the stored/env passes in resolveProvider
  *  flips named tests here. */
@@ -22,7 +22,7 @@ const CANARY = "CANARY-hunter2-3f9a1b7c-do-not-print";
 
 // every env var resolveProvider or the auth store consults — saved/cleared per test
 const ENV_KEYS = [
-  "AION_HOME", "AION_BASE_URL", "AION_API_KEY", "AION_MODEL", "OPENAI_API_KEY",
+  "ROVECODE_HOME", "ROVECODE_BASE_URL", "ROVECODE_API_KEY", "ROVECODE_MODEL", "OPENAI_API_KEY",
   ...listBuiltinProviders().map((p) => p.envKey),
 ];
 const savedEnv = new Map<string, string | undefined>();
@@ -30,8 +30,8 @@ let home = "";
 
 beforeEach(() => {
   for (const k of ENV_KEYS) { savedEnv.set(k, process.env[k]); delete process.env[k]; }
-  home = mkdtempSync(join(tmpdir(), "aion-auth-"));
-  process.env.AION_HOME = home;
+  home = mkdtempSync(join(tmpdir(), "rovecode-auth-"));
+  process.env.ROVECODE_HOME = home;
 });
 
 afterEach(() => {
@@ -47,9 +47,9 @@ afterEach(() => {
 function runCli(args: string[], stdin?: string): { stdout: string; stderr: string; code: number } {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
-    if (v !== undefined && !/_API_KEY$/.test(k) && !/^AION_/.test(k)) env[k] = v;
+    if (v !== undefined && !/_API_KEY$/.test(k) && !/^ROVECODE_/.test(k)) env[k] = v;
   }
-  env.AION_HOME = home;
+  env.ROVECODE_HOME = home;
   const r = Bun.spawnSync([process.execPath, MAIN, ...args], {
     cwd: ROOT, env,
     stdin: stdin === undefined ? "ignore" : Buffer.from(stdin),
@@ -59,15 +59,15 @@ function runCli(args: string[], stdin?: string): { stdout: string; stderr: strin
 
 // ---------- file location ----------
 
-test("credentials file lives at $AION_HOME/credentials.json", () => {
+test("credentials file lives at $ROVECODE_HOME/credentials.json", () => {
   saveCredential("anthropic", "sk-ant-roundtrip-0123456789");
   expect(credentialsPath()).toBe(join(home, "credentials.json"));
   expect(existsSync(join(home, "credentials.json"))).toBe(true);
 });
 
-test("default path (no AION_HOME) is ~/.aion/credentials.json — path only, nothing written", () => {
-  delete process.env.AION_HOME;
-  expect(credentialsPath()).toBe(join(homedir(), ".aion", "credentials.json"));
+test("default path (no ROVECODE_HOME) is ~/.rovecode/credentials.json — path only, nothing written", () => {
+  delete process.env.ROVECODE_HOME;
+  expect(credentialsPath()).toBe(join(homedir(), ".rovecode", "credentials.json"));
 });
 
 test("written file has restrictive permissions (POSIX 0o600; best-effort on Windows)", () => {
@@ -182,10 +182,10 @@ test("precedence: same provider with both -> the STORED value wins over the env 
   expect(cfg?.apiKey).toBe("sk-stored-oai-0123456789");
 });
 
-test("precedence: explicit AION_BASE_URL/AION_API_KEY pair still beats stored creds", () => {
+test("precedence: explicit ROVECODE_BASE_URL/ROVECODE_API_KEY pair still beats stored creds", () => {
   saveCredential("anthropic", "sk-stored-ant-0123456789");
-  process.env.AION_BASE_URL = "https://example.test/v1";
-  process.env.AION_API_KEY = "explicit-pair-key-0123456789";
+  process.env.ROVECODE_BASE_URL = "https://example.test/v1";
+  process.env.ROVECODE_API_KEY = "explicit-pair-key-0123456789";
   const cfg = resolveProvider();
   expect(cfg?.id).toBe("custom");
   expect(cfg?.apiKey).toBe("explicit-pair-key-0123456789");
@@ -199,7 +199,7 @@ test("precedence: env-only still resolves (regression) and nothing-at-all is nul
   expect(cfg?.apiKey).toBe("env-ds-key-0123456789");
 });
 
-// ---------- readSecret: the `aion auth set` prompt, driven in-process ----------
+// ---------- readSecret: the `rovecode auth set` prompt, driven in-process ----------
 
 const PROMPT = "ANTHROPIC_API_KEY for anthropic: ";
 type FakeTty = PassThrough & { isTTY: boolean; isRaw: boolean; setRawMode?: (m: boolean) => unknown };
@@ -262,7 +262,7 @@ test("readSecret (piped stdin): no prompt, nothing written, trimmed line; EOF wi
   expect(cap2.text()).toBe("");
 });
 
-// ---------- CLI end-to-end (real main.ts subprocess, temp AION_HOME) ----------
+// ---------- CLI end-to-end (real main.ts subprocess, temp ROVECODE_HOME) ----------
 
 test("cli: auth set stores the piped secret without printing it; list redacts it", () => {
   const set = runCli(["auth", "set", "anthropic"], `${CANARY}\n`);

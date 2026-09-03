@@ -4,7 +4,7 @@
  *  - env chain A,B; A answers 429, 429, 200 → A serves, the stub saw A three times, and the
  *    router emitted ZERO "router:" notes (retries are not advances) — each retry IS visible as a
  *    "retry:" note in the same drain (wiring pass: onRetry → routerNotes)
- *  - A answers 429 forever, AION_RETRY_MAX=2 → A is tried 3× (exhaust) THEN B serves — exactly
+ *  - A answers 429 forever, ROVECODE_RETRY_MAX=2 → A is tried 3× (exhaust) THEN B serves — exactly
  *    one note; the swapped composition (retry OUTSIDE the router) would show A once
  *  - abort mid-backoff (Retry-After: 30 keeps the sleep long) → the run stops promptly, the stub
  *    never sees a second request, no note */
@@ -52,22 +52,22 @@ const server = Bun.serve({
 // ---------- env harness (bun runs test files in one process — always restore) ----------
 
 const ENV_KEYS = [
-  "AION_BASE_URL", "AION_API_KEY", "AION_MODEL",
-  "AION_MODEL_DEFAULT", "AION_MODEL_SMOL", "AION_MODEL_PLAN", "AION_MODEL_COMMIT", "AION_MODEL_TASK",
-  "AION_NO_TOOL_MIDDLEWARE", "AION_TOOL_MIDDLEWARE", "AION_NO_REPOMAP",
-  "AION_RETRY_MAX", "AION_RETRY_BASE_MS",
+  "ROVECODE_BASE_URL", "ROVECODE_API_KEY", "ROVECODE_MODEL",
+  "ROVECODE_MODEL_DEFAULT", "ROVECODE_MODEL_SMOL", "ROVECODE_MODEL_PLAN", "ROVECODE_MODEL_COMMIT", "ROVECODE_MODEL_TASK",
+  "ROVECODE_NO_TOOL_MIDDLEWARE", "ROVECODE_TOOL_MIDDLEWARE", "ROVECODE_NO_REPOMAP",
+  "ROVECODE_RETRY_MAX", "ROVECODE_RETRY_BASE_MS",
 ] as const;
 const savedEnv = new Map<string, string | undefined>();
 const tmpDirs: string[] = [];
 
 beforeAll(() => {
   for (const k of ENV_KEYS) { savedEnv.set(k, process.env[k]); delete process.env[k]; }
-  process.env.AION_BASE_URL = `http://127.0.0.1:${server.port}/v1`;
-  process.env.AION_API_KEY = "test-key";
-  process.env.AION_MODEL_DEFAULT = "custom/alpha, custom/beta";
-  process.env.AION_NO_REPOMAP = "1"; // hermetic + fast buildDef in tmp cwds
-  process.env.AION_RETRY_MAX = "2"; // 1 attempt + 2 retries per candidate
-  process.env.AION_RETRY_BASE_MS = "1"; // REAL backoff with millisecond caps — the schedule itself is pinned in retry.test.ts
+  process.env.ROVECODE_BASE_URL = `http://127.0.0.1:${server.port}/v1`;
+  process.env.ROVECODE_API_KEY = "test-key";
+  process.env.ROVECODE_MODEL_DEFAULT = "custom/alpha, custom/beta";
+  process.env.ROVECODE_NO_REPOMAP = "1"; // hermetic + fast buildDef in tmp cwds
+  process.env.ROVECODE_RETRY_MAX = "2"; // 1 attempt + 2 retries per candidate
+  process.env.ROVECODE_RETRY_BASE_MS = "1"; // REAL backoff with millisecond caps — the schedule itself is pinned in retry.test.ts
 });
 
 afterAll(() => {
@@ -83,7 +83,7 @@ afterAll(() => {
 // ---------- helpers ----------
 
 function tmpCwd(): string {
-  const d = mkdtempSync(join(tmpdir(), "aion-retry-wiring-"));
+  const d = mkdtempSync(join(tmpdir(), "rovecode-retry-wiring-"));
   tmpDirs.push(d);
   return d;
 }
@@ -146,7 +146,7 @@ test("real wiring: 429, 429, 200 on the chain head → the head serves after two
 
 // ---------- exhaust THEN advance ----------
 
-test("real wiring: 429 forever on the head → retries EXHAUST (1 + AION_RETRY_MAX) THEN the chain advances; exactly one note", async () => {
+test("real wiring: 429 forever on the head → retries EXHAUST (1 + ROVECODE_RETRY_MAX) THEN the chain advances; exactly one note", async () => {
   script("alpha", [{ status: 429 }]);
   const rt = createRuntime({ cwd: tmpCwd() });
   const before = modelsSeen.length;

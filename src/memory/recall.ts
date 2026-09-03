@@ -1,5 +1,5 @@
 /** Cross-session recall (port #17): tokenized full-text search over
- *  `.aion/sessions/<id>/entries.jsonl` message text, exposed as a `recall` tool.
+ *  `.rovecode/sessions/<id>/entries.jsonl` message text, exposed as a `recall` tool.
  *
  *  Ported from hermes-agent's session search (MIT), adapted from SQLite FTS5 to an
  *  in-memory inverted index over the JSONL session tree:

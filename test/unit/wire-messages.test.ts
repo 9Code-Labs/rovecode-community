@@ -157,7 +157,7 @@ test("image-free histories are byte-identical to the pre-#34 lowering: plain-str
 });
 
 test("sidecar parts: an absolute path is read lazily at lowering time; a missing file lowers to a placeholder and a relative path is never read — no throw either way", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-wire-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-wire-"));
   const file = join(dir, "dot.png");
   writeFileSync(file, PNG_1x1);
   const onDisk: ImagePart = { kind: "image", mime: "image/png", path: file, name: "dot.png" };

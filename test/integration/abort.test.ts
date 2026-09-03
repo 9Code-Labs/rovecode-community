@@ -136,7 +136,7 @@ function parkedUntilAbort(): { stream: StreamFn; seen: Promise<AbortSignal> } {
 // ---------- mid-stream: the in-flight fetch dies ≤500ms after abort ----------
 
 test("abort mid-SSE-stream kills the REAL fetch: run settles <500ms, server sees the abort, partial text survives", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-abort-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-abort-"));
   let firstChunkSent!: () => void;
   const firstChunk = new Promise<void>((r) => { firstChunkSent = r; });
   const sawAbort = { value: false };
@@ -199,7 +199,7 @@ test("abort mid-SSE-stream kills the REAL fetch: run settles <500ms, server sees
 // ---------- mid-bash: the subprocess dies, its later side effects never land ----------
 
 test("abort mid-bash kills the shell AND the child it waits on: pending side effects never happen, the tagged sleep is gone (Windows), run ends stopped, history wire-well-formed", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-abort-bash-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-abort-bash-"));
   const tag = sleepTag();
   try {
     const store = new SessionStore(dir, randomUUID());
@@ -264,7 +264,7 @@ test("abort mid-bash kills the shell AND the child it waits on: pending side eff
 // ---------- MED-2: an aborted sequential batch never starts its queued calls ----------
 
 test("abort mid-batch (sequential [bash, prompt-gated tool]): the queued call is never started or prompted for; it persists as the aborted synthesis", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-abort-batch-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-abort-batch-"));
   const tag = sleepTag();
   try {
     const store = new SessionStore(dir, randomUUID());
@@ -334,7 +334,7 @@ test("abort mid-batch (sequential [bash, prompt-gated tool]): the queued call is
 // ---------- consumer .return() mid-batch: synthesized results, no orphans ----------
 
 test("consumer .return() mid-batch synthesizes failed results for issued calls (no orphan tool_calls)", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-abort-syn-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-abort-syn-"));
   try {
     const store = new SessionStore(dir, randomUUID());
     const reg = new ToolRegistry();
@@ -373,7 +373,7 @@ test("consumer .return() mid-batch synthesizes failed results for issued calls (
 // ---------- abort racing a COMPLETE tool_use turn: calls stored + synthesized ----------
 
 test("abort landing with a complete tool_use turn: calls are never executed, results synthesized", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-abort-race-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-abort-race-"));
   try {
     const store = new SessionStore(dir, randomUUID());
     const reg = new ToolRegistry();
@@ -413,7 +413,7 @@ test("abort landing with a complete tool_use turn: calls are never executed, res
 // ---------- post-abort next-turn OK ----------
 
 test("post-abort next-turn OK: the next run on the same session completes and its request is wire-well-formed", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-abort-next-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-abort-next-"));
   try {
     const store = new SessionStore(dir, randomUUID());
     const reg = new ToolRegistry();
@@ -455,7 +455,7 @@ test("post-abort next-turn OK: the next run on the same session completes and it
 // ---------- pre-aborted signal: the provider is never touched ----------
 
 test("pre-aborted deps.signal: run ends stopped without a provider call", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-abort-pre-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-abort-pre-"));
   try {
     const store = new SessionStore(dir, randomUUID());
     let calls = 0;
@@ -478,7 +478,7 @@ test("pre-aborted deps.signal: run ends stopped without a provider call", async 
 // ---------- abort mid-fallback stops the router chain ----------
 
 test("abort mid-fallback stops the chain: no further candidate after the aborted one", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-abort-router-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-abort-router-"));
   try {
     const store = new SessionStore(dir, randomUUID());
     const m = (model: string): ModelRef => ({ provider: "p", model });
@@ -520,7 +520,7 @@ test("abort mid-fallback stops the chain: no further candidate after the aborted
 // ---------- loop-owned controller: bare .return() still cancels (no deps.signal) ----------
 
 test("no deps.signal: consumer .return() still aborts in-flight tools via the loop-owned controller", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-abort-bare-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-abort-bare-"));
   try {
     const store = new SessionStore(dir, randomUUID());
     const reg = new ToolRegistry();
@@ -549,7 +549,7 @@ test("no deps.signal: consumer .return() still aborts in-flight tools via the lo
 // ---------- TUI surface: Esc aborts the run's controller for real ----------
 
 test("TUI Esc mid-run: the run controller aborts (parked provider turn released) and the run settles stopped", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-abort-tui-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-abort-tui-"));
   const term = new VirtualTerminal(80, 24);
   const renderer = new PiTuiRenderer({ terminal: term, cwd });
   const { stream, seen } = parkedUntilAbort();

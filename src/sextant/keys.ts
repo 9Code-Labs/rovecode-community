@@ -7,7 +7,7 @@
  *  card key route is card-keys.ts; the renderer-local slash commands, those notes and the
  *  state-then-hook effect helpers are local-commands.ts.
  *  `handleInput` is a PURE state mutator: `now` is a parameter (esc-esc window), no Date.now(),
- *  timers or process access; everything that leaves the state goes through KeyCtx.hooks (aion's
+ *  timers or process access; everything that leaves the state goes through KeyCtx.hooks (rovecode's
  *  RendererHooks) or KeyCtx.local (renderer-owned effects: theme rebuild, file/diff loading,
  *  toasts); a state field is written BEFORE its local hook fires, so the renderer only loads
  *  content / rebuilds the palette.
@@ -44,7 +44,7 @@ export type { HitZone } from "./types.ts";
 
 export interface KeyCtx {
   layout: Layout;
-  /** aion RendererHooks (tui/renderer.ts): the controller's submit / interrupt / exit */
+  /** rovecode RendererHooks (tui/renderer.ts): the controller's submit / interrupt / exit */
   hooks: { onSubmit(text: string): void; onInterrupt(): void; onExit(): void };
   /** renderer-owned effects; the state field is already written when these fire */
   local: { setTheme(name: ThemeName): void; setMode(mode: CodeMode): void; openFile(path: string): void; toast(text: string): void };

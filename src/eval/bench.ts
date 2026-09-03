@@ -1,4 +1,4 @@
-/** Cross-harness benchmark: runs equivalent micro-workloads through Aion and
+/** Cross-harness benchmark: runs equivalent micro-workloads through Rovecode and
  *  comparable harness primitives, measuring wall time, tool calls, success.
  *  Deterministic (scripted providers / direct API use) — no API keys needed. */
 
@@ -30,12 +30,12 @@ const cfg: RunConfig = {
 const def: AgentDefinition = { name: "bench", systemPrompt: "bench", tools: ["*"] };
 
 /** Workload: edit N lines across M files using anchored edits. */
-async function benchEditsAion(nFiles: number, nEdits: number): Promise<{ pass: boolean; ms: number; calls: number }> {
-  const ws = mkdtempSync(join(tmpdir(), "aion-bench-"));
+async function benchEditsRovecode(nFiles: number, nEdits: number): Promise<{ pass: boolean; ms: number; calls: number }> {
+  const ws = mkdtempSync(join(tmpdir(), "rovecode-bench-"));
   for (let i = 0; i < nFiles; i++) {
     writeFileSync(join(ws, `f${i}.txt`), Array.from({ length: 50 }, (_, j) => `line-${i}-${j}`).join("\n") + "\n");
   }
-  const store = new SessionStore(mkdtempSync(join(tmpdir(), "aion-bench-s-")), randomUUID());
+  const store = new SessionStore(mkdtempSync(join(tmpdir(), "rovecode-bench-s-")), randomUUID());
   const reg = new ToolRegistry();
   reg.register(readTool, editTool, writeTool);
   const t0 = Date.now();
@@ -115,7 +115,7 @@ function benchRawFs(nFiles: number, nEdits: number): { pass: boolean; ms: number
 
 /** Session durability benchmark: append + replay N messages. */
 function benchSessions(n: number): { pass: boolean; ms: number } {
-  const dir = mkdtempSync(join(tmpdir(), "aion-sess-bench-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-sess-bench-"));
   const t0 = Date.now();
   const s = new SessionStore(dir, randomUUID());
   let prev: string | null = null;
@@ -132,12 +132,12 @@ function benchSessions(n: number): { pass: boolean; ms: number } {
 
 export async function runBenchmarks(): Promise<BenchResult[]> {
   const results: BenchResult[] = [];
-  const edits = await benchEditsAion(3, 5);
-  results.push({ harness: "aion", task: "edits-3files-5edits", ...edits, durationMs: edits.ms, toolCalls: edits.calls } as unknown as BenchResult);
+  const edits = await benchEditsRovecode(3, 5);
+  results.push({ harness: "rovecode", task: "edits-3files-5edits", ...edits, durationMs: edits.ms, toolCalls: edits.calls } as unknown as BenchResult);
   const raw = benchRawFs(3, 5);
   results.push({ harness: "raw-fs", task: "edits-3files-5edits", pass: raw.pass, durationMs: raw.ms, toolCalls: 0 });
   const sess = benchSessions(500);
-  results.push({ harness: "aion", task: "session-append-replay-500", pass: sess.pass, durationMs: sess.ms, toolCalls: 0 });
+  results.push({ harness: "rovecode", task: "session-append-replay-500", pass: sess.pass, durationMs: sess.ms, toolCalls: 0 });
   return results;
 }
 

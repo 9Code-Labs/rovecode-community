@@ -1,5 +1,5 @@
-/** Custom slash commands (port #30): `.aion/commands/*.md` (project) and `~/.aion/commands/*.md`
- *  (user scope, AION_HOME-aware) become `/name` commands in the TUI — autocomplete, /help,
+/** Custom slash commands (port #30): `.rovecode/commands/*.md` (project) and `~/.rovecode/commands/*.md`
+ *  (user scope, ROVECODE_HOME-aware) become `/name` commands in the TUI — autocomplete, /help,
  *  and dispatch through the same user-turn path a typed prompt takes.
  *
  *  Ported from opencode @ ebece6e (MIT), packages/opencode/src unless noted:
@@ -8,7 +8,7 @@
  *    the frontmatter is the command's metadata and the markdown body its template
  *    (config/command.ts:26-30 `{ name, ...md.data, template: md.content.trim() }`); fields
  *    description/model (packages/core/src/v1/config/command.ts:5-12 — agent/variant/subtask
- *    have no aion counterpart; aion adds `mode` for plan/act, port #20).
+ *    have no rovecode counterpart; rovecode adds `mode` for plan/act, port #20).
  *  - precedence: the global config dir is loaded before the project's and later entries
  *    replace earlier ones (config/config.ts:473 mergeDeep) → project shadows user here.
  *  - templating (session/prompt.ts:1372-1395): quote-aware argument split (argsRegex :1594,
@@ -41,7 +41,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { AgentMode, ModeManager } from "../core/modes.ts";
-import { aionHome } from "../providers/auth.ts";
+import { rovecodeHome } from "../providers/auth.ts";
 import { parseFrontmatter } from "../skills/index.ts";
 import { togglePlanAct, type ModeStateSlice } from "./modes-cmd.ts";
 import type { Renderer, SlashCommand } from "./renderer.ts";
@@ -114,7 +114,7 @@ export function hints(body: string): string[] {
 // ---------- discovery ----------
 
 export interface DiscoverOptions {
-  /** user-scope aion dir; default aionHome() (AION_HOME → ~/.aion). Commands: `<home>/commands` */
+  /** user-scope rovecode dir; default rovecodeHome() (ROVECODE_HOME → ~/.rovecode). Commands: `<home>/commands` */
   home?: string;
   /** built-in command names — a custom command with one of these names is dropped, with a warning */
   reserved?: readonly string[];
@@ -122,15 +122,15 @@ export interface DiscoverOptions {
 
 export interface DiscoveredCommands { commands: CustomCommand[]; warnings: string[] }
 
-/** Scan `<home>/commands` then `<cwd>/.aion/commands`; a later (project) entry replaces an
+/** Scan `<home>/commands` then `<cwd>/.rovecode/commands`; a later (project) entry replaces an
  *  earlier (user) one of the same name. Missing dirs are silent (the common case); every
  *  other problem is a warning for the boot transcript, never a throw. Sorted by name. */
 export function discoverCommands(cwd: string, opts: DiscoverOptions = {}): DiscoveredCommands {
   const warnings: string[] = [];
   const reserved = new Set(opts.reserved ?? []);
-  const userDir = join(opts.home ?? aionHome(), "commands");
-  const projectDir = join(cwd, ".aion", "commands");
-  // cwd IS the aion home: one directory, scanned once (gemini-cli FileCommandLoader.ts:221-228)
+  const userDir = join(opts.home ?? rovecodeHome(), "commands");
+  const projectDir = join(cwd, ".rovecode", "commands");
+  // cwd IS the rovecode home: one directory, scanned once (gemini-cli FileCommandLoader.ts:221-228)
   const dirs: [CommandScope, string][] = resolve(userDir) === resolve(projectDir)
     ? [["project", projectDir]]
     : [["user", userDir], ["project", projectDir]];
@@ -202,7 +202,7 @@ export function renderCommand(cmd: Pick<CustomCommand, "body">, argString: strin
   return placeholder || raw === "" ? out : `${out}\n\n${raw}`;
 }
 
-/** `aion run "/name args"` hook (main.ts call sites — see the port notes): a leading `/name`
+/** `rovecode run "/name args"` hook (main.ts call sites — see the port notes): a leading `/name`
  *  that names a discovered command renders to its prompt; anything else passes through
  *  verbatim. `model`/`mode` are TUI semantics and are not applied here. */
 export function expandSlashPrompt(prompt: string, cwd: string, opts: DiscoverOptions = {}): string {

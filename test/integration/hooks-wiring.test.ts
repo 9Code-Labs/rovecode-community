@@ -2,7 +2,7 @@
  *  (pre_tool after policy, post_tool after execute), the approval hook as HookRunner.approver INSIDE
  *  the execpolicy wrap (cli/runtime.ts buildCfg: rules → execpolicy → hook → human), core/loop.ts
  *  agentLoop (pre_run / compaction / post_run / on_event via the observer), cli/runtime.ts
- *  (.aion/hooks.ts + ~/.aion loaded at boot, session_open/close) and the surfaces (cmdRun as a
+ *  (.rovecode/hooks.ts + ~/.rovecode loaded at boot, session_open/close) and the surfaces (cmdRun as a
  *  subprocess against a scripted provider, serve stop(), ACP shutdown()). "Policy wins" and
  *  "fail-open to policy" are pinned here; the runner's own mechanics live in test/unit/hooks.test.ts. */
 
@@ -50,7 +50,7 @@ function runner(...sets: HookSet[]): HookRunner {
   return r;
 }
 function newStore(): { store: SessionStore; done: () => void } {
-  const dir = mkdtempSync(join(tmpdir(), "aion-hooks-w-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-hooks-w-"));
   return { store: new SessionStore(dir, randomUUID()), done: () => rmSync(dir, { recursive: true, force: true }) };
 }
 const toolResults = (store: SessionStore): Extract<MessagePart, { kind: "tool_result" }>[] =>
@@ -65,10 +65,10 @@ function seedLongHistory(store: SessionStore): void {
 }
 /** a project hooks file that appends `<tag>:<sessionId>` lines to <cwd>/hooks.log for the given hooks */
 function markerHooks(cwd: string, hookNames: string[]): string {
-  mkdirSync(join(cwd, ".aion"), { recursive: true });
+  mkdirSync(join(cwd, ".rovecode"), { recursive: true });
   const log = join(cwd, "hooks.log");
   const body = hookNames.map((h) => `${h}(ctx) { appendFileSync(${JSON.stringify(log)}, ${JSON.stringify(h + ":")} + ctx.sessionId + "\\n"); }`).join(",\n  ");
-  writeFileSync(join(cwd, ".aion", "hooks.ts"), `import { appendFileSync } from "node:fs";\nexport default { version: 1, hooks: {\n  ${body},\n} };\n`);
+  writeFileSync(join(cwd, ".rovecode", "hooks.ts"), `import { appendFileSync } from "node:fs";\nexport default { version: 1, hooks: {\n  ${body},\n} };\n`);
   return log;
 }
 const markers = (log: string): string[] => existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean) : [];
@@ -168,10 +168,10 @@ test("approval hook rides the approver chain (hooks.approver) for a policy PROMP
 });
 
 test("ordering (port #9 contract holds under hooks): execpolicy-forbidden argv hard-stops BEFORE the approval hook (never consulted), allow-listed argv runs without asking anyone, prompt-classified argv is the hook's to pre-answer — the human only on void", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-hooks-order-"));
-  const home = mkdtempSync(join(tmpdir(), "aion-hooks-orderhome-"));
-  const savedHome = process.env.AION_HOME;
-  process.env.AION_HOME = home; // pinned: never load the developer's ~/.aion/hooks.ts
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-hooks-order-"));
+  const home = mkdtempSync(join(tmpdir(), "rovecode-hooks-orderhome-"));
+  const savedHome = process.env.ROVECODE_HOME;
+  process.env.ROVECODE_HOME = home; // pinned: never load the developer's ~/.rovecode/hooks.ts
   try {
     const rt = await bootRuntime({ cwd, sessionId: "sess-order", stream: null });
     // spy executor: register() overwrites by schema name, so this replaces the REAL bash tool — nothing is spawned
@@ -217,7 +217,7 @@ test("ordering (port #9 contract holds under hooks): execpolicy-forbidden argv h
     expect(rt.hooks.warnings).toEqual([]);
     await rt.hooks.close(); await rt.mcp?.close();
   } finally {
-    if (savedHome === undefined) delete process.env.AION_HOME; else process.env.AION_HOME = savedHome;
+    if (savedHome === undefined) delete process.env.ROVECODE_HOME; else process.env.ROVECODE_HOME = savedHome;
     rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
   }
 });
@@ -366,17 +366,17 @@ test("compaction hook fires with the yielded compaction event (strategy + trigge
 
 // ── runtime + surfaces ───────────────────────────────────────────────────────
 
-test("runtime: .aion/hooks.ts (project) + ~/.aion/hooks.ts (AION_HOME) load at boot, session_open fires once each, rt.hooks reaches dispatch, close() fires session_close once; a broken file is one warning", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-hooks-rt-"));
-  const home = mkdtempSync(join(tmpdir(), "aion-hooks-rthome-"));
-  const key = `__aionHooksRt_${process.pid}_${Date.now()}`;
+test("runtime: .rovecode/hooks.ts (project) + ~/.rovecode/hooks.ts (ROVECODE_HOME) load at boot, session_open fires once each, rt.hooks reaches dispatch, close() fires session_close once; a broken file is one warning", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-hooks-rt-"));
+  const home = mkdtempSync(join(tmpdir(), "rovecode-hooks-rthome-"));
+  const key = `__rovecodeHooksRt_${process.pid}_${Date.now()}`;
   const log: unknown[] = [];
   (globalThis as Record<string, unknown>)[key] = log;
-  const savedHome = process.env.AION_HOME;
-  process.env.AION_HOME = home;
+  const savedHome = process.env.ROVECODE_HOME;
+  process.env.ROVECODE_HOME = home;
   try {
-    mkdirSync(join(cwd, ".aion"), { recursive: true });
-    writeFileSync(join(cwd, ".aion", "hooks.ts"), `const log = globalThis[${JSON.stringify(key)}];
+    mkdirSync(join(cwd, ".rovecode"), { recursive: true });
+    writeFileSync(join(cwd, ".rovecode", "hooks.ts"), `const log = globalThis[${JSON.stringify(key)}];
 export default { version: 1, hooks: {
   session_open(ctx) { log.push(["open", ctx.sessionId, ctx.cwd]); },
   session_close(ctx) { log.push(["close", ctx.sessionId]); },
@@ -404,34 +404,34 @@ export default { version: 1, hooks: {
     expect(rt.hooks.warnings).toEqual([]);
     await rt.mcp?.close();
   } finally {
-    if (savedHome === undefined) delete process.env.AION_HOME; else process.env.AION_HOME = savedHome;
+    if (savedHome === undefined) delete process.env.ROVECODE_HOME; else process.env.ROVECODE_HOME = savedHome;
     delete (globalThis as Record<string, unknown>)[key];
     rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
   }
   // a broken project file: the runtime still boots, hooks.warnings names the file, nothing else changes
-  const cwd2 = mkdtempSync(join(tmpdir(), "aion-hooks-rt2-"));
-  const home2 = mkdtempSync(join(tmpdir(), "aion-hooks-rthome2-"));
-  process.env.AION_HOME = home2;
+  const cwd2 = mkdtempSync(join(tmpdir(), "rovecode-hooks-rt2-"));
+  const home2 = mkdtempSync(join(tmpdir(), "rovecode-hooks-rthome2-"));
+  process.env.ROVECODE_HOME = home2;
   try {
-    mkdirSync(join(cwd2, ".aion"), { recursive: true });
-    writeFileSync(join(cwd2, ".aion", "hooks.ts"), "export default { version: 1, hooks: {\n");
+    mkdirSync(join(cwd2, ".rovecode"), { recursive: true });
+    writeFileSync(join(cwd2, ".rovecode", "hooks.ts"), "export default { version: 1, hooks: {\n");
     const rt = await bootRuntime({ cwd: cwd2, stream: null });
     expect(rt.hooks.size).toBe(1); // the built-in reflection set only (port #28) — the broken file loaded nothing
     expect(rt.hooks.warnings.length).toBe(1);
-    expect(rt.hooks.warnings[0]!.startsWith(`${join(cwd2, ".aion", "hooks.ts")}: failed to load — `)).toBe(true);
+    expect(rt.hooks.warnings[0]!.startsWith(`${join(cwd2, ".rovecode", "hooks.ts")}: failed to load — `)).toBe(true);
     await rt.hooks.close();
     await rt.mcp?.close();
   } finally {
-    if (savedHome === undefined) delete process.env.AION_HOME; else process.env.AION_HOME = savedHome;
+    if (savedHome === undefined) delete process.env.ROVECODE_HOME; else process.env.ROVECODE_HOME = savedHome;
     rmSync(cwd2, { recursive: true, force: true }); rmSync(home2, { recursive: true, force: true });
   }
 });
 
 test("child runs (port #26 task) run under the parent runtime's hooks: a pre_tool bash veto holds INSIDE the child, and post_tool/on_event see the child's calls under the child's own session", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-hooks-child-"));
-  const home = mkdtempSync(join(tmpdir(), "aion-hooks-childhome-"));
-  const savedHome = process.env.AION_HOME;
-  process.env.AION_HOME = home; // pinned: never load the developer's ~/.aion/hooks.ts
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-hooks-child-"));
+  const home = mkdtempSync(join(tmpdir(), "rovecode-hooks-childhome-"));
+  const savedHome = process.env.ROVECODE_HOME;
+  process.env.ROVECODE_HOME = home; // pinned: never load the developer's ~/.rovecode/hooks.ts
   const goalOf = (ms: Message[]): string => { const u = ms.find((m) => m.role === "user"); return u ? partsText(u.parts) : ""; };
   const outputs = (ms: Message[]): string => ms.flatMap((m) => m.parts).filter((p): p is Extract<MessagePart, { kind: "tool_result" }> => p.kind === "tool_result").map((p) => p.output).join(" | ");
   // one scripted provider for parent and child — a run's identity is its goal (tasks-wiring idiom)
@@ -478,17 +478,17 @@ test("child runs (port #26 task) run under the parent runtime's hooks: a pre_too
     expect(rt.hooks.warnings).toEqual([]);
     await rt.tasks.drain(4_000); await rt.hooks.close(); await rt.mcp?.close();
   } finally {
-    if (savedHome === undefined) delete process.env.AION_HOME; else process.env.AION_HOME = savedHome;
+    if (savedHome === undefined) delete process.env.ROVECODE_HOME; else process.env.ROVECODE_HOME = savedHome;
     rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true });
   }
 }, 30_000);
 
 test("cmdRun e2e: hooks fire on the one-shot CLI path in order (session_open, pre_run, pre_tool deny, post_run, session_close); the deny reached the model; a broken user-scope file is one stderr warning", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-hooks-cli-"));
-  const home = mkdtempSync(join(tmpdir(), "aion-hooks-clihome-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-hooks-cli-"));
+  const home = mkdtempSync(join(tmpdir(), "rovecode-hooks-clihome-"));
   const log = join(cwd, "hooks.log");
-  mkdirSync(join(cwd, ".aion"), { recursive: true });
-  writeFileSync(join(cwd, ".aion", "hooks.ts"), `import { appendFileSync } from "node:fs";
+  mkdirSync(join(cwd, ".rovecode"), { recursive: true });
+  writeFileSync(join(cwd, ".rovecode", "hooks.ts"), `import { appendFileSync } from "node:fs";
 const mark = (s) => appendFileSync(${JSON.stringify(log)}, s + "\\n");
 export default { version: 1, hooks: {
   session_open() { mark("session_open"); },
@@ -515,8 +515,8 @@ export default { version: 1, hooks: {
   });
   try {
     const main = join(import.meta.dir, "..", "..", "src", "cli", "main.ts");
-    const env = { ...process.env, AION_BASE_URL: `http://127.0.0.1:${server.port}`, AION_API_KEY: "test-key", AION_MODEL: "scripted", AION_HOME: home } as Record<string, string>;
-    delete env["AION_STREAM"]; delete env["AION_NO_HOOKS"];
+    const env = { ...process.env, ROVECODE_BASE_URL: `http://127.0.0.1:${server.port}`, ROVECODE_API_KEY: "test-key", ROVECODE_MODEL: "scripted", ROVECODE_HOME: home } as Record<string, string>;
+    delete env["ROVECODE_STREAM"]; delete env["ROVECODE_NO_HOOKS"];
     const proc = Bun.spawn([process.execPath, main, "run", "hooks e2e", "--yolo"], { cwd, env, stdout: "pipe", stderr: "pipe" });
     const exit = await proc.exited;
     const out = await new Response(proc.stdout).text();
@@ -534,7 +534,7 @@ export default { version: 1, hooks: {
 }, 40_000);
 
 test("serve: runs use the server cwd's hooks; stop() fires session_close once per session runtime", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-hooks-srv-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-hooks-srv-"));
   const log = markerHooks(cwd, ["pre_run", "session_close"]);
   const pong: StreamFn = async function* () { yield { type: "turn", turn: textTurn("PONG") }; };
   const srv = startServer({ port: 0, cwd, stream: pong });
@@ -564,7 +564,7 @@ class QuietClient implements Client {
 }
 
 test("acp: shutdown() fires session_close once per session runtime (hooks of the session cwd)", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-hooks-acp-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-hooks-acp-"));
   const log = markerHooks(cwd, ["session_open", "session_close"]);
   const agentToClient = new TransformStream<Uint8Array, Uint8Array>();
   const clientToAgent = new TransformStream<Uint8Array, Uint8Array>();

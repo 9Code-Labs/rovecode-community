@@ -17,7 +17,7 @@ export type Entry = Message | ({ id: string; kind: "event"; parentId: string | n
  *  relative (F2) and an absolute path is dropped at load (F3), so the part lowers to a "file
  *  unavailable" placeholder and no line in entries.jsonl can point a hydrated part at a file
  *  outside `<session>/attachments/`.
- *  `aion export --json` copies entries.jsonl ALONE — the attachments directory travels with the
+ *  `rovecode export --json` copies entries.jsonl ALONE — the attachments directory travels with the
  *  session directory, not with the export (the JSONL stays a small, verbatim-copyable record). */
 
 export type CorruptionKind =
@@ -177,7 +177,7 @@ export class SessionStore {
     // above it) AND a message/event. As cache.at(-1) it was whatever id-bearing line came last, so a
     // foreign `{"id":"ghost","parentId":"nope",…}` hijacked the active path (messages() shrank to the
     // ghost, the next append parented on it) and a bare `{"id":"bare"}` emptied it and re-rooted the next
-    // append — silently: only `aion trace` shows these findings, the constructor discards them. Such
+    // append — silently: only `rovecode trace` shows these findings, the constructor discards them. Such
     // lines stay in the cache for chain/reporting and keep their orphan-entry / unknown-shape findings.
     let tail: Wrapped | undefined;
     lines.forEach((line, i) => {

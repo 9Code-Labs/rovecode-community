@@ -1,4 +1,4 @@
-/** Tool-call middleware: lets models WITHOUT native function calling drive aion's tools.
+/** Tool-call middleware: lets models WITHOUT native function calling drive rovecode's tools.
  *
  *  Port of senpi's tool-call middleware (research/source_snapshots/code-yeongyu-senpi @ a0f26a6,
  *  packages/ai/src/tool-call-middleware). Formats:
@@ -15,7 +15,7 @@
  *      parse time): decode XML entities then try JSON.parse else keep string
  *      (coerce-parameters.ts:94-98), boundary newlines trimmed (:15-19), duplicate parameter
  *      name invalidates the call (:29-31). Entities per xml-entities.ts:32-41.
- *  - "json-fenced": ```json {"name":...,"arguments":{...}} ``` — aion extension; senpi itself has
+ *  - "json-fenced": ```json {"name":...,"arguments":{...}} ``` — rovecode extension; senpi itself has
  *      no fenced-JSON protocol (its recovery-code-mask.ts EXCLUDES code spans from scanning), so
  *      the fence body is gated on the exact hermes call shape with NO extraneous keys — an
  *      ordinary JSON code block is never consumed.

@@ -21,7 +21,7 @@ import {
 } from "../../src/tools/ask-user.ts";
 import { createRuntime } from "../../src/cli/runtime.ts";
 import { applyModeRules } from "../../src/core/modes.ts";
-import { startServer, type AionServer } from "../../src/server/http.ts";
+import { startServer, type RovecodeServer } from "../../src/server/http.ts";
 import type { Message, ModelRef, RunEvent, StreamEvent, StreamFn, ToolCallPart, ToolContext } from "../../src/core/types.ts";
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -171,7 +171,7 @@ test("arg validation fails closed BEFORE the surface is asked", async () => {
 
 // ---------- registry + policy pins (createRuntime) ----------
 
-function tmpCwd(): string { return mkdtempSync(join(tmpdir(), "aion-askuser-")); }
+function tmpCwd(): string { return mkdtempSync(join(tmpdir(), "rovecode-askuser-")); }
 const call = (args: unknown): ToolCallPart => ({ kind: "tool_call", id: "ask-1", tool: "ask_user", args });
 
 test("createRuntime registers ask_user (kind read, sequential); the GATED rules run it with NO approver; unbound → the exact headless error", async () => {
@@ -182,7 +182,7 @@ test("createRuntime registers ask_user (kind read, sequential); the GATED rules 
     expect(tool).toBeDefined();
     expect(tool!.kind).toBe("read");      // mutation target: kind "custom" → action tool.ask_user has no rule → denied below
     expect(tool!.sequential).toBe(true);
-    const cfg = rt.buildCfg(false);       // gated, approver-less: exactly what `aion run` / serve / acp build
+    const cfg = rt.buildCfg(false);       // gated, approver-less: exactly what `rovecode run` / serve / acp build
     const events: RunEvent[] = [];
     const out = await deadline(rt.registry.dispatch(call(Q), ctx(), undefined, cfg.permissionRules, undefined, (e) => events.push(e)));
     expect(out).toEqual({ ok: false, output: ASK_USER_UNAVAILABLE });
@@ -222,7 +222,7 @@ test("setAskUser late-binds the asker behind the registered tool; undefined unbi
 
 // ---------- headless surface end-to-end: the HTTP server never binds an asker ----------
 
-const servers: AionServer[] = [];
+const servers: RovecodeServer[] = [];
 afterAll(async () => { for (const s of servers) await s.stop(); }); // house rule: no orphan sockets
 
 test("HTTP surface (serve): ask_user fails closed over SSE with the exact error and the run continues to a normal end", async () => {

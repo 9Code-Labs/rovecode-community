@@ -25,13 +25,13 @@ const ctx = (cwd = process.cwd()): ToolContext => ({
   permissions: { effect: "allow" as const },
 });
 
-function tmpRoot(): string { return mkdtempSync(join(tmpdir(), "aion-files-")); }
+function tmpRoot(): string { return mkdtempSync(join(tmpdir(), "rovecode-files-")); }
 
 /** git init + local identity; throws loudly when git is unavailable (the
  *  harness already depends on git for checkpoints/repomap). */
 function gitInit(dir: string): void {
   const r = spawnSync("git", ["init", "-q", dir], { encoding: "utf8", windowsHide: true, timeout: 10_000 });
-  if (r.error || r.status !== 0) throw new Error("git unavailable — required by this suite (and by aion checkpoints)");
+  if (r.error || r.status !== 0) throw new Error("git unavailable — required by this suite (and by rovecode checkpoints)");
 }
 
 // ---------- glob: output shape + sort ----------
@@ -497,7 +497,7 @@ test("tool contracts: kind read, parallel-safe, schemas advertise defaults and c
 // ---------- registration: runtime (dispatch-level) + cmdTools + gauntlet (grep-level) ----------
 
 test("registration: createRuntime registers glob/grep/ls", () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-files-rt-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-files-rt-"));
   const rt = createRuntime({ cwd, stream: null });
   const names = rt.registry.list().map((t) => t.schema.name);
   for (const n of ["glob", "grep", "ls"]) expect(names).toContain(n);

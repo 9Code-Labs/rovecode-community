@@ -8,7 +8,7 @@
  *  150ms rearming debounce from client.ts:13-16,160-172,464-497; errors-only formatter from
  *  diagnostic.ts:5-27; PATH probe + `--stdio` spawn from server.ts:115-142; swallow-all gate
  *  errors from lsp.ts:360; never-retry broken servers from lsp.ts:224-241. Framing is
- *  hand-rolled (aion adds no deps here; oh-my-pi client.ts hand-rolls the same reader). */
+ *  hand-rolled (rovecode adds no deps here; oh-my-pi client.ts hand-rolls the same reader). */
 
 import { existsSync, readFileSync } from "node:fs";
 import { extname, isAbsolute, join, resolve } from "node:path";

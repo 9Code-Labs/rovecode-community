@@ -1,11 +1,15 @@
 {
-  "name": "aion",
+  "name": "rovecode",
   "version": "0.2.0",
-  "description": "Research-derived agent harness on Bun/TypeScript: 20 evidence-based ports from open-source harnesses (TUI, MCP, ACP, headless server, repo-map, shadow-git checkpoints, execpolicy, model routers).",
+  "license": "AGPL-3.0-only",
+  "author": "9Code Labs",
+  "repository": { "type": "git", "url": "https://github.com/9Code-Labs/rovecode.git" },
+  "homepage": "https://github.com/9Code-Labs/rovecode",
+  "description": "Rovecode: a coding agent for the terminal. Research-derived harness on Bun/TypeScript with evidence-based ports from open-source harnesses (sextant TUI, MCP, ACP, headless server, repo-map, shadow-git checkpoints, execpolicy, model routers).",
   "type": "module",
   "module": "src/index.ts",
   "bin": {
-    "aion": "src/cli/main.ts"
+    "rovecode": "src/cli/main.ts"
   },
   "files": [
     "src",

@@ -12,7 +12,7 @@
  *
  *  Bounds (pure: no I/O, no clock, never touches the tool output — hashline's text is already the
  *  actionable one, describeEditFailure):
- *  - per-run cap: DEFAULT_REFLECTION_MAX (2) nudges per runId, AION_REFLECTION_MAX overrides (aider
+ *  - per-run cap: DEFAULT_REFLECTION_MAX (2) nudges per runId, ROVECODE_REFLECTION_MAX overrides (aider
  *    max_reflections = 3, base_coder.py:101); reset on pre_run (aider init_before_message resets
  *    reflected_message / num_reflections per user message, base_coder.py:864-871)
  *  - identical consecutive failures never re-nudge — repetition is the loop guard's territory
@@ -24,7 +24,7 @@
  *  - a nudge the loop never drained (budget / abort right after the failing call) is swept out of
  *    the queue at the run boundary (post_run, and pre_run of the next run) so it cannot open the
  *    next run's first turn; other steering messages (port #26 task notes) are preserved
- *  - AION_REFLECTION=0 → the set is not registered (cli/runtime.ts door)
+ *  - ROVECODE_REFLECTION=0 → the set is not registered (cli/runtime.ts door)
  *  - ownership (fix-wave 4, #26 MED-A): ONE set serves ONE queue, so it acts only on runs it OWNS
  *    (opts.owns; cli/runtime.ts binds it to `ctx.sessionId === the ACTIVE session store's id`, which
  *    TUI session switches keep current via setSessionStore). Background-task children (port #26) run
@@ -68,7 +68,7 @@ const LSP_NOTE = /\n\nlsp-gate \([^)\n]*\): \d+ error\(s\) in [^\n]* — fix bef
 export interface ReflectionOptions {
   /** the runtime's ONE steering queue (cli/runtime.ts rt.steering) — the nudge lands on the next turn */
   steering: Pick<SteeringQueue, "push" | "drainAll">;
-  /** nudges per run; default reflectionMax() (AION_REFLECTION_MAX → 2) */
+  /** nudges per run; default reflectionMax() (ROVECODE_REFLECTION_MAX → 2) */
   max?: number;
   /** tool names treated as mutating; default DEFAULT_REFLECTION_TOOLS */
   tools?: Iterable<string>;
@@ -79,14 +79,14 @@ export interface ReflectionOptions {
   owns?: (ctx: HookCtx) => boolean;
 }
 
-/** AION_REFLECTION=0 disables the built-in set; anything else (incl. unset) enables it. */
+/** ROVECODE_REFLECTION=0 disables the built-in set; anything else (incl. unset) enables it. */
 export function reflectionEnabled(env: Record<string, string | undefined> = process.env): boolean {
-  return env["AION_REFLECTION"] !== "0";
+  return env["ROVECODE_REFLECTION"] !== "0";
 }
 
-/** AION_REFLECTION_MAX: a non-negative integer (0 = attached but silent); blank/invalid → default. */
+/** ROVECODE_REFLECTION_MAX: a non-negative integer (0 = attached but silent); blank/invalid → default. */
 export function reflectionMax(env: Record<string, string | undefined> = process.env): number {
-  const raw = (env["AION_REFLECTION_MAX"] ?? "").trim();
+  const raw = (env["ROVECODE_REFLECTION_MAX"] ?? "").trim();
   if (raw === "") return DEFAULT_REFLECTION_MAX;
   const v = Number(raw);
   return Number.isFinite(v) && v >= 0 ? Math.floor(v) : DEFAULT_REFLECTION_MAX;

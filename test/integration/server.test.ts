@@ -6,7 +6,7 @@ import { test, expect, afterAll } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { startServer, DEFAULT_PORT, DEFAULT_HOSTNAME, MAX_BODY_BYTES, type AionServer } from "../../src/server/http.ts";
+import { startServer, DEFAULT_PORT, DEFAULT_HOSTNAME, MAX_BODY_BYTES, type RovecodeServer } from "../../src/server/http.ts";
 import type { Message, ModelRef, RunEvent, StreamEvent, StreamFn, StreamOptions } from "../../src/core/types.ts";
 import type { SessionSummary } from "../../src/core/session.ts";
 import { McpManager } from "../../src/mcp/client.ts";
@@ -63,8 +63,8 @@ const scripted: StreamFn = async function* (
 
 // ---------- shared server (ephemeral port, tmp cwd) ----------
 
-const cwd = mkdtempSync(join(tmpdir(), "aion-srv-"));
-const servers: AionServer[] = [];
+const cwd = mkdtempSync(join(tmpdir(), "rovecode-srv-"));
+const servers: RovecodeServer[] = [];
 const srv = startServer({ port: 0, cwd, stream: scripted });
 servers.push(srv);
 const base = srv.url;
@@ -315,7 +315,7 @@ const promptReq = (url: string, id: string, text: string, signal?: AbortSignal) 
   });
 
 test("MED-F1: client disconnect does NOT free the session until the run actually settles", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-srv-f1-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-srv-f1-"));
   const { stream, release, reached } = gatedStream();
   const s = startServer({ port: 0, cwd: dir, stream });
   try {
@@ -348,7 +348,7 @@ test("MED-F1: client disconnect does NOT free the session until the run actually
 });
 
 test("stop() with an in-flight SSE run: resolves promptly, sockets close (runs finish at their boundary)", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-srv-stop-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-srv-stop-"));
   const { stream, release, reached } = gatedStream();
   const s = startServer({ port: 0, cwd: dir, stream });
   try {
@@ -367,8 +367,8 @@ test("stop() with an in-flight SSE run: resolves promptly, sockets close (runs f
 });
 
 test("MED-F3: stop() closes every session runtime's MCP manager", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-srv-mcp-"));
-  writeFileSync(join(dir, ".mcp.json"), JSON.stringify({ mcpServers: { toy: { command: "aion-not-a-real-binary-srv" } } }));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-srv-mcp-"));
+  writeFileSync(join(dir, ".mcp.json"), JSON.stringify({ mcpServers: { toy: { command: "rovecode-not-a-real-binary-srv" } } }));
   const closed: McpManager[] = [];
   const orig = McpManager.prototype.close;
   McpManager.prototype.close = async function (this: McpManager) { closed.push(this); return orig.call(this); };
@@ -435,7 +435,7 @@ function abortAwareStream(): { stream: StreamFn; seen: Promise<AbortSignal>; rea
 }
 
 test("port #21: DELETE aborts the in-flight run — SSE ends with run_end stopped, 409 clears on settle, idle DELETE is idempotent", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-srv-del-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-srv-del-"));
   const { stream, seen, reached } = abortAwareStream();
   const s = startServer({ port: 0, cwd: dir, stream });
   try {
@@ -490,7 +490,7 @@ test("prompt route id refuses multi-segment / traversal ids (pin against ([^/]+)
 });
 
 test("session cwd reaches tools over HTTP: bash pwd lands in the server cwd, not the process dir", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-srv-cwd-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-srv-cwd-"));
   const s = startServer({ port: 0, cwd: dir, stream: scripted, yolo: true });
   try {
     const id = await createSession(s.url);
@@ -523,7 +523,7 @@ test("port #26: GET /session/:id/tasks lists the session's background tasks; unk
 });
 
 test("port #26: a yolo prompt that starts a background task shows it in GET /tasks (running → done), and the NEXT prompt on the session receives the completion steer", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-srv-tasks-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-srv-tasks-"));
   const s = startServer({ port: 0, cwd: dir, stream: scripted, yolo: true });
   try {
     const id = await createSession(s.url);
@@ -562,7 +562,7 @@ test("port #26: a yolo prompt that starts a background task shows it in GET /tas
 }, 20_000);
 
 test("port #26: DELETE /session/:id/prompt also cancels the background tasks that run started (bindRun on the run's controller)", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-srv-tasks-del-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-srv-tasks-del-"));
   const parked: string[] = [];
   const stream: StreamFn = async function* (_m: ModelRef, messages: Message[], opts?: StreamOptions): AsyncGenerator<StreamEvent> {
     const goal = lastUserText(messages);
@@ -604,7 +604,7 @@ test("port #26: DELETE /session/:id/prompt also cancels the background tasks tha
 }, 20_000);
 
 test("wiring pass (port #26): stop() cancels every session's live background tasks — the parked child's run signal aborts", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-srv-tasks-stop-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-srv-tasks-stop-"));
   const childSignals: AbortSignal[] = [];
   const stream: StreamFn = async function* (_m: ModelRef, messages: Message[], opts?: StreamOptions): AsyncGenerator<StreamEvent> {
     const goal = lastUserText(messages);

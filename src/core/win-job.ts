@@ -19,7 +19,7 @@
  *             drop the close-kill limit, then close — a child the command
  *             deliberately left behind (`server > log 2>&1 &`) survives, as
  *             it does on POSIX and did before this port. While the command is
- *             in flight the limit stays armed, so an aion crash takes the
+ *             in flight the limit stays armed, so an rovecode crash takes the
  *             tree with it (the OS closes the handle).
  *  assign() also sweeps the launcher's already-visible descendants by a
  *  Toolhelp32 parent-chain walk: a child forked in the spawn→assign window is
@@ -30,7 +30,7 @@
  *  reference box).
  *  Fail-safe: non-win32, no bun:ffi, or any kernel32 call failing → null; the
  *  caller keeps `taskkill /T /F` alone and reports treeKill "taskkill-only".
- *  Nested jobs (Windows 8+) let this work when aion itself already runs
+ *  Nested jobs (Windows 8+) let this work when rovecode itself already runs
  *  inside a job (terminals and IDEs do that): the launcher is then in both. */
 
 import { dlopen, FFIType, ptr } from "bun:ffi";

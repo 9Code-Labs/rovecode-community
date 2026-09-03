@@ -1,4 +1,4 @@
-// @ts-nocheck -- vendored by aion: upstream-checked at pinned SHA 853a80d2; see ../PATCHES.md
+// @ts-nocheck -- vendored by rovecode: upstream-checked at pinned SHA 853a80d2; see ../PATCHES.md
 import { createRequire } from "node:module";
 import * as path from "node:path";
 import { getNativeModuleCandidates } from "./native-module-path.ts";

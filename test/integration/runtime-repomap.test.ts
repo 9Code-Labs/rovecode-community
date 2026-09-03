@@ -1,8 +1,8 @@
 /** Port #12 runtime wiring (round-2 F1/F3): the repo-map chunk is built
- *  LAZILY at the first buildDef() — createRuntime stays cheap for `aion tools`
+ *  LAZILY at the first buildDef() — createRuntime stays cheap for `rovecode tools`
  *  and ACP session creation — memoized afterwards for prompt-cache stability,
- *  env-switchable (AION_NO_REPOMAP / AION_REPOMAP_TOKENS), persists its tags
- *  cache under .aion/cache/repomap.json, and reaches the model through the ONE
+ *  env-switchable (ROVECODE_NO_REPOMAP / ROVECODE_REPOMAP_TOKENS), persists its tags
+ *  cache under .rovecode/cache/repomap.json, and reaches the model through the ONE
  *  assembleContext path (config-chunk.test.ts precedent). Deleting the
  *  repoMapChunk block in runtime.ts turns this file red. */
 
@@ -18,7 +18,7 @@ import { join } from "node:path";
 /** Hermetic cwd: the (invalid) .git dir stops the config ancestor walk AND
  *  makes `git ls-files` fail fast, so the bounded walk enumerates fixtures. */
 function tmpCwd(): string {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-rtmap-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-rtmap-"));
   mkdirSync(join(cwd, ".git"));
   return cwd;
 }
@@ -77,40 +77,40 @@ test("memoized after the first buildDef: later edits do NOT move the chunk (prom
   rmSync(cwd, { recursive: true, force: true });
 });
 
-test("AION_NO_REPOMAP=1 kill switch: no repo-map chunk", () => {
+test("ROVECODE_NO_REPOMAP=1 kill switch: no repo-map chunk", () => {
   const cwd = tmpCwd();
   seedSources(cwd);
-  process.env.AION_NO_REPOMAP = "1";
+  process.env.ROVECODE_NO_REPOMAP = "1";
   try {
     const rt = createRuntime({ cwd, stream: null });
     const def = rt.buildDef(model);
     expect(def.contextChunks?.find((c) => c.name === "repo-map")).toBeUndefined();
   } finally {
-    delete process.env.AION_NO_REPOMAP;
+    delete process.env.ROVECODE_NO_REPOMAP;
   }
   rmSync(cwd, { recursive: true, force: true });
 });
 
-test("AION_REPOMAP_TOKENS caps the chunk budget", () => {
+test("ROVECODE_REPOMAP_TOKENS caps the chunk budget", () => {
   const cwd = tmpCwd();
   seedSources(cwd);
-  process.env.AION_REPOMAP_TOKENS = "40";
+  process.env.ROVECODE_REPOMAP_TOKENS = "40";
   try {
     const rt = createRuntime({ cwd, stream: null });
     const chunk = rt.buildDef(model).contextChunks?.find((c) => c.name === "repo-map");
     expect(chunk).toBeDefined();
     expect(chunk!.tokens).toBeLessThanOrEqual(40);
   } finally {
-    delete process.env.AION_REPOMAP_TOKENS;
+    delete process.env.ROVECODE_REPOMAP_TOKENS;
   }
   rmSync(cwd, { recursive: true, force: true });
 });
 
-test("first buildDef persists the tags cache under .aion/cache/repomap.json (F1)", () => {
+test("first buildDef persists the tags cache under .rovecode/cache/repomap.json (F1)", () => {
   const cwd = tmpCwd();
   const rt = createRuntime({ cwd, stream: null });
   seedSources(cwd);
-  const cachePath = join(cwd, ".aion", "cache", "repomap.json");
+  const cachePath = join(cwd, ".rovecode", "cache", "repomap.json");
   expect(existsSync(cachePath)).toBe(false); // createRuntime alone writes nothing
   rt.buildDef(model);
   expect(existsSync(cachePath)).toBe(true);  // warm launches skip extraction

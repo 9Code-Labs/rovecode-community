@@ -18,7 +18,7 @@ import type { Tool, ToolContext } from "../../src/core/types.ts";
 
 const tmpDirs: string[] = [];
 function makeTmp(): string {
-  const dir = mkdtempSync(join(tmpdir(), "aion-mcp-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-mcp-"));
   tmpDirs.push(dir);
   return dir;
 }
@@ -128,7 +128,7 @@ afterAll(async () => {
 // ---------- loadMcpConfig ----------
 
 describe("loadMcpConfig", () => {
-  test("merges .mcp.json and .aion/mcp.json with ours winning on name clash", () => {
+  test("merges .mcp.json and .rovecode/mcp.json with ours winning on name clash", () => {
     const dir = makeTmp();
     writeFileSync(
       join(dir, ".mcp.json"),
@@ -139,9 +139,9 @@ describe("loadMcpConfig", () => {
         },
       }),
     );
-    mkdirSync(join(dir, ".aion"));
+    mkdirSync(join(dir, ".rovecode"));
     writeFileSync(
-      join(dir, ".aion", "mcp.json"),
+      join(dir, ".rovecode", "mcp.json"),
       JSON.stringify({
         mcpServers: {
           dupe: { url: "http://localhost:8080/mcp" },
@@ -167,9 +167,9 @@ describe("loadMcpConfig", () => {
   test("tolerates malformed files and entries: skip + collect warnings", () => {
     const dir = makeTmp();
     writeFileSync(join(dir, ".mcp.json"), "{ this is not json");
-    mkdirSync(join(dir, ".aion"));
+    mkdirSync(join(dir, ".rovecode"));
     writeFileSync(
-      join(dir, ".aion", "mcp.json"),
+      join(dir, ".rovecode", "mcp.json"),
       JSON.stringify({
         mcpServers: {
           bad: {}, // neither command nor url
@@ -212,9 +212,9 @@ describe("loadMcpConfig", () => {
 
   test("ours also accepts a servers[] array form with enabled flag", () => {
     const dir = makeTmp();
-    mkdirSync(join(dir, ".aion"));
+    mkdirSync(join(dir, ".rovecode"));
     writeFileSync(
-      join(dir, ".aion", "mcp.json"),
+      join(dir, ".rovecode", "mcp.json"),
       JSON.stringify({ servers: [{ name: "arr", transport: "stdio", command: "bun", enabled: false }] }),
     );
     const configs = loadMcpConfig(dir);
@@ -228,7 +228,7 @@ describe("McpManager.connect", () => {
   test("a failing server lands in failed[] without breaking the others", async () => {
     const isolated = new McpManager(
       [
-        { name: "bogus", transport: "stdio", command: "aion-definitely-not-a-real-binary-xyz" },
+        { name: "bogus", transport: "stdio", command: "rovecode-definitely-not-a-real-binary-xyz" },
         { name: "toy", transport: "stdio", command: "unused-inmemory" },
       ],
       { transportFactory: makeToyFactory(), connectTimeoutMs: 5_000 },

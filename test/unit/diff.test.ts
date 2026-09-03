@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { previewDiff, DIFF_MAX_LINES, clipLines, moreMarker } from "../../src/coding/diff.ts";
 import { fileTag, lineHash } from "../../src/coding/hashline.ts";
 
-const tmp = () => mkdtempSync(join(tmpdir(), "aion-diff-"));
+const tmp = () => mkdtempSync(join(tmpdir(), "rovecode-diff-"));
 const numbered = (n: number, pre = "line") => Array.from({ length: n }, (_, i) => `${pre}-${i + 1}`).join("\n") + "\n";
 
 /** edit-tool args for one anchored op, hashed off `content` the way a fresh read would */

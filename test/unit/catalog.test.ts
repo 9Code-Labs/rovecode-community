@@ -104,7 +104,7 @@ test("deepseek-ai/ and moonshotai/ vendor prefixes resolve for aggregator provid
 
 test("vendor-prefix resolution also covers providers with no PROVIDER_MAP entry at all", () => {
   const catalog = new ModelCatalog();
-  // e.g. a custom AION_BASE_URL provider serving HuggingFace-style ids
+  // e.g. a custom ROVECODE_BASE_URL provider serving HuggingFace-style ids
   expect(catalog.lookup("custom", "zai-org/glm-5.3-flash")?.provider).toBe("zai");
   // …while a prefix-less id under the same unmapped provider stays undefined
   expect(catalog.lookup("custom", "glm-5.3-flash")).toBeUndefined();
@@ -194,7 +194,7 @@ test("refresh() is a no-op returning false when no fetchFn is configured (defaul
 // ---------- disk cache: corruption tolerance + TTL ----------
 
 test("corrupted cache file (invalid JSON) is ignored, not thrown, snapshot still used", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-catalog-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-catalog-"));
   writeFileSync(join(dir, "models.json"), "{not valid json at all");
   const catalog = new ModelCatalog({ fetchFn: neverCalledFetch, cacheDir: dir });
   expect(() => catalog.lookup("openai", "gpt-4o")).not.toThrow();
@@ -203,7 +203,7 @@ test("corrupted cache file (invalid JSON) is ignored, not thrown, snapshot still
 });
 
 test("corrupted cache file (valid JSON, wrong shape) is ignored, not thrown", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-catalog-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-catalog-"));
   writeFileSync(join(dir, "models.json"), JSON.stringify([1, 2, 3]));
   const catalog = new ModelCatalog({ fetchFn: neverCalledFetch, cacheDir: dir });
   expect(() => catalog.lookup("anthropic", "claude-haiku-4-5")).not.toThrow();
@@ -212,7 +212,7 @@ test("corrupted cache file (valid JSON, wrong shape) is ignored, not thrown", ()
 });
 
 test("disk cache ttl: fresh (<24h) cache is used, stale (>24h) cache is ignored in favor of the snapshot", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-catalog-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-catalog-"));
   const cachePath = join(dir, "models.json");
   const cached = { openai: { models: { "gpt-4o": { limit: { context: 1, output: 1 }, cost: { input: 111, output: 1 }, tool_call: true, reasoning: false } } } };
   writeFileSync(cachePath, JSON.stringify(cached)); // mtime is "now" -> fresh

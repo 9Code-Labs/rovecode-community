@@ -8,15 +8,15 @@
  *  ctx = {cwd, sessionId, runId?} and nothing else (no registry/store handles) — the surface stays
  *  tiny on purpose; a tenth hook is the budget's last slot, not a target.
  *
- *  Loading: `.aion/hooks.ts` or `.aion/hooks.js` in the project plus `~/.aion/hooks.{ts,js}`
- *  (AION_HOME idiom, providers/auth.ts aionHome), each `export default { version: 1, hooks: {…} }`,
+ *  Loading: `.rovecode/hooks.ts` or `.rovecode/hooks.js` in the project plus `~/.rovecode/hooks.{ts,js}`
+ *  (ROVECODE_HOME idiom, providers/auth.ts rovecodeHome), each `export default { version: 1, hooks: {…} }`,
  *  imported with a plain `await import()` — Bun runs TypeScript natively, so there is no build step
  *  and no loader dependency. User scope runs first, project second. Wrong/missing version → skipped
  *  with a warning (version gate); a failing import → warning, never a throw. Loaded ONCE per
- *  process (Bun's module cache; a `?query` does not bust it on 1.3.14): restart aion to pick up
- *  edits — the projectContext rule. AION_NO_HOOKS=1 skips the files (programmatic add() still works).
+ *  process (Bun's module cache; a `?query` does not bust it on 1.3.14): restart rovecode to pick up
+ *  edits — the projectContext rule. ROVECODE_NO_HOOKS=1 skips the files (programmatic add() still works).
  *
- *  Running: every hook call is timeout-bounded (AION_HOOK_TIMEOUT_MS, default 5000, on a REF'D
+ *  Running: every hook call is timeout-bounded (ROVECODE_HOOK_TIMEOUT_MS, default 5000, on a REF'D
  *  timer) and isolated — a throwing or hanging hook records one bounded warning note and the run
  *  continues as if the hook had returned void. Results are validated and bounded (deny reason
  *  ≤ MAX_DENY_REASON_CHARS; post_tool may grow the tool's output by ≤ MAX_POST_TOOL_GROWTH_CHARS).
@@ -39,8 +39,8 @@
  *  deny (fail-open to policy, which already ran).
  *
  *  TRUST: hooks are code the user placed in their own project or home dir, executed in-process with
- *  the user's privileges — the same trust class as .aion/commands and .aion/mcp.json (which spawns
- *  processes). Opening a checkout that ships a hostile .aion/hooks.ts runs it; a project-trust
+ *  the user's privileges — the same trust class as .rovecode/commands and .rovecode/mcp.json (which spawns
+ *  processes). Opening a checkout that ships a hostile .rovecode/hooks.ts runs it; a project-trust
  *  prompt (pi's project_trust event) is a documented follow-up, not in scope here.
  *
  *  Sources (pattern references, no code copied; both MIT — covered by the generic MIT credit in the
@@ -64,7 +64,7 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ApprovalFn, ApprovalRequest, RunEvent, ToolOutput } from "./types.ts";
-import { aionHome } from "../providers/auth.ts";
+import { rovecodeHome } from "../providers/auth.ts";
 
 export const HOOKS_API_VERSION = 1;
 export const DEFAULT_HOOK_TIMEOUT_MS = 5000;
@@ -119,15 +119,15 @@ export type HookDecision<K extends HookName> = Exclude<Awaited<ReturnType<NonNul
 
 export interface LoadedHooks { hooks: HookSet[]; sources: string[]; warnings: string[] }
 
-/** Load `<home>/hooks.{ts,js}` (user, first) and `<cwd>/.aion/hooks.{ts,js}` (project, second).
+/** Load `<home>/hooks.{ts,js}` (user, first) and `<cwd>/.rovecode/hooks.{ts,js}` (project, second).
  *  Never throws: every failure is a warning line naming the file. hooks[i] came from sources[i]. */
 export async function loadHooks(cwd: string, opts: { home?: string; timeoutMs?: number } = {}): Promise<LoadedHooks> {
   const out: LoadedHooks = { hooks: [], sources: [], warnings: [] };
-  if (process.env.AION_NO_HOOKS === "1") return out;
+  if (process.env.ROVECODE_NO_HOOKS === "1") return out;
   const seen = new Set<string>();
-  for (const dir of [opts.home ?? aionHome(), join(cwd, ".aion")]) {
+  for (const dir of [opts.home ?? rovecodeHome(), join(cwd, ".rovecode")]) {
     const file = pickHookFile(dir, out.warnings);
-    if (file === null || seen.has(resolve(file))) continue; // home inside cwd/.aion: one load
+    if (file === null || seen.has(resolve(file))) continue; // home inside cwd/.rovecode: one load
     seen.add(resolve(file));
     const set = await importHookSet(file, opts.timeoutMs ?? hookTimeoutMs(), out.warnings);
     if (set) { out.hooks.push(set); out.sources.push(file); }
@@ -161,7 +161,7 @@ function validateModule(file: string, dflt: unknown, warnings: string[]): HookSe
   if (dflt["version"] !== HOOKS_API_VERSION) {
     const v = dflt["version"]; // a string "1" is shown quoted, never disguised as the supported number
     const shown = v === undefined ? "missing" : typeof v === "string" ? JSON.stringify(v) : String(v);
-    warnings.push(`${file}: hooks API version ${shown} is not supported (this aion speaks ${HOOKS_API_VERSION}) — skipped`);
+    warnings.push(`${file}: hooks API version ${shown} is not supported (this rovecode speaks ${HOOKS_API_VERSION}) — skipped`);
     return null;
   }
   if (!isRecord(dflt["hooks"])) { warnings.push(`${file}: "hooks" must be an object of hook functions — skipped`); return null; }
@@ -174,9 +174,9 @@ function validateModule(file: string, dflt: unknown, warnings: string[]): HookSe
   return set as HookSet;
 }
 
-/** AION_HOOK_TIMEOUT_MS: blank/invalid/< 1 → default. */
+/** ROVECODE_HOOK_TIMEOUT_MS: blank/invalid/< 1 → default. */
 export function hookTimeoutMs(env: Record<string, string | undefined> = process.env): number {
-  const v = Number(env["AION_HOOK_TIMEOUT_MS"] ?? "");
+  const v = Number(env["ROVECODE_HOOK_TIMEOUT_MS"] ?? "");
   return Number.isFinite(v) && v >= 1 ? Math.floor(v) : DEFAULT_HOOK_TIMEOUT_MS;
 }
 
@@ -371,7 +371,7 @@ function boundGrowth(text: string, originalLen: number): string {
   return text.slice(0, cap) + `\n… [post_tool output truncated: hooks may add at most ${MAX_POST_TOOL_GROWTH_CHARS} chars]`;
 }
 
-const TIMED_OUT: unique symbol = Symbol("aion.hook.timeout");
+const TIMED_OUT: unique symbol = Symbol("rovecode.hook.timeout");
 /** resolves TIMED_OUT after ms on a REF'D timer (Bun unrefs AbortSignal.timeout — providers/retry.ts
  *  sleepMs / tools/webfetch.ts idiom); the original promise's later settle is ignored */
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {

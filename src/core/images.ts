@@ -6,12 +6,12 @@
  *    extension (png 89 50 4E 47.., jpeg FF D8 FF, gif "GIF8", webp "RIFF"…"WEBP"); bmp/pdf are
  *    recognised there but not accepted here (neither wire protocol takes them as images);
  *  - image/image.ts:10 MAX_BASE64_BYTES = 5 MiB (their cap is on the base64 form and they resize
- *    past it with photon; here the cap is on the decoded file, AION_IMAGE_MAX_BYTES, and an
+ *    past it with photon; here the cap is on the decoded file, ROVECODE_IMAGE_MAX_BYTES, and an
  *    oversize image is an error the user fixes — never a silent re-encode);
  *  - session/prompt.ts:66-71 SUPPORTED_MCP_RESOURCE_ATTACHMENT_MIMES — the same four types;
  *  - session/message-v2.ts:213-217 `[Attached <mime>: <filename>]` text stand-in for stripped
  *    media and provider/transform.ts:409-441 unsupportedParts (image → text when the model's
- *    input modalities lack "image") — the placeholder below is aion's own wording.
+ *    input modalities lack "image") — the placeholder below is rovecode's own wording.
  *  Pattern reference only, no code copied: cline @ 8eb5f3d sdk/packages/shared/src/llms/media.ts
  *  SUPPORTED_IMAGE_MEDIA_TYPES (:73-78), DEFAULT_MAX_IMAGE_BASE64_BYTES 5 MiB (:80),
  *  IMAGE_UNSUPPORTED_PLACEHOLDER (:6-12: the stored history keeps the real image, only the
@@ -26,15 +26,15 @@ import { readFileSync, statSync } from "node:fs";
 import { basename, isAbsolute } from "node:path";
 import type { ImageMime, ImagePart } from "./types.ts";
 
-/** decoded-file cap per image (bytes); AION_IMAGE_MAX_BYTES overrides */
+/** decoded-file cap per image (bytes); ROVECODE_IMAGE_MAX_BYTES overrides */
 export const IMAGE_MAX_BYTES = 5 * 1024 * 1024;
-export const IMAGE_MAX_BYTES_ENV = "AION_IMAGE_MAX_BYTES";
+export const IMAGE_MAX_BYTES_ENV = "ROVECODE_IMAGE_MAX_BYTES";
 /** cap per user message — the TUI's /attach queue and the ACP prompt path both check it */
 export const MAX_IMAGES_PER_MESSAGE = 8;
 export const IMAGE_MIMES: readonly ImageMime[] = ["image/png", "image/jpeg", "image/gif", "image/webp"];
 
 export interface ImageLoadOptions {
-  /** per-image byte cap; default AION_IMAGE_MAX_BYTES, else IMAGE_MAX_BYTES */
+  /** per-image byte cap; default ROVECODE_IMAGE_MAX_BYTES, else IMAGE_MAX_BYTES */
   maxBytes?: number;
   /** env the cap is read from (tests); default process.env */
   env?: Record<string, string | undefined>;
@@ -44,7 +44,7 @@ export interface ImageLoadOptions {
 
 export type ImageLoadResult = ImagePart | { error: string };
 
-/** The effective per-image cap: a positive integer AION_IMAGE_MAX_BYTES wins, else the default. */
+/** The effective per-image cap: a positive integer ROVECODE_IMAGE_MAX_BYTES wins, else the default. */
 export function imageMaxBytes(env: Record<string, string | undefined> = process.env): number {
   const raw = env[IMAGE_MAX_BYTES_ENV]?.trim();
   if (!raw) return IMAGE_MAX_BYTES;

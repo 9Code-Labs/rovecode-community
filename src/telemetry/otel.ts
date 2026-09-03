@@ -2,8 +2,8 @@
  *  OTel; per-step token/latency/cost accounting). A consumer of core/hooks.ts, nothing more: it is a
  *  HookSet attached with `hooks.add(set, "otel")`, so the loop/tools/runner stay untouched.
  *
- *  Shape — ONE trace per run: `aion.run` (pre_run → post_run) ⊃ `aion.turn` (turn_start → turn_end,
- *  one per model iteration) ⊃ `aion.tool` (pre_tool → post_tool; parent = the turn that ISSUED the
+ *  Shape — ONE trace per run: `rovecode.run` (pre_run → post_run) ⊃ `rovecode.turn` (turn_start → turn_end,
+ *  one per model iteration) ⊃ `rovecode.tool` (pre_tool → post_tool; parent = the turn that ISSUED the
  *  call). The loop yields turn_end BEFORE it executes the turn's calls (core/loop.ts:232 then :295),
  *  so a tool span starts after its parent turn ended — OTLP permits a child to outlive its parent and
  *  the run span brackets everything; keeping the turn = the model step keeps its latency honest.
@@ -11,13 +11,13 @@
  *  tui/cost.ts + cli/output.ts idiom): each turn span carries the tokens/cost of the assistant message
  *  it appended, the run span the sums since the run began; latency is the span itself. Compactions
  *  and calls that never reached pre_tool (policy deny, unknown tool, truncated) become span EVENTS on
- *  the current turn (`aion.compaction`, `aion.tool_call_failed`) — a zero-length "step" is noise as a
+ *  the current turn (`rovecode.compaction`, `rovecode.tool_call_failed`) — a zero-length "step" is noise as a
  *  span. Attribute policy follows pi (telemetry/README.md:387-389): ids, sizes and outcomes only —
  *  never the goal, tool args/output, headers or credentials (output_bytes, not output).
  *
  *  Export — hand-encoded OTLP/HTTP JSON (ExportTraceServiceRequest; OTLP/JSON mapping: ids as hex,
  *  int64 as decimal strings, enums as integers) POSTed ONCE per run at post_run to <endpoint>/v1/traces
- *  (AION_OTEL_ENDPOINT with or without the suffix; AION_OTEL_HEADERS "k=v,k2=v2" ride along). The POST
+ *  (ROVECODE_OTEL_ENDPOINT with or without the suffix; ROVECODE_OTEL_HEADERS "k=v,k2=v2" ride along). The POST
  *  is fire-and-forget on a 5s REF'D timer (hooks.ts withTimeout idiom — Bun unrefs AbortSignal.timeout),
  *  tracked so flush() and session_close await the outstanding ones; post_run never blocks the run and
  *  the export path never throws. A failed export is ONE bounded warning: direct consumers pass
@@ -26,7 +26,7 @@
  *  which the runner's isolation records as exactly one note ("otel: … hook threw: OTLP export to …
  *  failed …") that every surface already streams. The raise happens after that hook's own work.
  *
- *  ZERO OVERHEAD OFF — cli/runtime.ts calls createOtelHooks ONLY when AION_OTEL_ENDPOINT is set; off,
+ *  ZERO OVERHEAD OFF — cli/runtime.ts calls createOtelHooks ONLY when ROVECODE_OTEL_ENDPOINT is set; off,
  *  no set is attached and the runner's tap short-circuits (hooks.ts:272). otelDebug.constructed is the
  *  spy the off-path test pins ("exporter never constructed").
  *
@@ -36,12 +36,12 @@
  *  session_close still drains a leftover state (a generator dropped without .return()) as "stopped"
  *  before its flush. Tool spans are keyed per issuing turn, so a call id a provider reuses across
  *  turns (the SSE adapter's `tc<idx>` fallback, providers/stream.ts) is one span PER TURN.
- *  `aion.tool_calls` counts ISSUED calls — dispatched (spans) plus never-dispatched (tool_call_failed
- *  events) — the same count as `aion run --output json` toolCalls (cli/output.ts keys per issuing turn
+ *  `rovecode.tool_calls` counts ISSUED calls — dispatched (spans) plus never-dispatched (tool_call_failed
+ *  events) — the same count as `rovecode run --output json` toolCalls (cli/output.ts keys per issuing turn
  *  too, LOW-B), with ONE residual: a run aborted while a call waited between its pre_tool hook and its
  *  execution (tools.ts:141 returns without an event) has that call as a span but no toolCalls entry —
  *  the hook side saw pre_tool, the event side saw nothing. A guard-stubbed
- *  call (tool events without a pre_tool) carries aion.failure_reason=loop_guard. An endpoint that is
+ *  call (tool events without a pre_tool) carries rovecode.failure_reason=loop_guard. An endpoint that is
  *  not an absolute http(s) URL (`http://`, `host:4318`) disables export with ONE note instead of a
  *  5 s stall per run against host "v1".
  *
@@ -49,14 +49,14 @@
  *  - packages/agent/src/harness/telemetry.ts:235-256 `pi.harness.run` (outcome attribute; status error
  *    when the run fails), :327-352 `pi.harness.turn` ("one assistant response and its tool batch",
  *    parent run), :399-451 `pi.harness.tool` (parents turn|run; `pi.tool.name`, `pi.tool.call_id`,
- *    `pi.tool.is_error`; status error when execution returns an error) → aion.run / aion.turn /
- *    aion.tool with aion.status, aion.turn, aion.tool, aion.call_id, aion.ok.
+ *    `pi.tool.is_error`; status error when execution returns an error) → rovecode.run / rovecode.turn /
+ *    rovecode.tool with rovecode.status, rovecode.turn, rovecode.tool, rovecode.call_id, rovecode.ok.
  *  - :94-103 `pi.ai.usage.{input,output,cache_read,cache_write}_tokens` + `.cost`, :88-92
  *    `pi.ai.response.stop_reason`, :55-64 `pi.ai.provider`/`pi.ai.model`, :194 `pi.session.id` →
- *    aion.tokens.{input,output,cacheRead,cacheWrite} (NormalizedUsage spelling), aion.cost_usd,
- *    aion.stop_reason, aion.model.provider/model, aion.session_id.
+ *    rovecode.tokens.{input,output,cacheRead,cacheWrite} (NormalizedUsage spelling), rovecode.cost_usd,
+ *    rovecode.stop_reason, rovecode.model.provider/model, rovecode.session_id.
  *  Deviations: pi ships no exporter (telemetry/README.md:11 — adapter-owned) and records no timestamps
- *  (memory.ts:203-218); aion ships the OTLP/HTTP exporter and wall-clock ns times. */
+ *  (memory.ts:203-218); rovecode ships the OTLP/HTTP exporter and wall-clock ns times. */
 
 import { randomBytes } from "node:crypto";
 import type { HookCtx, HookSet, HookToolCall, RunResult } from "../core/hooks.ts";
@@ -83,7 +83,7 @@ export interface OtelOptions {
   fetch?: typeof fetch;
   /** wall clock in ms (fractions kept); default performance.timeOrigin + performance.now() */
   now?: () => number;
-  /** resource service.name; default "aion" */
+  /** resource service.name; default "rovecode" */
   serviceName?: string;
   /** live view of the session store — usage/origin per assistant message */
   messages: () => Message[];
@@ -116,10 +116,10 @@ const ERROR = (message: string): OtelSpan["status"] => ({ code: 2, message });
 
 // ---------- env / endpoint / headers ----------
 
-/** null unless AION_OTEL_ENDPOINT is set (blank = unset) — the runtime constructs nothing on null */
+/** null unless ROVECODE_OTEL_ENDPOINT is set (blank = unset) — the runtime constructs nothing on null */
 export function otelOptionsFromEnv(env: Record<string, string | undefined> = process.env): Pick<OtelOptions, "endpoint" | "headers"> | null {
-  const endpoint = (env["AION_OTEL_ENDPOINT"] ?? "").trim();
-  return endpoint ? { endpoint, headers: parseOtelHeaders(env["AION_OTEL_HEADERS"]) } : null;
+  const endpoint = (env["ROVECODE_OTEL_ENDPOINT"] ?? "").trim();
+  return endpoint ? { endpoint, headers: parseOtelHeaders(env["ROVECODE_OTEL_HEADERS"]) } : null;
 }
 
 /** "k=v,k2=v2" (OTEL_EXPORTER_OTLP_HEADERS shape): first "=" splits, so values may contain "=";
@@ -156,7 +156,7 @@ export function createOtelHooks(opts: OtelOptions): OtelHooks {
   const fetchFn = opts.fetch ?? fetch;
   const now = opts.now ?? defaultNow;
   const timeoutMs = opts.timeoutMs ?? DEFAULT_EXPORT_TIMEOUT_MS;
-  const service = opts.serviceName ?? "aion";
+  const service = opts.serviceName ?? "rovecode";
   let pricing: PricingSource | undefined = opts.pricing;
   const runs = new Map<string, RunState>();
   const pending = new Set<Promise<void>>();
@@ -179,20 +179,20 @@ export function createOtelHooks(opts: OtelOptions): OtelHooks {
     const key = toolKey(st, callId);
     let s = st.tools.get(key);
     if (!s) {
-      s = attach(st, "aion.tool", issuer(st));
-      s.attrs.set("aion.call_id", str(callId));
-      if (fromStart) s.attrs.set("aion.failure_reason", str("loop_guard"));
+      s = attach(st, "rovecode.tool", issuer(st));
+      s.attrs.set("rovecode.call_id", str(callId));
+      if (fromStart) s.attrs.set("rovecode.failure_reason", str("loop_guard"));
       st.tools.set(key, s);
       st.calls++;
     }
-    if (tool !== undefined && !s.attrs.has("aion.tool")) s.attrs.set("aion.tool", str(tool));
+    if (tool !== undefined && !s.attrs.has("rovecode.tool")) s.attrs.set("rovecode.tool", str(tool));
     return s;
   };
   const settleTool = (s: OtelSpan, ok: boolean, output: string): void => {
     if (s.end !== undefined) return; // post_tool already settled it; tool_execution_end only adds duration
-    s.attrs.set("aion.ok", bool(ok));
-    s.attrs.set("aion.output_bytes", int(Buffer.byteLength(output, "utf8")));
-    const name = s.attrs.get("aion.tool");
+    s.attrs.set("rovecode.ok", bool(ok));
+    s.attrs.set("rovecode.output_bytes", int(Buffer.byteLength(output, "utf8")));
+    const name = s.attrs.get("rovecode.tool");
     end(s, ok ? OK : ERROR(`tool ${name && "stringValue" in name ? name.stringValue : "call"} failed`));
   };
   /** tokens summed + cost priced PER MESSAGE at Message.origin (cli/output.ts summarize): any
@@ -209,11 +209,11 @@ export function createOtelHooks(opts: OtelOptions): OtelHooks {
       const c = row ? costUsd(n, row) : undefined;
       cost = c === undefined ? null : cost + c;
     }
-    s.attrs.set("aion.tokens.input", int(u.input)); s.attrs.set("aion.tokens.output", int(u.output));
-    s.attrs.set("aion.tokens.cacheRead", int(u.cacheRead)); s.attrs.set("aion.tokens.cacheWrite", int(u.cacheWrite));
-    if (cost !== null) s.attrs.set("aion.cost_usd", dbl(cost));
+    s.attrs.set("rovecode.tokens.input", int(u.input)); s.attrs.set("rovecode.tokens.output", int(u.output));
+    s.attrs.set("rovecode.tokens.cacheRead", int(u.cacheRead)); s.attrs.set("rovecode.tokens.cacheWrite", int(u.cacheWrite));
+    if (cost !== null) s.attrs.set("rovecode.cost_usd", dbl(cost));
     const served = msgs.at(-1)?.origin; // the model that SERVED (router fallback may differ from the request)
-    if (served) { s.attrs.set("aion.model.provider", str(served.provider)); s.attrs.set("aion.model.model", str(served.model)); }
+    if (served) { s.attrs.set("rovecode.model.provider", str(served.provider)); s.attrs.set("rovecode.model.model", str(served.model)); }
   };
 
   // --- export ---
@@ -223,7 +223,7 @@ export function createOtelHooks(opts: OtelOptions): OtelHooks {
   };
   const fail = (reason: string): void => warn(`OTLP export to ${url} failed: ${reason}`);
   const usable = validEndpoint(opts.endpoint); // ONE note at construction (raised by the first lifecycle hook), then no POSTs
-  if (!usable) warn(`AION_OTEL_ENDPOINT ${JSON.stringify(opts.endpoint)} is not an absolute http(s) URL — OTel export disabled`);
+  if (!usable) warn(`ROVECODE_OTEL_ENDPOINT ${JSON.stringify(opts.endpoint)} is not an absolute http(s) URL — OTel export disabled`);
   /** deferred failure → thrown from a lifecycle hook → one runner warning (header); no-op with onWarning */
   const raise = (): void => {
     if (failed === 0) return;
@@ -247,9 +247,9 @@ export function createOtelHooks(opts: OtelOptions): OtelHooks {
   const finish = (st: RunState, status: RunResult["status"]): void => {
     const t = now();
     for (const s of st.spans) if (s.end === undefined && s !== st.run) s.end = t;
-    st.run.attrs.set("aion.status", str(status));
-    st.run.attrs.set("aion.turns", int(st.spans.filter((s) => s.name === "aion.turn").length));
-    st.run.attrs.set("aion.tool_calls", int(st.calls));
+    st.run.attrs.set("rovecode.status", str(status));
+    st.run.attrs.set("rovecode.turns", int(st.spans.filter((s) => s.name === "rovecode.turn").length));
+    st.run.attrs.set("rovecode.tool_calls", int(st.calls));
     account(st.run, opts.messages().slice(st.baseline).filter((m) => m.role === "assistant"));
     st.run.end = t;
     st.run.status = status === "done" || status === "stopped" ? OK : ERROR(status); // budget/error did not complete
@@ -261,8 +261,8 @@ export function createOtelHooks(opts: OtelOptions): OtelHooks {
     openRuns: () => runs.size,
     pre_run(ctx) {
       if (ctx.runId === undefined) return;
-      const run: OtelSpan = { traceId: hex(16), spanId: hex(8), name: "aion.run", start: now(), attrs: new Map(), events: [], status: { code: 0 } };
-      run.attrs.set("aion.session_id", str(ctx.sessionId)); run.attrs.set("aion.run_id", str(ctx.runId));
+      const run: OtelSpan = { traceId: hex(16), spanId: hex(8), name: "rovecode.run", start: now(), attrs: new Map(), events: [], status: { code: 0 } };
+      run.attrs.set("rovecode.session_id", str(ctx.sessionId)); run.attrs.set("rovecode.run_id", str(ctx.runId));
       const len = opts.messages().length;
       runs.set(ctx.runId, { run, spans: [run], tools: new Map(), calls: 0, baseline: len, seen: len });
       raise();
@@ -273,14 +273,14 @@ export function createOtelHooks(opts: OtelOptions): OtelHooks {
       switch (ev.type) {
         case "turn_start": {
           if (st.turn) end(st.turn, st.turn.status); // defensive: the loop never nests turns
-          st.turn = st.lastTurn = attach(st, "aion.turn", st.run);
-          st.turn.attrs.set("aion.turn", int(ev.turn));
+          st.turn = st.lastTurn = attach(st, "rovecode.turn", st.run);
+          st.turn.attrs.set("rovecode.turn", int(ev.turn));
           break;
         }
         case "turn_end": {
           const t = st.turn ?? st.lastTurn;
           if (!t) break;
-          t.attrs.set("aion.stop_reason", str(ev.stopReason));
+          t.attrs.set("rovecode.stop_reason", str(ev.stopReason));
           const msgs = opts.messages();
           account(t, msgs.slice(st.seen).filter((m) => m.role === "assistant"));
           st.seen = msgs.length;
@@ -291,20 +291,20 @@ export function createOtelHooks(opts: OtelOptions): OtelHooks {
         case "tool_execution_start": openTool(st, ev.callId, ev.tool, true); break;
         case "tool_execution_end": {
           const s = openTool(st, ev.callId);
-          s.attrs.set("aion.duration_ms", int(ev.durationMs)); // the dispatcher's own measure (tools.ts:170)
+          s.attrs.set("rovecode.duration_ms", int(ev.durationMs)); // the dispatcher's own measure (tools.ts:170)
           settleTool(s, ev.ok, ev.output);
           break;
         }
         case "tool_call_failed": {
           const s = st.tools.get(toolKey(st, ev.callId));
-          if (s) { s.attrs.set("aion.ok", bool(false)); s.attrs.set("aion.failure_reason", str(ev.reason)); end(s, ERROR(ev.reason)); }
-          else { st.calls++; event(st.turn ?? st.lastTurn ?? st.run, "aion.tool_call_failed", [["aion.call_id", str(ev.callId)], ["aion.failure_reason", str(ev.reason)]]); }
+          if (s) { s.attrs.set("rovecode.ok", bool(false)); s.attrs.set("rovecode.failure_reason", str(ev.reason)); end(s, ERROR(ev.reason)); }
+          else { st.calls++; event(st.turn ?? st.lastTurn ?? st.run, "rovecode.tool_call_failed", [["rovecode.call_id", str(ev.callId)], ["rovecode.failure_reason", str(ev.reason)]]); }
           break;
         }
         case "compaction":
-          event(st.turn ?? st.run, "aion.compaction", [
-            ["aion.compaction.strategy", str(ev.strategy)], ...(ev.trigger ? [["aion.compaction.trigger", str(ev.trigger)] as [string, OtlpValue]] : []),
-            ["aion.compaction.tokens_before", int(ev.tokensBefore)], ["aion.compaction.tokens_after", int(ev.tokensAfter)],
+          event(st.turn ?? st.run, "rovecode.compaction", [
+            ["rovecode.compaction.strategy", str(ev.strategy)], ...(ev.trigger ? [["rovecode.compaction.trigger", str(ev.trigger)] as [string, OtlpValue]] : []),
+            ["rovecode.compaction.tokens_before", int(ev.tokensBefore)], ["rovecode.compaction.tokens_after", int(ev.tokensAfter)],
           ]);
           break;
         default: break; // run_start/run_end ride pre_run/post_run; deltas, progress notes and steers are not spans
@@ -336,7 +336,7 @@ function hex(bytes: number): string {
   do h = randomBytes(bytes).toString("hex"); while (/^0+$/.test(h));
   return h;
 }
-const TIMED_OUT: unique symbol = Symbol("aion.otel.timeout");
+const TIMED_OUT: unique symbol = Symbol("rovecode.otel.timeout");
 /** resolves TIMED_OUT after ms on a REF'D timer and aborts the request's controller (hooks.ts idiom);
  *  the race is independent of the fetch honoring the signal, so a stuck transport still settles */
 function withTimeout<T>(p: Promise<T>, ms: number, ac: AbortController): Promise<T | typeof TIMED_OUT> {

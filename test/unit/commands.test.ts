@@ -1,4 +1,4 @@
-/** Custom slash commands (port #30): discovery across user (temp AION_HOME) + project dirs,
+/** Custom slash commands (port #30): discovery across user (temp ROVECODE_HOME) + project dirs,
  *  name derivation/validation, frontmatter, $ARGUMENTS/$N templating, collisions, and the TUI
  *  dispatch semantics (busy gate, mode switch, per-run model override + restore) against a
  *  stub renderer. The terminal e2e lives in test/integration/tui-app.test.ts. */
@@ -16,15 +16,15 @@ import type { Renderer } from "../../src/tui/renderer.ts";
 
 let cwd: string;
 let home: string;
-const savedHome = process.env.AION_HOME;
+const savedHome = process.env.ROVECODE_HOME;
 
 beforeEach(() => {
-  cwd = mkdtempSync(join(tmpdir(), "aion-cmds-cwd-"));
-  home = mkdtempSync(join(tmpdir(), "aion-cmds-home-"));
+  cwd = mkdtempSync(join(tmpdir(), "rovecode-cmds-cwd-"));
+  home = mkdtempSync(join(tmpdir(), "rovecode-cmds-home-"));
 });
 
 afterEach(() => {
-  if (savedHome === undefined) delete process.env.AION_HOME; else process.env.AION_HOME = savedHome;
+  if (savedHome === undefined) delete process.env.ROVECODE_HOME; else process.env.ROVECODE_HOME = savedHome;
   rmSync(cwd, { recursive: true, force: true });
   rmSync(home, { recursive: true, force: true });
 });
@@ -35,13 +35,13 @@ function write(root: string, rel: string, content: string): string {
   writeFileSync(abs, content, "utf8");
   return abs;
 }
-const project = (file: string, content: string) => write(cwd, join(".aion", "commands", file), content);
+const project = (file: string, content: string) => write(cwd, join(".rovecode", "commands", file), content);
 const user = (file: string, content: string) => write(home, join("commands", file), content);
-const projectPath = (file: string) => join(cwd, ".aion", "commands", file);
+const projectPath = (file: string) => join(cwd, ".rovecode", "commands", file);
 
 // ---------- discovery ----------
 
-test("discovery: user (~/.aion/commands) + project (.aion/commands) merge, sorted by name, scoped", () => {
+test("discovery: user (~/.rovecode/commands) + project (.rovecode/commands) merge, sorted by name, scoped", () => {
   user("greet.md", "---\ndescription: Greet\n---\nHello $ARGUMENTS\n");
   project("hello.md", "---\ndescription: Say hello to someone\n---\nSay hi to $ARGUMENTS\n");
   const { commands, warnings } = discoverCommands(cwd, { home });
@@ -53,8 +53,8 @@ test("discovery: user (~/.aion/commands) + project (.aion/commands) merge, sorte
   expect(commands[1]!.path).toBe(projectPath("hello.md"));
 });
 
-test("discovery: the user scope defaults to AION_HOME (auth.ts aionHome idiom)", () => {
-  process.env.AION_HOME = home;
+test("discovery: the user scope defaults to ROVECODE_HOME (auth.ts rovecodeHome idiom)", () => {
+  process.env.ROVECODE_HOME = home;
   user("fromhome.md", "body\n");
   expect(discoverCommands(cwd).commands.map((c) => [c.name, c.scope])).toEqual([["fromhome", "user"]]);
 });
@@ -66,9 +66,9 @@ test("discovery: missing dirs are silent; non-.md files and subdirectories are i
   expect(discoverCommands(cwd, { home })).toEqual({ commands: [], warnings: [] });
 });
 
-test("discovery: cwd/.aion IS the aion home → one directory, scanned once, no self-collision warning", () => {
+test("discovery: cwd/.rovecode IS the rovecode home → one directory, scanned once, no self-collision warning", () => {
   project("solo.md", "body");
-  const { commands, warnings } = discoverCommands(cwd, { home: join(cwd, ".aion") });
+  const { commands, warnings } = discoverCommands(cwd, { home: join(cwd, ".rovecode") });
   expect(commands.map((c) => [c.name, c.scope])).toEqual([["solo", "project"]]);
   expect(warnings).toEqual([]);
 });
@@ -170,7 +170,7 @@ test("collision: a built-in name is dropped with a boot warning — the built-in
   ]);
 });
 
-// ---------- palette / help / aion run ----------
+// ---------- palette / help / rovecode run ----------
 
 test("palette + /help: autocomplete entries carry name/description; help lists a custom: section with hints and scope", () => {
   project("hello.md", "---\ndescription: Say hello to someone\n---\nSay hi to $ARGUMENTS\n");
@@ -186,7 +186,7 @@ test("palette + /help: autocomplete entries carry name/description; help lists a
   expect(helpForCommands([])).toBe("");
 });
 
-test("aion run hook: expandSlashPrompt renders a known /name (case-insensitive), passes everything else through", () => {
+test("rovecode run hook: expandSlashPrompt renders a known /name (case-insensitive), passes everything else through", () => {
   project("hello.md", "Say hi to $ARGUMENTS");
   expect(expandSlashPrompt("/hello big world", cwd, { home })).toBe("Say hi to big world");
   expect(expandSlashPrompt("/HELLO x", cwd, { home })).toBe("Say hi to x");
@@ -295,7 +295,7 @@ test("LOW-2: a huge `mode:` value is echoed clipped (40 chars + …) in the pars
 
 /** Windows needs a privilege or Developer Mode for file symlinks — detect once; the test skips (not fails) without it. */
 const canSymlink = (() => {
-  const d = mkdtempSync(join(tmpdir(), "aion-cmds-sym-"));
+  const d = mkdtempSync(join(tmpdir(), "rovecode-cmds-sym-"));
   try { writeFileSync(join(d, "t.md"), "x"); symlinkSync(join(d, "t.md"), join(d, "l.md"), "file"); return true; }
   catch { return false; }
   finally { rmSync(d, { recursive: true, force: true }); }
@@ -303,7 +303,7 @@ const canSymlink = (() => {
 
 test.skipIf(!canSymlink)("LOW-3: a symlinked *.md is discovered through its target; a DANGLING link is reported unreadable, never silently dropped (skipped where symlinkSync is not permitted: Windows without Developer Mode)", () => {
   const target = write(cwd, join("elsewhere", "real.md"), "---\ndescription: via link\n---\nLinked $ARGUMENTS\n");
-  mkdirSync(join(cwd, ".aion", "commands"), { recursive: true });
+  mkdirSync(join(cwd, ".rovecode", "commands"), { recursive: true });
   symlinkSync(target, projectPath("linked.md"), "file");
   symlinkSync(join(cwd, "elsewhere", "gone.md"), projectPath("dangling.md"), "file");
   const { commands, warnings } = discoverCommands(cwd, { home });

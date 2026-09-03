@@ -1,5 +1,5 @@
 /** OTLP/HTTP JSON wire shapes + encoder for the port-#39 exporter (telemetry/otel.ts): the
- *  ExportTraceServiceRequest subset aion emits, the mutable in-memory span record it fills while a
+ *  ExportTraceServiceRequest subset rovecode emits, the mutable in-memory span record it fills while a
  *  run is live, and the OTLP/JSON mapping rules — ids as hex, fixed64 times and int64 attributes as
  *  decimal strings, enums as integers. Pure: no I/O, no clock, no state. Split out of otel.ts at the
  *  400-line cap (fix-wave 4); otel.ts re-exports everything here, so its public surface is unchanged. */
@@ -47,7 +47,7 @@ export function encodeTraceRequest(serviceName: string, spans: readonly OtelSpan
     resourceSpans: [{
       resource: { attributes: kv([["service.name", str(serviceName)], ["service.version", str(pkg.version)]]) },
       scopeSpans: [{
-        scope: { name: "aion", version: pkg.version },
+        scope: { name: "rovecode", version: pkg.version },
         spans: spans.map((s) => ({
           traceId: s.traceId, spanId: s.spanId, ...(s.parentSpanId ? { parentSpanId: s.parentSpanId } : {}),
           name: s.name, kind: 1, // SPAN_KIND_INTERNAL

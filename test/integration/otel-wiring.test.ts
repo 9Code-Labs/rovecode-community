@@ -1,5 +1,5 @@
 /** PORT #39 OTel WIRING tests: the REAL runtime (bootRuntime → createRuntime registers the set only
- *  under AION_OTEL_ENDPOINT) + the real agentLoop (scripted mock stream with a tool call) against a
+ *  under ROVECODE_OTEL_ENDPOINT) + the real agentLoop (scripted mock stream with a tool call) against a
  *  local Bun.serve OTLP receiver. Pins: ON → one request whose span tree matches the run and whose
  *  usage/cost attrs match the store; OFF → nothing exported AND the exporter was never constructed
  *  (module spy — the bar's mutation target); unreachable endpoint → the run completes, one warning. */
@@ -51,11 +51,11 @@ function pinEnv(vars: Record<string, string | undefined>): () => void {
 interface Rig { cwd: string; home: string; rx: ReturnType<typeof receiver>; restore: () => void; rt?: Runtime }
 function rig(endpoint: string | undefined | ((rx: ReturnType<typeof receiver>) => string), headers?: string): Rig {
   const rx = receiver();
-  const cwd = mkdtempSync(join(tmpdir(), "aion-otel-cwd-"));
-  const home = mkdtempSync(join(tmpdir(), "aion-otel-home-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-otel-cwd-"));
+  const home = mkdtempSync(join(tmpdir(), "rovecode-otel-home-"));
   const restore = pinEnv({
-    AION_OTEL_ENDPOINT: typeof endpoint === "function" ? endpoint(rx) : endpoint, AION_OTEL_HEADERS: headers,
-    AION_HOME: home, AION_NO_REPOMAP: "1", AION_NO_CHECKPOINTS: "1", AION_NO_HOOKS: undefined,
+    ROVECODE_OTEL_ENDPOINT: typeof endpoint === "function" ? endpoint(rx) : endpoint, ROVECODE_OTEL_HEADERS: headers,
+    ROVECODE_HOME: home, ROVECODE_NO_REPOMAP: "1", ROVECODE_NO_CHECKPOINTS: "1", ROVECODE_NO_HOOKS: undefined,
   });
   return { cwd, home, rx, restore };
 }
@@ -81,7 +81,7 @@ async function until(pred: () => boolean, ms: number, what: string): Promise<voi
   const t0 = Date.now();
   while (!pred()) { if (Date.now() - t0 > ms) throw new Error(`${what}: not true within ${ms}ms`); await sleep(15); }
 }
-const runSpanOf = (body: OtlpTraceRequest): OtlpSpan => body.resourceSpans[0]!.scopeSpans[0]!.spans.find((s) => s.name === "aion.run")!;
+const runSpanOf = (body: OtlpTraceRequest): OtlpSpan => body.resourceSpans[0]!.scopeSpans[0]!.spans.find((s) => s.name === "rovecode.run")!;
 /** parks until ITS OWN ctx.signal aborts — a consumer that merely .return()s the generator releases it through the loop-owned controller */
 const parked: Tool = {
   schema: { name: "parked", description: "parks until aborted", args: { type: "object" } }, kind: "custom",
@@ -92,8 +92,8 @@ const parkedScript: StreamFn = async function* (_m: ModelRef, messages: Message[
   yield { type: "turn", turn: messages.at(-1)?.role === "tool" ? textTurn("late") : toolTurn([{ id: `p${messages.length}`, tool: "parked", args: {} }]) };
 };
 
-test("ON: AION_OTEL_ENDPOINT set → the runtime constructs the exporter once and taps on_event; a real run with a tool call reaches the receiver as ONE request (headers ride along) whose tree matches the run (1 run, N turns, 1 tool), token attrs equal the store's sums, cost matches costUsd() for the priced origin; close() flushes; no warnings", async () => {
-  const r = rig((rx) => `${rx.url}/`, "authorization=Bearer x=y, x-team=aion");
+test("ON: ROVECODE_OTEL_ENDPOINT set → the runtime constructs the exporter once and taps on_event; a real run with a tool call reaches the receiver as ONE request (headers ride along) whose tree matches the run (1 run, N turns, 1 tool), token attrs equal the store's sums, cost matches costUsd() for the priced origin; close() flushes; no warnings", async () => {
+  const r = rig((rx) => `${rx.url}/`, "authorization=Bearer x=y, x-team=rovecode");
   try {
     const before = otelDebug.constructed;
     r.rt = await bootRuntime({ cwd: r.cwd, sessionId: "otel-s", stream: script() });
@@ -108,11 +108,11 @@ test("ON: AION_OTEL_ENDPOINT set → the runtime constructs the exporter once an
     expect(path).toBe("/v1/traces");
     expect(headers["content-type"]).toBe("application/json");
     expect(headers["authorization"]).toBe("Bearer x=y");
-    expect(headers["x-team"]).toBe("aion");
+    expect(headers["x-team"]).toBe("rovecode");
     expect(body.resourceSpans.length).toBe(1);
-    expect(body.resourceSpans[0]!.resource.attributes).toContainEqual({ key: "service.name", value: { stringValue: "aion" } });
+    expect(body.resourceSpans[0]!.resource.attributes).toContainEqual({ key: "service.name", value: { stringValue: "rovecode" } });
     const spans = body.resourceSpans[0]!.scopeSpans[0]!.spans;
-    const runs = spans.filter((s) => s.name === "aion.run"), turns = spans.filter((s) => s.name === "aion.turn"), tools = spans.filter((s) => s.name === "aion.tool");
+    const runs = spans.filter((s) => s.name === "rovecode.run"), turns = spans.filter((s) => s.name === "rovecode.turn"), tools = spans.filter((s) => s.name === "rovecode.tool");
     expect(runs.length).toBe(1);
     expect(turns.length).toBe(events.filter((e) => e.type === "turn_start").length);
     expect(turns.length).toBe(2);
@@ -123,42 +123,42 @@ test("ON: AION_OTEL_ENDPOINT set → the runtime constructs the exporter once an
     expect(tools[0]!.parentSpanId).toBe(turns[0]!.spanId); // issued by turn 1
     for (const s of spans) { expect(s.traceId).toBe(run.traceId); expect(BigInt(s.endTimeUnixNano) >= BigInt(s.startTimeUnixNano)).toBe(true); }
     const start = events.find((e) => e.type === "run_start") as Extract<RunEvent, { type: "run_start" }>;
-    expect(attr(run, "aion.run_id")).toBe(start.runId);
-    expect(attr(run, "aion.session_id")).toBe("otel-s");
-    expect(attr(run, "aion.status")).toBe("done");
+    expect(attr(run, "rovecode.run_id")).toBe(start.runId);
+    expect(attr(run, "rovecode.session_id")).toBe("otel-s");
+    expect(attr(run, "rovecode.status")).toBe("done");
     expect(run.status).toEqual({ code: 1 });
     // tokens = the store's sums over the run's assistant messages; cost = per-message catalog pricing
     const assistants = r.rt.store.messages().filter((m) => m.role === "assistant");
     expect(assistants.length).toBe(2);
     const sum = (k: "input" | "output" | "cacheRead" | "cacheWrite") => assistants.reduce((n, m) => n + (m.usage?.[k] ?? 0), 0);
-    expect(attr(run, "aion.tokens.input")).toBe(String(sum("input")));
-    expect(attr(run, "aion.tokens.output")).toBe(String(sum("output")));
-    expect(attr(run, "aion.tokens.cacheRead")).toBe(String(sum("cacheRead")));
-    expect(attr(run, "aion.tokens.cacheWrite")).toBe(String(sum("cacheWrite")));
+    expect(attr(run, "rovecode.tokens.input")).toBe(String(sum("input")));
+    expect(attr(run, "rovecode.tokens.output")).toBe(String(sum("output")));
+    expect(attr(run, "rovecode.tokens.cacheRead")).toBe(String(sum("cacheRead")));
+    expect(attr(run, "rovecode.tokens.cacheWrite")).toBe(String(sum("cacheWrite")));
     expect(sum("output")).toBe(2);
     const pricing = new ModelCatalog().lookup("custom", MODEL)?.pricing;
     expect(pricing).toBeDefined();
     const expected = assistants.reduce((n, m) => n + costUsd({ input: m.usage!.input, output: m.usage!.output, cacheRead: m.usage!.cacheRead ?? 0, cacheWrite: m.usage!.cacheWrite ?? 0 }, pricing!)!, 0);
     expect(expected).toBeGreaterThan(0);
-    expect(attr(run, "aion.cost_usd") as number).toBeCloseTo(expected, 12);
-    expect(attr(run, "aion.model.provider")).toBe("custom");
-    expect(attr(run, "aion.model.model")).toBe(MODEL);
-    expect(turns.map((t) => attr(t, "aion.stop_reason"))).toEqual(["tool_use", "end_turn"]);
-    expect(turns.map((t) => attr(t, "aion.turn"))).toEqual(["1", "2"]);
-    expect(turns.map((t) => attr(t, "aion.tokens.output"))).toEqual(["1", "1"]);
+    expect(attr(run, "rovecode.cost_usd") as number).toBeCloseTo(expected, 12);
+    expect(attr(run, "rovecode.model.provider")).toBe("custom");
+    expect(attr(run, "rovecode.model.model")).toBe(MODEL);
+    expect(turns.map((t) => attr(t, "rovecode.stop_reason"))).toEqual(["tool_use", "end_turn"]);
+    expect(turns.map((t) => attr(t, "rovecode.turn"))).toEqual(["1", "2"]);
+    expect(turns.map((t) => attr(t, "rovecode.tokens.output"))).toEqual(["1", "1"]);
     const end = events.find((e) => e.type === "tool_execution_end") as Extract<RunEvent, { type: "tool_execution_end" }>;
-    expect(attr(tools[0]!, "aion.tool")).toBe("probe");
-    expect(attr(tools[0]!, "aion.call_id")).toBe("c1");
-    expect(attr(tools[0]!, "aion.ok")).toBe(true);
-    expect(attr(tools[0]!, "aion.duration_ms")).toBe(String(end.durationMs));
-    expect(attr(tools[0]!, "aion.output_bytes")).toBe(String(Buffer.byteLength("probe-output")));
+    expect(attr(tools[0]!, "rovecode.tool")).toBe("probe");
+    expect(attr(tools[0]!, "rovecode.call_id")).toBe("c1");
+    expect(attr(tools[0]!, "rovecode.ok")).toBe(true);
+    expect(attr(tools[0]!, "rovecode.duration_ms")).toBe(String(end.durationMs));
+    expect(attr(tools[0]!, "rovecode.output_bytes")).toBe(String(Buffer.byteLength("probe-output")));
     expect(tools[0]!.status).toEqual({ code: 1 });
     expect(JSON.stringify(body)).not.toContain("probe-output"); // sizes, never output
     expect(r.rt.hooks.warnings).toEqual([]);
   } finally { await teardown(r); }
 }, T);
 
-test("OFF: AION_OTEL_ENDPOINT unset → the exporter is never constructed (module spy unchanged), the runner has no sets and no on_event tap, a full scripted run exports nothing and warns nothing", async () => {
+test("OFF: ROVECODE_OTEL_ENDPOINT unset → the exporter is never constructed (module spy unchanged), the runner has no sets and no on_event tap, a full scripted run exports nothing and warns nothing", async () => {
   const r = rig(undefined);
   try {
     const before = otelDebug.constructed;
@@ -198,25 +198,25 @@ test("cancelled runs export (real runtime + agentLoop): (1) abort + gen.return()
     }
     expect(seen1).not.toContain("run_end");
     await until(() => r.rx.got.length >= 1, 6_000, "trace of the consumer-closed run"); // MUTATION TARGET: drop `await obs.close()` in agentLoop's finally → never exported
-    expect(attr(runSpanOf(r.rx.got[0]!.body), "aion.run_id")).toBe(ids[0]);
-    expect(attr(runSpanOf(r.rx.got[0]!.body), "aion.status")).toBe("stopped");
+    expect(attr(runSpanOf(r.rx.got[0]!.body), "rovecode.run_id")).toBe(ids[0]);
+    expect(attr(runSpanOf(r.rx.got[0]!.body), "rovecode.status")).toBe("stopped");
     // (2) abort only: the loop yields run_end stopped itself (cmdRun's SIGINT path) — exactly one trace, as before
     const ac2 = new AbortController();
     const seen2: RunEvent[] = [];
     for await (const ev of agentLoop(def, "cancel-2", {}, cfg, deps(ac2.signal), rt.steering)) { seen2.push(ev); if (ev.type === "run_start") ids.push(ev.runId); if (ev.type === "tool_execution_start") ac2.abort(); }
     expect(seen2.at(-1)).toMatchObject({ type: "run_end", status: "stopped" });
     await until(() => r.rx.got.length >= 2, 6_000, "trace of the aborted run");
-    expect(attr(runSpanOf(r.rx.got[1]!.body), "aion.run_id")).toBe(ids[1]);
-    expect(attr(runSpanOf(r.rx.got[1]!.body), "aion.status")).toBe("stopped");
+    expect(attr(runSpanOf(r.rx.got[1]!.body), "rovecode.run_id")).toBe(ids[1]);
+    expect(attr(runSpanOf(r.rx.got[1]!.body), "rovecode.status")).toBe("stopped");
     // (3) a consumer that just leaves (break → .return()) with no controller of its own
     const gen3 = agentLoop(def, "cancel-3", {}, cfg, deps(), rt.steering);
     for await (const ev of gen3) { if (ev.type === "run_start") ids.push(ev.runId); if (ev.type === "tool_execution_start") break; }
     await until(() => r.rx.got.length >= 3, 6_000, "trace of the bare-return run");
-    expect(attr(runSpanOf(r.rx.got[2]!.body), "aion.run_id")).toBe(ids[2]);
-    expect(attr(runSpanOf(r.rx.got[2]!.body), "aion.status")).toBe("stopped");
+    expect(attr(runSpanOf(r.rx.got[2]!.body), "rovecode.run_id")).toBe(ids[2]);
+    expect(attr(runSpanOf(r.rx.got[2]!.body), "rovecode.status")).toBe("stopped");
     await rt.hooks.close(); // session_close: nothing left to drain — no fourth POST
     expect(r.rx.got.length).toBe(3);
-    expect(new Set(r.rx.got.map((g) => attr(runSpanOf(g.body), "aion.run_id"))).size).toBe(3);
+    expect(new Set(r.rx.got.map((g) => attr(runSpanOf(g.body), "rovecode.run_id"))).size).toBe(3);
     expect(rt.hooks.warnings).toEqual([]);
   } finally { await teardown(r); }
 }, T);
@@ -242,8 +242,8 @@ test("serve: a client that disconnects mid-run and a DELETE-cancelled run each e
     await until(() => parkedTurns >= 1, 4_000, "run A inside its provider turn");
     ac.abort();
     await until(() => r.rx.got.length >= 1, 6_000, "trace of the disconnected run"); // MUTATION TARGET: drop the teardown seam → 0 traces for this session
-    expect(attr(runSpanOf(r.rx.got[0]!.body), "aion.session_id")).toBe(idA);
-    expect(attr(runSpanOf(r.rx.got[0]!.body), "aion.status")).toBe("stopped");
+    expect(attr(runSpanOf(r.rx.got[0]!.body), "rovecode.session_id")).toBe(idA);
+    expect(attr(runSpanOf(r.rx.got[0]!.body), "rovecode.status")).toBe("stopped");
     // DELETE-cancel: the loop yields run_end stopped itself — still exactly one trace
     const idB = await session();
     const resB = await prompt(idB);
@@ -251,8 +251,8 @@ test("serve: a client that disconnects mid-run and a DELETE-cancelled run each e
     expect(await (await fetch(`${srv.url}/session/${idB}/prompt`, { method: "DELETE" })).json()).toEqual({ cancelled: true });
     expect(await resB.text()).toContain('"status":"stopped"');
     await until(() => r.rx.got.length >= 2, 6_000, "trace of the DELETE-cancelled run");
-    expect(attr(runSpanOf(r.rx.got[1]!.body), "aion.session_id")).toBe(idB);
-    expect(attr(runSpanOf(r.rx.got[1]!.body), "aion.status")).toBe("stopped");
+    expect(attr(runSpanOf(r.rx.got[1]!.body), "rovecode.session_id")).toBe(idB);
+    expect(attr(runSpanOf(r.rx.got[1]!.body), "rovecode.status")).toBe("stopped");
     await srv.stop(); // session_close per runtime: flush, nothing to drain
     expect(r.rx.got.length).toBe(2);
   } finally {
@@ -261,7 +261,7 @@ test("serve: a client that disconnects mid-run and a DELETE-cancelled run each e
   }
 }, T);
 
-test("aion.tool_calls = ISSUED calls, the `aion run --output json` toolCalls count on the SAME run: a dispatched call, an unknown tool (not_found, never dispatched) and a truncated turn's call (never dispatched) → 3 on both sides; only the dispatched one is a span", async () => {
+test("rovecode.tool_calls = ISSUED calls, the `rovecode run --output json` toolCalls count on the SAME run: a dispatched call, an unknown tool (not_found, never dispatched) and a truncated turn's call (never dispatched) → 3 on both sides; only the dispatched one is a span", async () => {
   const r = rig((rx) => rx.url);
   try {
     const turns: AssistantTurn[] = [
@@ -286,14 +286,14 @@ test("aion.tool_calls = ISSUED calls, the `aion run --output json` toolCalls cou
     await rt.hooks.close();
     expect(r.rx.got.length).toBe(1);
     const spans = r.rx.got[0]!.body.resourceSpans[0]!.scopeSpans[0]!.spans;
-    expect(attr(runSpanOf(r.rx.got[0]!.body), "aion.tool_calls")).toBe(String(result.toolCalls.length)); // MUTATION TARGET: count spans only → "1"
-    expect(spans.filter((s) => s.name === "aion.tool").length).toBe(1);
-    const failedEvents = spans.filter((s) => s.name === "aion.turn").flatMap((t) => (t.events ?? []).filter((e) => e.name === "aion.tool_call_failed"));
-    expect(failedEvents.map((e) => e.attributes.find((a) => a.key === "aion.failure_reason")?.value)).toEqual([{ stringValue: "not_found" }, { stringValue: "truncated" }]);
+    expect(attr(runSpanOf(r.rx.got[0]!.body), "rovecode.tool_calls")).toBe(String(result.toolCalls.length)); // MUTATION TARGET: count spans only → "1"
+    expect(spans.filter((s) => s.name === "rovecode.tool").length).toBe(1);
+    const failedEvents = spans.filter((s) => s.name === "rovecode.turn").flatMap((t) => (t.events ?? []).filter((e) => e.name === "rovecode.tool_call_failed"));
+    expect(failedEvents.map((e) => e.attributes.find((a) => a.key === "rovecode.failure_reason")?.value)).toEqual([{ stringValue: "not_found" }, { stringValue: "truncated" }]);
   } finally { await teardown(r); }
 }, T);
 
-test("LOW-B (#39): a call id REUSED across turns on the REAL loop (the critic's repro — three consecutive turns each issue `same`): `aion run --output json` lists 3 toolCalls with their own ok/ms and aion.tool_calls = 3 = toolCalls.length — one tool span per issuing turn (was json 1 vs otel 3)", async () => {
+test("LOW-B (#39): a call id REUSED across turns on the REAL loop (the critic's repro — three consecutive turns each issue `same`): `rovecode run --output json` lists 3 toolCalls with their own ok/ms and rovecode.tool_calls = 3 = toolCalls.length — one tool span per issuing turn (was json 1 vs otel 3)", async () => {
   const r = rig((rx) => rx.url);
   try {
     const turns: AssistantTurn[] = [1, 2, 3].map((n) => toolTurn([{ id: "same", tool: "probe", args: { n } }]));
@@ -316,11 +316,11 @@ test("LOW-B (#39): a call id REUSED across turns on the REAL loop (the critic's 
     expect(r.rx.got.length).toBe(1);
     const body = r.rx.got[0]!.body;
     const spans = body.resourceSpans[0]!.scopeSpans[0]!.spans;
-    expect(attr(runSpanOf(body), "aion.tool_calls")).toBe("3");
-    expect(attr(runSpanOf(body), "aion.tool_calls")).toBe(String(result.toolCalls.length));
-    const turnSpans = spans.filter((s) => s.name === "aion.turn"), tools = spans.filter((s) => s.name === "aion.tool");
+    expect(attr(runSpanOf(body), "rovecode.tool_calls")).toBe("3");
+    expect(attr(runSpanOf(body), "rovecode.tool_calls")).toBe(String(result.toolCalls.length));
+    const turnSpans = spans.filter((s) => s.name === "rovecode.turn"), tools = spans.filter((s) => s.name === "rovecode.tool");
     expect(tools.map((t) => t.parentSpanId)).toEqual(turnSpans.slice(0, 3).map((t) => t.spanId)); // one span per issuing turn
-    expect(tools.map((t) => attr(t, "aion.call_id"))).toEqual(["same", "same", "same"]);
+    expect(tools.map((t) => attr(t, "rovecode.call_id"))).toEqual(["same", "same", "same"]);
   } finally { await teardown(r); }
 }, T);
 

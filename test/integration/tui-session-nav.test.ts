@@ -73,7 +73,7 @@ const BUSY_WARN = "finish or interrupt the run first (Esc)";
 // ── MED-1a + LOW-4: busy gates for /new //rewind //sessions, then /new replay semantics ──
 
 test("busy gates: /new, /rewind, /sessions refuse mid-run; /new after the run branches and replays", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-nav-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-nav-"));
   const sid = "gate-session";
   let started!: () => void;
   const startedP = new Promise<void>((r) => { started = r; });
@@ -95,17 +95,17 @@ test("busy gates: /new, /rewind, /sessions refuse mid-run; /new after the run br
   await new Promise((r) => setTimeout(r, 50));
   expect(fake.warns().filter((w) => w === BUSY_WARN).length).toBe(3);
   expect(fake.pickCalls.length).toBe(0);            // no overlay opened mid-run
-  const metaP = join(cwd, ".aion", "sessions", sid, "meta.json");
+  const metaP = join(cwd, ".rovecode", "sessions", sid, "meta.json");
   expect("leaf" in JSON.parse(readFileSync(metaP, "utf8"))).toBe(false); // leaf never moved mid-run
 
   release();
   await waitFor(() => fake.busyFlags.at(-1) === false && fake.assistants.some((a) => a.includes("answer")));
-  expect(new SessionStore(join(cwd, ".aion", "sessions"), sid).reload()).toEqual([]); // chain intact
+  expect(new SessionStore(join(cwd, ".rovecode", "sessions"), sid).reload()).toEqual([]); // chain intact
 
   fake.hooks.onSubmit("/new");                      // now allowed: branch to session start
   await waitFor(() => fake.notes.some((n) => n.text === "branched to session start"));
   const meta = JSON.parse(readFileSync(metaP, "utf8"));
-  const firstId = JSON.parse(readFileSync(join(cwd, ".aion", "sessions", sid, "entries.jsonl"), "utf8").split("\n")[0]!).id;
+  const firstId = JSON.parse(readFileSync(join(cwd, ".rovecode", "sessions", sid, "entries.jsonl"), "utf8").split("\n")[0]!).id;
   expect(meta.leaf).toBe(firstId);                  // durable leaf at the first entry
   expect(fake.users).toEqual(["go"]);               // transcript replayed to the branch point
   expect(fake.assistants).toEqual([]);
@@ -116,7 +116,7 @@ test("busy gates: /new, /rewind, /sessions refuse mid-run; /new after the run br
 }, 20_000);
 
 test("/new on an empty session reports nothing to branch", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-nav-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-nav-"));
   const fake = new FakeRenderer();
   const app = runTui({ renderer: fake, stream: mockStream({ turns: [textTurn("x")] }), cwd, yolo: true, exitOnClose: false, model: "scripted" });
   fake.hooks.onSubmit("/new");
@@ -130,8 +130,8 @@ test("/new on an empty session reports nothing to branch", async () => {
 // ── LOW-2: ambiguous /resume prefix warns and stays; exact id still wins ──
 
 test("/resume with an ambiguous prefix warns and does not switch; exact id resumes", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-nav-"));
-  const root = join(cwd, ".aion", "sessions");
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-nav-"));
+  const root = join(cwd, ".rovecode", "sessions");
   new SessionStore(root, "sess-aab").append(umsg("in aab", null));
   new SessionStore(root, "sess-aabc").append(umsg("in aabc", null));
   const fake = new FakeRenderer();
@@ -154,8 +154,8 @@ test("/resume with an ambiguous prefix warns and does not switch; exact id resum
 // ── LOW-3: booting with opts.sessionId replays transcript and usage ──
 
 test("boot with sessionId replays the transcript and restores usage counters", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-nav-"));
-  const root = join(cwd, ".aion", "sessions");
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-nav-"));
+  const root = join(cwd, ".rovecode", "sessions");
   const s = new SessionStore(root, "boot-replay");
   const u = umsg("old question", null); s.append(u);
   s.append({ id: randomUUID(), role: "assistant" as const, parts: [{ kind: "text" as const, text: "old answer" }], parentId: u.id, createdAt: Date.now(), usage: { input: 11, output: 7 } });
@@ -172,8 +172,8 @@ test("boot with sessionId replays the transcript and restores usage counters", a
 }, 20_000);
 
 test("boot with a unique id prefix resolves to the existing session (no stray dir)", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-nav-"));
-  const root = join(cwd, ".aion", "sessions");
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-nav-"));
+  const root = join(cwd, ".rovecode", "sessions");
   new SessionStore(root, "resolv-target-1").append(umsg("prefix hello", null));
   const fake = new FakeRenderer();
   const app = runTui({ renderer: fake, stream: mockStream({ turns: [textTurn("x")] }), cwd, sessionId: "resolv", yolo: true, exitOnClose: false, model: "scripted" });
@@ -185,8 +185,8 @@ test("boot with a unique id prefix resolves to the existing session (no stray di
 }, 20_000);
 
 test("boot with an ambiguous prefix starts fresh and warns instead of guessing", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-nav-"));
-  const root = join(cwd, ".aion", "sessions");
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-nav-"));
+  const root = join(cwd, ".rovecode", "sessions");
   new SessionStore(root, "amb-1").append(umsg("one", null));
   new SessionStore(root, "amb-2").append(umsg("two", null));
   const fake = new FakeRenderer();
@@ -202,8 +202,8 @@ test("boot with an ambiguous prefix starts fresh and warns instead of guessing",
 // ── LOW-4: memory tool re-registration on session switch ──
 
 test("memory_edit writes to the SWITCHED session's block store after /resume", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-nav-"));
-  const root = join(cwd, ".aion", "sessions");
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-nav-"));
+  const root = join(cwd, ".rovecode", "sessions");
   new SessionStore(root, "mem-b");                  // pre-existing target session
   const stream = mockStream({
     turns: [
@@ -232,8 +232,8 @@ test("memory_edit writes to the SWITCHED session's block store after /resume", a
 // ── LOW-4: tool cards replay after a session switch ──
 
 test("tool cards replay after /resume: tool_call and tool_result parts render", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-nav-"));
-  const root = join(cwd, ".aion", "sessions");
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-nav-"));
+  const root = join(cwd, ".rovecode", "sessions");
   const s = new SessionStore(root, "toolsess");
   const u = umsg("did tools", null); s.append(u);
   const a1 = {
@@ -264,8 +264,8 @@ test("tool cards replay after /resume: tool_call and tool_result parts render", 
 // ── LOW-4: root-rewind path + pickOne overlay ordering ──
 
 test("rewind to the ROOT turn opens a fresh session, keeps the old one, prefills the prompt", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-nav-"));
-  const root = join(cwd, ".aion", "sessions");
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-nav-"));
+  const root = join(cwd, ".rovecode", "sessions");
   const sid = "root-rewind";
   const fake = new FakeRenderer();
   const app = runTui({ renderer: fake, stream: mockStream({ turns: [textTurn("first answer")] }), cwd, sessionId: sid, yolo: true, exitOnClose: false, model: "scripted" });
@@ -287,7 +287,7 @@ test("rewind to the ROOT turn opens a fresh session, keeps the old one, prefills
 }, 20_000);
 
 test("/rewind overlay lists turns newest-first (#2 above #1)", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-nav-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-nav-"));
   const fake = new FakeRenderer();
   const stream = mockStream({ turns: [textTurn("answer one"), textTurn("answer two")] });
   const app = runTui({ renderer: fake, stream, cwd, yolo: true, exitOnClose: false, model: "scripted" });
@@ -308,11 +308,11 @@ test("/rewind overlay lists turns newest-first (#2 above #1)", async () => {
   rmSync(cwd, { recursive: true, force: true });
 }, 20_000);
 
-// ── LOW-3 (CLI flag): aion --resume <prefix> headlessly replays the session ──
+// ── LOW-3 (CLI flag): rovecode --resume <prefix> headlessly replays the session ──
 
-test("CLI: `aion --resume <prefix>` boots the TUI on the resumed session (headless)", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-cli-"));
-  const root = join(cwd, ".aion", "sessions");
+test("CLI: `rovecode --resume <prefix>` boots the TUI on the resumed session (headless)", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-cli-"));
+  const root = join(cwd, ".rovecode", "sessions");
   const s = new SessionStore(root, "cliresume-full-id");
   const u = umsg("CLI-RESUME-PROBE hello", null); s.append(u);
   s.append({ id: randomUUID(), role: "assistant" as const, parts: [{ kind: "text" as const, text: "probe answer" }], parentId: u.id, createdAt: Date.now() });

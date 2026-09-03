@@ -32,7 +32,7 @@ describe("sextant engine: tokenizer (prototype output pinned)", () => {
     T("", "ts", []);
   });
   it("json: object keys are `key`, values `str`/`num`/`kw`", () => {
-    T('{ "name": "aion", "n": 12, "ok": true }', "json", [["{", "pu"], [" ", "plain"], ['"name"', "key"], [":", "pu"], [" ", "plain"], ['"aion"', "str"], [",", "pu"], [" ", "plain"], ['"n"', "key"], [":", "pu"], [" ", "plain"], ["12", "num"], [",", "pu"], [" ", "plain"], ['"ok"', "key"], [":", "pu"], [" ", "plain"], ["true", "kw"], [" ", "plain"], ["}", "pu"]]);
+    T('{ "name": "rovecode", "n": 12, "ok": true }', "json", [["{", "pu"], [" ", "plain"], ['"name"', "key"], [":", "pu"], [" ", "plain"], ['"rovecode"', "str"], [",", "pu"], [" ", "plain"], ['"n"', "key"], [":", "pu"], [" ", "plain"], ["12", "num"], [",", "pu"], [" ", "plain"], ['"ok"', "key"], [":", "pu"], [" ", "plain"], ["true", "kw"], [" ", "plain"], ["}", "pu"]]);
     T('  "nested": { "k": [1, 2] },', "json", [["  ", "plain"], ['"nested"', "key"], [":", "pu"], [" ", "plain"], ["{", "pu"], [" ", "plain"], ['"k"', "key"], [":", "pu"], [" ", "plain"], ["[", "pu"], ["1", "num"], [",", "pu"], [" ", "plain"], ["2", "num"], ["]", "pu"], [" ", "plain"], ["}", "pu"], [",", "pu"]]);
   });
   it("md: headings kw, indented code str, inline code str, else plain; text is one plain run", () => {

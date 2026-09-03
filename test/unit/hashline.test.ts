@@ -14,7 +14,7 @@ test("lineHash ignores whitespace", () => {
 });
 
 test("hashline edit applies with valid anchors, reverse order safe", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-hl-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-hl-"));
   const p = join(dir, "f.txt");
   writeFileSync(p, "alpha\nbeta\ngamma\n");
   const f = readAnchored(p);
@@ -29,7 +29,7 @@ test("hashline edit applies with valid anchors, reverse order safe", () => {
 });
 
 test("stale tag rejected with diagnostic", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-hl-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-hl-"));
   const p = join(dir, "f.txt");
   writeFileSync(p, "one\ntwo\n");
   const r = applyEdits(p, [{ path: p, tag: "dead", anchorLine: 1, anchorHash: lineHash("one"), newLines: ["1"] }]);
@@ -39,7 +39,7 @@ test("stale tag rejected with diagnostic", () => {
 });
 
 test("hash mismatch returns nearest-match diagnostic", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-hl-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-hl-"));
   const p = join(dir, "f.txt");
   writeFileSync(p, "aaa\nbbb\nccc\n");
   const f = readAnchored(p);
@@ -58,7 +58,7 @@ test("fileTag changes on content change", () => {
 });
 
 test("renderAnchored includes path#tag header and hashed lines", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-hl-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-hl-"));
   const p = join(dir, "r.txt");
   writeFileSync(p, "x\ny\n");
   const rendered = renderAnchored(readAnchored(p));
@@ -75,7 +75,7 @@ function makeCtx(dir: string): { sessionId: string; cwd: string; signal: AbortSi
 }
 
 test("readTool windows large files with bounds note", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-hl-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-hl-"));
   const p = join(dir, "big.txt");
   writeFileSync(p, Array.from({ length: 5000 }, (_, i) => `line-${i + 1}`).join("\n") + "\n");
   const ctx = makeCtx(dir);
@@ -115,7 +115,7 @@ test("readTool windows large files with bounds note", async () => {
 // ---------- bashTool deny patterns ----------
 
 test("bashTool refuses destructive commands, runs benign ones", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-hl-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-hl-"));
   const ctx = makeCtx(dir);
   for (const cmd of ["rm -rf /", "rm -rf /*", "sudo rm -rf /etc", ':(){ :|:& };:', "mkfs.ext4 /dev/sda1", "shutdown now", "format c:", "del /f /q *", "echo hi > /dev/sda"]) {
     const r = await bashTool.execute({ command: cmd }, ctx);
@@ -136,7 +136,7 @@ test("bashTool refuses destructive commands, runs benign ones", async () => {
 // ---------- editTool lint-gate ----------
 
 test("editTool lint-gate reverts edits that add new lint errors", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-hl-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-hl-"));
   const p = join(dir, "f.txt");
   writeFileSync(p, "aaa\nbbb\n");
   const f = readAnchored(p);
@@ -166,7 +166,7 @@ test("editTool lint-gate reverts edits that add new lint errors", async () => {
 });
 
 test("lint-gate tolerates pre-existing errors, only NEW ones revert", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-hl-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-hl-"));
   const p = join(dir, "f.txt");
   writeFileSync(p, "aaa\nbbb\n");
   const f = readAnchored(p);
@@ -185,7 +185,7 @@ test("lint-gate tolerates pre-existing errors, only NEW ones revert", async () =
 // ---------- bashTool retry ----------
 
 test("bashTool retries once on non-zero exit and reports final code", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-hl-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-hl-"));
   const ctx = makeCtx(dir);
   // counter file: first command fails, second (retry) succeeds
   const script = `if [ -f flag ]; then echo attempt-2; else touch flag; exit 3; fi`;
@@ -210,7 +210,7 @@ test("bashTool surfaces a missing bash as structured exit=-1 spawn failed, not a
     spawns++;
     return Promise.resolve({ code: -1, stdout: "", stderr: "spawn failed: ENOENT bash" });
   };
-  const dir = mkdtempSync(join(tmpdir(), "aion-hl-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-hl-"));
   try {
     await configureExecutor("direct", { runner });
     const out = await bashTool.execute({ command: "echo hi" }, makeCtx(dir));
@@ -233,7 +233,7 @@ test("bashTool surfaces a missing bash as structured exit=-1 spawn failed, not a
 const REMEDY = "Remedy: re-read the file with `read` to get fresh line hashes, then retry the edit.";
 
 test("editTool hash mismatch: the message shows the anchor line's CURRENT text + hash vs the expected hash, lists the lines that carry the anchor (≤3), and ends with the read-then-retry remedy", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-hl-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-hl-"));
   const p = join(dir, "f.txt");
   writeFileSync(p, "aaa\nbbb\nccc\nbbb\nbbb\nbbb\n");
   const f = readAnchored(p);
@@ -260,7 +260,7 @@ test("editTool hash mismatch: the message shows the anchor line's CURRENT text +
 });
 
 test("editTool out-of-range / stale tag / missing file each state what the file is NOW and how to recover", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-hl-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-hl-"));
   const p = join(dir, "f.txt");
   writeFileSync(p, "aaa\nbbb\nccc\nddd\n"); // 5 lines (the trailing newline is an empty 5th)
   const f = readAnchored(p);
@@ -278,7 +278,7 @@ test("editTool out-of-range / stale tag / missing file each state what the file 
 });
 
 test("writeTool: a missing parent directory is a 'Write rejected' message naming the directory and the fix, never a raw ENOENT; an existing directory still writes", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-hl-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-hl-"));
   try {
     const target = join(dir, "missing", "deep");
     const out = await writeTool.execute({ path: "missing/deep/new.txt", content: "x" }, makeCtx(dir));
@@ -299,7 +299,7 @@ test("failure messages stay bounded (≤600): a very long path and line text cli
   const short = describeEditFailure({ kind: "out-of-range", path: "/w/f.txt", line: 7, lineCount: 3 });
   expect(short).toBe(`Edit rejected: line 7 is out of range — /w/f.txt has 3 lines (valid anchors: 1-3). ${REMEDY}`);
   // lint gate: 20 new errors → the first 8 + "… and 12 more", then the retry line
-  const dir = mkdtempSync(join(tmpdir(), "aion-hl-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-hl-"));
   const p = join(dir, "f.txt");
   writeFileSync(p, "aaa\nbbb\n");
   const f = readAnchored(p);

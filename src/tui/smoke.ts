@@ -1,4 +1,4 @@
-/** `aion smoke-tui`: end-to-end render check through the real pipeline —
+/** `rovecode smoke-tui`: end-to-end render check through the real pipeline —
  *  agentLoop → Renderer → pi-tui → ANSI → @xterm/headless terminal emulator.
  *  Gated session: a scripted write, then an anchored edit of that file, each raise the
  *  approval overlay with its diff card (port #24) and are approved once the card is on
@@ -15,7 +15,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 export async function runTuiSmoke(): Promise<void> {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tui-smoke-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tui-smoke-"));
   const term = new VirtualTerminal(80, 24);
   const renderer = new PiTuiRenderer({ terminal: term, cwd });
   const probe = join(cwd, "smoke.txt");
@@ -34,7 +34,7 @@ export async function runTuiSmoke(): Promise<void> {
   const app = runTui({ renderer, stream, cwd, yolo: false, exitOnClose: false, model: "scripted" });
 
   // type a prompt into the (focused) editor and submit
-  term.sendInput("hello aion");
+  term.sendInput("hello rovecode");
   term.sendInput("\r");
 
   // each approval overlay must show its diff card before Enter (= allow once) approves it:

@@ -1,5 +1,5 @@
 /** Port #34 image attachments (core/images.ts): magic-byte sniffing (the extension is never
- *  trusted), the per-image size cap (default 5 MiB, AION_IMAGE_MAX_BYTES) and per-message count
+ *  trusted), the per-image size cap (default 5 MiB, ROVECODE_IMAGE_MAX_BYTES) and per-message count
  *  cap, header-only dimension parsing for all four containers, the placeholder/chip text pins,
  *  the wire block helpers both adapters use, and the transport (base64) form. */
 
@@ -15,7 +15,7 @@ import {
 import type { ImagePart } from "../../src/core/types.ts";
 import { PNG_1x1, PNG_1x1_B64, GIF_2x3, JPEG_2x3, WEBP_VP8L_2x3, WEBP_VP8X_4x5, WEBP_VP8_6x7 } from "../fixtures/images.ts";
 
-const tmp = () => mkdtempSync(join(tmpdir(), "aion-img-"));
+const tmp = () => mkdtempSync(join(tmpdir(), "rovecode-img-"));
 function ok(r: ImageLoadResult): ImagePart { if ("error" in r) throw new Error(r.error); return r; }
 function err(r: ImageLoadResult): string { if (!("error" in r)) throw new Error("expected { error }, got an ImagePart"); return r.error; }
 
@@ -51,17 +51,17 @@ test("size cap: 5 MiB + 1 is rejected (default cap), exactly 5 MiB loads; env/op
   const exact = Buffer.alloc(IMAGE_MAX_BYTES); PNG_1x1.copy(exact);
   writeFileSync(join(dir, "big.png"), big);
   writeFileSync(join(dir, "exact.png"), exact);
-  expect(err(loadImageAttachment(join(dir, "big.png")))).toBe("big.png: 5121 KB is over the 5120 KB per-image cap (AION_IMAGE_MAX_BYTES)");
+  expect(err(loadImageAttachment(join(dir, "big.png")))).toBe("big.png: 5121 KB is over the 5120 KB per-image cap (ROVECODE_IMAGE_MAX_BYTES)");
   expect(ok(loadImageAttachment(join(dir, "exact.png"))).width).toBe(1);
   expect(err(imageFromBytes(big, { name: "big.png" }))).toContain("over the 5120 KB per-image cap");
-  // AION_IMAGE_MAX_BYTES read from the env handed in (process.env untouched); non-positive/garbage → default
-  expect(imageMaxBytes({ AION_IMAGE_MAX_BYTES: "100" })).toBe(100);
-  expect(imageMaxBytes({ AION_IMAGE_MAX_BYTES: "lots" })).toBe(IMAGE_MAX_BYTES);
-  expect(imageMaxBytes({ AION_IMAGE_MAX_BYTES: "-5" })).toBe(IMAGE_MAX_BYTES);
-  expect(imageMaxBytes({ AION_IMAGE_MAX_BYTES: "0" })).toBe(IMAGE_MAX_BYTES);
+  // ROVECODE_IMAGE_MAX_BYTES read from the env handed in (process.env untouched); non-positive/garbage → default
+  expect(imageMaxBytes({ ROVECODE_IMAGE_MAX_BYTES: "100" })).toBe(100);
+  expect(imageMaxBytes({ ROVECODE_IMAGE_MAX_BYTES: "lots" })).toBe(IMAGE_MAX_BYTES);
+  expect(imageMaxBytes({ ROVECODE_IMAGE_MAX_BYTES: "-5" })).toBe(IMAGE_MAX_BYTES);
+  expect(imageMaxBytes({ ROVECODE_IMAGE_MAX_BYTES: "0" })).toBe(IMAGE_MAX_BYTES);
   expect(imageMaxBytes({})).toBe(IMAGE_MAX_BYTES);
-  expect(err(loadImageAttachment(join(dir, "exact.png"), { env: { AION_IMAGE_MAX_BYTES: "1024" } }))).toBe("exact.png: 5120 KB is over the 1 KB per-image cap (AION_IMAGE_MAX_BYTES)");
-  expect(err(imageFromBytes(PNG_1x1, { maxBytes: 10, name: "dot.png" }))).toBe("dot.png: 70 B is over the 10 B per-image cap (AION_IMAGE_MAX_BYTES)");
+  expect(err(loadImageAttachment(join(dir, "exact.png"), { env: { ROVECODE_IMAGE_MAX_BYTES: "1024" } }))).toBe("exact.png: 5120 KB is over the 1 KB per-image cap (ROVECODE_IMAGE_MAX_BYTES)");
+  expect(err(imageFromBytes(PNG_1x1, { maxBytes: 10, name: "dot.png" }))).toBe("dot.png: 70 B is over the 10 B per-image cap (ROVECODE_IMAGE_MAX_BYTES)");
   expect(ok(imageFromBytes(PNG_1x1, { maxBytes: 70 })).mime).toBe("image/png"); // cap is inclusive
   rmSync(dir, { recursive: true, force: true });
 });
@@ -113,7 +113,7 @@ test("wire block helpers: Anthropic base64 source and OpenAI data URL (detail au
   expect(anthropicImageBlock(p)).toEqual({ type: "image", source: { type: "base64", media_type: "image/png", data: PNG_1x1_B64 } });
   expect(openaiImageBlock(p)).toEqual({ type: "image_url", image_url: { url: `data:image/png;base64,${PNG_1x1_B64}`, detail: "auto" } });
   expect((openaiImageBlock(p, "high") as { image_url: { detail: string } }).image_url.detail).toBe("high");
-  const gone: ImagePart = { kind: "image", mime: "image/png", path: join(tmpdir(), "definitely-missing-aion-p34.png") };
+  const gone: ImagePart = { kind: "image", mime: "image/png", path: join(tmpdir(), "definitely-missing-rovecode-p34.png") };
   expect(anthropicImageBlock(gone)).toBeUndefined();
   expect(openaiImageBlock(gone)).toBeUndefined();
 });

@@ -28,7 +28,7 @@ async function until(term: VirtualTerminal, pred: (screen: string) => boolean, m
 }
 
 test("yolo run renders markdown + tool card end-to-end", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiapp-"));
   const term = new VirtualTerminal(80, 24);
   const renderer = new PiTuiRenderer({ terminal: term, cwd });
   const probe = join(cwd, "e2e.txt");
@@ -55,7 +55,7 @@ test("yolo run renders markdown + tool card end-to-end", async () => {
 }, 20_000);
 
 test("gated run: write tool requires approval; Enter approves once and the write lands", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiapp-"));
   const term = new VirtualTerminal(80, 24);
   const renderer = new PiTuiRenderer({ terminal: term, cwd });
   const probe = join(cwd, "gated.txt");
@@ -85,7 +85,7 @@ test("gated run: write tool requires approval; Enter approves once and the write
 }, 20_000);
 
 test("closing mid-run is clean: the run's finally after renderer.stop() must not reject", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiapp-"));
   const term = new VirtualTerminal(80, 24);
   const renderer = new PiTuiRenderer({ terminal: term, cwd });
   const rejections: unknown[] = [];
@@ -113,14 +113,14 @@ test("closing mid-run is clean: the run's finally after renderer.stop() must not
 }, 20_000);
 
 test("slash command /status renders without starting a run — incl. the active sandbox rung + origin (port #27 LOW-1)", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiapp-"));
   const term = new VirtualTerminal(80, 24);
   const renderer = new PiTuiRenderer({ terminal: term, cwd });
-  // hermetic rung: a host AION_SANDBOX would change the line; createRuntime reads env synchronously inside runTui()
-  const savedSandbox = process.env.AION_SANDBOX;
-  delete process.env.AION_SANDBOX;
+  // hermetic rung: a host ROVECODE_SANDBOX would change the line; createRuntime reads env synchronously inside runTui()
+  const savedSandbox = process.env.ROVECODE_SANDBOX;
+  delete process.env.ROVECODE_SANDBOX;
   const app = runTui({ renderer, stream: mockStream({ turns: [textTurn("x")] }), cwd, yolo: true, exitOnClose: false, model: "m1" });
-  if (savedSandbox !== undefined) process.env.AION_SANDBOX = savedSandbox;
+  if (savedSandbox !== undefined) process.env.ROVECODE_SANDBOX = savedSandbox;
   term.sendInput("/status");
   term.sendInput("\r");
   const screen = await until(term, (s) => s.includes("provider="));
@@ -134,13 +134,13 @@ test("slash command /status renders without starting a run — incl. the active 
 // ---------- ports #5+#6: /cost ----------
 
 test("/cost reports normalized tokens, cache traffic, and origin-priced USD end-to-end", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiapp-"));
   const term = new VirtualTerminal(80, 24);
   const renderer = new PiTuiRenderer({ terminal: term, cwd });
   // hermetic provider resolution (#6 re-verify): a host provider key (e.g. TOGETHER_API_KEY)
   // would win resolveProvider(), stamp Message.origin with THAT provider, and price the model
   // at its catalog entry instead of the zai vendor row ($0.0490 ≠ $0.0245, or "pricing
-  // unknown"). Sweep every *_API_KEY out and pin AION_BASE_URL/AION_API_KEY — the override
+  // unknown"). Sweep every *_API_KEY out and pin ROVECODE_BASE_URL/ROVECODE_API_KEY — the override
   // that beats all named keys — so origin.provider is "custom" (no PROVIDER_MAP entry) and
   // pricing always resolves via the zai-org/ vendor prefix, whatever the host env holds.
   const savedEnv = new Map<string, string | undefined>();
@@ -149,8 +149,8 @@ test("/cost reports normalized tokens, cache traffic, and origin-priced USD end-
     if (v === undefined) delete process.env[k]; else process.env[k] = v;
   };
   for (const k of Object.keys(process.env)) if (k.endsWith("_API_KEY")) setEnv(k, undefined);
-  setEnv("AION_BASE_URL", "http://stub.invalid/v1");
-  setEnv("AION_API_KEY", "test-key");
+  setEnv("ROVECODE_BASE_URL", "http://stub.invalid/v1");
+  setEnv("ROVECODE_API_KEY", "test-key");
   // the REAL Anthropic adapter against a stubbed wire, so usage flows
   // fetch → parseAnthropicResponse → normalizeUsage → Message.usage → /cost
   // (a mock stream would bypass the parsers and leave their cache fields untested)
@@ -207,7 +207,7 @@ test("buildCostNote prices per message at its ORIGIN model, with explicit caveat
 });
 
 test("/status surfaces harvested config sources incl. truncation state (port #8 HIGH-2)", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiapp-"));
   writeFileSync(join(cwd, "AGENTS.md"), "y\n".repeat(5000), "utf8"); // 10,000 chars > 8,000 per-file cap
   const term = new VirtualTerminal(80, 24);
   const renderer = new PiTuiRenderer({ terminal: term, cwd });
@@ -224,7 +224,7 @@ test("/status surfaces harvested config sources incl. truncation state (port #8 
 // ---------- port #2: rewind + resume ----------
 
 test("rewind: pick an earlier turn, transcript truncates, editor prefills, resubmit forks the tree", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiapp-"));
   const sid = randomUUID();
   const term = new VirtualTerminal(80, 24);
   const renderer = new PiTuiRenderer({ terminal: term, cwd });
@@ -241,7 +241,7 @@ test("rewind: pick an earlier turn, transcript truncates, editor prefills, resub
   await until(term, (s) => s.includes("second answer"));
 
   // capture the pre-rewind tree: [q1, q2]; q2's parent is what the leaf must move to
-  const before = new SessionStore(join(cwd, ".aion", "sessions"), sid).turnPoints();
+  const before = new SessionStore(join(cwd, ".rovecode", "sessions"), sid).turnPoints();
   expect(before.length).toBe(2);
   const q2 = before[1]!;
 
@@ -258,7 +258,7 @@ test("rewind: pick an earlier turn, transcript truncates, editor prefills, resub
   term.sendInput(" edited"); term.sendInput("\r");       // edit-and-resubmit → new branch
   await until(term, (s) => s.includes("branch answer"));
 
-  const reopened = new SessionStore(join(cwd, ".aion", "sessions"), sid);
+  const reopened = new SessionStore(join(cwd, ".rovecode", "sessions"), sid);
   const points = reopened.turnPoints();
   expect(points.length).toBe(2);                         // [q1, q2-edited] — NOT 3
   const last = points[points.length - 1]!;
@@ -275,7 +275,7 @@ test("rewind: pick an earlier turn, transcript truncates, editor prefills, resub
 }, 30_000);
 
 test("resume: /resume <id-prefix> swaps sessions and replays the old transcript", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiapp-"));
   const oldId = randomUUID();
 
   // session 1: one exchange, then close
@@ -294,7 +294,7 @@ test("resume: /resume <id-prefix> swaps sessions and replays the old transcript"
   const term = new VirtualTerminal(80, 24);
   const renderer = new PiTuiRenderer({ terminal: term, cwd });
   const app = runTui({ renderer, stream: mockStream({ turns: [textTurn("x")] }), cwd, yolo: true, exitOnClose: false, model: "scripted" });
-  await until(term, (s) => s.includes("aion"));
+  await until(term, (s) => s.includes("rovecode"));
   term.sendInput(`/resume ${oldId.slice(0, 8)}`); term.sendInput("\r");
   const screen = await until(term, (s) => s.includes("noted forever"));
   expect(screen).toContain("remember me");
@@ -308,7 +308,7 @@ test("resume: /resume <id-prefix> swaps sessions and replays the old transcript"
 // ---------- port #38: /export ----------
 
 test("/export writes <short>.md, --json copies the JSONL byte-verbatim, a spaced path stays whole, no silent overwrite", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiapp-"));
   const sid = randomUUID();
   const short = sid.slice(0, 8);
   const term = new VirtualTerminal(80, 24);
@@ -326,7 +326,7 @@ test("/export writes <short>.md, --json copies the JSONL byte-verbatim, a spaced
   const mdPath = join(cwd, `${short}.md`);
   expect(existsSync(mdPath)).toBe(true);
   const rendered = readFileSync(mdPath, "utf8");
-  expect(rendered).toContain(`# aion session ${short}`);
+  expect(rendered).toContain(`# rovecode session ${short}`);
   expect(rendered).toContain("say something");
   expect(rendered).toContain("exported answer");
 
@@ -335,7 +335,7 @@ test("/export writes <short>.md, --json copies the JSONL byte-verbatim, a spaced
   await until(term, (s) => s.includes("exported jsonl"));
   const jsonlPath = join(cwd, `${short}.jsonl`);
   expect(existsSync(jsonlPath)).toBe(true);
-  const src = readFileSync(join(cwd, ".aion", "sessions", sid, "entries.jsonl"));
+  const src = readFileSync(join(cwd, ".rovecode", "sessions", sid, "entries.jsonl"));
   expect(Buffer.compare(readFileSync(jsonlPath), src)).toBe(0);
 
   // /export <path with spaces> → ONE path, not the first word (LOW-3 wrote a file named "my")
@@ -376,7 +376,7 @@ function gatedEditApp(cwd: string, term: VirtualTerminal, finalText: string) {
 }
 
 test("gated edit: the overlay shows the unified diff before consent; Escape denies and the file is untouched", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiapp-"));
   const term = new VirtualTerminal(80, 24);
   const { app, target, content } = gatedEditApp(cwd, term, "after denial.");
 
@@ -404,7 +404,7 @@ test("gated edit: the overlay shows the unified diff before consent; Escape deni
 }, 20_000);
 
 test("gated edit: allow once applies exactly the previewed change", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiapp-"));
   const term = new VirtualTerminal(80, 24);
   const { app, target } = gatedEditApp(cwd, term, "applied.");
   const card = await until(term, (s) => s.includes("+new-line"));
@@ -421,7 +421,7 @@ test("gated edit: allow once applies exactly the previewed change", async () => 
 }, 20_000);
 
 test("gated write of a new file: the overlay shows an all-adds diff against /dev/null", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiapp-"));
   const term = new VirtualTerminal(80, 24);
   const renderer = new PiTuiRenderer({ terminal: term, cwd });
   const probe = join(cwd, "fresh.txt");
@@ -451,7 +451,7 @@ test("gated write of a new file: the overlay shows an all-adds diff against /dev
 // ---------- LoopDeps.cwd threading: relative tool paths resolve against the TUI's cwd ----------
 
 test("relative tool paths resolve against runTui({cwd}), not process.cwd(): the write lands under cwd and the follow-up edit applies", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiapp-"));
   mkdirSync(join(cwd, "out"));                            // write does not mkdir -p: out/ exists ONLY under the TUI's cwd
   const term = new VirtualTerminal(80, 24);
   const renderer = new PiTuiRenderer({ terminal: term, cwd });
@@ -498,7 +498,7 @@ function askStream(args: unknown): StreamFn {
 const DB_ARGS = { question: "Which database?", options: ["postgres", "sqlite"] };
 
 test("ask_user e2e (gated): the overlay shows the options with NO approval prompt; Down+Enter answers and the next model turn sees `answer: sqlite`", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiapp-"));
   const term = new VirtualTerminal(80, 24);
   const renderer = new PiTuiRenderer({ terminal: term, cwd });
   const app = runTui({ renderer, stream: askStream(DB_ARGS), cwd, yolo: false, exitOnClose: false, model: "scripted" });
@@ -522,17 +522,17 @@ test("ask_user e2e (gated): the overlay shows the options with NO approval promp
   await app;
   rmSync(cwd, { recursive: true, force: true });
 }, 20_000);
-// ---------- port #30: custom slash commands (.aion/commands/*.md) ----------
+// ---------- port #30: custom slash commands (.rovecode/commands/*.md) ----------
 
 test("custom commands e2e: palette + /help list /hello, dispatch submits the rendered $ARGUMENTS prompt as the user turn, mode: plan flips the indicator, model: overrides per run", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
-  const home = mkdtempSync(join(tmpdir(), "aion-tuiapp-home-"));
-  const savedHome = process.env.AION_HOME;
-  process.env.AION_HOME = home; // hermetic user scope: the host's real ~/.aion/commands must not leak in
-  mkdirSync(join(cwd, ".aion", "commands"), { recursive: true });
-  writeFileSync(join(cwd, ".aion", "commands", "hello.md"), "---\ndescription: Say hello to someone\n---\nSay hi to $ARGUMENTS\n", "utf8");
-  writeFileSync(join(cwd, ".aion", "commands", "plan-it.md"), "---\ndescription: Plan a change\nmode: plan\nmodel: fast-model\n---\nPlan: $ARGUMENTS\n", "utf8");
-  writeFileSync(join(cwd, ".aion", "commands", "help.md"), "must lose to the built-in\n", "utf8");
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiapp-"));
+  const home = mkdtempSync(join(tmpdir(), "rovecode-tuiapp-home-"));
+  const savedHome = process.env.ROVECODE_HOME;
+  process.env.ROVECODE_HOME = home; // hermetic user scope: the host's real ~/.rovecode/commands must not leak in
+  mkdirSync(join(cwd, ".rovecode", "commands"), { recursive: true });
+  writeFileSync(join(cwd, ".rovecode", "commands", "hello.md"), "---\ndescription: Say hello to someone\n---\nSay hi to $ARGUMENTS\n", "utf8");
+  writeFileSync(join(cwd, ".rovecode", "commands", "plan-it.md"), "---\ndescription: Plan a change\nmode: plan\nmodel: fast-model\n---\nPlan: $ARGUMENTS\n", "utf8");
+  writeFileSync(join(cwd, ".rovecode", "commands", "help.md"), "must lose to the built-in\n", "utf8");
   const term = new VirtualTerminal(80, 24);
   const renderer = new PiTuiRenderer({ terminal: term, cwd });
   // capture what the loop actually sends: the ModelRef and the latest user message text
@@ -579,14 +579,14 @@ test("custom commands e2e: palette + /help list /hello, dispatch submits the ren
     term.sendInput("\x03");
     await app;
   } finally {
-    if (savedHome === undefined) delete process.env.AION_HOME; else process.env.AION_HOME = savedHome;
+    if (savedHome === undefined) delete process.env.ROVECODE_HOME; else process.env.ROVECODE_HOME = savedHome;
     rmSync(cwd, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });
   }
 }, 30_000);
 
 test("ask_user e2e: free text — pick 'type an answer…', type, Enter → the model sees the typed text", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiapp-"));
   const term = new VirtualTerminal(80, 24);
   const renderer = new PiTuiRenderer({ terminal: term, cwd });
   const app = runTui({ renderer, stream: askStream(DB_ARGS), cwd, yolo: false, exitOnClose: false, model: "scripted" });
@@ -607,7 +607,7 @@ test("ask_user e2e: free text — pick 'type an answer…', type, Enter → the 
 }, 20_000);
 
 test("ask_user e2e: Esc while the question is open interrupts the run — overlay gone, run aborted (failed result stored), TUI alive", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-tuiapp-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiapp-"));
   const sid = randomUUID();
   const term = new VirtualTerminal(80, 24);
   const renderer = new PiTuiRenderer({ terminal: term, cwd });
@@ -626,7 +626,7 @@ test("ask_user e2e: Esc while the question is open interrupts the run — overla
   const alive = await until(term, (s) => s.includes("provider="));
   expect(alive).toContain("model=scripted");
   // wire-well-formed store: the issued call has a FAILED result mentioning the abort
-  const toolMsgs = new SessionStore(join(cwd, ".aion", "sessions"), sid).messages().filter((m) => m.role === "tool");
+  const toolMsgs = new SessionStore(join(cwd, ".rovecode", "sessions"), sid).messages().filter((m) => m.role === "tool");
   expect(toolMsgs.length).toBe(1);
   const part = toolMsgs[0]!.parts[0]!;
   if (part.kind !== "tool_result") throw new Error("expected tool_result part");

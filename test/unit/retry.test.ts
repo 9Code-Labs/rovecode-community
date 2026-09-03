@@ -368,10 +368,10 @@ test("non-turn events pass through live from every attempt; the terminal turn is
 
 test("retryOptionsFromEnv: defaults, parsing, 0 honored (off), invalid/blank → default", () => {
   expect(retryOptionsFromEnv({})).toEqual({ maxRetries: DEFAULT_MAX_RETRIES, baseMs: DEFAULT_BASE_MS });
-  expect(retryOptionsFromEnv({ AION_RETRY_MAX: "0", AION_RETRY_BASE_MS: "250" })).toEqual({ maxRetries: 0, baseMs: 250 });
-  expect(retryOptionsFromEnv({ AION_RETRY_MAX: "7.9", AION_RETRY_BASE_MS: " 40 " })).toEqual({ maxRetries: 7, baseMs: 40 });
-  expect(retryOptionsFromEnv({ AION_RETRY_MAX: "abc", AION_RETRY_BASE_MS: "0" })).toEqual({ maxRetries: DEFAULT_MAX_RETRIES, baseMs: DEFAULT_BASE_MS });
-  expect(retryOptionsFromEnv({ AION_RETRY_MAX: "-1", AION_RETRY_BASE_MS: "" })).toEqual({ maxRetries: DEFAULT_MAX_RETRIES, baseMs: DEFAULT_BASE_MS });
+  expect(retryOptionsFromEnv({ ROVECODE_RETRY_MAX: "0", ROVECODE_RETRY_BASE_MS: "250" })).toEqual({ maxRetries: 0, baseMs: 250 });
+  expect(retryOptionsFromEnv({ ROVECODE_RETRY_MAX: "7.9", ROVECODE_RETRY_BASE_MS: " 40 " })).toEqual({ maxRetries: 7, baseMs: 40 });
+  expect(retryOptionsFromEnv({ ROVECODE_RETRY_MAX: "abc", ROVECODE_RETRY_BASE_MS: "0" })).toEqual({ maxRetries: DEFAULT_MAX_RETRIES, baseMs: DEFAULT_BASE_MS });
+  expect(retryOptionsFromEnv({ ROVECODE_RETRY_MAX: "-1", ROVECODE_RETRY_BASE_MS: "" })).toEqual({ maxRetries: DEFAULT_MAX_RETRIES, baseMs: DEFAULT_BASE_MS });
   expect(DEFAULT_MAX_RETRIES).toBe(3);
   expect(DEFAULT_BASE_MS).toBe(2000);
 });

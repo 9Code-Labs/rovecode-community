@@ -18,7 +18,7 @@ export const LANG_BY_EXT: Record<string, Lang> = {
   ".js": Lang.JavaScript, ".mjs": Lang.JavaScript, ".cjs": Lang.JavaScript, ".jsx": Lang.JavaScript,
 };
 
-const SKIP_DIRS = new Set(["node_modules", ".git", ".aion", "dist", "build", "out", "coverage", ".cache"]);
+const SKIP_DIRS = new Set(["node_modules", ".git", ".rovecode", "dist", "build", "out", "coverage", ".cache"]);
 /** hard bounds (round-2 F2): enumeration/parse cost is O(cap), not O(repo) */
 export const MAX_SRC_FILES = 2000;
 export const MAX_SRC_BYTES = 256 * 1024;

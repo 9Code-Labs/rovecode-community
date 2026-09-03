@@ -30,7 +30,7 @@ const CACHE_FILE = "models.json";
 const LIVE_URL = "https://models.dev/api.json";
 
 /**
- * aion provider id -> models.dev provider key. Derived by loading the offline snapshot
+ * rovecode provider id -> models.dev provider key. Derived by loading the offline snapshot
  * (node_modules/@opencode-ai/models/dist/snapshot.js) and inspecting Object.keys(providers)
  * directly rather than guessing:
  *   - together -> "togetherai" and fireworks -> "fireworks-ai" (not the bare names)
@@ -38,7 +38,7 @@ const LIVE_URL = "https://models.dev/api.json";
  *   - everything else here is an exact 1:1 id match confirmed present in the snapshot
  *
  * Deliberately absent (verified NOT a key in the snapshot -> lookup() returns undefined):
- * kaesra (aion's own proxy brand, not a models.dev provider — its vendor-prefixed model ids
+ * kaesra (rovecode's own proxy brand, not a models.dev provider — its vendor-prefixed model ids
  * resolve through VENDOR_PREFIX_MAP below instead), ollama (only "ollama-cloud" exists, not
  * bare "ollama"), moondream, vllm.
  */
@@ -129,7 +129,7 @@ export class ModelCatalog {
   }
 
   /** offline snapshot first; live cache layered on top when enabled.
-   *  Resolution order: (1) the aion provider's own models.dev entry (PROVIDER_MAP), then
+   *  Resolution order: (1) the rovecode provider's own models.dev entry (PROVIDER_MAP), then
    *  (2) the model id's vendor prefix (VENDOR_PREFIX_MAP) with the prefix stripped — the
    *  path that makes aggregator providers like kaesra (default model zai-org/glm-5.3-flash)
    *  priceable. The vendor hit reports the vendor as `provider`, naming the pricing source. */

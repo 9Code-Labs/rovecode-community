@@ -10,7 +10,7 @@ function msg(text: string, parentId: string | null = null) {
 }
 
 test("session store appends and replays path", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-test-"));
   const s = new SessionStore(dir, "s1");
   const m1 = msg("hello", null);
   const m2 = msg("world", m1.id);
@@ -22,7 +22,7 @@ test("session store appends and replays path", () => {
 });
 
 test("branch rewinds leaf without deleting", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-test-"));
   const s = new SessionStore(dir, "s2");
   const m1 = msg("a"); s.append(m1);
   const m2 = msg("b", m1.id); s.append(m2);
@@ -36,7 +36,7 @@ test("branch rewinds leaf without deleting", () => {
 });
 
 test("reload detects malformed json corruption", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-test-"));
   const s = new SessionStore(dir, "s3");
   s.append(msg("x"));
   const f = join(dir, "s3", "entries.jsonl");
@@ -65,7 +65,7 @@ function amsg(text: string, parentId: string | null) {
 }
 
 test("durable leaf round-trip: branch survives restart, appends chain off branched entry", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-test-"));
   const s1 = new SessionStore(dir, "d1");
   const a = msg("A", null); s1.append(a);
   const b = amsg("B", a.id); s1.append(b);
@@ -91,7 +91,7 @@ test("durable leaf round-trip: branch survives restart, appends chain off branch
 });
 
 test("legacy meta.json without leaf: leaf = last entry (behavior unchanged)", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-test-"));
   const s = new SessionStore(dir, "d2");
   const m1 = msg("a"); s.append(m1);
   const m2 = amsg("b", m1.id); s.append(m2);
@@ -103,7 +103,7 @@ test("legacy meta.json without leaf: leaf = last entry (behavior unchanged)", ()
 });
 
 test("persisted leaf pointing at unknown id falls back to last entry without throwing", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-test-"));
   const s = new SessionStore(dir, "d3");
   const m1 = msg("a"); s.append(m1);
   const m2 = amsg("b", m1.id); s.append(m2);
@@ -117,7 +117,7 @@ test("persisted leaf pointing at unknown id falls back to last entry without thr
 });
 
 test("listSessions: sorted updatedAt desc, previews single-line ≤80, garbage skipped", () => {
-  const root = mkdtempSync(join(tmpdir(), "aion-test-"));
+  const root = mkdtempSync(join(tmpdir(), "rovecode-test-"));
   const t = Date.now();
   const mk = (id: string, at: number, text: string) => {
     const s = new SessionStore(root, id);
@@ -142,7 +142,7 @@ test("listSessions: sorted updatedAt desc, previews single-line ≤80, garbage s
 });
 
 test("turnPoints: active-path user turns with 1-based index, parentId, branch counts", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-test-"));
   const s = new SessionStore(dir, "d5");
   const u1 = msg("U1", null); s.append(u1);
   const a1 = amsg("A1", u1.id); s.append(a1);
@@ -181,7 +181,7 @@ function imsg(text: string, img: ImagePart, parentId: string | null = null) {
 }
 
 test("image round-trip: sidecar on disk, JSONL carries a relative path and NO bytes, in-memory parts resolve to the absolute path, bytes read back identical, chain intact", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-test-"));
   const s = new SessionStore(dir, "img1");
   const img = dot();
   const m = imsg("look", img);
@@ -208,9 +208,9 @@ test("image round-trip: sidecar on disk, JSONL carries a relative path and NO by
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("aion export --json of a session with an image is still a byte-verbatim copy of entries.jsonl (the attachments dir is not bundled)", () => {
-  const root = mkdtempSync(join(tmpdir(), "aion-test-"));
-  const out = mkdtempSync(join(tmpdir(), "aion-test-out-"));
+test("rovecode export --json of a session with an image is still a byte-verbatim copy of entries.jsonl (the attachments dir is not bundled)", () => {
+  const root = mkdtempSync(join(tmpdir(), "rovecode-test-"));
+  const out = mkdtempSync(join(tmpdir(), "rovecode-test-out-"));
   const s = new SessionStore(root, "imgexp");
   s.append(imsg("look", dot()));
   const src = readFileSync(join(root, "imgexp", "entries.jsonl"));
@@ -224,7 +224,7 @@ test("aion export --json of a session with an image is still a byte-verbatim cop
 });
 
 test("stageAttachments: a system entry leaves the stage alone; the next USER append gets the parts folded IN PLACE (the loop's history object), persisted as a sidecar, then the stage is empty", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-test-"));
   const s = new SessionStore(dir, "img3");
   const img = dot();
   s.stageAttachments([img]);
@@ -248,7 +248,7 @@ test("stageAttachments: a system entry leaves the stage alone; the next USER app
 });
 
 test("sidecar write failure keeps the image inline in the JSONL — nothing dropped, the round-trip still reads back", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-test-"));
   const s = new SessionStore(dir, "img4");
   writeFileSync(join(dir, "img4", "attachments"), "a file where the directory should be");
   s.append(imsg("look", dot()));
@@ -261,7 +261,7 @@ test("sidecar write failure keeps the image inline in the JSONL — nothing drop
 });
 
 test("hash chain valid after restart → branch → append: zero corruption, per-entry hashes verify", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-test-"));
   const s1 = new SessionStore(dir, "d6");
   const a = msg("A", null); s1.append(a);
   const b = amsg("B", a.id); s1.append(b);
@@ -294,7 +294,7 @@ function wrap(prev: { id: string; hash: string }, id: string, entry: unknown) {
 }
 
 test("F1 (ADR-004): foreign/corrupt entry shapes — entry null, a scalar entry, parts:[null], parts not an array, a bare {} and a scalar LINE — load without throwing, are reported as unknown-shape, and messages()/turnPoints()/path()/listSessions carry on with the good entry (9261dc1: the constructor threw TypeError from hydrateImages; c4ac431: loaded, but messages() threw on the null entry)", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-test-"));
   const s = new SessionStore(dir, "shapes");
   const good = msg("good"); s.append(good);
   const f = join(dir, "shapes", "entries.jsonl");
@@ -325,7 +325,7 @@ test("F1 (ADR-004): foreign/corrupt entry shapes — entry null, a scalar entry,
 });
 
 test("F2: a persisted image path hydrates ONLY as attachments/<file> — `../outside.png` (a real PNG next to the session dir that the old join resolved to), attachments/../x.png, a nested path, a backslash form, `attachments/..` and `attachments/` stay unhydrated → imageData declines them → the wire sends placeholders; the canonical form still resolves", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-test-"));
   writeFileSync(join(dir, "outside.png"), PNG_1x1);                 // readable PNG OUTSIDE the session dir (= join(sessionDir, "../outside.png"))
   const s = new SessionStore(dir, "f2");
   s.append(imsg("ok", dot()));
@@ -353,8 +353,8 @@ import { describeImage } from "../../src/core/images.ts";
 import { toOpenAiMessages } from "../../src/providers/wire-messages.ts";
 
 test("F3: a persisted ABSOLUTE image path is foreign — the store writes only `attachments/<file>` — so hydration DROPS it (native and forward-slash forms of a real PNG in another directory, and even the session's OWN sidecar named absolutely): imageData declines, describeImage leaks no size, both wires send `file unavailable`; the canonical part beside them and the store's own round-trip still read; the JSONL line itself is untouched", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-test-"));
-  const elsewhere = mkdtempSync(join(tmpdir(), "aion-elsewhere-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-test-"));
+  const elsewhere = mkdtempSync(join(tmpdir(), "rovecode-elsewhere-"));
   writeFileSync(join(elsewhere, "secret.png"), PNG_1x1);            // a readable PNG in an unrelated directory
   const s = new SessionStore(dir, "f3");
   s.append(imsg("ok", dot()));                                      // the store's own round-trip: relative on disk, absolute in memory
@@ -389,7 +389,7 @@ test("F3: a persisted ABSOLUTE image path is foreign — the store writes only `
 test("F4: id-less object lines — `{\"entry\":null}` and `{\"entry\":{\"role\":\"user\",\"parts\":[null,5]}}` — appended after a 2-message session are reported as unknown-shape only (no spurious duplicate-id/cycle) and never become the leaf: messages() keeps both, turnPoints intact, the loop's next parent (history.at(-1)) is the real leaf, appendEvent hangs off it and the next append chains onto it; the same two lines mid-file report the same two findings and nothing else", () => {
   const IDLESS = ['{"entry":null}', '{"entry":{"role":"user","parts":[null,5]}}'];
   const text = (m: Message) => (m.parts[0] as { text: string }).text;
-  const dir = mkdtempSync(join(tmpdir(), "aion-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-test-"));
   const s = new SessionStore(dir, "idless");
   const a = msg("A"); s.append(a);
   const b = amsg("B", a.id); s.append(b);
@@ -427,7 +427,7 @@ const textOf = (m: Message) => (m.parts[0] as { text: string }).text;
 
 /** a 2-message session A ← B on disk (legacy meta: no leaf field) + its two good lines */
 function seeded(id: string) {
-  const dir = mkdtempSync(join(tmpdir(), "aion-test-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-test-"));
   const s = new SessionStore(dir, id);
   const a = msg("A"); s.append(a);
   const b = amsg("B", a.id); s.append(b);

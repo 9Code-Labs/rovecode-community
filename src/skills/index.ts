@@ -48,9 +48,9 @@ export interface ScanResult {
 }
 
 export interface SkillStoreOptions {
-  /** project skills dir (default: <cwd>/.aion/skills) */
+  /** project skills dir (default: <cwd>/.rovecode/skills) */
   projectDir?: string;
-  /** global skills dir; null disables (default: ~/.aion/skills) */
+  /** global skills dir; null disables (default: ~/.rovecode/skills) */
   globalDir?: string | null;
   /** max directory depth when walking for SKILL.md (default 3) */
   maxDepth?: number;
@@ -156,10 +156,10 @@ export class SkillStore {
   private manifest = new Map<string, string>();
 
   constructor(readonly cwd: string, opts: SkillStoreOptions = {}) {
-    this.projectDir = resolve(cwd, opts.projectDir ?? join(".aion", "skills"));
+    this.projectDir = resolve(cwd, opts.projectDir ?? join(".rovecode", "skills"));
     this.globalDir = opts.globalDir === null
       ? null
-      : resolve(opts.globalDir ?? join(homedir(), ".aion", "skills"));
+      : resolve(opts.globalDir ?? join(homedir(), ".rovecode", "skills"));
     this.maxDepth = opts.maxDepth ?? 3;
   }
 

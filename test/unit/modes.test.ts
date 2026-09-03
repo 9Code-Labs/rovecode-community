@@ -19,7 +19,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 function tmpCwd(): string {
-  return mkdtempSync(join(tmpdir(), "aion-modes-"));
+  return mkdtempSync(join(tmpdir(), "rovecode-modes-"));
 }
 
 // ---------- plan-mode policy via the existing evaluatePermissions ladder ----------
@@ -270,10 +270,10 @@ test("modeSwitchOf extracts the switch from real entries, null for notes/junk (r
 
 // ---------- config file loading ----------
 
-test("loadModesConfig parses .aion/modes.json and validates fields", () => {
+test("loadModesConfig parses .rovecode/modes.json and validates fields", () => {
   const cwd = tmpCwd();
-  mkdirSync(join(cwd, ".aion"), { recursive: true });
-  writeFileSync(join(cwd, ".aion", "modes.json"), JSON.stringify({
+  mkdirSync(join(cwd, ".rovecode"), { recursive: true });
+  writeFileSync(join(cwd, ".rovecode", "modes.json"), JSON.stringify({
     defaultMode: "plan",
     planActSeparateModels: true,
     plan: { model: "o1", provider: "openai" },
@@ -293,11 +293,11 @@ test("loadModesConfig degrades junk to defaults, never throws", () => {
   expect(loadModesConfig(missing)).toEqual({}); // no file
 
   const cwd = tmpCwd();
-  mkdirSync(join(cwd, ".aion"), { recursive: true });
-  writeFileSync(join(cwd, ".aion", "modes.json"), "{not json");
+  mkdirSync(join(cwd, ".rovecode"), { recursive: true });
+  writeFileSync(join(cwd, ".rovecode", "modes.json"), "{not json");
   expect(loadModesConfig(cwd)).toEqual({}); // malformed
 
-  writeFileSync(join(cwd, ".aion", "modes.json"), JSON.stringify({
+  writeFileSync(join(cwd, ".rovecode", "modes.json"), JSON.stringify({
     defaultMode: "turbo",              // invalid mode
     planActSeparateModels: "yes",      // wrong type
     plan: { model: 42 },               // wrong type → dropped selection
@@ -306,7 +306,7 @@ test("loadModesConfig degrades junk to defaults, never throws", () => {
   expect(loadModesConfig(cwd)).toEqual({});
 
   // config feeds the manager end to end
-  writeFileSync(join(cwd, ".aion", "modes.json"), JSON.stringify({
+  writeFileSync(join(cwd, ".rovecode", "modes.json"), JSON.stringify({
     defaultMode: "plan", planActSeparateModels: true, plan: { model: "o1" },
   }));
   const m = new ModeManager(loadModesConfig(cwd), { provider: "anthropic", model: "sonnet" });

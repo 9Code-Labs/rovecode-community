@@ -75,8 +75,8 @@ function scriptedStream(turns: ReturnType<typeof textTurn>[]): StreamFn {
 }
 
 test("runChild: child CAN file.read under an allow-all parent, unlisted kinds still denied", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aion-rules-root-"));
-  const sessions = mkdtempSync(join(tmpdir(), "aion-rules-sess-"));
+  const root = mkdtempSync(join(tmpdir(), "rovecode-rules-root-"));
+  const sessions = mkdtempSync(join(tmpdir(), "rovecode-rules-sess-"));
   const peek = countedTool("peek", "read");     // action file.read
   const sh = countedTool("sh", "execute");      // action shell.exec
   try {
@@ -103,8 +103,8 @@ test("runChild: child CAN file.read under an allow-all parent, unlisted kinds st
 }, 30_000);
 
 test("runChild: allow-all parent actually lets the child execute tools (FW2-P end-to-end)", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aion-rules-root-"));
-  const sessions = mkdtempSync(join(tmpdir(), "aion-rules-sess-"));
+  const root = mkdtempSync(join(tmpdir(), "rovecode-rules-root-"));
+  const sessions = mkdtempSync(join(tmpdir(), "rovecode-rules-sess-"));
   const peek = countedTool("peek", "read");
   try {
     const res = await runChild({

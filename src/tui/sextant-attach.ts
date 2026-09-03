@@ -12,7 +12,7 @@ import { sessionUsage } from "./cost.ts";
 
 /** slash names the sextant surface handles itself before onSubmit (keys.ts runLocal — the future
  *  src/sextant/local-commands.ts); reserved against custom commands like the built-ins, so a
- *  `.aion/commands/theme.md` warns and loses instead of silently never being reachable. */
+ *  `.rovecode/commands/theme.md` warns and loses instead of silently never being reachable. */
 export const SEXTANT_LOCAL_NAMES: readonly string[] = ["theme", "open", "diff", "focus", "agents"];
 
 export interface AttachSources {

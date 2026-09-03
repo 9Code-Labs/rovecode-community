@@ -17,7 +17,7 @@ import { VirtualTerminal } from "../../vendor/pi-tui/test/virtual-terminal.ts";
 import { PiTuiRenderer } from "../../src/tui/pi-renderer.ts";
 import { runTui } from "../../src/tui/app.ts";
 
-function tmp(): string { return mkdtempSync(join(tmpdir(), "aion-rtcp-")); }
+function tmp(): string { return mkdtempSync(join(tmpdir(), "rovecode-rtcp-")); }
 
 /** Build the runtime exactly like main.ts/repl.ts do and drain one scripted run. */
 async function drive(cwd: string, sessionId: string, turns: MockScript["turns"], goal = "go"): Promise<Runtime> {
@@ -27,7 +27,7 @@ async function drive(cwd: string, sessionId: string, turns: MockScript["turns"],
   return rt;
 }
 
-function sidecarPath(cwd: string, sid: string): string { return join(cwd, ".aion", "checkpoints", sid, "checkpoints.jsonl"); }
+function sidecarPath(cwd: string, sid: string): string { return join(cwd, ".rovecode", "checkpoints", sid, "checkpoints.jsonl"); }
 
 function firstSnapshot(cwd: string, sid: string): Checkpoint {
   return JSON.parse(readFileSync(sidecarPath(cwd, sid), "utf8").trim().split("\n")[0]!) as Checkpoint;
@@ -42,7 +42,7 @@ test("wiring (a): a FAILED mutating tool never snapshots; the next successful on
     textTurn("gave up"),
   ]);
   // the hook must not have touched checkpoints at all — not even lazy init
-  expect(existsSync(join(cwd, ".aion", "checkpoints", sid))).toBe(false);
+  expect(existsSync(join(cwd, ".rovecode", "checkpoints", sid))).toBe(false);
 
   // same session, new runtime: a successful write snapshots exactly once
   await drive(cwd, sid, [
@@ -54,20 +54,20 @@ test("wiring (a): a FAILED mutating tool never snapshots; the next successful on
   rmSync(cwd, { recursive: true, force: true });
 }, 30_000);
 
-test("wiring (b): AION_NO_CHECKPOINTS=1 kills snapshots while every tool keeps working", async () => {
+test("wiring (b): ROVECODE_NO_CHECKPOINTS=1 kills snapshots while every tool keeps working", async () => {
   const cwd = tmp();
   const sid = randomUUID();
-  const saved = process.env.AION_NO_CHECKPOINTS;
+  const saved = process.env.ROVECODE_NO_CHECKPOINTS;
   try {
-    process.env.AION_NO_CHECKPOINTS = "1";
+    process.env.ROVECODE_NO_CHECKPOINTS = "1";
     await drive(cwd, sid, [
       toolTurn([{ id: "t1", tool: "write", args: { path: join(cwd, "kill.txt"), content: "works" } }]),
       textTurn("done"),
     ]);
     expect(readFileSync(join(cwd, "kill.txt"), "utf8")).toBe("works"); // the tool itself ran
-    expect(existsSync(join(cwd, ".aion", "checkpoints"))).toBe(false); // zero shadow repos
+    expect(existsSync(join(cwd, ".rovecode", "checkpoints"))).toBe(false); // zero shadow repos
   } finally {
-    if (saved === undefined) delete process.env.AION_NO_CHECKPOINTS; else process.env.AION_NO_CHECKPOINTS = saved;
+    if (saved === undefined) delete process.env.ROVECODE_NO_CHECKPOINTS; else process.env.ROVECODE_NO_CHECKPOINTS = saved;
   }
   rmSync(cwd, { recursive: true, force: true });
 }, 30_000);
@@ -84,7 +84,7 @@ test("wiring (c): snapshot entryId anchors the LAST USER message", async () => {
     textTurn("done"),
   ]);
   const snap = firstSnapshot(cwd, sid);
-  const store = new SessionStore(join(cwd, ".aion", "sessions"), sid);
+  const store = new SessionStore(join(cwd, ".rovecode", "sessions"), sid);
   const lastUser = store.messages().findLast((m) => m.role === "user")!;
   expect(snap.entryId).toBe(lastUser.id); // anchorEntryId: branching here never strands tool_calls
   rmSync(cwd, { recursive: true, force: true });
@@ -99,7 +99,7 @@ test("wiring (c'): the recorded anchor exists in THIS session's tree and is bran
   ]);
   const snap = firstSnapshot(cwd, sid);
   expect(typeof snap.entryId).toBe("string"); // captured (activeStore matched the session)
-  const store = new SessionStore(join(cwd, ".aion", "sessions"), sid);
+  const store = new SessionStore(join(cwd, ".rovecode", "sessions"), sid);
   expect(store.branch(snap.entryId!)).toBe(true);
   rmSync(cwd, { recursive: true, force: true });
 }, 30_000);

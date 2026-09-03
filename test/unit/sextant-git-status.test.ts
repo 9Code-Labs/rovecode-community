@@ -82,7 +82,7 @@ const git = (cwd: string, ...args: string[]) => {
 const haveGit = spawnSync("git", ["--version"], { encoding: "utf8", windowsHide: true }).status === 0;
 
 test.if(haveGit)("real repo: branch, M/A/D incl. staged rename and untracked file inside a new dir, HEAD content, detached HEAD, non-repo → null", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-sx-git-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-sx-git-"));
   try {
     git(dir, "init", "-q");
     git(dir, "symbolic-ref", "HEAD", "refs/heads/main");
@@ -138,7 +138,7 @@ test("gitRunnerAsync: a hung child is killed at the timeout and the call resolve
 });
 
 test.if(haveGit)("real repo: every async twin answers exactly what its sync form does — branch, porcelain (rename + untracked), HEAD content, the full scanRepo snapshot, fileDiff; `git --version` through spawnGitAsync exits 0; a non-repo dir → null", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-sx-git-async-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-sx-git-async-"));
   try {
     git(dir, "init", "-q");
     git(dir, "symbolic-ref", "HEAD", "refs/heads/main");
@@ -160,7 +160,7 @@ test.if(haveGit)("real repo: every async twin answers exactly what its sync form
     expect(await fileDiffAsync(dir, "a.ts", undefined)).toEqual(fileDiff(dir, "a.ts", undefined));
     expect(await fileDiffAsync(dir, "a.ts", undefined)).toMatchObject({ add: 1, del: 1, base: "head" });
     expect((await spawnGitAsync(["--version"], dir))?.status).toBe(0);
-    const outside = mkdtempSync(join(tmpdir(), "aion-sx-norepo-async-"));
+    const outside = mkdtempSync(join(tmpdir(), "rovecode-sx-norepo-async-"));
     try {
       const inside = spawnSync("git", ["-C", outside, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8", windowsHide: true }).status === 0;
       if (!inside) { expect(await gitBranchAsync(outside)).toBeNull(); expect(await gitPorcelainAsync(outside)).toBeNull(); expect((await scanRepoAsync(outside)).git).toBe(false); }
@@ -170,7 +170,7 @@ test.if(haveGit)("real repo: every async twin answers exactly what its sync form
 });
 
 test.if(haveGit)("real git, not a repo / missing dir → null for all three (real spawnGit, nothing thrown)", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-sx-norepo-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-sx-norepo-"));
   try {
     const inside = spawnSync("git", ["-C", dir, "rev-parse", "--is-inside-work-tree"], { encoding: "utf8", windowsHide: true }).status === 0;
     if (!inside) {

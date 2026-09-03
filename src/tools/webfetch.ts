@@ -24,7 +24,7 @@
  *  dispatcher hook Bun's fetch does not expose.
  *  Policy: kind "network" → action net.fetch, resource = canonical URL host
  *  (core/tools.ts hostOf); runtime.ts buildCfg makes it PROMPT by default.
- *  Env: AION_WEBFETCH_TIMEOUT_MS (default 30000), AION_WEBFETCH_ALLOW_PRIVATE=1
+ *  Env: ROVECODE_WEBFETCH_TIMEOUT_MS (default 30000), ROVECODE_WEBFETCH_ALLOW_PRIVATE=1
  *  (skip the private-address guard, for local dev servers). */
 
 import { lookup } from "node:dns/promises";
@@ -38,7 +38,7 @@ export const CHARS_DEFAULT = 50_000;       // text chars returned by default
 export const CHARS_CAP = 250_000;          // ceiling for maxChars (gemini-cli MAX_CONTENT_LENGTH)
 export const MAX_REDIRECTS = 5;
 export const TIMEOUT_DEFAULT_MS = 30_000;  // opencode DEFAULT_TIMEOUT
-const USER_AGENT = "Mozilla/5.0 (compatible; aion/0.2 web_fetch)";
+const USER_AGENT = "Mozilla/5.0 (compatible; rovecode/0.2 web_fetch)";
 const ACCEPT = "text/html, application/xhtml+xml, application/json;q=0.9, text/*;q=0.8, application/xml;q=0.7, */*;q=0.1";
 
 /** files.ts clampLimit contract: ceiling CHARS_CAP; absent/NaN/non-positive → default; fractions floor. */
@@ -46,7 +46,7 @@ export function clampChars(v: number | undefined): number {
   return Number.isFinite(v) && v! > 0 ? Math.min(Math.floor(v!), CHARS_CAP) : CHARS_DEFAULT;
 }
 function timeoutMs(): number {
-  const v = Number(process.env.AION_WEBFETCH_TIMEOUT_MS ?? "");
+  const v = Number(process.env.ROVECODE_WEBFETCH_TIMEOUT_MS ?? "");
   return Number.isFinite(v) && v > 0 ? Math.floor(v) : TIMEOUT_DEFAULT_MS;
 }
 
@@ -215,7 +215,7 @@ export function createWebFetchTool(deps: WebFetchDeps = {}): Tool {
     let current: URL;
     try { current = new URL(a.url.trim()); } catch { return { ok: false, output: `web_fetch: invalid URL: ${a.url}` }; }
     const maxChars = clampChars(a.maxChars);
-    const allowPrivate = process.env.AION_WEBFETCH_ALLOW_PRIVATE === "1";
+    const allowPrivate = process.env.ROVECODE_WEBFETCH_ALLOW_PRIVATE === "1";
     if (ctx.signal.aborted) return { ok: false, output: "web_fetch: aborted" };
 
     // Timeout: a REF'D setTimeout drives the controller (Bun's AbortSignal.timeout
@@ -245,7 +245,7 @@ export function createWebFetchTool(deps: WebFetchDeps = {}): Tool {
           let reason: string | null;
           try { reason = await abortable(ssrfDenyReason(current.hostname, resolve), ac.signal); } catch (e) { return fail(e); }
           if (reason !== null) {
-            return { ok: false, output: `web_fetch: refused ${current.href}: ${reason} (set AION_WEBFETCH_ALLOW_PRIVATE=1 for local dev servers)` };
+            return { ok: false, output: `web_fetch: refused ${current.href}: ${reason} (set ROVECODE_WEBFETCH_ALLOW_PRIVATE=1 for local dev servers)` };
           }
         }
         // Policy consented to net.fetch on the host of the ORIGINAL url only

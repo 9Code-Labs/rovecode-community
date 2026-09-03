@@ -1,5 +1,5 @@
 /**
- * PORT #18 — persistent eval cell, feature-flagged (AION_EVAL_CELL=1).
+ * PORT #18 — persistent eval cell, feature-flagged (ROVECODE_EVAL_CELL=1).
  *
  * Concept sources (research/source_snapshots):
  *   - OMP (can1357-oh-my-pi), MIT — persistent eval cells:
@@ -40,7 +40,7 @@
  *     Everything else lives in the bootstrap IIFE's closure, unreachable from cell
  *     code, which evaluates via indirect eval in the worker's global scope.
  *   What is NOT pre-exposed (a non-exposure claim, NOT unreachability): nothing from
- *   the aion module graph is imported into or handed to the worker — it loads only
+ *   the rovecode module graph is imported into or handed to the worker — it loads only
  *   this inline bootstrap blob, so the tool registry (v1 deliberately has NO tool
  *   re-entry bridge — scope note), session stores, permission/approval machinery,
  *   and the graders under src/eval/* stay live only in the host process, and the
@@ -62,7 +62,7 @@
 
 import type { Tool, ToolContext, ToolOutput } from "../core/types.ts";
 
-export const EVAL_CELL_FLAG = "AION_EVAL_CELL";
+export const EVAL_CELL_FLAG = "ROVECODE_EVAL_CELL";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const MIN_TIMEOUT_MS = 50;
@@ -296,7 +296,7 @@ const evalCellTool: Tool = {
       "State survives across calls: `var`, function declarations, and `globalThis.*` assignments " +
       "persist; top-level `let`/`const` are cell-local. Console output is captured and the final " +
       "expression's value is returned as `=> value`. Cells using top-level `await` or bare `return` " +
-      "run wrapped in an async function — persist state via `globalThis` there. No aion tool access " +
+      "run wrapped in an async function — persist state via `globalThis` there. No rovecode tool access " +
       "from inside the cell (v1 scope). Output is truncated to a byte budget. On timeout — or if a " +
       "background error crashes the worker between calls — cell state resets, and the next call " +
       "says so in a `note:` prefix. NOT a sandbox: gated by the same execute policy as bash.",
@@ -329,7 +329,7 @@ const evalCellTool: Tool = {
   },
 };
 
-/** Flag-gated factory: the ONLY door to the tool. Returns null unless AION_EVAL_CELL=1,
+/** Flag-gated factory: the ONLY door to the tool. Returns null unless ROVECODE_EVAL_CELL=1,
  *  so flag-off runs register nothing (bar: OFF by default and unregistered when off). */
 export function createEvalCellTool(
   env: Record<string, string | undefined> = process.env,

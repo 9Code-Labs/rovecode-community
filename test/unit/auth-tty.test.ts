@@ -9,7 +9,7 @@ import { test, expect } from "bun:test";
 import { VirtualTerminal } from "../../vendor/pi-tui/test/virtual-terminal.ts";
 import { echoScrubSequence } from "../../src/providers/auth.ts";
 
-const PROMPT = "ANTHROPIC_API_KEY for anthropic: "; // the real `aion auth set anthropic` prompt: 33 cols
+const PROMPT = "ANTHROPIC_API_KEY for anthropic: "; // the real `rovecode auth set anthropic` prompt: 33 cols
 // 108 chars like an Anthropic key, drawn from an alphabet DISJOINT from the prompt's so every key
 // char left on screen is countable (prompt letters: A N T H R O P I C _ K E Y f o r a n t h i c)
 const KEY = "sk-" + "0123456789bdegjlmqsuvwxz".repeat(5).slice(0, 105);

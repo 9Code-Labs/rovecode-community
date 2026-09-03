@@ -12,7 +12,7 @@ const ctx = {
 } satisfies ToolContext;
 
 function tmpStore(seed?: { memory?: string; user?: string }): { store: BlockStore; dir: string } {
-  const dir = mkdtempSync(join(tmpdir(), "aion-mem-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-mem-"));
   if (seed?.memory !== undefined) writeFileSync(join(dir, "MEMORY.md"), seed.memory);
   if (seed?.user !== undefined) writeFileSync(join(dir, "USER.md"), seed.user);
   return { store: new BlockStore(dir), dir };
@@ -240,7 +240,7 @@ test("rollback restores a prior version and the store keeps committing afterward
 });
 
 test("two stores on one dir: second writer conflicts, nothing is silently lost, retry lands", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-mem-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-mem-"));
   const a = new BlockStore(dir);
   const b = new BlockStore(dir); // both opened at version 0
   const toolB = memoryEditTool(b);
@@ -264,7 +264,7 @@ test("two stores on one dir: second writer conflicts, nothing is silently lost, 
 });
 
 test("conflict result carries a generic reason; ledger numbers ride the data field only", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-mem-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-mem-"));
   const a = new BlockStore(dir);
   const b = new BlockStore(dir);
   expect(b.add("memory", "b first").ok).toBe(true);
@@ -278,7 +278,7 @@ test("conflict result carries a generic reason; ledger numbers ride the data fie
 // ---------- integration with the record store's directory layout ----------
 
 test("BlockStore does not disturb MemoryStore's memory.json", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-mem-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-mem-"));
   writeFileSync(join(dir, "memory.json"), "[]");
   const store = new BlockStore(dir);
   store.add("memory", "fact");

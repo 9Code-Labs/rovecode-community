@@ -2,7 +2,7 @@
  *  createRuntime stream (router.wrap OUTERMOST over provider+middleware) through the REAL
  *  agent loop against a local OpenAI-compatible stub — per the port-#7 middleware-wiring
  *  precedent. The seam assertions the module suite cannot see:
- *  - HIGH-1: env chain (AION_MODEL_DEFAULT) + scripted 429 from candidate 1 → candidate 2
+ *  - HIGH-1: env chain (ROVECODE_MODEL_DEFAULT) + scripted 429 from candidate 1 → candidate 2
  *    actually serves the turn (stub sees both models on the wire) AND exactly one advance
  *    note surfaces via drainRouterNotes(), draining once.
  *  - HIGH-2: the surviving assistant message's origin is the model that SERVED (candidate 2),
@@ -49,20 +49,20 @@ const server = Bun.serve({
 // ---------- env harness (bun runs test files in one process — always restore) ----------
 
 const ENV_KEYS = [
-  "AION_BASE_URL", "AION_API_KEY", "AION_MODEL",
-  "AION_MODEL_DEFAULT", "AION_MODEL_SMOL", "AION_MODEL_PLAN", "AION_MODEL_COMMIT", "AION_MODEL_TASK",
-  "AION_NO_TOOL_MIDDLEWARE", "AION_TOOL_MIDDLEWARE", "AION_NO_REPOMAP", "AION_RETRY_MAX",
+  "ROVECODE_BASE_URL", "ROVECODE_API_KEY", "ROVECODE_MODEL",
+  "ROVECODE_MODEL_DEFAULT", "ROVECODE_MODEL_SMOL", "ROVECODE_MODEL_PLAN", "ROVECODE_MODEL_COMMIT", "ROVECODE_MODEL_TASK",
+  "ROVECODE_NO_TOOL_MIDDLEWARE", "ROVECODE_TOOL_MIDDLEWARE", "ROVECODE_NO_REPOMAP", "ROVECODE_RETRY_MAX",
 ] as const;
 const savedEnv = new Map<string, string | undefined>();
 const tmpDirs: string[] = [];
 
 beforeAll(() => {
   for (const k of ENV_KEYS) { savedEnv.set(k, process.env[k]); delete process.env[k]; }
-  process.env.AION_BASE_URL = `http://127.0.0.1:${server.port}/v1`;
-  process.env.AION_API_KEY = "test-key";
-  process.env.AION_MODEL_DEFAULT = "custom/alpha, custom/beta";
-  process.env.AION_NO_REPOMAP = "1"; // hermetic + fast buildDef in tmp cwds
-  process.env.AION_RETRY_MAX = "0"; // port #23: same-model retry off — these tests pin chain advance alone (retry-wiring.test.ts covers the interplay)
+  process.env.ROVECODE_BASE_URL = `http://127.0.0.1:${server.port}/v1`;
+  process.env.ROVECODE_API_KEY = "test-key";
+  process.env.ROVECODE_MODEL_DEFAULT = "custom/alpha, custom/beta";
+  process.env.ROVECODE_NO_REPOMAP = "1"; // hermetic + fast buildDef in tmp cwds
+  process.env.ROVECODE_RETRY_MAX = "0"; // port #23: same-model retry off — these tests pin chain advance alone (retry-wiring.test.ts covers the interplay)
 });
 
 afterAll(() => {
@@ -78,7 +78,7 @@ afterAll(() => {
 // ---------- helpers ----------
 
 function tmpCwd(): string {
-  const d = mkdtempSync(join(tmpdir(), "aion-router-wiring-"));
+  const d = mkdtempSync(join(tmpdir(), "rovecode-router-wiring-"));
   tmpDirs.push(d);
   return d;
 }
@@ -145,7 +145,7 @@ test("real wiring: requested model outside the env chain falls back into it (pre
 // ---------- LOW/MED-4: single-model chain → provider error verbatim, no note ----------
 
 test("real wiring: single-model env chain surfaces the raw provider error — no exhausted rewrite, no note", async () => {
-  process.env.AION_MODEL_DEFAULT = "custom/alpha";
+  process.env.ROVECODE_MODEL_DEFAULT = "custom/alpha";
   try {
     const rt = createRuntime({ cwd: tmpCwd() });
     const before = modelsSeen.length;
@@ -157,14 +157,14 @@ test("real wiring: single-model env chain surfaces the raw provider error — no
     expect(end.summary).not.toContain("exhausted");
     expect(rt.drainRouterNotes()).toHaveLength(0);
   } finally {
-    process.env.AION_MODEL_DEFAULT = "custom/alpha, custom/beta";
+    process.env.ROVECODE_MODEL_DEFAULT = "custom/alpha, custom/beta";
   }
 });
 
 // ---------- MED-3 seam gate: env UNSET → the synthesized default must NOT capture loose models ----------
 
-test("real wiring: with AION_MODEL_DEFAULT unset, a failing model gets NO loose fallback (env gate off)", async () => {
-  delete process.env.AION_MODEL_DEFAULT;
+test("real wiring: with ROVECODE_MODEL_DEFAULT unset, a failing model gets NO loose fallback (env gate off)", async () => {
+  delete process.env.ROVECODE_MODEL_DEFAULT;
   try {
     const rt = createRuntime({ cwd: tmpCwd() });
     const before = modelsSeen.length;
@@ -177,7 +177,7 @@ test("real wiring: with AION_MODEL_DEFAULT unset, a failing model gets NO loose 
     expect(end.summary).not.toContain("exhausted");
     expect(rt.drainRouterNotes()).toHaveLength(0);
   } finally {
-    process.env.AION_MODEL_DEFAULT = "custom/alpha, custom/beta";
+    process.env.ROVECODE_MODEL_DEFAULT = "custom/alpha, custom/beta";
   }
 });
 

@@ -8,7 +8,7 @@
  *  child's nudge was pushed for nobody and swept by the child's own post_run; (3) the parent's OWN
  *  failed edit while a child starts/finishes inside the same batch wait — the child's pre_run / post_run
  *  swept the parent's pending nudge. One scripted provider serves parent and children (a run's identity
- *  is its goal); every gate is explicit, every run has a deadline; AION_HOME pinned to a temp dir. */
+ *  is its goal); every gate is explicit, every run has a deadline; ROVECODE_HOME pinned to a temp dir. */
 
 import { test, expect } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -45,18 +45,18 @@ function gate(): { wait: Promise<void>; open: () => void } {
 }
 
 interface Recorded { goal: string; messages: Message[] }
-const ENV_KEYS = ["AION_HOME", "AION_NO_CHECKPOINTS", "AION_NO_REPOMAP", "AION_REFLECTION", "AION_REFLECTION_MAX"] as const;
+const ENV_KEYS = ["ROVECODE_HOME", "ROVECODE_NO_CHECKPOINTS", "ROVECODE_NO_REPOMAP", "ROVECODE_REFLECTION", "ROVECODE_REFLECTION_MAX"] as const;
 interface Rig { cwd: string; recorded: Recorded[]; done: () => void }
 function rig(): Rig {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-refl-tasks-"));
-  const home = mkdtempSync(join(tmpdir(), "aion-refl-tasks-home-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-refl-tasks-"));
+  const home = mkdtempSync(join(tmpdir(), "rovecode-refl-tasks-home-"));
   const saved: Record<string, string | undefined> = {};
   for (const k of ENV_KEYS) saved[k] = process.env[k];
-  process.env.AION_HOME = home; // hermetic user scope: the developer's real ~/.aion/hooks.* must not load
-  process.env.AION_NO_CHECKPOINTS = "1";
-  process.env.AION_NO_REPOMAP = "1";
-  delete process.env.AION_REFLECTION;
-  delete process.env.AION_REFLECTION_MAX;
+  process.env.ROVECODE_HOME = home; // hermetic user scope: the developer's real ~/.rovecode/hooks.* must not load
+  process.env.ROVECODE_NO_CHECKPOINTS = "1";
+  process.env.ROVECODE_NO_REPOMAP = "1";
+  delete process.env.ROVECODE_REFLECTION;
+  delete process.env.ROVECODE_REFLECTION_MAX;
   return {
     cwd, recorded: [],
     done: () => {

@@ -27,7 +27,7 @@ const MODES: readonly RestoreMode[] = ["files", "conversation", "both"];
 export async function cmdCheckpoints(ctx: CheckpointCmdCtx): Promise<void> {
   if (ctx.busy()) { ctx.renderer.addSystemNote("finish or interrupt the run first (Esc)", "warn"); return; }
   const cp = await ctx.checkpointsFor(ctx.sessionId());
-  if (!cp) { ctx.renderer.addSystemNote("checkpoints unavailable (git missing or AION_NO_CHECKPOINTS=1)", "warn"); return; }
+  if (!cp) { ctx.renderer.addSystemNote("checkpoints unavailable (git missing or ROVECODE_NO_CHECKPOINTS=1)", "warn"); return; }
   const log = cp.list();
   if (log.length === 0) { ctx.renderer.addSystemNote("no checkpoints yet — snapshots land after each mutating tool call"); return; }
   const items = [...log].reverse().slice(0, 20).map((c, i) => ({
@@ -49,7 +49,7 @@ export async function cmdRestore(ctx: CheckpointCmdCtx, arg: string): Promise<vo
   const mode = (modeArg || "files") as RestoreMode;
   if (!MODES.includes(mode)) { ctx.renderer.addSystemNote(`unknown restore mode "${modeArg}" (files|conversation|both)`, "warn"); return; }
   const cp = await ctx.checkpointsFor(ctx.sessionId());
-  if (!cp) { ctx.renderer.addSystemNote("checkpoints unavailable (git missing or AION_NO_CHECKPOINTS=1)", "warn"); return; }
+  if (!cp) { ctx.renderer.addSystemNote("checkpoints unavailable (git missing or ROVECODE_NO_CHECKPOINTS=1)", "warn"); return; }
   // dedupe candidates BY HASH (identical content re-snapshotted shares one): counting
   // entries made even the full 40-char hash "match 2 checkpoints" forever. Latest entry
   // per hash wins, mirroring the module's own pick.

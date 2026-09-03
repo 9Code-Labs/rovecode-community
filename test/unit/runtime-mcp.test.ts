@@ -11,7 +11,7 @@ import type { ApprovalRequest, ToolCallPart, ToolContext } from "../../src/core/
 
 const tmpDirs: string[] = [];
 function makeTmp(): string {
-  const dir = mkdtempSync(join(tmpdir(), "aion-rtmcp-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-rtmcp-"));
   tmpDirs.push(dir);
   return dir;
 }
@@ -29,7 +29,7 @@ function callPart(tool: string, args: unknown): ToolCallPart {
 describe("createRuntime MCP wiring", () => {
   test("cwd with .mcp.json registers exactly mcp_list + mcp_call; gated dispatch of mcp_call records a PROMPT", async () => {
     const dir = makeTmp();
-    writeFileSync(join(dir, ".mcp.json"), JSON.stringify({ mcpServers: { toy: { command: "aion-not-a-real-binary-wiring" } } }));
+    writeFileSync(join(dir, ".mcp.json"), JSON.stringify({ mcpServers: { toy: { command: "rovecode-not-a-real-binary-wiring" } } }));
     const rt = createRuntime({ cwd: dir, stream: null });
 
     const mcpNames = rt.registry.list().map((t) => t.schema.name).filter((n) => n.startsWith("mcp_"));

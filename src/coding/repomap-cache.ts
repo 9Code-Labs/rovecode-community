@@ -1,7 +1,7 @@
 /** Persistent per-file tags cache (PORT #12, round-2 F1): aider persists its
  *  tags cache to disk via diskcache (.aider.tags.cache.v4, repomap.py
  *  L217-222) so extraction "only happens once" ACROSS launches, not per
- *  process. JSON equivalent under <root>/.aion/cache/repomap.json, keyed by
+ *  process. JSON equivalent under <root>/.rovecode/cache/repomap.json, keyed by
  *  absolute path -> { mtimeMs, size, tags }. mtime+size mismatch, a missing
  *  file, or corrupt JSON simply miss (aider recreates the cache on SQLITE
  *  errors, L241-264). Strictly advisory: every failure path degrades to
@@ -22,7 +22,7 @@ export class TagsDiskCache {
   private dirty = false;
 
   constructor(root: string) {
-    this.path = join(root, ".aion", "cache", "repomap.json");
+    this.path = join(root, ".rovecode", "cache", "repomap.json");
     try {
       const raw = JSON.parse(readFileSync(this.path, "utf8")) as
         { version?: number; entries?: Record<string, CacheEntry> };

@@ -3,9 +3,9 @@
  *  ENABLE_VIRTUAL_TERMINAL_INPUT helper — without it libuv's console reader drops modifier state and
  *  Shift+Tab arrives as a plain \t instead of CSI Z; the helper is loaded AFTER setRawMode(true), which
  *  resets the console mode, exactly as vendor/pi-tui/src/terminal.ts:186-190 does). MemoryIO is the
- *  in-memory double tests and the smoke drive. chooseSurface() is the pure `aion` default rule:
+ *  in-memory double tests and the smoke drive. chooseSurface() is the pure `rovecode` default rule:
  *  sextant only on a TTY of at least 100×30 that renders truecolor or 256 colors (the #40 quantizer
- *  paints the latter); `--classic` beats everything; AION_TUI=classic|sextant overrides the heuristics
+ *  paints the latter); `--classic` beats everything; ROVECODE_TUI=classic|sextant overrides the heuristics
  *  (a non-TTY still never gets sextant, nor does a TTY under the 40×12 Screen floor). */
 
 import { createRequire } from "node:module";
@@ -164,12 +164,12 @@ export function fitsFloor(stdout: StdoutInfo): boolean {
 
 export type Surface = "sextant" | "classic";
 
-/** `--classic` wins; AION_TUI=classic forces classic, AION_TUI=sextant forces sextant on any TTY at or
+/** `--classic` wins; ROVECODE_TUI=classic forces classic, ROVECODE_TUI=sextant forces sextant on any TTY at or
  *  above the 40×12 floor (the 100×30 and color heuristics skipped); otherwise sextantOk(). A non-TTY
  *  stdout never gets sextant. */
 export function chooseSurface(cli: { classic: boolean }, env: Env, stdout: StdoutInfo): Surface {
   if (cli.classic) return "classic";
-  const force = (env.AION_TUI ?? "").trim().toLowerCase();
+  const force = (env.ROVECODE_TUI ?? "").trim().toLowerCase();
   if (force === "classic") return "classic";
   if (force === "sextant") return stdout.isTTY && fitsFloor(stdout) ? "sextant" : "classic";
   return sextantOk(env, stdout) ? "sextant" : "classic";
@@ -180,5 +180,5 @@ export function chooseSurface(cli: { classic: boolean }, env: Env, stdout: Stdou
  *  classic PiTuiRenderer exactly as before) */
 export function pickRenderer(cli: { classic: boolean; pet?: string }, env: Env = process.env, stdout: RawStdout = process.stdout): Renderer | undefined {
   if (chooseSurface(cli, env, stdout) !== "sextant") return undefined;
-  return new SextantRenderer({ io: new ProcessIO(process.stdin, stdout, env), truecolor: colorDepth(env) === "truecolor", ...(cli.pet !== undefined ? { pet: cli.pet } : {}), ...(env.AION_THEME ? { theme: env.AION_THEME } : {}) });
+  return new SextantRenderer({ io: new ProcessIO(process.stdin, stdout, env), truecolor: colorDepth(env) === "truecolor", ...(cli.pet !== undefined ? { pet: cli.pet } : {}), ...(env.ROVECODE_THEME ? { theme: env.ROVECODE_THEME } : {}) });
 }

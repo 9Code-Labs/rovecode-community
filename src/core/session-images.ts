@@ -12,7 +12,7 @@
  *  on-disk bytes to the provider as an image block). imageData()/imageByteSize() decline both, so
  *  the part lowers to a "file unavailable" placeholder. Consequently the only file a hydrated part
  *  can name is `<session>/attachments/<one segment>`, whatever entries.jsonl says.
- *  `aion export --json` copies entries.jsonl ALONE — the attachments directory travels with the
+ *  `rovecode export --json` copies entries.jsonl ALONE — the attachments directory travels with the
  *  session directory, not with the export (the JSONL stays a small, verbatim-copyable record). */
 
 import { createHash } from "node:crypto";

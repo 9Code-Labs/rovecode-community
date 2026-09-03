@@ -181,7 +181,7 @@ test("error-looking results are never stubbed (:91-92, :612; classifier :326-328
 });
 
 test("ok:false results are never stubbed even when the text dodges the string sniff (MED-3)", () => {
-  // aion failure shapes that do NOT start with "Error" and contain no
+  // rovecode failure shapes that do NOT start with "Error" and contain no
   // '"error"'/'"failed"' in the head — the sniff alone would let these stub
   const failure = "Permission denied by user. " + "d".repeat(600);
   const g = new ToolGuard();

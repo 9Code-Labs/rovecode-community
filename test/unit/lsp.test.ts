@@ -38,7 +38,7 @@ async function disposeAndRm(gate: LspGate, dir: string): Promise<void> {
 }
 
 function tempProject(): { dir: string; file: string } {
-  const dir = mkdtempSync(join(tmpdir(), "aion-lsp-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-lsp-"));
   const file = join(dir, "bad.ts");
   writeFileSync(file, "const unused = 1;\nexport {};\nconst n: number = 'x';\n");
   return { dir, file };
@@ -156,7 +156,7 @@ test("laggy server: publish carrying the previous version is rejected, the match
 
 test("absent server: probe miss turns the feature off silently and never spawns", async () => {
   const { dir, file } = tempProject();
-  const gate = createLspGate({ serverName: "aion-no-such-lsp-server-p13", root: dir });
+  const gate = createLspGate({ serverName: "rovecode-no-such-lsp-server-p13", root: dir });
   try {
     const t0 = Date.now();
     expect(await gate.note(file)).toBe("");
@@ -318,8 +318,8 @@ test("default-gate map is bounded: oldest root evicted and disposed past the cap
   disposeDefaultGates();
   try {
     for (let i = 0; i < 6; i++) {
-      const root = join(tmpdir(), `aion-fake-root-${i}`); // never spawns: probe misses
-      expect(await lspGateNote(join(root, "x.ts"), root, { serverName: "aion-no-such-lsp-server-p13" })).toBe("");
+      const root = join(tmpdir(), `rovecode-fake-root-${i}`); // never spawns: probe misses
+      expect(await lspGateNote(join(root, "x.ts"), root, { serverName: "rovecode-no-such-lsp-server-p13" })).toBe("");
     }
     expect(disposeDefaultGates().length).toBe(4); // 6 roots in, only the 4 newest kept
   } finally {

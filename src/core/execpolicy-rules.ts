@@ -173,7 +173,7 @@ export const DEFAULT_RULES: readonly PrefixRuleSpec[] = [
   { pattern: ["printenv"], notMatch: [["print", "-0"]] },  // :54-63
   { pattern: ["grep"] },
   // NO rg rule (R2 #9 HIGH-1a): `rg --pre <cmd>` / `--hostname-bin <cmd>` execute
-  // arbitrary programs, and the rule was an aion ADDITION absent from upstream
+  // arbitrary programs, and the rule was an rovecode ADDITION absent from upstream
   // example.codexpolicy — unknown rg falls to heuristics → prompt.
   { pattern: ["cd"] },
   { pattern: ["git", ["status", "log", "diff", "show", "branch"]],

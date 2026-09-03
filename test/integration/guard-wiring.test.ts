@@ -76,7 +76,7 @@ function loopingStream(tool: string, args: unknown, finalText: string): StreamFn
 // with 12 executions, no warn, no stub)
 
 test("agentLoop: identical calls escalate across turns — warn nudges, then the stub blocks execution", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-gw-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-gw-"));
   const store = new SessionStore(dir, randomUUID());
   const reg = new ToolRegistry();
   const probe = countingTool();
@@ -107,7 +107,7 @@ test("agentLoop: identical calls escalate across turns — warn nudges, then the
 });
 
 test("agentLoop: guard resets at the follow-up boundary (per-USER-turn semantics, hermes reset_for_turn)", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-gw-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-gw-"));
   const store = new SessionStore(dir, randomUUID());
   const reg = new ToolRegistry();
   const probe = countingTool();
@@ -167,8 +167,8 @@ test("gauntlet adversarial-loop-guard: FAILS without a guard, PASSES with one", 
 // ── orchestrator wiring: subagents get their own guard ──────────────────────
 
 test("runChild: a looping subagent is stopped by its own guard", async () => {
-  const root = mkdtempSync(join(tmpdir(), "aion-gw-root-"));
-  const sessions = mkdtempSync(join(tmpdir(), "aion-gw-sess-"));
+  const root = mkdtempSync(join(tmpdir(), "rovecode-gw-root-"));
+  const sessions = mkdtempSync(join(tmpdir(), "rovecode-gw-sess-"));
   const probe = countingTool();
   const res = await runChild({
     defs: new Map([["worker", { name: "worker", systemPrompt: "w", tools: ["*"] }]]),
@@ -194,7 +194,7 @@ test("runChild: a looping subagent is stopped by its own guard", async () => {
 // ── CLI `run` wiring: full subprocess against a scripted HTTP provider ───────
 
 test("cmdRun: guard events reach the one-shot CLI path end-to-end", async () => {
-  const tmp = mkdtempSync(join(tmpdir(), "aion-gw-cli-"));
+  const tmp = mkdtempSync(join(tmpdir(), "rovecode-gw-cli-"));
   const notePath = join(tmp, "note.txt");
   writeFileSync(notePath, "loop guard e2e\n");
   let calls = 0;
@@ -217,8 +217,8 @@ test("cmdRun: guard events reach the one-shot CLI path end-to-end", async () => 
   });
   try {
     const main = join(import.meta.dir, "..", "..", "src", "cli", "main.ts");
-    const env = { ...process.env, AION_BASE_URL: `http://127.0.0.1:${server.port}`, AION_API_KEY: "test-key", AION_MODEL: "scripted" } as Record<string, string>;
-    delete env["AION_STREAM"];
+    const env = { ...process.env, ROVECODE_BASE_URL: `http://127.0.0.1:${server.port}`, ROVECODE_API_KEY: "test-key", ROVECODE_MODEL: "scripted" } as Record<string, string>;
+    delete env["ROVECODE_STREAM"];
     const proc = Bun.spawn([process.execPath, main, "run", "read note.txt forever", "--yolo"], {
       cwd: tmp, env, stdout: "pipe", stderr: "pipe",
     });
@@ -358,7 +358,7 @@ test("policy: a tool whose schema declares `path` still resolves its resource fr
 // policy resource is built the same way — `read {path:"secrets/creds.txt"}`
 // used to dodge a deny on the absolute path (the resource was the raw string).
 test("policy: a relative `path` is resolved against ctx.cwd before matching — an absolute-path deny holds for the real read tool", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-gw-rel-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-gw-rel-"));
   mkdirSync(join(cwd, "secrets"));
   writeFileSync(join(cwd, "secrets", "creds.txt"), "TOPSECRET\n");
   writeFileSync(join(cwd, "public.txt"), "PUBLIC-OK\n");

@@ -15,7 +15,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, appendFileSync, ex
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 
-function ws(): string { return mkdtempSync(join(tmpdir(), "aion-cp-")); }
+function ws(): string { return mkdtempSync(join(tmpdir(), "rovecode-cp-")); }
 
 /** Minimal CheckpointCmdCtx: notes + branch targets captured, everything else inert. */
 function cmdCtx(cp: Checkpoints | null): { ctx: CheckpointCmdCtx; notes: string[]; branched: string[] } {
@@ -60,7 +60,7 @@ function dirState(root: string, rel = ""): Map<string, string> {
   return out;
 }
 
-test("snapshot per write: shadow git-dir under .aion/checkpoints/<session>, workspace stays non-git", async () => {
+test("snapshot per write: shadow git-dir under .rovecode/checkpoints/<session>, workspace stays non-git", async () => {
   const w = ws();
   const cp = await Checkpoints.init({ workspace: w, sessionId: "s1" });
   writeFileSync(join(w, "a.txt"), "v1");
@@ -72,8 +72,8 @@ test("snapshot per write: shadow git-dir under .aion/checkpoints/<session>, work
   expect(c1.hash).not.toBe(c2.hash);
   expect(cp.list().map((c) => c.label)).toEqual(["write a.txt", "edit a.txt"]);
   expect(cp.list().map((c) => c.entryId)).toEqual(["e1", "e2"]);
-  // git-dir lives under .aion/checkpoints/<session>; the WORKSPACE has no .git at all
-  expect(cp.gitDir.startsWith(join(w, ".aion", "checkpoints", "s1"))).toBe(true);
+  // git-dir lives under .rovecode/checkpoints/<session>; the WORKSPACE has no .git at all
+  expect(cp.gitDir.startsWith(join(w, ".rovecode", "checkpoints", "s1"))).toBe(true);
   expect(existsSync(join(cp.gitDir, "HEAD"))).toBe(true);
   expect(existsSync(join(w, ".git"))).toBe(false); // non-git workspace works & stays non-git
   rmSync(w, { recursive: true, force: true });
@@ -180,12 +180,12 @@ test("user .git (root and nested) is byte-for-byte untouched in a git workspace"
   rmSync(w, { recursive: true, force: true });
 }, 30000);
 
-test("excludes: node_modules and .aion are never snapshotted, never deleted by restore", async () => {
+test("excludes: node_modules and .rovecode are never snapshotted, never deleted by restore", async () => {
   const w = ws();
   mkdirSync(join(w, "node_modules", "pkg"), { recursive: true });
   writeFileSync(join(w, "node_modules", "pkg", "x.js"), "junk");
-  mkdirSync(join(w, ".aion", "sessions", "s1"), { recursive: true });
-  writeFileSync(join(w, ".aion", "sessions", "s1", "entries.jsonl"), "{}");
+  mkdirSync(join(w, ".rovecode", "sessions", "s1"), { recursive: true });
+  writeFileSync(join(w, ".rovecode", "sessions", "s1", "entries.jsonl"), "{}");
   writeFileSync(join(w, "a.txt"), "v1");
 
   const cp = await Checkpoints.init({ workspace: w, sessionId: "s1" });
@@ -193,13 +193,13 @@ test("excludes: node_modules and .aion are never snapshotted, never deleted by r
   const tracked = execFileSync("git", ["--git-dir", cp.gitDir, "ls-files"], { encoding: "utf8" });
   expect(tracked).toContain("a.txt");
   expect(tracked).not.toContain("node_modules");
-  expect(tracked).not.toContain(".aion");
+  expect(tracked).not.toContain(".rovecode");
 
   writeFileSync(join(w, "node_modules", "pkg", "later.js"), "installed later");
   const r = await cp.restore(c1.hash, "files");
   expect(r.ok).toBe(true);
   expect(existsSync(join(w, "node_modules", "pkg", "later.js"))).toBe(true); // ignored files survive restore
-  expect(existsSync(join(w, ".aion", "sessions", "s1", "entries.jsonl"))).toBe(true);
+  expect(existsSync(join(w, ".rovecode", "sessions", "s1", "entries.jsonl"))).toBe(true);
   rmSync(w, { recursive: true, force: true });
 }, 30000);
 
@@ -299,7 +299,7 @@ test("MED-3 module: duplicate hashes are ONE candidate and the LATEST entry's an
   const c1 = await cp.snapshot("one", "e-old");
   // identical content re-snapshotted can mint the SAME commit hash (same tree/parent/second);
   // forge the sidecar shape directly so the fixture is deterministic
-  const sidecar = join(w, ".aion", "checkpoints", "s1", "checkpoints.jsonl");
+  const sidecar = join(w, ".rovecode", "checkpoints", "s1", "checkpoints.jsonl");
   appendFileSync(sidecar, JSON.stringify({ hash: c1.hash, label: "one", entryId: "e-new", createdAt: Date.now() }) + "\n");
   const cp2 = await Checkpoints.init({ workspace: w, sessionId: "s1" });
   expect(cp2.list().length).toBe(2);
@@ -319,7 +319,7 @@ test("MED-3 surface: cmdRestore dedupes candidates by hash instead of refusing t
   const cp = await Checkpoints.init({ workspace: w, sessionId: "s1" });
   writeFileSync(join(w, "a.txt"), "v1");
   const c1 = await cp.snapshot("one", "e-old");
-  const sidecar = join(w, ".aion", "checkpoints", "s1", "checkpoints.jsonl");
+  const sidecar = join(w, ".rovecode", "checkpoints", "s1", "checkpoints.jsonl");
   appendFileSync(sidecar, JSON.stringify({ hash: c1.hash, label: "one", entryId: "e-new", createdAt: Date.now() }) + "\n");
   const cp2 = await Checkpoints.init({ workspace: w, sessionId: "s1" });
 
@@ -349,11 +349,11 @@ winTest("LOW-5b: case-variant workspace path (C:\\foo vs c:\\foo) reopens the sh
 
 test('LOW-5c: dot-only session ids ("." / "..") cannot collapse into or escape the shadow root', async () => {
   const w = ws();
-  const root = join(w, ".aion", "checkpoints");
+  const root = join(w, ".rovecode", "checkpoints");
   for (const sid of [".", ".."]) {
     const cp = await Checkpoints.init({ workspace: w, sessionId: sid });
     const shadowDir = dirname(cp.gitDir);
-    expect(resolve(shadowDir).startsWith(root + sep)).toBe(true); // "..": escaped to .aion pre-fix
+    expect(resolve(shadowDir).startsWith(root + sep)).toBe(true); // "..": escaped to .rovecode pre-fix
     expect(resolve(shadowDir)).not.toBe(root);                    // ".": collapsed ONTO the root pre-fix
   }
   rmSync(w, { recursive: true, force: true });

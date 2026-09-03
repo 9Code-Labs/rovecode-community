@@ -8,8 +8,8 @@
  *    `sandbox_mode = "…"` (app-server/tests/common/config.rs:140) with the
  *    `--sandbox` flag mapped onto the same SandboxMode enum
  *    (utils/cli/src/shared_options.rs:40-41, utils/cli/src/sandbox_mode_cli_arg.rs:14-25).
- *    Here: `.aion/sandbox.json` < `AION_SANDBOX` env (aion has no per-run CLI
- *    flag for this; env is the override layer, as for every other AION_* knob);
+ *    Here: `.rovecode/sandbox.json` < `ROVECODE_SANDBOX` env (rovecode has no per-run CLI
+ *    flag for this; env is the override layer, as for every other ROVECODE_* knob);
  *  - an explicitly requested but unprovidable tier is a HARD ERROR
  *    (sandboxing/src/manager.rs:203-222) — the executor seam already refuses
  *    to fall DOWN the ladder (RungUnavailableError); this module turns that
@@ -27,7 +27,7 @@
  *  Scope: consumed by createRuntime (src/cli/runtime.ts) — the ONE runtime
  *  construction behind tui/run/repl/acp/serve. The gauntlet runner
  *  (src/eval/gauntlet-runner.ts) registers tools directly and never builds a
- *  runtime, so `aion gauntlet` stays on the lazy `direct` seam regardless of
+ *  runtime, so `rovecode gauntlet` stays on the lazy `direct` seam regardless of
  *  the cwd's sandbox config (by design: the eval suite measures the loop, not
  *  the machine's WSL/Docker state). The executor seam is process-wide (#10):
  *  in a multi-session process (serve/acp) the most recently booted session's
@@ -49,9 +49,9 @@ export interface SandboxConfig {
   source: SandboxSource;
 }
 
-export const SANDBOX_FILE = ".aion/sandbox.json";
-export const SANDBOX_ENV = "AION_SANDBOX";
-export const SANDBOX_IMAGE_ENV = "AION_SANDBOX_IMAGE";
+export const SANDBOX_FILE = ".rovecode/sandbox.json";
+export const SANDBOX_ENV = "ROVECODE_SANDBOX";
+export const SANDBOX_IMAGE_ENV = "ROVECODE_SANDBOX_IMAGE";
 
 const HINT = `fix ${SANDBOX_FILE} or ${SANDBOX_ENV} (default: direct)`;
 
@@ -97,7 +97,7 @@ function fail(message: string): never {
 interface FileFields { rung?: unknown; dockerImage?: unknown; path: string }
 
 function readSandboxFile(cwd: string): FileFields | null {
-  const path = join(cwd, ".aion", "sandbox.json");
+  const path = join(cwd, ".rovecode", "sandbox.json");
   let text: string;
   try {
     text = readFileSync(path, "utf8");
@@ -118,9 +118,9 @@ function readSandboxFile(cwd: string): FileFields | null {
   return { rung: o.rung, dockerImage: o.dockerImage, path };
 }
 
-/** Resolve the sandbox rung for `cwd`: `AION_SANDBOX` (rung name) beats
- *  `<cwd>/.aion/sandbox.json` `{ rung, dockerImage }` beats the `direct`
- *  default; `AION_SANDBOX_IMAGE` beats the file's dockerImage. Throws
+/** Resolve the sandbox rung for `cwd`: `ROVECODE_SANDBOX` (rung name) beats
+ *  `<cwd>/.rovecode/sandbox.json` `{ rung, dockerImage }` beats the `direct`
+ *  default; `ROVECODE_SANDBOX_IMAGE` beats the file's dockerImage. Throws
  *  SandboxConfigError (one line) on an unknown rung, a malformed file, or a
  *  bad dockerImage — never degrades silently. */
 export function loadSandboxConfig(cwd: string, env: Record<string, string | undefined> = process.env): SandboxConfig {
@@ -159,8 +159,8 @@ function originOf(cfg: SandboxConfig): string {
   return cfg.source === "env" ? SANDBOX_ENV : cfg.source === "file" ? SANDBOX_FILE : "default";
 }
 
-/** One-line human form for /status: `direct (default)`, `wsl (.aion/sandbox.json)`,
- *  `docker debian:stable-slim (AION_SANDBOX)`. */
+/** One-line human form for /status: `direct (default)`, `wsl (.rovecode/sandbox.json)`,
+ *  `docker debian:stable-slim (ROVECODE_SANDBOX)`. */
 export function describeSandbox(cfg: SandboxConfig): string {
   const image = cfg.rung === "docker" ? ` ${cfg.dockerImage ?? DEFAULT_DOCKER_IMAGE}` : "";
   return `${cfg.rung}${image} (${originOf(cfg)})`;

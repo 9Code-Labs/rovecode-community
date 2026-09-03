@@ -95,8 +95,8 @@ test("selector parsing: first-slash split keeps model-id slashes; comma lists be
 test("roleTableFromEnv: env chains parsed per role, default falls back to the provided ref", () => {
   const fallback = ref("kaesra", "zai-org/glm-5.3-flash");
   const roles = roleTableFromEnv(fallback, {
-    AION_MODEL_SMOL: "kaesra/zai-org/glm-5.3-flash, openai/gpt-4o-mini",
-    AION_MODEL_PLAN: "anthropic/claude-sonnet",
+    ROVECODE_MODEL_SMOL: "kaesra/zai-org/glm-5.3-flash, openai/gpt-4o-mini",
+    ROVECODE_MODEL_PLAN: "anthropic/claude-sonnet",
   });
   expect(roles.default).toEqual([fallback]);
   expect(roles.smol).toEqual([ref("kaesra", "zai-org/glm-5.3-flash"), ref("openai", "gpt-4o-mini")]);

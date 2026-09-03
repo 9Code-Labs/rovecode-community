@@ -1,9 +1,9 @@
 /** PORT #26 fix-wave (critic MED-1 / L1): background tasks vs the CLI process, through the REAL CLI.
- *  Hermetic like output-modes.test.ts — AION_* and *_API_KEY scrubbed, AION_HOME → an empty temp dir,
+ *  Hermetic like output-modes.test.ts — ROVECODE_* and *_API_KEY scrubbed, ROVECODE_HOME → an empty temp dir,
  *  cwd → a temp workspace — with ONE loopback OpenAI-compatible provider scripting parent AND child.
  *  A run is identified by its LAST "PARENT …"/"CHILD …" user message (completion notes are user
  *  messages too, so the first user message would mislead in a multi-turn repl session).
- *  Policy under test: a one-shot `aion run` and a closed `--plain` repl do not outlive their process —
+ *  Policy under test: a one-shot `rovecode run` and a closed `--plain` repl do not outlive their process —
  *  live children are cancelled and DRAINED before exit (their in-flight bash trees die and their runs
  *  settle, answering the in-flight tool_call), and the plain repl hands rt.steering to the loop so a
  *  completion note reaches the model on the next turn. The tree-death probe is a Win32_Process query
@@ -26,8 +26,8 @@ const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 let work = "", home = "";
 beforeAll(() => {
-  work = mkdtempSync(join(tmpdir(), "aion-tcli-"));
-  home = mkdtempSync(join(tmpdir(), "aion-tcli-home-"));
+  work = mkdtempSync(join(tmpdir(), "rovecode-tcli-"));
+  home = mkdtempSync(join(tmpdir(), "rovecode-tcli-home-"));
 });
 afterAll(() => {
   rmSync(work, { recursive: true, force: true });
@@ -72,9 +72,9 @@ async function survivors(tag: string, ms: number): Promise<number[]> {
 function hermeticEnv(extra: Record<string, string>): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
-    if (v !== undefined && !/^AION_/i.test(k) && !/_API_KEY$/i.test(k)) env[k] = v;
+    if (v !== undefined && !/^ROVECODE_/i.test(k) && !/_API_KEY$/i.test(k)) env[k] = v;
   }
-  env.AION_HOME = home;
+  env.ROVECODE_HOME = home;
   return Object.assign(env, extra);
 }
 
@@ -155,7 +155,7 @@ function fakeProvider(tag: string) {
     },
   });
   return {
-    env: { AION_BASE_URL: `http://127.0.0.1:${server.port}`, AION_API_KEY: "test-key", AION_MODEL: "probe-model", AION_NO_REPOMAP: "1" },
+    env: { ROVECODE_BASE_URL: `http://127.0.0.1:${server.port}`, ROVECODE_API_KEY: "test-key", ROVECODE_MODEL: "probe-model", ROVECODE_NO_REPOMAP: "1" },
     requests, served,
     stop: () => { server.stop(true); },
   };
@@ -166,7 +166,7 @@ type Result = Extract<MessagePart, { kind: "tool_result" }>;
 
 /** The child's OWN session (runChild: one store per child, its preview is its goal) as calls + results. */
 function childSession(goalPrefix: string): { calls: Call[]; results: Result[] } {
-  const root = join(work, ".aion", "sessions");
+  const root = join(work, ".rovecode", "sessions");
   const all = listSessions(root);
   const s = all.find((x) => x.preview.startsWith(goalPrefix));
   if (!s) throw new Error(`no session with goal "${goalPrefix}" — have: ${all.map((x) => x.preview).join(" | ")}`);
@@ -174,14 +174,14 @@ function childSession(goalPrefix: string): { calls: Call[]; results: Result[] } 
   return { calls: parts.filter((p): p is Call => p.kind === "tool_call"), results: parts.filter((p): p is Result => p.kind === "tool_result") };
 }
 
-// ---------- MED-1: aion run ----------
+// ---------- MED-1: rovecode run ----------
 
-test("MED-1: `aion run` ending with a child mid-bash — the task is cancelled + drained before exit: exit 0, no tagged sleep survives, the child's session answers its bash call", async () => {
+test("MED-1: `rovecode run` ending with a child mid-bash — the task is cancelled + drained before exit: exit 0, no tagged sleep survives, the child's session answers its bash call", async () => {
   const tag = sleepTag();
   const p = fakeProvider(tag);
   const cli = spawnCli(["run", "PARENT sleep", "--yolo"], p.env, "ignore");
   try {
-    const code = await deadline(cli.exited, 90_000, "aion run exits");
+    const code = await deadline(cli.exited, 90_000, "rovecode run exits");
     expect(cli.buf.out).toContain("PARENT-DONE");
     expect(code).toBe(0);
     expect(p.served(`CHILD sleep ${tag}`)).toBe(true); // the child WAS mid-bash when the parent finished (the provider gated PARENT-DONE on it)
@@ -200,14 +200,14 @@ test("MED-1: `aion run` ending with a child mid-bash — the task is cancelled +
   }
 }, T);
 
-// ---------- L1: aion --plain ----------
+// ---------- L1: rovecode --plain ----------
 
-test("L1: `aion --plain` — a task's completion note reaches the model on the NEXT turn (rt.steering), and quitting cancels + drains a live task (exit 0, no survivor, no orphan)", async () => {
+test("L1: `rovecode --plain` — a task's completion note reaches the model on the NEXT turn (rt.steering), and quitting cancels + drains a live task (exit 0, no survivor, no orphan)", async () => {
   const tag = sleepTag();
   const p = fakeProvider(tag);
   const cli = spawnCli(["--plain", "--yolo"], p.env, "pipe");
   try {
-    await cli.waitOut((o) => o.includes("aion>"), 30_000, "repl prompt");
+    await cli.waitOut((o) => o.includes("rovecode>"), 30_000, "repl prompt");
     cli.type("PARENT quick\n");
     await cli.waitOut((o) => o.includes("PARENT-DONE"), 30_000, "turn 1 done");
     await sleep(500); // the child answered before PARENT-DONE (provider-gated); its task settles right after → note queued

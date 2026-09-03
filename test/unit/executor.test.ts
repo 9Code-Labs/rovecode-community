@@ -142,8 +142,8 @@ test("docker probe is a trial container run proving daemon+image+bash, not `dock
   expect(calls[0]!.opts.signal).toBeInstanceOf(AbortSignal);
   // the trial proves THE image commands will later use
   const custom = fakeRunner(() => ok());
-  await probeRung("docker", custom.runner, "linux", { dockerImage: "aion/dev:1" });
-  expect(custom.calls[0]!.argv).toEqual(["docker", "run", "--rm", "aion/dev:1", "bash", "-c", "true"]);
+  await probeRung("docker", custom.runner, "linux", { dockerImage: "rovecode/dev:1" });
+  expect(custom.calls[0]!.argv).toEqual(["docker", "run", "--rm", "rovecode/dev:1", "bash", "-c", "true"]);
 });
 
 test("docker probe: daemon up but image lacks bash → UNAVAILABLE (G2 regression)", async () => {
@@ -294,9 +294,9 @@ test("docker rung runs the container against the mounted workspace", async () =>
   expect(r).toEqual({ code: 0, text: "out" });
 
   const custom = probeOkThen(() => ok());
-  const ex2 = await createExecutor("docker", { runner: custom.runner, dockerImage: "aion/dev:1", platform: "linux" });
+  const ex2 = await createExecutor("docker", { runner: custom.runner, dockerImage: "rovecode/dev:1", platform: "linux" });
   await ex2.run("pwd", "/repo");
-  expect(custom.calls[1]!.argv[7]).toBe("aion/dev:1");
+  expect(custom.calls[1]!.argv[7]).toBe("rovecode/dev:1");
 });
 
 test("every rung forwards the caller's signal and cwd to the runner BY IDENTITY (G4)", async () => {
@@ -351,7 +351,7 @@ function makeCtx(cwd: string): { sessionId: string; cwd: string; signal: AbortSi
 }
 
 test("direct rung parity: ABSOLUTE bytes pinned per case, and bashTool emits exit=<code>\\n<text> (G5)", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-exec-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-exec-"));
   writeFileSync(join(dir, "marker.txt"), "from-cwd");
   const ctx = makeCtx(dir);
   const ex = getExecutor(); // unconfigured seam = direct = today's behavior
@@ -441,7 +441,7 @@ const treeShapes: [shape: string, mk: (hold: string, dir: string) => string][] =
 for (const [shape, mk] of treeShapes) {
   test.skipIf(!isWin)(`Windows abort kills the whole tree (${shape}): the msys sleep is gone ≤3s, the runner settled ≤1s, nothing truncated`, async () => {
     const tag = sleepTag();
-    const dir = mkdtempSync(join(tmpdir(), "aion-tree-"));
+    const dir = mkdtempSync(join(tmpdir(), "rovecode-tree-"));
     try {
       const ac = new AbortController();
       const run = bunRunner([CANON_BASH, "-c", mk(`sleep ${tag}`, dir.replace(/\\/g, "/"))], { cwd: dir, signal: ac.signal });

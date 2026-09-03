@@ -9,8 +9,8 @@ import {
 } from "../../src/skills/index.ts";
 import { createSkillTools, buildSkillsIndex, INDEX_PROMPT_LIMIT } from "../../src/skills/tools.ts";
 
-const root = join(tmpdir(), "aion-skills-test");
-const projSkills = join(root, "proj", ".aion", "skills");
+const root = join(tmpdir(), "rovecode-skills-test");
+const projSkills = join(root, "proj", ".rovecode", "skills");
 const globalSkills = join(root, "global-skills");
 
 function mkSkill(dir: string, name: string, description: string, body = "do the thing", version = "1.0.0"): string {
@@ -87,7 +87,7 @@ test("missing dirs scan to empty without throwing", () => {
 // ---------- manifest invalidation ----------
 
 test("manifest diff: no changes → empty diff; touch → changed; new file → added; delete → removed", async () => {
-  const dir = join(root, "mf", ".aion", "skills");
+  const dir = join(root, "mf", ".rovecode", "skills");
   const store = new SkillStore(join(root, "mf"), { globalDir: null });
   const first = store.scan();
   expect(first.changes.added.length).toBe(0);
@@ -163,13 +163,13 @@ test("lifecycle: active → stale transitions on 90d boundary", () => {
 
 test("buildSkillsIndex renders names and descriptions; empty above the 50-skill limit", async () => {
   const store = new SkillStore(join(root, "idx"), { globalDir: null });
-  mkSkill(join(root, "idx", ".aion", "skills"), "solo", "only skill in town");
+  mkSkill(join(root, "idx", ".rovecode", "skills"), "solo", "only skill in town");
   store.scan();
   const idx = buildSkillsIndex(store);
   expect(idx).toBe("- solo (v1.0.0): only skill in town");
 
   // >50 skills → index must NOT go to the system prompt; skills_list tool covers it
-  const bigDir = join(root, "big", ".aion", "skills");
+  const bigDir = join(root, "big", ".rovecode", "skills");
   for (let i = 0; i < INDEX_PROMPT_LIMIT + 1; i++) mkSkill(bigDir, `sk${String(i).padStart(2, "0")}`, `skill number ${i}`);
   const bigStore = new SkillStore(join(root, "big"), { globalDir: null });
   bigStore.scan();

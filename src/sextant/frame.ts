@@ -34,7 +34,7 @@ export const defaultPainters: Painters = {
   messages: placeholder("messages"),
   plan: drawPlan,
   usage: drawUsage,
-  pet: placeholder("nimbus"),
+  pet: placeholder("rovecode"),
 };
 
 /** app.js layout(): files column at w ≥ 140 (30 wide at ≥ 150, else 26); right column (plan + usage)

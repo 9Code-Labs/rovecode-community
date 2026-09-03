@@ -15,7 +15,7 @@
  *    provider-native  delegate to a server-side compaction capability when the active provider
  *                     advertises one (oh-my-pi :222-231 shouldUseProviderNativeCompaction;
  *                     :1264-1281 local summary when remote is off/unsupported). HONESTY: none
- *                     of aion's adapters advertise it today — the seam (LoopDeps.compactNative)
+ *                     of rovecode's adapters advertise it today — the seam (LoopDeps.compactNative)
  *                     and a test double ship; absent or declining → head-summarize fallback.
  *
  *  Trigger (senpi a0f26a6): "speculative" when the ESTIMATE crosses budget × threshold, before
@@ -45,7 +45,7 @@ export const DEFAULT_COMPACTION_STRATEGY: CompactionStrategy = "head-summarize";
 /** keep-window: user turns retained BEFORE the current one when RunConfig.compactionKeepTurns is unset */
 export const DEFAULT_KEEP_TURNS = 2;
 
-/** `AION_COMPACTION=<strategy>`, case-insensitive — unset/blank → undefined (the caller applies the
+/** `ROVECODE_COMPACTION=<strategy>`, case-insensitive — unset/blank → undefined (the caller applies the
  *  default). An unknown name is ALSO undefined (→ default) plus ONE stderr note per process and value:
  *  createRuntime has no warnings channel, and buildCfg re-parses the env before every run. */
 const unknownStrategyNoted = new Set<string>();
@@ -55,7 +55,7 @@ export function parseCompactionStrategy(raw: string | undefined): CompactionStra
   if ((COMPACTION_STRATEGIES as readonly string[]).includes(v)) return v as CompactionStrategy;
   if (!unknownStrategyNoted.has(v)) {
     unknownStrategyNoted.add(v);
-    console.error(`aion: unknown AION_COMPACTION "${(raw ?? "").trim()}" — using ${DEFAULT_COMPACTION_STRATEGY} (known: ${COMPACTION_STRATEGIES.join(", ")})`);
+    console.error(`rovecode: unknown ROVECODE_COMPACTION "${(raw ?? "").trim()}" — using ${DEFAULT_COMPACTION_STRATEGY} (known: ${COMPACTION_STRATEGIES.join(", ")})`);
   }
   return undefined;
 }
@@ -105,7 +105,7 @@ export function compactionTrigger(histTokens: number, cfg: RunConfig, overflow: 
 
 /** Provider phrasings of "the prompt does not fit" — opencode-2026 llm/provider-error.ts:4-38
  *  @ ebece6e (MIT), minus the throttling exclusions; plus HTTP 413 (provider/error.ts:175).
- *  aion error text is "HTTP <status>: <body>" (stream-errors.ts httpErrorTurn; router.ts
+ *  rovecode error text is "HTTP <status>: <body>" (stream-errors.ts httpErrorTurn; router.ts
  *  classifyStreamError reads the same prefix) or a bare transport message. 429/5xx are the
  *  retry classes (port #23) and never an overflow, whatever their body says. */
 const OVERFLOW_PATTERNS = [

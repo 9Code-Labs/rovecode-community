@@ -1,4 +1,4 @@
-/** Aion TUI theme: raw ANSI styling (no chalk dep) + theme objects for vendored pi-tui
+/** Rovecode TUI theme: raw ANSI styling (no chalk dep) + theme objects for vendored pi-tui
  *  components (EditorTheme / MarkdownTheme / SelectListTheme shapes from vendor). */
 
 import type { EditorTheme, MarkdownTheme, SelectListTheme } from "../../vendor/pi-tui/src/index.ts";
@@ -28,7 +28,7 @@ export const pal = {
   link: st.fg(75),
 };
 
-export const aionSelectListTheme: SelectListTheme = {
+export const rovecodeSelectListTheme: SelectListTheme = {
   selectedPrefix: (t) => pal.accent(t),
   selectedText: (t) => st.bold(t),
   description: (t) => st.dim(t),
@@ -36,12 +36,12 @@ export const aionSelectListTheme: SelectListTheme = {
   noMatch: (t) => st.dim(t),
 };
 
-export const aionEditorTheme: EditorTheme = {
+export const rovecodeEditorTheme: EditorTheme = {
   borderColor: (t) => pal.accentDim(t),
-  selectList: aionSelectListTheme,
+  selectList: rovecodeSelectListTheme,
 };
 
-export const aionMarkdownTheme: MarkdownTheme = {
+export const rovecodeMarkdownTheme: MarkdownTheme = {
   heading: (t) => st.bold(pal.accent(t)),
   link: (t) => pal.link(st.underline(t)),
   linkUrl: (t) => st.dim(t),

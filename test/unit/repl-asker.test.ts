@@ -1,4 +1,4 @@
-/** `aion --plain` ask_user asker (cli/repl.ts readlineAsker) — WIRE-1 re-verify LOW: on the run's abort
+/** `rovecode --plain` ask_user asker (cli/repl.ts readlineAsker) — WIRE-1 re-verify LOW: on the run's abort
  *  the promise resolved null but rl.question's callback stayed ARMED, so the user's NEXT typed line
  *  was swallowed by the dead callback and readline emitted no `line` event (reachable via Ctrl-C
  *  while a question is pending). The signal now also goes to rl.question, which disarms it. Driven

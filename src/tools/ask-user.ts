@@ -14,7 +14,7 @@
  *     model sees ("The user dismissed this question"), never a silent empty answer.
  *   - gemini-cli (Apache-2.0, 0bd1d43) packages/cli/src/config/config.ts:794-803 — headless
  *     behavior: with no human present ask_user is excluded and ASK_USER decisions translate to
- *     DENY. aion keeps the tool registered on every surface (one registry for all of them) and
+ *     DENY. rovecode keeps the tool registered on every surface (one registry for all of them) and
  *     fails closed at execute time with a message that tells the model what to do instead.
  *  Deviations: ONE question per call (sequential: true) instead of a batch of up to 4; options
  *  are plain strings — the harness renders into 80 columns, not a web panel. No code copied.

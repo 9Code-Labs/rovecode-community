@@ -94,7 +94,7 @@ test("one scan in flight at a time: a mutation during a scan does not spawn a co
 });
 
 test("non-repo (git → null): the bounded walk lists the files, statuses null, branch null, and there is no idle poll nor a rescan after a mutation; scan:false never touches git at all", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-sx-repo-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-sx-repo-"));
   try {
     writeFileSync(join(dir, "z.txt"), ""); mkdirSync(join(dir, "sub")); writeFileSync(join(dir, "sub", "a.ts"), "");
     const s = baseState({ cwd: dir });
@@ -119,7 +119,7 @@ test("non-repo (git → null): the bounded walk lists the files, statuses null, 
 });
 
 test("scheduleDiff: a captured pre-edit base → edit-only hunks overwrite the row's counts (no flag); ops → the base is rebuilt (same); no base → HEAD hunks are flagged `head` and the row keeps its counts; nothing at all → no change; loadDiff shows HEAD flagged without forcing the mode; stop() drops a pending diff", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-sx-diff-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-sx-diff-"));
   try {
     const before = "keep-1\nold-line\nkeep-2\nextra\n";                   // the file as the model read it (already dirty vs HEAD)
     writeFileSync(join(dir, "n.txt"), "keep-1\nnew-line\nkeep-2\nextra\n"); // after the edit

@@ -1,7 +1,7 @@
 /** Sextant tool rows (port #41): RunEvent tool name + args → the compact row's verb/label, the
  *  activity it drives and the code-panel target; tool output → the row's trailing detail. Ported
  *  from the user's sextant v0.4.0 app.js scenario verbs (read/edit/write/remove/run/search) — here
- *  derived from aion's real tools (coding/hashline.ts, coding/files.ts, tools/webfetch.ts, tools/task.ts). */
+ *  derived from rovecode's real tools (coding/hashline.ts, coding/files.ts, tools/webfetch.ts, tools/task.ts). */
 
 import { isAbsolute, relative } from "node:path";
 import type { ActivityState } from "./types.ts";

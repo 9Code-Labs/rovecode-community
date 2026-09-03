@@ -1,6 +1,6 @@
 /** Shadow-git checkpoints (PORT #11, cline port, Apache-2.0 — see THIRD_PARTY_NOTICES).
  *
- *  A SECOND git repository whose git-dir lives under .aion/checkpoints/<session> and whose
+ *  A SECOND git repository whose git-dir lives under .rovecode/checkpoints/<session> and whose
  *  work-tree is the WORKSPACE, so the user's own .git is never written. This is cline's
  *  shadow-git design: the @8eb5f3d snapshot's docs still describe it (docs/core-workflows/
  *  checkpoints.mdx:17 "shadow Git repository separate from your project's actual Git
@@ -19,10 +19,10 @@
  *     `commit --allow-empty --no-verify` (CheckpointTracker.ts:251-253)
  *   - restore = `reset --hard <hash>` (CheckpointTracker.ts:364) + `clean -fd` so files
  *     created after the checkpoint are rewound away while ignored paths (node_modules,
- *     .aion, build output) survive — the reset+clean pair of the snapshot's own restore
+ *     .rovecode, build output) survive — the reset+clean pair of the snapshot's own restore
  *     (checkpoint-restore.ts:458-470)
- *  Deviations from v3.89.2: the shadow repo lives IN-WORKSPACE under .aion (bar) so
- *  ".aion/" is excluded from itself; the nested-.git rename dance
+ *  Deviations from v3.89.2: the shadow repo lives IN-WORKSPACE under .rovecode (bar) so
+ *  ".rovecode/" is excluded from itself; the nested-.git rename dance
  *  (CheckpointGitOperations.ts:148-166, 207 ".git_disabled") is NOT ported — renaming the
  *  user's nested .git would violate "user .git never touched", so nested repos become
  *  inert gitlink entries instead (their contents are not checkpointed, never modified);
@@ -50,7 +50,7 @@ export type RestoreResult =
 
 /** ToolKind values whose calls mutate the workspace → snapshot after each (bar:
  *  "snapshot commit after every mutating tool call"). memory writes land under the
- *  excluded .aion/; spawned children's own write/execute calls hit the same hook. */
+ *  excluded .rovecode/; spawned children's own write/execute calls hit the same hook. */
 export const MUTATING_KINDS: ReadonlySet<string> = new Set(["write", "execute"]);
 
 /** Conversation-restore anchor for a snapshot: the LAST role:"user" message on the
@@ -67,15 +67,15 @@ export function anchorEntryId(messages: ReadonlyArray<{ id: string; role: string
 export interface CheckpointsInit {
   workspace: string;
   sessionId: string;
-  /** override the shadow root (default <workspace>/.aion/checkpoints) — tests/global mode */
+  /** override the shadow root (default <workspace>/.rovecode/checkpoints) — tests/global mode */
   shadowRoot?: string;
 }
 
 /** Trimmed port of cline's default exclusions (CheckpointExclusions.ts:42-70 keeps a long
- *  media/cache/db list; we keep the structural entries + the bar's node_modules/.aion). */
+ *  media/cache/db list; we keep the structural entries + the bar's node_modules/.rovecode). */
 const EXCLUDES = [
   ".git/",
-  ".aion/",            // the shadow repo itself lives here (deviation: in-workspace)
+  ".rovecode/",            // the shadow repo itself lives here (deviation: in-workspace)
   "node_modules/",
   "dist/",
   "build/",
@@ -119,7 +119,7 @@ export class Checkpoints {
 
   private constructor(
     readonly workspace: string,
-    /** shadow repo GIT DIR: <workspace>/.aion/checkpoints/<session>/.git */
+    /** shadow repo GIT DIR: <workspace>/.rovecode/checkpoints/<session>/.git */
     readonly gitDir: string,
     private readonly sidecar: string,
   ) {}
@@ -138,7 +138,7 @@ export class Checkpoints {
     // shadow root under join() — fold them (and "") to underscores
     const cleaned = opts.sessionId.replace(/[^A-Za-z0-9._-]/g, "_");
     const session = /^\.*$/.test(cleaned) ? cleaned.replace(/\./g, "_") || "_" : cleaned;
-    const shadowDir = join(opts.shadowRoot ?? join(workspace, ".aion", "checkpoints"), session);
+    const shadowDir = join(opts.shadowRoot ?? join(workspace, ".rovecode", "checkpoints"), session);
     const gitDir = join(shadowDir, ".git"); // cline layout: <checkpointsDir>/.git (CheckpointUtils.ts:20-23)
     mkdirSync(shadowDir, { recursive: true });
     const cp = new Checkpoints(workspace, gitDir, join(shadowDir, "checkpoints.jsonl"));
@@ -146,13 +146,13 @@ export class Checkpoints {
     if (!existsSync(join(gitDir, "HEAD"))) {
       // plain `git init` in the shadow dir, exactly GitOperations.ts:88
       await runGit(["init"], shadowDir);
-      // GitOperations.ts:91-94 config block (identity ours; autocrlf is an aion addition)
+      // GitOperations.ts:91-94 config block (identity ours; autocrlf is an rovecode addition)
       for (const [k, v] of [
         ["core.worktree", workspace],
         ["commit.gpgSign", "false"],
         ["core.autocrlf", "false"],
-        ["user.name", "Aion Checkpoint"],
-        ["user.email", "checkpoint@aion.local"],
+        ["user.name", "Rovecode Checkpoint"],
+        ["user.email", "checkpoint@rovecode.local"],
       ] as const) await cp.git("config", k, v);
     } else {
       // reuse check: refuse a shadow repo whose recorded worktree is another path
@@ -184,7 +184,7 @@ export class Checkpoints {
    *  tool call; `entryId` is the session entry a conversation restore should branch to. */
   async snapshot(label: string, entryId?: string): Promise<Checkpoint> {
     await this.git("add", ".", "--ignore-errors");
-    await this.git("commit", "--allow-empty", "--no-verify", "-m", `aion-checkpoint: ${label}`);
+    await this.git("commit", "--allow-empty", "--no-verify", "-m", `rovecode-checkpoint: ${label}`);
     const hash = await this.git("rev-parse", "HEAD");
     const c: Checkpoint = { hash, label, createdAt: Date.now(), ...(entryId !== undefined ? { entryId } : {}) };
     appendFileSync(this.sidecar, JSON.stringify(c) + "\n");

@@ -10,7 +10,7 @@ import { estimateTokens } from "../../src/core/context.ts";
 
 /** Hermetic cwd: `.git` stops the ancestor walk at the tmp dir. */
 function tmpCwd(): string {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-rtconfig-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-rtconfig-"));
   mkdirSync(join(cwd, ".git"));
   return cwd;
 }

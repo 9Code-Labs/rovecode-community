@@ -1,7 +1,7 @@
 /** Sextant diff base (port #44 fix wave): the PRE-EDIT content of a file the agent edited without a
  *  gate (yolo, `always`, an auto-allowed rule), rebuilt after the fact. Why after: the renderer sees
  *  tool_execution_start only when the loop's event pump flushes (core/loop.ts pumps every 5 ms), and
- *  aion's edit/write tools have already written synchronously by then (core/tools.ts: emit → await
+ *  rovecode's edit/write tools have already written synchronously by then (core/tools.ts: emit → await
  *  execute, whose first statements are the fs calls) — a disk snapshot taken at the start event IS the
  *  post-edit file. What the ops carry is enough to walk the edit back: each hashline op replaced ONE
  *  anchored line (anchorLine in the original, verified by lineHash) with newLines, applied bottom-up

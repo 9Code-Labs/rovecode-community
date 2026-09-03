@@ -76,7 +76,7 @@ const table = (rows: Record<string, string>): GitRunner => (args) => { const k =
 const changes = (d: { hunks: { rows: { op: string; text: string }[] }[] }): [string, string][] => d.hunks.flatMap((h) => h.rows).filter((r) => r.op !== " ").map((r) => [r.op, r.text]);
 
 test("fileDiff: captured base beats HEAD (edit-only, unflagged); ops rebuild the same base; nothing captured → HEAD hunks flagged `head`; a repo file HEAD never saw → all adds flagged; outside git → null unless captured; a deleted file with a base → all deletes; the async form agrees on every case", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-sx-fd-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-sx-fd-"));
   try {
     const before = "keep-1\nold-line\nkeep-2\nextra\n", head = "keep-1\nold-line\nkeep-2\n";
     writeFileSync(join(dir, "n.txt"), "keep-1\nnew-line\nkeep-2\nextra\n");

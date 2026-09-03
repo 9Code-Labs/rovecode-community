@@ -31,7 +31,7 @@ const call = (command: string, id: string): ToolCallPart =>
   ({ kind: "tool_call", id, tool: "bash", args: { command } });
 
 test("headless gated runtime (no approver): allow-listed argv auto-runs, forbidden argv hard-stops, unknown argv fails closed — never silently run", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-execpolicy-wiring-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-execpolicy-wiring-"));
   try {
     const rt = createRuntime({ cwd, stream: null });
     const cfg = rt.buildCfg(false); // headless: NO approver — the wrap must still be installed

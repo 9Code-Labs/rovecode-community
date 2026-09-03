@@ -1,4 +1,4 @@
-/** Aion public API surface. */
+/** Rovecode public API surface. */
 
 export * from "./core/types.ts";
 export { agentLoop, SteeringQueue, extractToolCalls, partsText } from "./core/loop.ts";

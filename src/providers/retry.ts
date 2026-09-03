@@ -34,9 +34,9 @@
  *    (router.ts header, mid-stream failure note): canonical content is the terminal turn only.
  *
  *  Env (retryOptionsFromEnv, read once by cli/runtime.ts):
- *  - AION_RETRY_MAX      retries after the first attempt; 0 disables. Default 3 (→ 4 attempts;
+ *  - ROVECODE_RETRY_MAX      retries after the first attempt; 0 disables. Default 3 (→ 4 attempts;
  *                        upstream 10 attempts — a fallback chain multiplies attempts per candidate).
- *  - AION_RETRY_BASE_MS  cap of the first backoff in ms. Default 2000 (upstream 5000; full jitter
+ *  - ROVECODE_RETRY_BASE_MS  cap of the first backoff in ms. Default 2000 (upstream 5000; full jitter
  *                        halves the expected wait, so 2s ≈ a 1s expected first pause).
  *  Fixed: max backoff 30s (upstream verbatim), total budget 60s per invocation. */
 
@@ -61,9 +61,9 @@ export interface RetryNote {
 }
 
 export interface RetryOptions {
-  /** Retries after the first attempt (AION_RETRY_MAX). 0 = never retry. */
+  /** Retries after the first attempt (ROVECODE_RETRY_MAX). 0 = never retry. */
   maxRetries?: number;
-  /** Cap of the first backoff, doubling per attempt (AION_RETRY_BASE_MS). */
+  /** Cap of the first backoff, doubling per attempt (ROVECODE_RETRY_BASE_MS). */
   baseMs?: number;
   /** Ceiling for the doubling backoff term. */
   maxDelayMs?: number;
@@ -101,9 +101,9 @@ export function parseRetryAfter(value: string | undefined, now: number): number 
 }
 
 /** Env knobs (header). Blank/invalid/out-of-range values fall back to the defaults;
- *  AION_RETRY_MAX=0 is honored (retry off). */
+ *  ROVECODE_RETRY_MAX=0 is honored (retry off). */
 export function retryOptionsFromEnv(env: Record<string, string | undefined> = process.env): RetryOptions {
-  return { maxRetries: envInt(env.AION_RETRY_MAX, DEFAULT_MAX_RETRIES, 0), baseMs: envInt(env.AION_RETRY_BASE_MS, DEFAULT_BASE_MS, 1) };
+  return { maxRetries: envInt(env.ROVECODE_RETRY_MAX, DEFAULT_MAX_RETRIES, 0), baseMs: envInt(env.ROVECODE_RETRY_BASE_MS, DEFAULT_BASE_MS, 1) };
 }
 
 function envInt(raw: string | undefined, dflt: number, min: number): number {

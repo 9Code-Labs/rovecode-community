@@ -65,7 +65,7 @@ function collectMatches(map: RuleMap, cmd: readonly string[]): RuleMatch[] {
   const exact = collect(first, cmd);
   if (exact.length > 0) return exact;
   // Codex additionally checks host_executable() path allowlists; absent an
-  // entry, fallback is allowed (README.md:43-44) — aion carries no such
+  // entry, fallback is allowed (README.md:43-44) — rovecode carries no such
   // metadata, so this is always that case.
   if (!isAbsolutePath(first)) return [];
   const base = executableLookupKey(first);
@@ -141,14 +141,14 @@ export class ExecPolicy {
   /** Evaluate chain members; aggregate decision is the strictest across ALL
    *  segments (exec_policy.rs:360-364, policy.rs:265-288 check_multiple).
    *  Upstream treats empty input as an invariant violation (policy.rs:401-405);
-   *  aion fails closed instead: empty → heuristics prompt. */
+   *  rovecode fails closed instead: empty → heuristics prompt. */
   checkMany(commands: readonly (readonly string[])[]): Evaluation {
     const matched = commands.flatMap((c) => this.check(c).matchedRules);
     if (matched.length === 0) return this.check([]);
     return { decision: strictest(matched.map((m) => m.decision)), matchedRules: matched };
   }
 
-  /** Evaluate a raw command line as run by aion's bash tool (`bash -c script`).
+  /** Evaluate a raw command line as run by rovecode's bash tool (`bash -c script`).
    *  Word-only scripts split into members; anything else is OPAQUE and checked
    *  as the single command ["bash","-c",script] (exec_policy.rs:835-862). */
   checkScript(script: string): Evaluation {
@@ -159,7 +159,7 @@ export class ExecPolicy {
 
 /** Basename key: strip dirs and Windows .exe/.cmd/.bat/.com suffixes
  *  (is_dangerous_command.rs:70-94). Null for non-path tokens. Deviation: codex
- *  lowercases the whole basename on Windows only; aion normalizes case only
+ *  lowercases the whole basename on Windows only; rovecode normalizes case only
  *  when a known suffix is stripped — a bare-name case mismatch just falls back
  *  to heuristics (over-rejection, safe). */
 function executableLookupKey(raw: string): string | null {
@@ -180,8 +180,8 @@ function isAbsolutePath(raw: string): boolean {
 
 // ---------- unmatched-command heuristics ----------
 
-/** aion's fixed mapping for unmatched commands: ALWAYS needs approval. Codex
- *  derives this from approval mode + sandbox (exec_policy.rs:735-819); aion has
+/** rovecode's fixed mapping for unmatched commands: ALWAYS needs approval. Codex
+ *  derives this from approval mode + sandbox (exec_policy.rs:735-819); rovecode has
  *  no sandbox, i.e. codex's UnlessTrusted arm → Prompt (exec_policy.rs:779-783).
  *  Dangerous commands also Prompt (exec_policy.rs:763-771), and the danger
  *  reason rides along for the approver (codex surfaces it when the prompt is
@@ -196,7 +196,7 @@ function unmatchedHeuristics(cmd: readonly string[]): RuleMatch {
   };
 }
 
-/** R2 #9 HIGH-1c (aion escalation, no upstream twin): `--output <path>` /
+/** R2 #9 HIGH-1c (rovecode escalation, no upstream twin): `--output <path>` /
  *  `--output=<path>` turns git's readers (diff/show/log) into WRITERS, so a
  *  rule-allowed invocation gains a write side effect. Prefix rules match
  *  whole tokens positionally and cannot see `--output=x` mid-argv, so this
@@ -263,7 +263,7 @@ export function dangerousCommandMatch(cmd: readonly string[], depth = 0): Danger
   // bash/sh/zsh -c|-lc script: scan inner members (bash.rs:106-119 accepts
   // exactly [shell, -c|-lc, script]). Upstream scans the LITERAL parse tree
   // (is_dangerous_command.rs:37-43 parse_shell_lc_literal_commands) so it sees
-  // inside control flow and substitutions; aion reuses the strict parser —
+  // inside control flow and substitutions; rovecode reuses the strict parser —
   // opaque inner scripts stay undetected HERE but classify as prompt anyway
   // via the opaque path, losing only the specific danger message.
   if ((head === "bash" || head === "sh" || head === "zsh") && cmd.length === 3
@@ -322,7 +322,7 @@ export function refineExec(command: string, policy: ExecPolicy = defaultExecPoli
     const heur = ev.matchedRules.find((m) => m.kind === "heuristics" && m.justification !== undefined);
     const reason = rule !== null
       ? (rule.justification !== undefined ? `\`${command}\` requires approval: ${rule.justification}` : `\`${command}\` requires approval by policy`)
-      : heur?.justification; // aion extension: danger reason shown at prompt time, not only on rejection
+      : heur?.justification; // rovecode extension: danger reason shown at prompt time, not only on rejection
     return { effect: "prompt", reason };
   }
   return { effect: "allow" };
@@ -357,7 +357,7 @@ function exampleToArgv(ex: string | readonly string[]): string[] {
 
 export interface ExecPolicyApproverOptions {
   policy?: ExecPolicy;
-  /** Tool names whose string `command` arg is shell (default: aion's bash tool). */
+  /** Tool names whose string `command` arg is shell (default: rovecode's bash tool). */
   tools?: readonly string[];
 }
 
