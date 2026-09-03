@@ -33,5 +33,9 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 # Finder (MacOS) folder config
 .DS_Store
 
-# aion local state
-.aion/
+# rovecode local state (.cumulus/ is the pre-rename name, still ignored for old checkouts)
+.cumulus/
+.rovecode/
+
+# tool artifacts
+.playwright-mcp/
