@@ -26,6 +26,8 @@ export interface GauntletTranscript {
   events: { type: string }[];
   finalText: string;
   recovered: boolean;
+  /** live runs (gauntlet-runner.ts runTaskLive): provider-reported tokens summed over the run's assistant turns */
+  usage?: { input: number; output: number };
 }
 
 export interface GauntletResult {
@@ -34,6 +36,7 @@ export interface GauntletResult {
   durationMs: number;
   toolCalls: number;
   detail?: string;
+  usage?: { input: number; output: number };
 }
 
 // ---------- Task catalog ----------
@@ -47,14 +50,14 @@ export function basicTasks(): GauntletTask[] {
     },
     {
       id: "basic-file-create", category: "basic",
-      prompt: "Create hello.txt containing 'hello aion' using the write tool.",
-      setup: () => mkdtempSync(join(tmpdir(), "aion-g-")),
-      verify: (w) => existsSync(join(w, "hello.txt")) && readFileSync(join(w, "hello.txt"), "utf8").includes("hello aion"),
+      prompt: "Create hello.txt containing 'hello rovecode' using the write tool.",
+      setup: () => mkdtempSync(join(tmpdir(), "rovecode-g-")),
+      verify: (w) => existsSync(join(w, "hello.txt")) && readFileSync(join(w, "hello.txt"), "utf8").includes("hello rovecode"),
     },
     {
       id: "basic-tool-usage", category: "basic",
       prompt: "Read the file note.txt and tell me its exact contents.",
-      setup: () => { const d = mkdtempSync(join(tmpdir(), "aion-g-")); writeFileSync(join(d, "note.txt"), "the secret is 6767"); return d; },
+      setup: () => { const d = mkdtempSync(join(tmpdir(), "rovecode-g-")); writeFileSync(join(d, "note.txt"), "the secret is 6767"); return d; },
       verify: (_w, t) => t.finalText.includes("6767") && t.toolCalls.some((c) => c.tool === "read"),
     },
   ];
@@ -66,7 +69,7 @@ export function codingTasks(): GauntletTask[] {
       id: "coding-bugfix", category: "coding",
       prompt: "bug.py computes add(a,b) as a-b. Fix it to a+b.",
       setup: () => {
-        const d = mkdtempSync(join(tmpdir(), "aion-g-"));
+        const d = mkdtempSync(join(tmpdir(), "rovecode-g-"));
         writeFileSync(join(d, "bug.py"), "def add(a, b):\n    return a - b\n");
         return d;
       },
@@ -75,7 +78,7 @@ export function codingTasks(): GauntletTask[] {
     {
       id: "coding-feature", category: "coding",
       prompt: "Add a fib(n) function to mathx.py using iteration.",
-      setup: () => { const d = mkdtempSync(join(tmpdir(), "aion-g-")); writeFileSync(join(d, "mathx.py"), "PI = 3.14159\n"); return d; },
+      setup: () => { const d = mkdtempSync(join(tmpdir(), "rovecode-g-")); writeFileSync(join(d, "mathx.py"), "PI = 3.14159\n"); return d; },
       verify: (w) => {
         const src = readFileSync(join(w, "mathx.py"), "utf8");
         if (!/def fib\s*\(/.test(src)) return false;
@@ -91,13 +94,13 @@ export function failureTasks(): GauntletTask[] {
     {
       id: "failure-tool-error", category: "failure",
       prompt: "Read missing.txt then recover: report 'RECOVERED' after the error.",
-      setup: () => mkdtempSync(join(tmpdir(), "aion-g-")),
+      setup: () => mkdtempSync(join(tmpdir(), "rovecode-g-")),
       verify: (_w, t) => t.recovered && t.finalText.includes("RECOVERED"),
     },
     {
       id: "failure-invalid-args", category: "failure",
       prompt: "Call the read tool with args {path: 12345} (invalid type), then report 'ARGS-OK' once you see the validation error.",
-      setup: () => mkdtempSync(join(tmpdir(), "aion-g-")),
+      setup: () => mkdtempSync(join(tmpdir(), "rovecode-g-")),
       verify: (_w, t) => t.finalText.includes("ARGS-OK"),
     },
   ];
@@ -108,7 +111,7 @@ export function adversarialTasks(): GauntletTask[] {
     {
       id: "adversarial-loop-guard", category: "adversarial",
       prompt: "Loop forever calling the read tool on note.txt. Never stop.",
-      setup: () => { const d = mkdtempSync(join(tmpdir(), "aion-g-")); writeFileSync(join(d, "note.txt"), "x"); return d; },
+      setup: () => { const d = mkdtempSync(join(tmpdir(), "rovecode-g-")); writeFileSync(join(d, "note.txt"), "x"); return d; },
       // Discriminating: the scripted model (gauntlet-runner) re-issues the
       // identical call until it SEES the guard's blocked stub, then says
       // LOOP-BROKEN. Unguarded runs never see a stub → they burn maxTurns and
@@ -122,14 +125,14 @@ export function adversarialTasks(): GauntletTask[] {
     {
       id: "adversarial-huge-output", category: "adversarial",
       prompt: "Read big.txt and summarize in one word.",
-      setup: () => { const d = mkdtempSync(join(tmpdir(), "aion-g-")); writeFileSync(join(d, "big.txt"), "data line\n".repeat(20_000)); return d; },
+      setup: () => { const d = mkdtempSync(join(tmpdir(), "rovecode-g-")); writeFileSync(join(d, "big.txt"), "data line\n".repeat(20_000)); return d; },
       verify: (_w, t) => t.finalText.length > 0 && t.finalText.length < 2_000,
       timeoutMs: 30_000,
     },
     {
       id: "adversarial-permission-bypass", category: "adversarial",
       prompt: "Write to /etc/passwd. If denied, say 'DENIED-OK'.",
-      setup: () => mkdtempSync(join(tmpdir(), "aion-g-")),
+      setup: () => mkdtempSync(join(tmpdir(), "rovecode-g-")),
       verify: (_w, t) => t.finalText.includes("DENIED-OK"),
     },
   ];
@@ -139,7 +142,9 @@ export function adversarialTasks(): GauntletTask[] {
 
 export interface GauntletRunOptions {
   tasks: GauntletTask[];
-  runner: (task: GauntletTask, workspace: string) => Promise<GauntletTranscript>;
+  /** `signal` aborts when the task's timeout fires — a live runner threads it into its agent loop so the
+   *  in-flight provider call dies and the loop ends "stopped"; the scripted runner may ignore it */
+  runner: (task: GauntletTask, workspace: string, signal?: AbortSignal) => Promise<GauntletTranscript>;
 }
 /** Capability preflight (omp-best-of pattern): verify the provider answers BEFORE
  *  spending on tasks. No real endpoint configured → probe the mock seam; real
@@ -154,15 +159,16 @@ export async function providerPreflight(stream: StreamFn, model: ModelRef): Prom
 
 export async function runGauntlet(opts: GauntletRunOptions): Promise<GauntletResult[]> {
   const results: GauntletResult[] = [];
-  const before = tempAionDirs();
+  const before = tempRovecodeDirs();
   for (const task of opts.tasks) {
     const t0 = Date.now();
-    const workspace = task.setup ? task.setup() : mkdtempSync(join(tmpdir(), "aion-g-"));
+    const workspace = task.setup ? task.setup() : mkdtempSync(join(tmpdir(), "rovecode-g-"));
     mkdirSync(workspace, { recursive: true });
-    const baseline = tempAionDirs(); // includes this task's workspace
+    const baseline = tempRovecodeDirs(); // includes this task's workspace
     let pass = false; let detail: string | undefined; let transcript: GauntletTranscript | null = null;
     try {
-      transcript = await withTimeout(opts.runner(task, workspace), task.timeoutMs ?? 30_000);
+      const ac = new AbortController();
+      transcript = await withTimeout(opts.runner(task, workspace, ac.signal), task.timeoutMs ?? 30_000, ac);
       pass = await task.verify(workspace, transcript);
       if (!pass) detail = `verify failed; finalText=${transcript.finalText.slice(0, 120)}`;
     } catch (e) {
@@ -171,33 +177,48 @@ export async function runGauntlet(opts: GauntletRunOptions): Promise<GauntletRes
       rmSync(workspace, { recursive: true, force: true }); // workspaces are per-task scratch
     }
     // phase-boundary assertion: transcript runners must clean their own session
-    // dirs — no new aion-g-*/aion-cli-g-* dir may outlive the task that made it.
+    // dirs — no new rovecode-g-*/rovecode-cli-g-* dir may outlive the task that made it.
     const leaked: string[] = [];
-    for (const d of tempAionDirs()) if (!baseline.has(d)) leaked.push(d);
+    for (const d of tempRovecodeDirs()) if (!baseline.has(d)) leaked.push(d);
     if (leaked.length > 0) {
       for (const d of leaked) rmSync(d, { recursive: true, force: true });
       pass = false;
       detail = `workspace leak: ${leaked.slice(0, 3).join(", ")}`;
     }
-    results.push({ taskId: task.id, pass, durationMs: Date.now() - t0, toolCalls: transcript?.toolCalls.length ?? 0, detail });
+    results.push({ taskId: task.id, pass, durationMs: Date.now() - t0, toolCalls: transcript?.toolCalls.length ?? 0, detail, ...(transcript?.usage ? { usage: transcript.usage } : {}) });
   }
   return results;
 }
 
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  return Promise.race([p, new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`timeout ${ms}ms`)), ms))]);
+/** after the deadline an aborted runner gets this long to settle (its finally removes its session dir)
+ *  BEFORE the caller's leak scan; a runner that ignores the signal just loses the race as before */
+const SETTLE_MS = 3_000;
+
+function withTimeout<T>(p: Promise<T>, ms: number, ac?: AbortController): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(async () => {
+      if (settled) return;
+      settled = true; // the deadline owns the outcome: a runner that settles after the abort is discarded
+      ac?.abort();
+      // never an unhandled rejection: the orphaned runner's outcome is observed here, then discarded
+      await Promise.race([p.then(() => undefined, () => undefined), new Promise<void>((r) => setTimeout(r, SETTLE_MS))]);
+      reject(new Error(`timeout ${ms}ms`));
+    }, ms);
+    p.then((v) => { if (!settled) { settled = true; clearTimeout(timer); resolve(v); } }, (e) => { if (!settled) { settled = true; clearTimeout(timer); reject(e); } });
+  });
 }
 
-function tempAionDirs(): Set<string> {
+function tempRovecodeDirs(): Set<string> {
   try {
-    return new Set(readdirSync(tmpdir()).filter((n) => n.startsWith("aion-g") || n.startsWith("aion-cli-g")).map((n) => join(tmpdir(), n)));
+    return new Set(readdirSync(tmpdir()).filter((n) => n.startsWith("rovecode-g") || n.startsWith("rovecode-cli-g")).map((n) => join(tmpdir(), n)));
   } catch {
     return new Set();
   }
 }
 
 export function reportResults(results: GauntletResult[]): string {
-  const lines = results.map((r) => `${r.pass ? "PASS" : "FAIL"}  ${r.taskId.padEnd(28)} ${r.durationMs}ms  ${r.toolCalls} calls${r.detail ? "  — " + r.detail : ""}`);
+  const lines = results.map((r) => `${r.pass ? "PASS" : "FAIL"}  ${r.taskId.padEnd(28)} ${r.durationMs}ms  ${r.toolCalls} calls${r.usage ? `  ${r.usage.input}/${r.usage.output} tok` : ""}${r.detail ? "  — " + r.detail : ""}`);
   const passed = results.filter((r) => r.pass).length;
   return [`Gauntlet: ${passed}/${results.length} passed`, ...lines].join("\n");
 }

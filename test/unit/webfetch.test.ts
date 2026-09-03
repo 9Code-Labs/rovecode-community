@@ -4,7 +4,7 @@
  *  with the target so it re-enters policy as its own call), SSRF guard (literal
  *  private/loopback/link-local/metadata/unspecified/mapped targets refused before
  *  any connection, DNS-resolved private refused, redirect-to-private refused AT
- *  THE HOP with the target never reached), the AION_WEBFETCH_ALLOW_PRIVATE door,
+ *  THE HOP with the target never reached), the ROVECODE_WEBFETCH_ALLOW_PRIVATE door,
  *  byte + char bounds with exact markers, the empty-chunk edge and the clamp
  *  contract, timeout via a ref'd timer that also bounds the DNS phase (deadline-
  *  raced so a hang fails instead of freezing the runner), mid-fetch abort, policy
@@ -120,7 +120,7 @@ async function withEnv<T>(vars: Record<string, string | undefined>, fn: () => Pr
   }
 }
 /** Positive tests reach the 127.0.0.1 fixture through the documented dev-server door. */
-const local = <T>(fn: () => Promise<T>): Promise<T> => withEnv({ AION_WEBFETCH_ALLOW_PRIVATE: "1", AION_WEBFETCH_TIMEOUT_MS: undefined }, fn);
+const local = <T>(fn: () => Promise<T>): Promise<T> => withEnv({ ROVECODE_WEBFETCH_ALLOW_PRIVATE: "1", ROVECODE_WEBFETCH_TIMEOUT_MS: undefined }, fn);
 
 /** Races against a REF'D deadline: a hung fetch FAILS the test instead of freezing the runner. */
 async function within<T>(ms: number, p: Promise<T>): Promise<T> {
@@ -310,7 +310,7 @@ test("SSRF: literal private/loopback/link-local/unspecified/mapped targets and l
     const out = await tool.execute({ url }, ctx());
     expect(out.ok).toBe(false);
     expect(out.output.startsWith(`web_fetch: refused ${new URL(url).href}: `)).toBe(true);
-    expect(out.output).toContain("(set AION_WEBFETCH_ALLOW_PRIVATE=1 for local dev servers)");
+    expect(out.output).toContain("(set ROVECODE_WEBFETCH_ALLOW_PRIVATE=1 for local dev servers)");
   }
   expect(calls).toEqual([]);
 });
@@ -319,7 +319,7 @@ test("SSRF: the cloud metadata address 169.254.169.254 (link-local) is refused",
   const { tool, calls } = seamTool(neverResolve);
   const out = await tool.execute({ url: "http://169.254.169.254/latest/meta-data/" }, ctx());
   expect(out.ok).toBe(false);
-  expect(out.output).toBe("web_fetch: refused http://169.254.169.254/latest/meta-data/: 169.254.169.254 is a private, loopback, link-local or reserved address (set AION_WEBFETCH_ALLOW_PRIVATE=1 for local dev servers)");
+  expect(out.output).toBe("web_fetch: refused http://169.254.169.254/latest/meta-data/: 169.254.169.254 is a private, loopback, link-local or reserved address (set ROVECODE_WEBFETCH_ALLOW_PRIVATE=1 for local dev servers)");
   expect(calls).toEqual([]);
   expect(isPrivateAddress("169.254.169.254")).toBe(true);
   expect(isPrivateAddress("169.253.255.255")).toBe(false);
@@ -338,7 +338,7 @@ test("SSRF: a name is refused when ANY resolved address is private; unresolvable
   expect(mixed.output).toContain("mixed.test resolves to 10.0.0.7, a private, loopback, link-local or reserved address");
   const nx = await tool.execute({ url: "http://nx.test/" }, ctx());
   expect(nx.ok).toBe(false);
-  expect(nx.output).toBe("web_fetch: refused http://nx.test/: could not resolve nx.test: getaddrinfo ENOTFOUND nx.test (set AION_WEBFETCH_ALLOW_PRIVATE=1 for local dev servers)");
+  expect(nx.output).toBe("web_fetch: refused http://nx.test/: could not resolve nx.test: getaddrinfo ENOTFOUND nx.test (set ROVECODE_WEBFETCH_ALLOW_PRIVATE=1 for local dev servers)");
   expect(calls).toEqual([]);
   const pub = await tool.execute({ url: `http://PUBLIC.test:${server.port}/json` }, ctx());
   expect(pub.ok).toBe(true);
@@ -359,10 +359,10 @@ test("scheme gate: non-http(s) and malformed URLs are rejected without a request
   expect(calls).toEqual([]);
 });
 
-test("AION_WEBFETCH_ALLOW_PRIVATE=1 opens the door to 127.0.0.1; unset, the same URL is refused", async () => {
-  const refused = await withEnv({ AION_WEBFETCH_ALLOW_PRIVATE: undefined }, () => webFetchTool.execute({ url: `${base}/json` }, ctx()));
+test("ROVECODE_WEBFETCH_ALLOW_PRIVATE=1 opens the door to 127.0.0.1; unset, the same URL is refused", async () => {
+  const refused = await withEnv({ ROVECODE_WEBFETCH_ALLOW_PRIVATE: undefined }, () => webFetchTool.execute({ url: `${base}/json` }, ctx()));
   expect(refused.ok).toBe(false);
-  expect(refused.output).toBe(`web_fetch: refused ${base}/json: 127.0.0.1 is a private, loopback, link-local or reserved address (set AION_WEBFETCH_ALLOW_PRIVATE=1 for local dev servers)`);
+  expect(refused.output).toBe(`web_fetch: refused ${base}/json: 127.0.0.1 is a private, loopback, link-local or reserved address (set ROVECODE_WEBFETCH_ALLOW_PRIVATE=1 for local dev servers)`);
   const allowed = await local(() => webFetchTool.execute({ url: `${base}/json` }, ctx()));
   expect(allowed.ok).toBe(true);
 });
@@ -451,8 +451,8 @@ test("char bound: maxChars truncates the text with the exact marker; absurd valu
 
 // ---------- timeout + abort ----------
 
-test("timeout: AION_WEBFETCH_TIMEOUT_MS=200 against a 5s-silent server → clean timeout error promptly (ref'd timer, no hang)", async () => {
-  await withEnv({ AION_WEBFETCH_ALLOW_PRIVATE: "1", AION_WEBFETCH_TIMEOUT_MS: "200" }, async () => {
+test("timeout: ROVECODE_WEBFETCH_TIMEOUT_MS=200 against a 5s-silent server → clean timeout error promptly (ref'd timer, no hang)", async () => {
+  await withEnv({ ROVECODE_WEBFETCH_ALLOW_PRIVATE: "1", ROVECODE_WEBFETCH_TIMEOUT_MS: "200" }, async () => {
     const t0 = Date.now();
     const out = await within(3000, webFetchTool.execute({ url: `${base}/slow` }, ctx()));
     const elapsed = Date.now() - t0;
@@ -464,12 +464,12 @@ test("timeout: AION_WEBFETCH_TIMEOUT_MS=200 against a 5s-silent server → clean
   expect(TIMEOUT_DEFAULT_MS).toBe(30_000);
 });
 
-test("LOW-7: the timeout bounds the DNS phase — a 1.5s resolver under AION_WEBFETCH_TIMEOUT_MS=200 fails at ~200ms, not 1500; Esc during DNS aborts promptly; nothing is sent", async () => {
+test("LOW-7: the timeout bounds the DNS phase — a 1.5s resolver under ROVECODE_WEBFETCH_TIMEOUT_MS=200 fails at ~200ms, not 1500; Esc during DNS aborts promptly; nothing is sent", async () => {
   const pending = new Set<ReturnType<typeof setTimeout>>();
   const slow = (): Promise<string[]> => new Promise((r) => { pending.add(setTimeout(() => r(["93.184.216.34"]), 1500)); });
   const { tool, calls } = seamTool(slow);
   try {
-    await withEnv({ AION_WEBFETCH_ALLOW_PRIVATE: undefined, AION_WEBFETCH_TIMEOUT_MS: "200" }, async () => {
+    await withEnv({ ROVECODE_WEBFETCH_ALLOW_PRIVATE: undefined, ROVECODE_WEBFETCH_TIMEOUT_MS: "200" }, async () => {
       const t0 = Date.now();
       const out = await within(3000, tool.execute({ url: "http://public.test/json" }, ctx()));
       const elapsed = Date.now() - t0;
@@ -478,7 +478,7 @@ test("LOW-7: the timeout bounds the DNS phase — a 1.5s resolver under AION_WEB
       expect(elapsed).toBeGreaterThanOrEqual(150);
       expect(elapsed).toBeLessThan(1000);
     });
-    await withEnv({ AION_WEBFETCH_ALLOW_PRIVATE: undefined, AION_WEBFETCH_TIMEOUT_MS: undefined }, async () => {
+    await withEnv({ ROVECODE_WEBFETCH_ALLOW_PRIVATE: undefined, ROVECODE_WEBFETCH_TIMEOUT_MS: undefined }, async () => {
       const ac = new AbortController();
       pending.add(setTimeout(() => ac.abort(), 100));
       const t0 = Date.now();
@@ -568,7 +568,7 @@ test("MED-2: policy sees the CANONICAL host — `deny net.fetch evil.com` holds 
 });
 
 test("policy: under the runtime's default gated rules web_fetch is PROMPT class (fails closed headless, runs with an approver); yolo auto-runs", async () => local(async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-web-rt-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-web-rt-"));
   try {
     const rt = createRuntime({ cwd, stream: null });
     const before = hits["/json"] ?? 0;
@@ -593,7 +593,7 @@ test("policy: under the runtime's default gated rules web_fetch is PROMPT class 
 // ---------- registration ----------
 
 test("registration: createRuntime registers web_fetch with kind network; main.ts cmdTools registers it; the offline gauntlet runner does not", () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-web-reg-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-web-reg-"));
   try {
     const rt = createRuntime({ cwd, stream: null });
     const tool = rt.registry.list().find((t) => t.schema.name === "web_fetch");
@@ -602,7 +602,12 @@ test("registration: createRuntime registers web_fetch with kind network; main.ts
   } finally { rmSync(cwd, { recursive: true, force: true }); }
   const mainSrc = readFileSync(join(import.meta.dir, "../../src/cli/main.ts"), "utf8");
   expect(mainSrc).toContain("registry.register(webFetchTool)");
+  // The invariant is that the offline runner cannot REACH the network, so it is asserted on the
+  // identifier that would import or register the tool — not on the tool's NAME appearing anywhere in
+  // the file. A bare substring scan failed the moment a comment explained which tools the runner
+  // deliberately leaves out, which is documentation working exactly as intended.
   const gauntletSrc = readFileSync(join(import.meta.dir, "../../src/eval/gauntlet-runner.ts"), "utf8");
   expect(gauntletSrc).not.toContain("webFetchTool");
-  expect(gauntletSrc).not.toContain("web_fetch");
+  const code = gauntletSrc.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  expect(code).not.toContain("web_fetch");
 });

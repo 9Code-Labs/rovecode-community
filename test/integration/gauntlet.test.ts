@@ -12,8 +12,8 @@ function okRunner(_task: GauntletTask, _workspace: string): Promise<GauntletTran
   return Promise.resolve({ toolCalls: [], events: [], finalText: "ok", recovered: false });
 }
 
-function aionTempDirs(): string[] {
-  return readdirSync(tmpdir()).filter((n) => n.startsWith("aion-g") || n.startsWith("aion-cli-g")).map((n) => join(tmpdir(), n));
+function rovecodeTempDirs(): string[] {
+  return readdirSync(tmpdir()).filter((n) => n.startsWith("rovecode-g") || n.startsWith("rovecode-cli-g")).map((n) => join(tmpdir(), n));
 }
 
 describe("providerPreflight (verify-before-spend)", () => {
@@ -36,7 +36,7 @@ describe("providerPreflight (verify-before-spend)", () => {
 
 describe("runGauntlet phase-boundary cleanup", () => {
   test("runner leaking a session dir fails the task", async () => {
-    const leakedDir = mkdtempSync(join(tmpdir(), "aion-cli-g-")); // simulate a runner that forgets rmSync
+    const leakedDir = mkdtempSync(join(tmpdir(), "rovecode-cli-g-")); // simulate a runner that forgets rmSync
     const task: GauntletTask = {
       id: "leak-probe", category: "basic", prompt: "x",
       verify: () => true,
@@ -44,7 +44,7 @@ describe("runGauntlet phase-boundary cleanup", () => {
     const results = await runGauntlet({
       tasks: [task],
       runner: async () => {
-        mkdtempSync(join(tmpdir(), "aion-cli-g-leak-")); // session dir the runner forgot to rmSync
+        mkdtempSync(join(tmpdir(), "rovecode-cli-g-leak-")); // session dir the runner forgot to rmSync
         return { toolCalls: [], events: [], finalText: "ok", recovered: false };
       },
     });
@@ -53,22 +53,22 @@ describe("runGauntlet phase-boundary cleanup", () => {
     rmSync(leakedDir, { recursive: true, force: true }); // pre-baseline strays are the caller's, not the gauntlet's
   });
 
-  test("clean runner passes and no aion-g-* dirs outlive the run", async () => {
-    const before = new Set(aionTempDirs());
+  test("clean runner passes and no rovecode-g-* dirs outlive the run", async () => {
+    const before = new Set(rovecodeTempDirs());
     const results = await runGauntlet({ tasks: basicTasks(), runner: okRunner });
     // okRunner satisfies only basic-question's verify; the file tasks legitimately fail verify —
     // what must hold: zero leak failures and no temp growth.
     for (const r of results) expect(r.detail ?? "").not.toContain("workspace leak");
-    const after = aionTempDirs();
+    const after = rovecodeTempDirs();
     for (const d of after) expect(before.has(d)).toBe(true);
   });
 
   test("real transcript runner (runTask) leaves no session dirs", async () => {
-    const before = new Set(aionTempDirs());
-    const results = await runGauntlet({ tasks: basicTasks(), runner: runTask });
+    const before = new Set(rovecodeTempDirs());
+    const results = await runGauntlet({ tasks: basicTasks(), runner: (task, workspace) => runTask(task, workspace) });
     expect(results.filter((r) => r.pass).length).toBeGreaterThan(0);
     for (const r of results) expect(r.detail ?? "").not.toContain("workspace leak");
-    const after = aionTempDirs();
+    const after = rovecodeTempDirs();
     for (const d of after) expect(before.has(d)).toBe(true);
   });
 });

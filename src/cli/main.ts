@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-/** Aion CLI: run / gauntlet / agents / tools / trace / eval surfaces. */
+/** Rovecode CLI: run / gauntlet / agents / tools / trace / eval surfaces. */
 
 import { agentLoop, SteeringQueue } from "../core/loop.ts";
 import { ToolRegistry } from "../core/tools.ts";
@@ -11,22 +11,32 @@ import { todoTools } from "../tools/todo.ts";
 import { askUserTool } from "../tools/ask-user.ts";
 import { TaskManager } from "../core/tasks.ts";
 import { createTaskTool, createTaskStatusTool } from "../tools/task.ts";
-import { mockStream, textTurn, providerStream, openaiCompatStreaming, resolveProvider, listBuiltinProviders } from "../providers/stream.ts";
-import { saveCredential, removeCredential, listProviders, keyNameFor, credentialsPath, readSecret } from "../providers/auth.ts";
+import { mockStream, textTurn, providerStream, providerStreaming, openaiCompatStreaming, wantsStreaming, resolveProvider } from "../providers/stream.ts";
+import { saveCredential, removeCredential, listProviders, credentialsPath, readSecret } from "../providers/auth.ts";
+import { ProviderRegistry, formatProviderList, parseAddArgs, ADD_USAGE } from "../providers/registry.ts";
+import { isConfigured, providersPathFor } from "../providers/provider-config.ts";
+import { providerEditTool, providerListTool } from "../tools/provider.ts";
 import { runGauntlet, reportResults, providerPreflight, basicTasks, codingTasks, failureTasks, adversarialTasks } from "../eval/gauntlet.ts";
-import { runTask } from "../eval/gauntlet-runner.ts";
+import { liveGauntletTasks, runTask, runTaskLive } from "../eval/gauntlet-runner.ts";
+import { profileFor, profileHint } from "../providers/profiles.ts";
 import { runBenchmarks } from "../eval/bench.ts";
 import { resetTurnFailureCount } from "../memory/tools.ts";
-import type { ModelRef, StreamFn } from "../core/types.ts";
+import type { PermissionLevel, ModelRef, StreamFn } from "../core/types.ts";
+import { parseEffort } from "../core/types.ts";
+import { resolvePermission } from "../core/settings.ts";
 import { bootRuntime } from "./runtime.ts";
 import { SandboxConfigError } from "../core/sandbox-config.ts";
 import { runRepl } from "./repl.ts";
+import { askLine, runSetup } from "./setup.ts";
+import { helpText } from "./help.ts";
+import { MOCK_PROVIDER_TEXT } from "../core/voice.ts";
 import { runTui } from "../tui/app.ts";
 import { pickRenderer } from "../tui/sextant-io.ts";
 import { expandSlashPrompt } from "../tui/commands.ts";
 import { parseCli } from "./dispatch.ts";
 import { buildRunDeps, createOutputSink, guardStdout, parseOutputMode, runPromptWords } from "./output.ts";
 import { join } from "node:path";
+import { rmSync } from "node:fs";
 import pkg from "../../package.json";
 
 const cli = parseCli(process.argv);
@@ -43,11 +53,12 @@ if (process.argv.includes("--version")) {
 function resolveStream(): { stream: StreamFn; model: ModelRef; real: boolean; providerId: string } {
   const cfg = resolveProvider();
   if (cfg) {
-    const stream = process.env.AION_STREAM === "sse" ? openaiCompatStreaming({ baseUrl: cfg.baseUrl, apiKey: cfg.apiKey }) : providerStream(cfg);
-    return { stream, model: { provider: cfg.id, model: process.env.AION_MODEL ?? cfg.defaultModel ?? "gpt-4o-mini" }, real: true, providerId: cfg.id };
+    // streaming by default (both protocols); ROVECODE_STREAM=off|json falls back to the JSON adapters
+    const stream = wantsStreaming({ ROVECODE_STREAM: process.env.ROVECODE_STREAM }) ? providerStreaming(cfg) : providerStream(cfg);
+    return { stream, model: { provider: cfg.id, model: process.env.ROVECODE_MODEL ?? cfg.defaultModel ?? "gpt-4o-mini" }, real: true, providerId: cfg.id };
   }
   return {
-    stream: mockStream({ turns: [textTurn("Aion mock provider: run `aion auth set <provider>`, or set AION_BASE_URL and AION_API_KEY (or a <NAME>_API_KEY env var), for a real model.")] }),
+    stream: mockStream({ turns: [textTurn(MOCK_PROVIDER_TEXT)] }),
     model: { provider: "mock", model: "default" }, real: false, providerId: "mock",
   };
 }
@@ -60,13 +71,13 @@ async function preflightProvider(): Promise<void> {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error(`error: ${msg}`);
-    console.error(`hint: check AION_BASE_URL (${process.env.AION_BASE_URL ?? "not set"}) and AION_API_KEY; aborting before running tasks.`);
+    console.error(`hint: check ROVECODE_BASE_URL (${process.env.ROVECODE_BASE_URL ?? "not set"}) and ROVECODE_API_KEY; aborting before running tasks.`);
     process.exit(2);
   }
 }
 
 async function cmdRun(prompt: string): Promise<void> {
-  // port #35: --output is validated FIRST. bootRuntime has side effects (mkdir .aion/sessions/<id>
+  // port #35: --output is validated FIRST. bootRuntime has side effects (mkdir .rovecode/sessions/<id>
   // + meta.json + memory dir, skills scan, sandbox probe, MCP children) and a usage error is a bare
   // process.exit(2) — parsing after the boot left a stray session dir behind every `--output xml`.
   const mode = parseOutputMode(process.argv);
@@ -76,12 +87,12 @@ async function cmdRun(prompt: string): Promise<void> {
   // stdout: not process.stdout, so the sink installs no second guard; this one holds until exit
   const rawOut = { write: process.stdout.write.bind(process.stdout) };
   if (mode !== "text") guardStdout(process.stderr);
-  const yolo = process.argv.includes("--yolo") || process.env.AION_YOLO === "1";
+  const yolo = process.argv.includes("--yolo") || process.env.ROVECODE_YOLO === "1";
   // One-shot runs build the SAME agent as repl/tui (createRuntime: tools incl.
   // MCP/recall/eval-cell, guardrails, config chunk, execpolicy approver seam).
-  // AION_STREAM=sse keeps its meaning: raw SSE adapter, no middleware wrap.
+  // ROVECODE_STREAM=sse keeps its meaning: raw SSE adapter, no middleware wrap.
   const providerCfg = resolveProvider();
-  const sse = providerCfg && process.env.AION_STREAM === "sse"
+  const sse = providerCfg && process.env.ROVECODE_STREAM === "sse"
     ? openaiCompatStreaming({ baseUrl: providerCfg.baseUrl, apiKey: providerCfg.apiKey })
     : undefined;
   // port #27: a sandbox misconfig or an unavailable configured rung is a clean one-line
@@ -91,9 +102,13 @@ async function cmdRun(prompt: string): Promise<void> {
     throw e;
   });
   const model: ModelRef = rt.provider
-    ? { provider: rt.provider.id, model: process.env.AION_MODEL ?? rt.provider.defaultModel ?? "gpt-4o-mini" }
+    ? { provider: rt.provider.id, model: process.env.ROVECODE_MODEL ?? rt.provider.defaultModel ?? "gpt-4o-mini" }
     : { provider: "mock", model: "default" };
-  const stream = rt.stream ?? mockStream({ turns: [textTurn("Aion mock provider: run `aion auth set <provider>`, or set AION_BASE_URL and AION_API_KEY (or a <NAME>_API_KEY env var), for a real model.")] });
+  // no provider configured → the scripted mock (packaging smoke, tests); the registry's own stream would
+  // otherwise end the run with a `config:` error turn. noProviderReason() is null for an injected stream.
+  const stream = rt.stream !== null && rt.noProviderReason() === null
+    ? rt.stream
+    : mockStream({ turns: [textTurn(MOCK_PROVIDER_TEXT)] });
   rt.hooks.onWarning((w) => console.error(`hooks: ${w}`)); // port #29: load + runtime hook notes → stderr (stdout stays the transcript)
   const exit = async (code: number): Promise<never> => {
     // port #26 (fix-wave MED-1): a one-shot run does not outlive its process — cancel the children
@@ -110,7 +125,12 @@ async function cmdRun(prompt: string): Promise<void> {
   // above the guard and send human progress to stderr) and its signal aborts on SIGINT, so Ctrl-C
   // ends the run "stopped" (exit 130)
   const sink = createOutputSink(mode, { stdout: mode === "text" ? process.stdout : rawOut, stderr: process.stderr, model, messages: () => rt.store.messages() });
-  for await (const ev of agentLoop(rt.buildDef(model), prompt, {}, rt.buildCfg(yolo), buildRunDeps(rt, stream, sink), rt.steering)) { // port #26: runtime queue -> task notes reach the run; cwd threaded like every other surface
+  const effortFlag = parseEffort(process.argv[process.argv.indexOf("--effort") + 1]);
+  if (effortFlag !== undefined) rt.setEffort(effortFlag); // --effort beats ROVECODE_EFFORT for this run
+  // same ladder as the TUI (core/settings.ts): flag → env → project file → user file → "ask"
+  const level = resolvePermission(rt.cwd, yolo ? "auto" : process.argv.includes("--accept-edits") ? "accept-edits" : undefined,
+    { ROVECODE_PERMISSION: process.env.ROVECODE_PERMISSION, ROVECODE_YOLO: process.env.ROVECODE_YOLO, ROVECODE_ACCEPT_EDITS: process.env.ROVECODE_ACCEPT_EDITS });
+  for await (const ev of agentLoop(rt.buildDef(model), prompt, {}, rt.buildCfg(level), buildRunDeps(rt, stream, sink), rt.steering)) { // port #26: runtime queue -> task notes reach the run; cwd threaded like every other surface
     if (ev.type === "turn_start") resetTurnFailureCount();
     sink.onEvent(ev);
     if (ev.type === "run_end") await exit(sink.finish(ev));
@@ -119,11 +139,58 @@ async function cmdRun(prompt: string): Promise<void> {
 }
 
 async function cmdGauntlet(): Promise<void> {
+  if (process.argv.includes("--live")) return cmdGauntletLive();
   await preflightProvider();
   const tasks = [...basicTasks(), ...codingTasks(), ...failureTasks(), ...adversarialTasks()];
-  const results = await runGauntlet({ tasks, runner: runTask });
+  const results = await runGauntlet({ tasks, runner: (task, workspace) => runTask(task, workspace) });
   console.log(reportResults(results));
   process.exit(results.some((r) => !r.pass) ? 1 : 0);
+}
+
+/** `rovecode gauntlet --live [--model provider/model] [--effort e]`: the gauntlet's basic/coding/failure/
+ *  adversarial tasks (minus loop-guard) against a REAL model through the real runtime — the product's system
+ *  prompt (incl. the model profile, providers/profiles.ts), router/retry/middleware stream, guard. The
+ *  instrument for "does this prompt/profile change help model X": run it before and after, compare
+ *  pass count, tool calls and tokens. Exit 0 all pass, 1 any fail, 2 no provider / preflight failed. */
+async function cmdGauntletLive(): Promise<void> {
+  const rt = await bootRuntime().catch((e: unknown): never => {
+    if (e instanceof SandboxConfigError) { console.error(`error: ${e.message}`); process.exit(2); }
+    throw e;
+  });
+  const exit = async (code: number): Promise<never> => {
+    await rt.hooks.close();
+    await rt.mcp?.close().catch(() => {});
+    // the live tasks run in their own tmp stores; the boot session under <cwd>/.rovecode/sessions stays empty
+    if (rt.store.messages().length === 0) rmSync(join(rt.cwd, ".rovecode", "sessions", rt.sessionId), { recursive: true, force: true });
+    return process.exit(code);
+  };
+  const why = rt.noProviderReason();
+  if (why !== null || rt.stream === null || rt.provider === null) { console.error(`error: ${why ?? "no provider configured"}`); await exit(2); }
+  const provider = rt.provider!;
+  const stream = rt.stream!;
+  const selIdx = process.argv.indexOf("--model");
+  const sel = selIdx >= 0 ? process.argv[selIdx + 1] : undefined;
+  // the selector grammar every interactive surface uses: a leading segment is a provider only when it
+  // names one, so `--model zai-org/glm-5.3-flash` stays a model id on the default provider
+  const picked = sel ? rt.providers.resolveSelector(sel, provider.id) : { provider: provider.id, model: rt.defaultModel || provider.defaultModel || "" };
+  if ("error" in picked) { console.error(`error: ${picked.error}`); await exit(2); }
+  const model = picked as ModelRef;
+  if (!model.model) { console.error("error: no model — pass --model <provider/model> or set a default (rovecode model use …)"); await exit(2); }
+  const effortFlag = parseEffort(process.argv[process.argv.indexOf("--effort") + 1]);
+  if (effortFlag !== undefined) rt.setEffort(effortFlag);
+  const hint = profileHint();
+  if (hint) console.error(`note: ${hint}`);
+  try {
+    await providerPreflight(stream, model);
+  } catch (e) {
+    console.error(`error: ${e instanceof Error ? e.message : String(e)}`);
+    await exit(2);
+  }
+  const tasks = liveGauntletTasks();
+  console.log(`Gauntlet (live): ${model.provider}/${model.model} · effort ${rt.effort} · profile ${profileFor(model)?.id ?? "none"} · ${tasks.length} tasks`);
+  const results = await runGauntlet({ tasks, runner: (task, workspace, signal) => runTaskLive(task, workspace, rt, model, signal) });
+  console.log(reportResults(results));
+  await exit(results.some((r) => !r.pass) ? 1 : 0);
 }
 
 async function cmdBench(): Promise<void> {
@@ -138,81 +205,22 @@ function cmdTools(): void {
   const registry = new ToolRegistry();
   registry.register(readTool, editTool, writeTool, bashTool, globTool, grepTool, lsTool);
   registry.register(webFetchTool); // port #31
-  registry.register(...todoTools(join(process.cwd(), ".aion", "sessions"))); // port #32: listing only — the root is never touched here
+  registry.register(...todoTools(join(process.cwd(), ".rovecode", "sessions"))); // port #32: listing only — the root is never touched here
   registry.register(askUserTool(() => undefined)); // port #33: listing only — no asker is bound here
   const tasks = new TaskManager({ deps: () => null }); registry.register(createTaskTool(tasks), createTaskStatusTool(tasks)); // port #26: listing only — no provider, nothing can start
+  const providers = new ProviderRegistry(process.cwd()); registry.register(providerListTool(providers), providerEditTool(providers)); // listing only — reads providers.json, writes nothing
   for (const t of registry.list()) {
     console.log(`${t.schema.name.padEnd(8)} ${t.kind.padEnd(8)} sequential=${t.sequential !== false}`);
     console.log(`         ${t.schema.description}`);
   }
 }
 
-function cmdHelp(): void {
-  console.log(`aion — agent harness
-
-commands:
-  aion                      interactive TUI chat — the sextant surface (files · code · messages · plan · usage · pet)
-                            on a truecolor TTY of at least 100x30, else the classic pi-tui chat;
-                            --classic forces the classic chat · --pet <name> names the pet · --plain = readline REPL
-  aion --resume <id>        open the TUI resuming a session (full id or unique prefix)
-  aion "prompt"             one-shot task (same as run)
-  aion smoke-tui            render check: full pipeline into an 80x24 terminal emulator (dev-only)
-  aion smoke-tui --sextant  render check: the sextant surface at 160x44 through the full pipeline (no emulator needed)
-  aion run "<prompt>"       run an agent task (--yolo allows all tools; mock provider only if no provider env set)
-                            "/name args" expands a custom command (.aion/commands/<name>.md, else ~/.aion/commands)
-                            the way the TUI does; an unknown /name is sent verbatim; model:/mode: frontmatter is
-                            TUI-only and not applied headlessly
-    --output <text|json|ndjson>  text (default): progress + the final answer on stdout
-                            json: exactly ONE result object on stdout {status, summary, sessionId,
-                            model:{provider,model}, origin (served model|null), usage:{input,output,cacheRead,
-                            cacheWrite}, costUsd (null when unpriced), toolCalls:[{tool,ok,ms?}], durationMs, exitCode}
-                            ndjson: one JSON line per RunEvent, then a final {type:"result"} line
-                            json/ndjson: stdout carries only JSON, progress goes to stderr
-                            exit codes: 0 done · 1 error/budget · 2 usage/startup error · 130 aborted (Ctrl-C)
-                            exit 2 = usage/startup error (bad --output value, sandbox misconfig or unavailable rung):
-                            one stderr line, nothing on stdout; --output=<mode> is accepted as well
-  aion bench                run cross-harness micro-benchmarks (edits, sessions)
-  aion gauntlet             run the adversarial evaluation suite
-  aion tools                list registered tools
-  aion auth set <provider> [--key <name>]  store an API key (prompts on stdin; ~/.aion/credentials.json)
-  aion auth list            stored providers + key names (values redacted)
-  aion auth remove <provider>  delete a stored credential
-  aion trace <session-id>   print session tree events (JSONL)
-  aion export <session>     write a session as markdown (--json: raw JSONL copy; --out <path>; --force)
-  aion eval                 alias for gauntlet
-  aion acp                  Agent Client Protocol v1 endpoint over stdio (Zed/JetBrains)
-  aion serve                headless HTTP server (AION_PORT, default 4100; loopback-only)
-
-env:
-  AION_BASE_URL   any OpenAI-compatible or Anthropic endpoint
-  AION_API_KEY    API key (falls back to OPENAI_API_KEY)
-  AION_MODEL      model id (e.g. zai-org/glm-5.3)
-  AION_MODEL_<ROLE>  role fallback chain, comma-separated provider/model list; on 429/5xx
-                  the next candidate serves. Roles: DEFAULT SMOL PLAN COMMIT TASK
-                  (e.g. AION_MODEL_DEFAULT=kaesra/zai-org/glm-5.3-flash,openai/gpt-4o-mini)
-  AION_STREAM=sse use SSE streaming
-  AION_YOLO=1     allow all tool actions
-  AION_TUI        sextant | classic — force the TUI surface (sextant still needs a TTY; --classic wins)
-  AION_THEME      sextant palette: night (default) | ember | contrast (/theme switches it live)
-  AION_PET=0      hide the sextant pet panel (nimbus); --pet <name> renames it
-  AION_SANDBOX    executor rung for bash: direct (default) | wsl | docker; beats .aion/sandbox.json {"rung","dockerImage"}
-  AION_SANDBOX_IMAGE  image for the docker rung (default debian:stable-slim; must contain bash)
-  AION_RETRY_MAX  same-model retries after a 429/5xx/transport failure (default 3; 0 = off)
-  AION_RETRY_BASE_MS  first backoff cap in ms (default 2000; exponential, full jitter, Retry-After honored)
-  AION_WEBFETCH_TIMEOUT_MS  web_fetch request timeout in ms (default 30000)
-  AION_WEBFETCH_ALLOW_PRIVATE=1  let web_fetch reach loopback/private hosts (SSRF guard escape for local dev)
-  AION_COMPACTION  history compaction strategy: head-summarize (default) | keep-window | provider-native
-  AION_TASKS_MAX  concurrent background tasks (default 3; further task starts queue FIFO)
-  AION_OTEL_ENDPOINT  OTLP/HTTP collector, e.g. http://host:4318 — one trace per run (run ⊃ turn ⊃ tool); unset = off
-  AION_OTEL_HEADERS  extra OTLP headers as k=v,k2=v2 (e.g. authorization=Bearer …)
-  AION_REFLECTION=0  disable reflection nudges after failed edits; AION_REFLECTION_MAX caps them per run (default 2)
-providers: kaesra openai anthropic deepseek groq openrouter ollama lmstudio
-            together mistral cerebras fireworks perplexity xai moondream vllm
-            (aion auth set <name>, or set <NAME>_API_KEY — stored creds beat env;
-            AION_BASE_URL/AION_API_KEY always wins)`);
+/** `rovecode help [topic]` — short and grouped by default; env / advanced / all hold the reference (cli/help.ts). */
+function cmdHelp(topic = ""): void {
+  console.log(helpText(topic));
 }
 
-/** port #37: provider credential onboarding (`aion auth set/list/remove`).
+/** port #37: provider credential onboarding (`rovecode auth set/list/remove`).
  *  Secrets are NEVER printed: list shows key NAMES plus a redacted prefix, set/remove
  *  messages and errors never embed the value. */
 async function cmdAuth(rest: string[]): Promise<void> {
@@ -227,21 +235,23 @@ async function cmdAuth(rest: string[]): Promise<void> {
   if (action === "list") {
     const entries = listProviders();
     if (entries.length === 0) {
-      console.log(`no stored credentials (${credentialsPath()}) — run: aion auth set <provider>`);
+      console.log(`no stored credentials (${credentialsPath()}) — run: rovecode auth set <provider>`);
       return;
     }
     for (const e of entries) console.log(`${e.provider.padEnd(12)} ${e.keyName.padEnd(24)} ${e.redacted}`);
     return;
   }
   if (action === "set" && provider !== undefined) {
-    const ids = listBuiltinProviders().map((p) => p.id);
-    if (!ids.includes(provider)) {
-      // strict on purpose: a credential resolveProvider can never consume is a silent
-      // onboarding no-op; catch the typo here instead
-      console.error(`error: unknown provider "${provider}" — known: ${ids.join(" ")}`);
+    // strict on purpose: a credential no provider can consume is a silent onboarding no-op; catch
+    // the typo here. Built-ins AND providers.json entries count (providers/registry.ts).
+    const reg = new ProviderRegistry(process.cwd());
+    const known = reg.get(provider);
+    if (known === undefined) {
+      console.error(`error: unknown provider "${provider}" — known: ${reg.ids().join(" ")}`);
+      console.error(`hint: register a custom endpoint first: rovecode provider add ${provider} <baseUrl>`);
       process.exit(1);
     }
-    const name = keyName ?? keyNameFor(provider);
+    const name = keyName ?? known.keyEnv;
     const secret = await readSecret(`${name} for ${provider}: `);
     if (secret.length === 0) {
       console.error("error: empty secret — nothing stored");
@@ -259,12 +269,133 @@ async function cmdAuth(rest: string[]): Promise<void> {
     console.log(`removed credential for ${provider}`);
     return;
   }
-  console.error("usage: aion auth set <provider> [--key <name>] | aion auth list | aion auth remove <provider>");
+  console.error("usage: rovecode auth set <provider> [--key <name>] | rovecode auth list | rovecode auth remove <provider>");
   process.exit(1);
 }
 
+/** argv words after a subcommand, flags INCLUDED — parseCli's `rest` drops flags but keeps their
+ *  values, which is useless for flag-driven subcommands; the global boolean flags are removed. */
+function argvAfter(command: string): string[] {
+  const i = process.argv.indexOf(command);
+  return i === -1 ? [] : process.argv.slice(i + 1).filter((a) => a !== "--yolo" && a !== "--plain" && a !== "--classic");
+}
+
+/** `rovecode provider list|add|remove|test` over providers.json (providers/registry.ts). Secrets: `--key`
+ *  prompts through readSecret (never echoed, never in argv); `--key-env NAME` names an env var instead.
+ *  Every change is live for running TUIs/servers on this machine — the registry re-reads on change. */
+async function cmdProvider(words: string[]): Promise<void> {
+  const reg = new ProviderRegistry(process.cwd());
+  const [action, ...rest] = words;
+  if (action === undefined || action === "list") { console.log(formatProviderList(reg, { all: rest.includes("--all") })); return; }
+  if (action === "add") {
+    const parsed = parseAddArgs(rest);
+    if ("error" in parsed) { console.error(`error: ${parsed.error}`); process.exit(2); }
+    const r = reg.add(parsed.spec, parsed.scope);
+    if ("error" in r) { console.error(`error: ${r.error}`); process.exit(1); }
+    console.log(`added ${r.id} (${r.protocol}, ${r.baseUrl}) to ${providersPathFor(parsed.scope, process.cwd())}`);
+    if (parsed.promptKey) {
+      const secret = await readSecret(`${r.keyEnv} for ${r.id}: `);
+      if (secret.length === 0) { console.error("error: empty secret — provider kept, no key stored"); process.exit(1); }
+      saveCredential(r.id, secret, r.keyEnv);
+      console.log(`stored ${r.keyEnv} for ${r.id} in ${credentialsPath()}`);
+    } else if (!isConfigured(r)) {
+      console.log(`no key yet: rovecode auth set ${r.id}   (or set ${r.keyEnv}; picked up live, no restart)`);
+    }
+    if (reg.refresh() && reg.defaultRef()?.provider !== r.id) console.log(`make it the default: rovecode model use ${r.id}/${r.defaultModel ?? "<model>"}`);
+    return;
+  }
+  if (action === "remove" && rest[0] !== undefined) {
+    const r = reg.remove(rest[0]);
+    if ("error" in r) { console.error(`error: ${r.error}`); process.exit(1); }
+    console.log(r.removed.length > 0 ? `removed ${rest[0]} from the ${r.removed.join(" and ")} providers.json` : `${rest[0]} was not in any providers.json`);
+    return;
+  }
+  if (action === "test" && rest[0] !== undefined) {
+    const r = await reg.probe(rest[0], rest[1]);
+    console.log(`${rest[0]}/${r.model}: ${r.detail}`);
+    process.exit(r.ok ? 0 : 1);
+  }
+  console.error(`usage: rovecode provider list [--all] | rovecode provider ${ADD_USAGE} [--key] | rovecode provider remove <id> | rovecode provider test <id> [model]`);
+  process.exit(2);
+}
+
+/** `rovecode model list [provider] | use <provider/model> [--project]` — the persisted default. */
+async function cmdModel(words: string[]): Promise<void> {
+  const reg = new ProviderRegistry(process.cwd());
+  const pos = words.filter((w) => !w.startsWith("-"));
+  const [action, arg] = pos;
+  if (action === "list") {
+    const id = arg ?? reg.defaultRef()?.provider;
+    if (id === undefined) { console.error("error: no provider configured — rovecode provider add <id> <baseUrl>"); process.exit(1); }
+    const r = await reg.models(id);
+    if (!r.ok) { console.error(`error: ${r.error}`); process.exit(1); }
+    const cur = reg.defaultRef();
+    if (r.models.length === 0) console.log(`${id}: the endpoint listed no models (no /models route?) — pass one directly: rovecode model use ${id}/<model>`);
+    for (const m of r.models) console.log(`${cur?.provider === id && cur.model === m ? "*" : " "} ${id}/${m}`);
+    return;
+  }
+  // `rovecode model` / `rovecode model use` with nothing to use: pick from a numbered menu instead of
+  // making the human go find an id first. TTY only — a pipe must not be consumed by a prompt, and a
+  // script that meant to pass an id gets the usage line below.
+  if ((action === undefined || (action === "use" && arg === undefined)) && process.stdin.isTTY === true) {
+    const chosen = await pickModelInteractively(reg);
+    if (chosen === null) return;
+    const r = reg.setDefault(chosen, words.includes("--project") ? "project" : "user");
+    if ("error" in r) { console.error(`error: ${r.error}`); process.exit(1); }
+    console.log(`default → ${r.provider}/${r.model} (${providersPathFor(words.includes("--project") ? "project" : "user", process.cwd())}; running TUIs switch live)`);
+    return;
+  }
+  if (action === "use" && arg !== undefined) {
+    const scope = words.includes("--project") ? "project" : "user";
+    const r = reg.setDefault(arg, scope);
+    if ("error" in r) { console.error(`error: ${r.error}`); process.exit(1); }
+    console.log(`default → ${r.provider}/${r.model} (${providersPathFor(scope, process.cwd())}; running TUIs switch live)`);
+    const p = reg.get(r.provider);
+    if (p !== undefined && !isConfigured(p)) console.log(reg.keyHint(p));
+    return;
+  }
+  console.error("usage: rovecode model list [provider] | rovecode model use <provider/model> [--project]");
+  process.exit(2);
+}
+
+/** `rovecode connect [<id> [<baseUrl>]] [flags]` — the one-shot form; bare, it hands over to the wizard. */
+async function cmdConnect(words: string[]): Promise<number> {
+  const registry = new ProviderRegistry(process.cwd());
+  if (words.length === 0) return runSetup({ registry });
+  const { parseConnectArgs, runConnect } = await import("./connect.ts");
+  const parsed = parseConnectArgs(words);
+  if ("error" in parsed) { console.error(`error: ${parsed.error}`); return 2; }
+  return runConnect(parsed, { registry });
+}
+
+/** The numbered menu behind a bare `rovecode model`. Every CONFIGURED provider is asked for its
+ *  models concurrently; one that is down or keyless prints its reason and is skipped rather than
+ *  taking the whole list down with it. Returns the "provider/model" selector, or null when the
+ *  human cancels or there is nothing to choose from. */
+async function pickModelInteractively(reg: ProviderRegistry): Promise<string | null> {
+  const ids = reg.list().filter(isConfigured).map((p) => p.id);
+  if (ids.length === 0) { console.error("error: no provider is configured yet — run: rovecode connect"); process.exit(1); }
+  console.log(`fetching models from ${ids.length} provider${ids.length === 1 ? "" : "s"}…`);
+  const results = await Promise.all(ids.map(async (id) => ({ id, r: await reg.models(id) })));
+  const cur = reg.defaultRef();
+  const rows: string[] = [];
+  for (const { id, r } of results) {
+    if (!r.ok) { console.log(`  (${id}: ${r.error})`); continue; }
+    for (const m of r.models) rows.push(`${id}/${m}`);
+  }
+  if (rows.length === 0) { console.error("error: no models to choose from"); process.exit(1); }
+  const currentSel = cur ? `${cur.provider}/${cur.model}` : null;
+  rows.sort((a, b) => Number(b === currentSel) - Number(a === currentSel)); // the one you are on, first
+  rows.forEach((sel, i) => console.log(`  ${String(i + 1).padStart(2)}  ${sel === currentSel ? "* " : "  "}${sel}`));
+  const answer = (await askLine(`Which one? [1-${rows.length}, empty = cancel]: `)).trim();
+  if (answer.length === 0) { console.log("cancelled — nothing changed"); return null; }
+  const n = Number(answer);
+  if (!Number.isInteger(n) || n < 1 || n > rows.length) { console.error(`error: "${answer}" is not one of 1-${rows.length}`); process.exit(2); }
+  return rows[n - 1]!;
+}
+
 async function cmdTrace(sessionId: string): Promise<void> {
-  const store = new SessionStore(join(process.cwd(), ".aion", "sessions"), sessionId);
+  const store = new SessionStore(join(process.cwd(), ".rovecode", "sessions"), sessionId);
   const corrupt = store.reload();
   if (corrupt.length > 0) console.error(`warning: ${corrupt.length} corruption(s):`, corrupt);
   for (const m of store.messages()) {
@@ -274,17 +405,17 @@ async function cmdTrace(sessionId: string): Promise<void> {
   }
 }
 
-const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "auth", "trace", "help", "chat", "repl", "smoke-tui", "acp", "serve", "export"]);
+const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "auth", "provider", "model", "models", "setup", "connect", "trace", "help", "chat", "repl", "smoke-tui", "acp", "serve", "export"]);
 // --resume <id>: TUI-only value flag, parsed here (parseCli skips its value when locating the
 // command but returns no flag values); its value must not be mistaken for a one-shot prompt
 const rIx = process.argv.indexOf("--resume");
 const rArg = rIx !== -1 ? process.argv[rIx + 1] : undefined;
 const resumeId = rArg !== undefined && !rArg.startsWith("-") ? rArg : undefined;
 if (cmd === "" || cmd === "chat" || cmd === "repl") {
-  // default surface (port #44): the sextant renderer on a truecolor TTY of ≥ 100×30 (AION_TUI / --classic
+  // default surface (port #44): the sextant renderer on a truecolor TTY of ≥ 100×30 (ROVECODE_TUI / --classic
   // override — sextant-io.ts chooseSurface), else the pi-tui chat (port #1); --plain keeps the readline REPL
   if (cli.plain) await runRepl({ yolo: cli.yolo });
-  else await runTui({ yolo: cli.yolo, sessionId: resumeId, renderer: pickRenderer(cli, process.env, process.stdout), ...(cli.pet !== undefined ? { pet: cli.pet } : {}) });
+  else await runTui({ yolo: cli.yolo, acceptEdits: cli.acceptEdits, ...(cli.effort !== undefined ? { effort: cli.effort } : {}), sessionId: resumeId, renderer: pickRenderer(cli, process.env, process.stdout), ...(cli.pet !== undefined ? { pet: cli.pet } : {}) });
 } else if (known.has(cmd)) {
   switch (cmd) {
     // port #35: runPromptWords drops a post-command --output value; port #30: a leading /name expands a custom command
@@ -292,7 +423,16 @@ if (cmd === "" || cmd === "chat" || cmd === "repl") {
     case "gauntlet": case "eval": await cmdGauntlet(); break;
     case "bench": await cmdBench(); break;
     case "tools": cmdTools(); break;
+    case "setup": process.exitCode = await runSetup({ registry: new ProviderRegistry(process.cwd()) }); break; // connect a model step by step (cli/setup.ts)
+    // `connect` is the one-line form of setup: bare it IS the wizard, with an id it takes the answers
+    // from argv (cli/connect.ts) so a README or a CI step can do it without a terminal
+    case "connect": process.exitCode = await cmdConnect(argvAfter("connect")); break;
+    case "help": cmdHelp(cli.rest[0] ?? ""); break; // short by default; help env | advanced | all
     case "auth": await cmdAuth(cli.rest); break;
+    case "provider": await cmdProvider(argvAfter("provider")); break; // providers.json: list/add/remove/test
+    case "model": await cmdModel(argvAfter("model")); break;          // persisted default model: list/use
+    // `rovecode models` reads better than `model list` and is what people type; same command
+    case "models": await cmdModel(["list", ...argvAfter("models")]); break;
     case "trace": await cmdTrace(cli.rest[0] ?? ""); break;
     // port #38: session export (markdown transcript or raw JSONL copy) — local only.
     // Hand-parses its own argv: --out takes a value, and parseCli flags are boolean-only.
@@ -325,9 +465,9 @@ if (cmd === "" || cmd === "chat" || cmd === "repl") {
     // policy-only over HTTP — see GET /doc). Bun.serve keeps the process alive.
     case "serve": {
       const { startServer } = await import("../server/http.ts");
-      const port = Number(process.env.AION_PORT ?? "") || undefined;
+      const port = Number(process.env.ROVECODE_PORT ?? "") || undefined;
       const srv = startServer({ ...(port !== undefined ? { port } : {}), yolo: cli.yolo });
-      console.log(`aion server listening on ${srv.url} — POST /session · POST /session/:id/prompt (SSE) · DELETE /session/:id/prompt · GET /session/:id/tasks · GET /sessions · GET /doc`);
+      console.log(`rovecode server listening on ${srv.url} — POST /session · POST /session/:id/prompt (SSE) · DELETE /session/:id/prompt · GET /session/:id/tasks · GET /sessions · GET /doc`);
       break;
     }
     default: cmdHelp(); break;

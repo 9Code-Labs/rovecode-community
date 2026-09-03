@@ -2,16 +2,20 @@
  *  registration, skills/memory indexes, provider resolution, RunConfig defaults.
  *  Extracted from repl.ts/main.ts so every surface builds the same agent. */
 
-import type { AgentDefinition, ApprovalFn, ModelRef, RunConfig, StreamFn, Tool } from "../core/types.ts";
+import type { AgentDefinition, ApprovalFn, Message, ModelRef, PermissionLevel, RunConfig, StreamFn, ThinkingEffort, Tool } from "../core/types.ts";
+import { parseEffort } from "../core/types.ts";
 import { SessionStore } from "../core/session.ts";
 import { ToolRegistry } from "../core/tools.ts";
 import { SkillStore } from "../skills/index.ts";
 import { createSkillTools, buildSkillsIndex } from "../skills/tools.ts";
 import { BlockStore } from "../memory/blocks.ts";
 import { memoryEditTool } from "../memory/tools.ts";
-import { resolveProvider, providerStream, type ProviderConfig } from "../providers/stream.ts";
+import type { ProviderConfig } from "../providers/stream.ts";
+import { ProviderRegistry } from "../providers/registry.ts";
+import { providerEditTool, providerListTool } from "../tools/provider.ts";
 import { withToolCallParsing, toolPromptBlock } from "../providers/middleware.ts";
 import { ModelCatalog } from "../providers/catalog.ts";
+import { profileFor, profilePromptSection } from "../providers/profiles.ts";
 import { loadProjectContext, type ProjectContext } from "../core/config.ts";
 import { estimateTokens, type ContextChunk } from "../core/context.ts";
 import { parseCompactionStrategy } from "../core/compaction.ts";
@@ -35,14 +39,15 @@ import { execPolicyApprover } from "../core/execpolicy.ts";
 import { recallTool } from "../memory/recall.ts";
 import { configureExecutor, type SpawnRunner } from "../core/executor.ts";
 import { loadSandboxConfig, unavailableRungError, type SandboxConfig } from "../core/sandbox-config.ts";
-import { todoTools } from "../tools/todo.ts";
+import { loadTodos, planReminder, todoTools } from "../tools/todo.ts";
 import { SteeringQueue } from "../core/loop.ts";
 import { TaskManager } from "../core/tasks.ts";
 import { createTaskTool, createTaskStatusTool } from "../tools/task.ts";
 import type { ChildContext, ChildRunnerDeps } from "../core/orchestrator.ts";
 import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { sep, join } from "node:path";
 import { randomUUID } from "node:crypto";
+import { noModelHint } from "../core/voice.ts";
 
 export interface RuntimeOptions {
   cwd?: string;
@@ -72,38 +77,57 @@ export interface Runtime {
   registry: ToolRegistry;
   skillStore: SkillStore;
   blockStore: BlockStore;
-  /** resolveProvider() result (null if unconfigured) */
+  /** the live provider registry (providers/registry.ts): providers.json (user + project) + stored
+   *  credentials + env, hot-reloaded on file change — `rovecode provider add`, `/provider …` in the
+   *  TUI and the agent's provider_edit tool all land here and serve the next model call, no restart */
+  providers: ProviderRegistry;
+  /** the default provider as a stream.ts config — LIVE (re-resolved on every read); null when none */
   provider: ProviderConfig | null;
-  /** providerStream(provider) or opts.stream override; null when neither */
+  /** the registry's dispatching stream (router → retry → middleware → per-provider adapter) or the
+   *  opts.stream override; null only when opts.stream was explicitly null */
   stream: StreamFn | null;
-  /** provider?.defaultModel ?? env AION_MODEL ?? "" */
+  /** env ROVECODE_MODEL ?? providers.json `default` ?? the default provider's model ?? "" — LIVE */
   defaultModel: string;
-  /** interactive system prompt incl. skills index + memory index (indexes rebuilt per call) */
-  systemPrompt(): string;
-  buildDef(model: ModelRef): AgentDefinition;
-  buildCfg(yolo: boolean, approval?: ApprovalFn): RunConfig;
+  /** null when a run can start; else the one-line reason (no provider configured yet). Live: adding
+   *  a provider through the CLI, the TUI or the agent flips it back to null without a restart.
+   *  Always null when the runtime was built with an injected stream (tests, smoke). */
+  noProviderReason(): string | null;
+  /** interactive system prompt incl. skills index + memory index (indexes rebuilt per call). `cwdOverride`
+   *  names another directory in the identity sentence — the live gauntlet points the model at its scratch
+   *  workspace while everything else (indexes, profile override lookup) stays on the runtime's cwd */
+  systemPrompt(cwdOverride?: string): string;
+  buildDef(model: ModelRef, opts?: { cwd?: string }): AgentDefinition;
+  /** `true`/`false` still mean auto/ask — every existing caller keeps working */
+  buildCfg(permission: PermissionLevel | boolean, approval?: ApprovalFn): RunConfig;
   /** swap the session-scoped memory store — rebinds the memory tool AND the prompt (port #2 fix) */
   setBlockStore(b: BlockStore): void;
   /** tool-loop guardrails (port #4), one per runtime, thread into LoopDeps.guard */
   guard: ToolGuard;
+  /** port #32: the open todo list, re-sent once per turn — thread into LoopDeps.planReminder */
+  planReminder: (history: readonly Message[]) => string | null;
+  /** How hard the model thinks before answering. Stamped onto every ModelRef buildDef hands out, so
+   *  ONE setting reaches every surface (TUI, one-shot, serve, acp) without each threading a flag.
+   *  A ref that already names an effort keeps it. */
+  effort: ThinkingEffort;
+  setEffort(e: ThinkingEffort): void;
   /** MCP server manager (port #3); null when no servers configured */
   mcp: McpManager | null;
   /** port #8 config snapshot (AGENTS.md/CLAUDE.md/… harvested cwd-upward ONCE
    *  at construction, for prompt-cache stability) incl. dropped/truncated
    *  source stubs for /status. Mid-session config edits are intentionally not
-   *  picked up — restart aion (a new runtime) to refresh. */
+   *  picked up — restart rovecode (a new runtime) to refresh. */
   projectContext: ProjectContext;
-  /** port #14: role→model router with fallback chains (env AION_MODEL_<ROLE>). */
+  /** port #14: role→model router with fallback chains (env ROVECODE_MODEL_<ROLE>). */
   router: Router;
   /** port #14: fallback-advance notes accumulated since the last drain. */
   drainRouterNotes(): string[];
   /** port #11: shadow-git checkpoints for a session (lazy; null when git is absent
-   *  or AION_NO_CHECKPOINTS=1). Snapshots land automatically after mutating tools. */
+   *  or ROVECODE_NO_CHECKPOINTS=1). Snapshots land automatically after mutating tools. */
   checkpointsFor(sessionId: string): Promise<Checkpoints | null>;
   /** port #11: point checkpoint entryId capture at the ACTIVE session store after
    *  a TUI session switch (pairs with setBlockStore). */
   setSessionStore(s: SessionStore): void;
-  /** port #27: executor rung selected by .aion/sandbox.json / AION_SANDBOX (+ probe) */
+  /** port #27: executor rung selected by .rovecode/sandbox.json / ROVECODE_SANDBOX (+ probe) */
   sandbox: SandboxState;
   /** port #33: bind (or unbind with undefined) the interactive asker behind the ask_user
    *  tool — the TUI hands in its question overlay; headless surfaces (run/serve/acp) never
@@ -116,7 +140,7 @@ export interface Runtime {
   steering: SteeringQueue;
   /** port #26: background subagents (bounded FIFO jobs over orchestrator runChild) */
   tasks: TaskManager;
-  /** port #29: typed hook set — `.aion/hooks.{ts,js}` (+ `~/.aion`, AION_HOME) loaded at construction
+  /** port #29: typed hook set — `.rovecode/hooks.{ts,js}` (+ `~/.rovecode`, ROVECODE_HOME) loaded at construction
    *  (background import; every run() waits for it, so no surface can race the load), session_open
    *  fired once loaded. Thread into LoopDeps.hooks; attach more sets programmatically via hooks.add()
    *  (port #39 OTel); surfaces call hooks.close() at teardown → session_close once. Load + runtime
@@ -137,17 +161,17 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   }).then(() => undefined, (e: unknown) => { throw unavailableRungError(sandboxCfg, e); });
   void ready.catch(() => {}); // verdict is read via bootRuntime / await — never an unhandled rejection
   const sandbox: SandboxState = { ...sandboxCfg, ready };
-  const sessionsDir = join(cwd, ".aion", "sessions");
+  const sessionsDir = join(cwd, ".rovecode", "sessions");
   mkdirSync(sessionsDir, { recursive: true });
   const sessionId = opts.sessionId ?? randomUUID();
   const store = new SessionStore(sessionsDir, sessionId);
 
-  // port #11: shadow-git checkpoints — one repo per session under .aion/checkpoints/,
+  // port #11: shadow-git checkpoints — one repo per session under .rovecode/checkpoints/,
   // snapshot after every SUCCESSFUL mutating tool call (kinds write/execute). Lazy
-  // per-session init; git absent or AION_NO_CHECKPOINTS=1 → silently off.
+  // per-session init; git absent or ROVECODE_NO_CHECKPOINTS=1 → silently off.
   const cpBySession = new Map<string, Promise<Checkpoints | null>>();
   const checkpointsFor = (sid: string): Promise<Checkpoints | null> => {
-    if (process.env.AION_NO_CHECKPOINTS === "1") return Promise.resolve(null);
+    if (process.env.ROVECODE_NO_CHECKPOINTS === "1") return Promise.resolve(null);
     let p = cpBySession.get(sid);
     if (!p) { p = Checkpoints.init({ workspace: cwd, sessionId: sid }).then((c) => c, () => null); cpBySession.set(sid, p); }
     return p;
@@ -181,23 +205,39 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   registry.register(...createSkillTools(skillStore));
   let blocks = new BlockStore(join(sessionsDir, sessionId, "memory"));
   registry.register(memoryEditTool(blocks));
-  // port #18: persistent eval cell — registered ONLY when AION_EVAL_CELL=1
+  // port #18: persistent eval cell — registered ONLY when ROVECODE_EVAL_CELL=1
   const evalCell = createEvalCellTool();
   if (evalCell) registry.register(withCheckpoint(evalCell));
   // port #17: cross-session recall (kind read → file.read gate; pure transcript search)
   registry.register(recallTool(sessionsDir));
   registry.register(...todoTools(sessionsDir)); // port #32: per-session todo list at <session>/todos.json (todo_write kind memory → memory.write allow; todo_read kind read)
+
+  /** LoopDeps.planReminder: while a plan is open, re-send it as the LAST thing in the request. Read
+   *  from disk every turn, so the agent's own todo_write (and a /todos edit, and a second surface on
+   *  the same session) are all reflected. Skipped when the model just wrote the list — it is already
+   *  looking at that tool result, and a copy right under it teaches nothing. */
+  const planReminderFor = (history: readonly Message[]): string | null => {
+    const last = history.at(-1);
+    if (last?.parts.some((p) => p.kind === "tool_result" && p.output.startsWith("todos:"))) return null;
+    const dir = join(sessionsDir, store.id);
+    try { return planReminder(loadTodos(dir).items); } catch { return null; } // a missing/corrupt list never blocks a turn
+  };
+  // providers: ONE live registry per runtime (providers/registry.ts) — providers.json (user + project),
+  // stored credentials and env, re-read when a source file changes. provider_list is kind read (always
+  // allowed); provider_edit is kind custom → tool.provider_edit, PROMPT under the gated rules below
+  const providers = new ProviderRegistry(cwd);
+  registry.register(providerListTool(providers), providerEditTool(providers));
   // port #33: ask_user on EVERY surface (kind read → auto-runs under gated/plan rules); only an
   // interactive surface binds an asker via setAskUser — unbound, the tool fails closed
   let askUser: AskFn | undefined;
   registry.register(askUserTool(() => askUser));
   const guard = new ToolGuard(); // port #4: loop signatures + duplicate-result stubs
   // port #29: hooks v2 — the runner exists synchronously (createRuntime stays sync); open() imports
-  // .aion/hooks.{ts,js} (+ user scope) in the background and fires session_open; run() awaits it
+  // .rovecode/hooks.{ts,js} (+ user scope) in the background and fires session_open; run() awaits it
   const hooks = new HookRunner({ cwd, sessionId });
   void hooks.open(cwd);
 
-  // port #3: MCP servers from .aion/mcp.json + harvested .mcp.json; two lazy tools only.
+  // port #3: MCP servers from .rovecode/mcp.json + harvested .mcp.json; two lazy tools only.
   // connect() is fire-and-forget; tool executes await first-connect before dispatching.
   const mcpConfigs = loadMcpConfig(cwd);
   let mcp: McpManager | null = null;
@@ -210,32 +250,37 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     }
   }
 
-  const provider = resolveProvider();
-  const defaultModel = provider?.defaultModel ?? process.env.AION_MODEL ?? "";
-  // port #14: role router + fallback chains (env AION_MODEL_DEFAULT/SMOL/PLAN/COMMIT/TASK,
-  // comma-separated provider/model chains). Model-level fallback shares THIS provider's
-  // wire — a chain entry naming another provider resolves but streams over the same endpoint.
+  // boot-time view of the default provider — only the router's role table is pinned to it; every
+  // other reader goes through the LIVE getters on the returned Runtime (provider / defaultModel)
+  const bootDefault = providers.defaultRef();
+  // port #14: role router + fallback chains (env ROVECODE_MODEL_DEFAULT/SMOL/PLAN/COMMIT/TASK,
+  // comma-separated provider/model chains). The registry's dispatcher routes every candidate to
+  // ITS OWN provider's endpoint, so a cross-provider chain really fails over.
   const routerNotes: string[] = [];
-  const fallbackRef: ModelRef = { provider: provider?.id ?? "mock", model: defaultModel || "default" };
+  const fallbackRef: ModelRef = { provider: bootDefault?.provider ?? "mock", model: bootDefault?.model || "default" };
   const router = createRouter({
     roles: roleTableFromEnv(fallbackRef),
     // MED-3: an explicitly configured default chain is the fallback pool even for models
     // outside it (requested model prepended as primary); the synthesized single-model
     // default (env unset) must NOT capture loose models — hence the env gate.
-    looseFallback: (process.env.AION_MODEL_DEFAULT ?? "").trim().length > 0,
+    looseFallback: (process.env.ROVECODE_MODEL_DEFAULT ?? "").trim().length > 0,
     onNote: (n) => routerNotes.push(
       `router: ${n.chain} ${n.from.provider}/${n.from.model} → ${n.to ? `${n.to.provider}/${n.to.model}` : "chain exhausted"} (${n.reason})`),
   });
   // port #7: provider streams get the non-native tool-call parser (strict-gated passthrough
-  // for native turns); injected test streams stay untouched. Kill switch: AION_NO_TOOL_MIDDLEWARE=1
+  // for native turns); injected test streams stay untouched. Kill switch: ROVECODE_NO_TOOL_MIDDLEWARE=1
   // port #14: the router wraps OUTERMOST (chain advance re-drives the whole turn).
   // port #23: same-model retry sits INSIDE the router — backoff retries exhaust on candidate N
-  // before the chain advances (AION_RETRY_MAX / AION_RETRY_BASE_MS; providers/retry.ts header).
-  const rawStream = provider ? providerStream(provider) : null;
-  const middlewared = rawStream && process.env.AION_NO_TOOL_MIDDLEWARE !== "1" ? withToolCallParsing(rawStream) : rawStream;
-  const stream = opts.stream !== undefined ? opts.stream : middlewared ? router.wrap(withRetry(middlewared, { ...retryOptionsFromEnv(), onRetry: (n) => routerNotes.push(`retry: ${n.model.provider}/${n.model.model} attempt ${n.attempt} in ${n.delayMs}ms (${n.reason})`) })) : null; // retries surface as router-style notes (drainRouterNotes)
+  // before the chain advances (ROVECODE_RETRY_MAX / ROVECODE_RETRY_BASE_MS; providers/retry.ts header).
+  // The raw stream is the registry's DISPATCHER: it resolves model.provider on every call against the
+  // live snapshot, so the wrapped stream below never needs rebuilding when providers change. With
+  // nothing configured it yields a `config:` error turn (non-retryable) — surfaces consult
+  // noProviderReason() first and cmdRun keeps its mock fallback.
+  const rawStream = providers.stream();
+  const middlewared = process.env.ROVECODE_NO_TOOL_MIDDLEWARE !== "1" ? withToolCallParsing(rawStream) : rawStream;
+  const stream = opts.stream !== undefined ? opts.stream : router.wrap(withRetry(middlewared, { ...retryOptionsFromEnv(), onRetry: (n) => routerNotes.push(`retry: ${n.model.provider}/${n.model.model} attempt ${n.attempt} in ${n.delayMs}ms (${n.reason})`) })); // retries surface as router-style notes (drainRouterNotes)
   const catalog = new ModelCatalog(); // offline models.dev snapshot (port #6)
-  // port #39: OTel span export rides the hook seam — attached ONLY when AION_OTEL_ENDPOINT is set (off:
+  // port #39: OTel span export rides the hook seam — attached ONLY when ROVECODE_OTEL_ENDPOINT is set (off:
   // nothing constructed, no on_event tap → zero cost); export failures surface through hooks.warnings
   const otel = otelOptionsFromEnv();
   if (otel) hooks.add(createOtelHooks({ ...otel, pricing: catalog, messages: () => activeStore.messages() }), "otel");
@@ -253,36 +298,45 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
 
   // port #12: repo-map fills the reserved ADR-007 chunk (priority 80, set by the
   // module: system>files>repo-map>skills/config>history). Built LAZILY at the
-  // first buildDef() and memoized — createRuntime stays sync-cheap (`aion tools`,
+  // first buildDef() and memoized — createRuntime stays sync-cheap (`rovecode tools`,
   // ACP session setup pay nothing) and per-file tags persist under
-  // .aion/cache/repomap.json, so warm launches skip extraction. Frozen after
-  // the first build, like config, for prompt-cache stability. AION_NO_REPOMAP=1
-  // disables; budget override via AION_REPOMAP_TOKENS (default 1024, aider's).
+  // .rovecode/cache/repomap.json, so warm launches skip extraction. Frozen after
+  // the first build, like config, for prompt-cache stability. ROVECODE_NO_REPOMAP=1
+  // disables; budget override via ROVECODE_REPOMAP_TOKENS (default 1024, aider's).
   let extraChunksMemo: ContextChunk[] | null = null;
   const extraChunks = (): ContextChunk[] => {
     if (extraChunksMemo !== null) return extraChunksMemo;
     let repoMapChunk: ContextChunk | null = null;
-    if (process.env.AION_NO_REPOMAP !== "1") {
-      const budget = Number(process.env.AION_REPOMAP_TOKENS ?? "") || 1024;
+    if (process.env.ROVECODE_NO_REPOMAP !== "1") {
+      const budget = Number(process.env.ROVECODE_REPOMAP_TOKENS ?? "") || 1024;
       try { repoMapChunk = buildRepoMapChunk(cwd, budget); } catch { repoMapChunk = null; }
     }
     extraChunksMemo = [configChunk, repoMapChunk].filter((c): c is ContextChunk => c !== null);
     return extraChunksMemo;
   };
 
-  const systemPrompt = (): string => {
+  const systemPrompt = (cwdOverride?: string): string => {
     const skillsIndex = buildSkillsIndex(skillStore);
     const memoryIndex = blocks.renderForPrompt();
-    return `You are Aion, an interactive coding agent in ${cwd}. Use read/edit/write/bash tools. Edits require line hashes from read output. Be concise.${skillsIndex ? "\n\n# Skills\n" + skillsIndex : ""}${memoryIndex ? "\n\n# Memory\n" + memoryIndex : ""}`;
+    return `You are Rovecode, an interactive coding agent in ${cwdOverride ?? cwd}. Use read/edit/write/bash tools. Edits require line hashes from read output. Be concise.${skillsIndex ? "\n\n# Skills\n" + skillsIndex : ""}${memoryIndex ? "\n\n# Memory\n" + memoryIndex : ""}`;
   };
 
-  const buildDef = (model: ModelRef): AgentDefinition => {
+  // ROVECODE_EFFORT is the boot default; /effort and --effort move it at runtime
+  let effort: ThinkingEffort = parseEffort(process.env.ROVECODE_EFFORT) ?? "off";
+
+  const buildDef = (model: ModelRef, opts: { cwd?: string } = {}): AgentDefinition => {
+    if (model.effort === undefined) model = { ...model, effort }; // one dial, every surface
     activeModel = model; // port #26: children run the model of the run that started them
     // models the catalog knows CANNOT do native tool calling get the senpi-format
-    // prompt block (port #7); unknown models attempt native first. Force: AION_TOOL_MIDDLEWARE=1
+    // prompt block (port #7); unknown models attempt native first. Force: ROVECODE_TOOL_MIDDLEWARE=1
     const info = catalog.lookup(model.provider, model.model);
-    const nonNative = info?.supportsTools === false || process.env.AION_TOOL_MIDDLEWARE === "1";
-    const base = systemPrompt();
+    const nonNative = info?.supportsTools === false || process.env.ROVECODE_TOOL_MIDDLEWARE === "1";
+    // model profile (providers/profiles.ts): a per-family behavioral section rides AFTER the base prompt
+    // and its indexes and BEFORE the tool-calling block — one string for the whole run (prompt cache);
+    // .rovecode/profiles/<id>.md replaces the built-in text, ROVECODE_PROFILE=off drops it
+    const profile = profileFor(model);
+    const section = profile === null ? "" : profilePromptSection(profile, cwd); // "" = an empty override file: no section, no separator
+    const base = section.length > 0 ? `${systemPrompt(opts.cwd)}\n\n${section}` : systemPrompt(opts.cwd);
     return {
       name: "main", model, tools: ["*"],
       systemPrompt: nonNative
@@ -291,9 +345,17 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
       ...(extraChunks().length > 0 ? { contextChunks: extraChunks() } : {}),
     };
   };
-  const buildCfg = (yolo: boolean, approval?: ApprovalFn): RunConfig => (activeCfg = {
+  /** the workspace as a rule resource: every path resource is absolute (tools.ts describeResource),
+   *  so `<cwd><sep>*` is "inside this repository" and nothing else — a sibling directory whose name
+   *  merely STARTS with the cwd (…/repo-backup) does not match, because the separator is in the glob. */
+  const insideCwd = `${cwd.replace(/[\/]$/, "")}${sep}*`;
+
+  const buildCfg = (permission: PermissionLevel | boolean, approval?: ApprovalFn): RunConfig => {
+    const level: PermissionLevel = permission === true ? "auto" : permission === false ? "ask" : permission;
+    const yolo = level === "auto";
+    return (activeCfg = {
     maxTurns: 60, contextBudgetTokens: 200_000, compactionThreshold: 0.8,
-    compactionStrategy: parseCompactionStrategy(process.env.AION_COMPACTION) ?? "head-summarize", // port #25: AION_COMPACTION=head-summarize|keep-window|provider-native
+    compactionStrategy: parseCompactionStrategy(process.env.ROVECODE_COMPACTION) ?? "head-summarize", // port #25: ROVECODE_COMPACTION=head-summarize|keep-window|provider-native
     parallelTools: true,
     permissionRules: yolo
       ? [{ action: "*", resource: "*", effect: "allow" }]
@@ -307,10 +369,17 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
           { action: "shell.exec", resource: "*", effect: "prompt" },
           { action: "spawn", resource: "*", effect: "prompt" },
           { action: "tool.mcp_call", resource: "*", effect: "prompt" },
+          // provider_edit (tools/provider.ts) rewrites providers.json / the default model: ask first.
+          // provider_list is kind read → covered by the file.read allow above
+          { action: "tool.provider_edit", resource: "*", effect: "prompt" },
           // port #31: resource = canonical host (lowercased, no trailing dot), so `allow
           // net.fetch <host>` auto-runs THAT host only; web_fetch stops at a redirect to
           // another host and reports it, so the new host gets its own decision here
           { action: "net.fetch", resource: "*", effect: "prompt" },
+          // accept-edits: writing INSIDE the workspace stops asking. Placed last of the file.write
+          // rules because the last match wins (tools.ts evaluatePermissions) — a write outside the
+          // repo still hits the prompt rule above, and any deny rule a surface appends still wins.
+          ...(level === "accept-edits" ? [{ action: "file.write", resource: insideCwd, effect: "allow" as const }] : []),
         ],
     // port #9: execpolicy refines the PROMPT branch only (allow-listed argv →
     // "once", forbidden → deny before any human); rules above stay the outer gate.
@@ -321,7 +390,8 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     // port #29: the approval hook sits INSIDE the wrap, where the human would — a
     // forbidden argv never reaches a hook, an allow-listed one never asks (hooks.ts).
     approval: yolo ? undefined : execPolicyApprover(hooks.approver(approval)),
-  });
+    });
+  };
 
   // port #26: background subagents. Children run through orchestrator runChild (the ONE
   // agentLoop) with deps resolved at each start: the def/config of the run that STARTED
@@ -351,7 +421,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     } : null,
   });
   tasks.attach(steering);
-  // port #28: built-in reflection set (core/reflection.ts) — a failed edit/write (or an LSP-diagnosed one) nudges the model once via steering, capped per run (AION_REFLECTION_MAX); AION_REFLECTION=0 disables.
+  // port #28: built-in reflection set (core/reflection.ts) — a failed edit/write (or an LSP-diagnosed one) nudges the model once via steering, capped per run (ROVECODE_REFLECTION_MAX); ROVECODE_REFLECTION=0 disables.
   // owns: the ACTIVE session's runs only — a task child (own store id, same hooks) must neither nudge nor sweep this queue (#26 MED-A)
   if (reflectionEnabled()) hooks.add(createReflectionHooks({ steering, owns: (c) => c.sessionId === activeStore.id }), "reflection");
   registry.register(createTaskTool(tasks, { parentDepth: 0 }), createTaskStatusTool(tasks)); // task: kind spawn → gated rules prompt once per start, yolo allows; task_status: kind read → allowed everywhere
@@ -360,18 +430,28 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     cwd, sessionId, store, registry, skillStore,
     get blockStore() { return blocks; },
     setBlockStore(b: BlockStore) { blocks = b; registry.register(memoryEditTool(b)); },
-    guard, mcp, projectContext, router,
+    guard, planReminder: planReminderFor, mcp, projectContext, router,
+    get effort() { return effort; },
+    setEffort(e: ThinkingEffort) { effort = e; },
     drainRouterNotes: () => routerNotes.splice(0),
     checkpointsFor,
     setSessionStore(s: SessionStore) { activeStore = s; },
     sandbox,
     setAskUser(fn: AskFn | undefined) { askUser = fn; },
     hooks,
-    provider, stream, defaultModel, systemPrompt,
+    providers,
+    get provider() { return providers.defaultConfig(); },
+    stream,
+    get defaultModel() { return providers.defaultRef()?.model ?? process.env.ROVECODE_MODEL ?? ""; },
+    noProviderReason: () => (opts.stream === undefined && !providers.configured() ? NO_PROVIDER_HINT : null),
+    systemPrompt,
     buildDef, buildCfg,
     steering, tasks,
   };
 }
+
+/** The one sentence every surface shows when nothing is configured (Runtime.noProviderReason). */
+export const NO_PROVIDER_HINT = noModelHint("cli");
 
 /** port #27: construct + await the sandbox probe — the boot path for every
  *  entrypoint that must fail CLEANLY at startup (run/repl/tui/acp/serve).
