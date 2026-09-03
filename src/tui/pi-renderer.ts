@@ -39,7 +39,8 @@ import type {
 	StatusInfo,
 } from "./renderer.ts";
 import { ApprovalCard, FREE_TEXT, QuestionCard, SKIP_QUESTION } from "./overlays.ts";
-import { aionEditorTheme, aionMarkdownTheme, aionSelectListTheme, pal, st } from "./theme.ts";
+import { modeLabelShort } from "../core/voice.ts";
+import { rovecodeEditorTheme, rovecodeMarkdownTheme, rovecodeSelectListTheme, pal, st } from "./theme.ts";
 
 /** Tool cards stay single-line: collapse whitespace and clip to ~120 columns. */
 const CARD_MAX = 120;
@@ -111,10 +112,10 @@ export class PiTuiRenderer implements Renderer {
 		this.tui = tui;
 
 		// header banner
-		tui.addChild(new Text(st.dim("aion"), 1, 0));
+		tui.addChild(new Text(st.dim("rovecode"), 1, 0));
 
 		// editor (kept just above the status line; transcript is spliced in before it)
-		const editor = new Editor(tui, aionEditorTheme);
+		const editor = new Editor(tui, rovecodeEditorTheme);
 		this.editor = editor;
 		editor.onSubmit = (value: string) => {
 			const text = value.trim();
@@ -190,7 +191,7 @@ export class PiTuiRenderer implements Renderer {
 	beginAssistant(): AssistantView {
 		const tui = this.tui;
 		if (!tui) return { append: () => {}, done: () => {} };
-		const md = new Markdown("", 1, 1, aionMarkdownTheme);
+		const md = new Markdown("", 1, 1, rovecodeMarkdownTheme);
 		this.insertTranscript(md);
 		let buffer = "";
 		return {
@@ -259,7 +260,7 @@ export class PiTuiRenderer implements Renderer {
 		const list = new SelectList(
 			items.map((i) => ({ value: i.value, label: i.label, description: i.description })),
 			Math.min(items.length, 8),
-			aionSelectListTheme,
+			rovecodeSelectListTheme,
 		);
 		return this.pickWith(list, list, 64);
 	}
@@ -274,7 +275,7 @@ export class PiTuiRenderer implements Renderer {
 		let picked: string | null;
 		if (detail) {
 			// port #24: the diff rides inside the overlay; same list, same keys as the plain path
-			const list = new SelectList(items, items.length, aionSelectListTheme);
+			const list = new SelectList(items, items.length, rovecodeSelectListTheme);
 			const card = new ApprovalCard(`approval needed: ${tool}`, detail.split("\n"), list, () => this.terminal.rows);
 			picked = await this.pickWith(card, list, Math.max(40, Math.min(this.terminal.columns - 4, 100)));
 		} else picked = await this.pickOne(items);
@@ -296,7 +297,7 @@ export class PiTuiRenderer implements Renderer {
 		const items: SelectItem[] = options.map((label, i) => ({ value: String(i), label }));
 		if (freeText) items.push({ value: FREE_TEXT, label: "type an answer…" });
 		items.push({ value: SKIP_QUESTION, label: "skip this question" }); // non-destructive decline → null; Escape on a busy run still stops the run
-		const list = new SelectList(items, Math.max(1, items.length), aionSelectListTheme);
+		const list = new SelectList(items, Math.max(1, items.length), rovecodeSelectListTheme);
 		const card = new QuestionCard(q.question, list, options.length, freeText, () => this.terminal.rows, () => this.loader !== null);
 		this.addSystemNote(`question: ${oneLine(q.question)}`, "warn"); // transcript record, like approvals
 		return new Promise<QuestionAnswer | null>((resolve) => {
@@ -376,7 +377,7 @@ export class PiTuiRenderer implements Renderer {
 	}
 
 	setStatus(info: StatusInfo): void {
-		const gate = info.yolo ? "yolo" : "gated";
+		const gate = modeLabelShort(info.yolo); // "ask first" | "auto" — the flags keep their names
 		const mode = info.mode ? `${info.mode} · ` : ""; // port #20 mode indicator
 		this.statusText = st.dim(
 			`${mode}${info.provider}/${info.model} · ${gate} · turns ${info.turns} · tokens ${info.tokensIn}/${info.tokensOut}${info.todos ? ` · ${info.todos}` : ""}`, // port #32 todo progress

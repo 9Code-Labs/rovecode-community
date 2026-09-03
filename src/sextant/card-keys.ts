@@ -10,7 +10,7 @@ import type { CardState, KeyEvent, SextantState } from "./types.ts";
 /** false = not a card key: it falls through to the prompt (typing a follow-up while a card waits) */
 export function onCardKey(s: SextantState, c: CardState, ev: KeyEvent): boolean {
   const { name } = ev;
-  const n = c.kind === "approval" ? 3 // allow · always · deny
+  const n = c.kind === "approval" ? c.verdicts.length // allow · always · [all edits] · deny
     : (c.prompt.options?.length ?? 0) + (c.prompt.allowFreeText !== false ? 1 : 0) + 1; // options · free text · skip
   if (name === "left" || name === "up") return move(c, n, -1);
   if (name === "right" || name === "down" || name === "tab") return move(c, n, 1);
@@ -18,7 +18,7 @@ export function onCardKey(s: SextantState, c: CardState, ev: KeyEvent): boolean 
   if (c.kind === "approval") {
     if (name !== "enter") return false;
     s.card = null;
-    c.resolve((["once", "always", "deny"] as const)[c.selected]);
+    c.resolve(c.verdicts[c.selected] ?? "deny");
     return true;
   }
   const opts = c.prompt.options?.length ?? 0, freeIdx = c.prompt.allowFreeText !== false ? opts : -1;
@@ -43,7 +43,7 @@ export function onCardKey(s: SextantState, c: CardState, ev: KeyEvent): boolean 
 /** wrap the selection over the card's n rows */
 function move(c: CardState, n: number, d: -1 | 1): true {
   const v = (c.selected + d + n) % n;
-  if (c.kind === "approval") c.selected = v as 0 | 1 | 2; else c.selected = v;
+  c.selected = v;
   return true;
 }
 

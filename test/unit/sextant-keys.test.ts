@@ -262,7 +262,7 @@ test("messages PgUp/PgDn scroll (PgUp turns stick off), End re-sticks", () => {
 
 function approval(): { card: CardState; answers: string[] } {
   const answers: string[] = [];
-  const card: CardState = { kind: "approval", tool: "edit", argsPreview: "x.ts", selected: 0, resolve: (a) => { answers.push(a); } };
+  const card: CardState = { kind: "approval", verdicts: ["once", "always", "deny"], tool: "edit", argsPreview: "x.ts", selected: 0, resolve: (a) => { answers.push(a); } };
   return { card, answers };
 }
 

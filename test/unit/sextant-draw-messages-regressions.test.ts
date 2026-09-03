@@ -4,7 +4,9 @@
  *  lines at the frame's 160×44 message height (MED-2); tool names of 7+ chars keep a space before the
  *  label (MED-3); the run header says `needs you` while a card is open, like the frame header (LOW-1);
  *  wrap/hardWrap/toolRow count cells per code point — no split surrogate pairs, no 39-cell "40-cell"
- *  rows (LOW-2); a system/compaction row that opens a run draws the `◆ aion` header first. */
+ *  rows (LOW-2); a system/compaction row that opens a run draws the `◆ rovecode` header first; the live
+ *  line — a run that has said nothing shows `◆ rovecode  · <word>  14s · 1.2k tokens`, the word
+ *  rotating every 4 s from QUIPS.thinking, the tail degrading tokens-then-clock to the width. */
 
 import { test, expect } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -19,6 +21,7 @@ import { summarizeEnd } from "../../src/sextant/tool-rows.ts";
 import { previewDiff } from "../../src/coding/diff.ts";
 import { describeEditFailure } from "../../src/coding/hashline.ts";
 import { GridScreen, THEME, baseState } from "../helpers/sextant-grid.ts";
+import { activityLabel as frameLabel } from "../../src/sextant/draw-frame.ts";
 
 const RECT = { x: 2, y: 1, w: 70, h: 14 }; // the 160×44 frame's messages height: inner 66×12 → message area h = 10 (y 2..11), rule y 12, prompt y 13
 const BX = 4, BW = 66, IW = BW - 2;
@@ -34,10 +37,10 @@ function draw(s: SextantState, rect = RECT): GridScreen { const g = new GridScre
 const rowOf = (g: GridScreen, needle: string): number => { for (let y = 0; y < g.h; y++) if (g.row(y).includes(needle)) return y; return -1; };
 const span = (g: GridScreen, from: number, to: number): string[] => Array.from({ length: to - from }, (_, i) => g.span(BX, from + i, BW));
 const running = { running: true, activity: { state: "WRITING" as const, label: "writing", runId: "r", startedAt: 0, endedAt: null } };
-const approval = (detail: string, selected: 0 | 1 | 2 = 0): CardState => ({ kind: "approval", tool: "write", argsPreview: "f.txt", detail, selected, resolve: noop });
+const approval = (detail: string, selected: 0 | 1 | 2 = 0): CardState => ({ kind: "approval", verdicts: ["once", "always", "deny"], tool: "write", argsPreview: "f.txt", detail, selected, resolve: noop });
 /** a real previewDiff of writing `after` over a file that holds `before` */
 function realDiff(before: string, after: string): string {
-  const dir = mkdtempSync(join(tmpdir(), "aion-f42-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-f42-"));
   try { writeFileSync(join(dir, "f.txt"), before); return previewDiff("write", { path: "f.txt", content: after }, dir).text; }
   finally { rmSync(dir, { recursive: true, force: true }); }
 }
@@ -73,11 +76,11 @@ test("a failed edit row shows its rejection detail in red and never the +a −b 
 // ------------------------------------------------------------------ re-verify MED: the reason survives at the frame's width
 
 /** the REAL rejection the edit tool emits for a stale anchor, with an absolute temp path in the message */
-const REJECTION = describeEditFailure({ kind: "hash-mismatch", path: "C:\\Users\\admins\\AppData\\Local\\Temp\\aion-sextant-Ab3xYz\\notes.txt", line: 2, expected: "cd3", actual: "e5f", nearest: "", text: "old-line", matches: [] });
+const REJECTION = describeEditFailure({ kind: "hash-mismatch", path: "C:\\Users\\admins\\AppData\\Local\\Temp\\rovecode-sextant-Ab3xYz\\notes.txt", line: 2, expected: "cd3", actual: "e5f", nearest: "", text: "old-line", matches: [] });
 const REASON = "Edit rejected: anchor mismatch — line 2 now reads \"old-line\" (hash e5f), your anchor expected hash cd3.";
 
 test("a failed edit's row detail drops the ` at <abs path>:N` locator (the label names the file) so the 80-cell detail carries the reason and what the line holds now; other verbs keep their text", () => {
-  expect(REJECTION).toContain(" at C:\\Users\\admins\\AppData\\Local\\Temp\\aion-sextant-Ab3xYz\\notes.txt:2 — ");
+  expect(REJECTION).toContain(" at C:\\Users\\admins\\AppData\\Local\\Temp\\rovecode-sextant-Ab3xYz\\notes.txt:2 — ");
   const end = summarizeEnd({ verb: "edit" }, "edit", false, REJECTION);
   expect(end.detail).not.toContain("Temp");
   expect(end.detail!.startsWith(REASON.slice(0, 79))).toBe(true);           // firstLine's 80-cell clip lands inside the reason's tail, not the path
@@ -178,9 +181,9 @@ test("tool names of any length keep ≥1 space before the label: ≤6 chars pad 
 test("run header while a card waits: `needs you` (the frame header's word) instead of the raw activity, for approval and question cards", () => {
   const live = msgState([{ kind: "user", text: "fix" }, tool({ verb: "read" })], { card: approval("+x"), ...running });
   expect(activityLabel(live)).toBe("needs you");
-  expect(rowsOf(live)).toContain("◆ aion  · needs you");
+  expect(rowsOf(live)).toContain("◆ rovecode  · needs you");
   const g = draw(live);
-  expect(g.span(BX, rowOf(g, "◆ aion"), BW)).toBe("◆ aion  · needs you");
+  expect(g.span(BX, rowOf(g, "◆ rovecode"), BW)).toBe("◆ rovecode  · needs you");
   const q: CardState = { kind: "question", prompt: { question: "Which?", options: ["a"], allowFreeText: false }, selected: 0, freeText: "", resolve: noop };
   expect(activityLabel(msgState([], { card: q, running: true, activity: { state: "THINKING", label: "thinking", runId: "r", startedAt: 0, endedAt: null } }))).toBe("needs you");
   expect(activityLabel(msgState([], { card: q }))).toBe("needs you"); // idle + card → still the user's move
@@ -224,24 +227,59 @@ test("toolRow and the assistant rows measure cells per code point: an emoji labe
 
 // ------------------------------------------------------------------ cosmetic: the run header precedes any first row
 
-test("a system or compaction row that opens a run draws the `◆ aion` header first; idle notes before any user row get no header", () => {
+test("a system or compaction row that opens a run draws the `◆ rovecode` header first; idle notes before any user row get no header", () => {
   const denied = msgState([{ kind: "user", text: "fix" }, { kind: "system", text: "permission denied: user denied", tone: "error" }, tool({ verb: "read", label: "note.ts", detail: "3 lines" })],
     { running: true, activity: { state: "ERROR", label: "note.ts denied", runId: "r", startedAt: 0, endedAt: null } });
   const r = rowsOf(denied);
-  expect(r.slice(0, 5)).toEqual(["you  · sent", "  fix", "", "◆ aion  · note.ts denied", "× permission denied: user denied"]);
+  expect(r.slice(0, 5)).toEqual(["you  · sent", "  fix", "", "◆ rovecode  · note.ts denied", "× permission denied: user denied"]);
   expect(r[5]).toMatch(/^ {2}· read {3}note\.ts {2,}… 3 lines$/);
   expect(r).toHaveLength(6); // one header per run
   const g = draw(denied);
-  expect(rowOf(g, "◆ aion")).toBeLessThan(rowOf(g, "× permission denied"));
+  expect(rowOf(g, "◆ rovecode")).toBeLessThan(rowOf(g, "× permission denied"));
   const ended = msgState([{ kind: "user", text: "fix" }, { kind: "system", text: "boom", tone: "error" }], { activity: { state: "ERROR", label: "error", runId: "r", startedAt: 0, endedAt: 1 } });
-  expect(rowsOf(ended)).toEqual(["you  · sent", "  fix", "", "◆ aion  · error", "× boom"]); // a run whose only row is its failure
+  expect(rowsOf(ended)).toEqual(["you  · sent", "  fix", "", "◆ rovecode  · error", "× boom"]); // a run whose only row is its failure
   const compacted = msgState([{ kind: "user", text: "go" }, { kind: "compaction", text: "compacted 12 turns" }], { activity: { state: "SUCCESS", label: "done", runId: "r", startedAt: 0, endedAt: 1 } });
-  expect(rowsOf(compacted)).toEqual(["you  · sent", "  go", "", "◆ aion  · done", "▸ compacted 12 turns"]);
+  expect(rowsOf(compacted)).toEqual(["you  · sent", "  go", "", "◆ rovecode  · done", "▸ compacted 12 turns"]);
   const goalRun = msgState([{ kind: "system", text: "boom", tone: "error" }], running); // a run started from the CLI goal: no user row, but live
-  expect(rowsOf(goalRun)).toEqual(["", "◆ aion  · writing", "× boom"]);
+  expect(rowsOf(goalRun)).toEqual(["", "◆ rovecode  · writing", "× boom"]);
   const older = msgState([{ kind: "user", text: "a" }, { kind: "system", text: "denied", tone: "error" }, { kind: "user", text: "b" }, { kind: "assistant", text: "B", streaming: false }],
     { activity: { state: "SUCCESS", label: "done", runId: "r", startedAt: 0, endedAt: 1 } });
-  expect(rowsOf(older).filter((l) => l.startsWith("◆ aion"))).toEqual(["◆ aion", "◆ aion  · done"]); // the earlier run's header keeps just the diamond
+  expect(rowsOf(older).filter((l) => l.startsWith("◆ rovecode"))).toEqual(["◆ rovecode", "◆ rovecode  · done"]); // the earlier run's header keeps just the diamond
   const idle = msgState([{ kind: "system", text: "plan mode on", tone: "info" }, { kind: "system", text: "yolo off", tone: "info" }]);
   expect(rowsOf(idle)).toEqual(["▸ plan mode on", "▸ yolo off"]); // no run → no header, no blank
+});
+
+test("live line: a silent run shows `◆ rovecode  · <word>  14s · 1.2k tokens`; the word rotates every 4 s, the tail drops tokens then the clock to fit; tools, cards and idle keep the old header", () => {
+  const live = (tokens: number, state: "THINKING" | "WRITING" = "THINKING", rows: MessageRow[] = [{ kind: "user", text: "fix" }]): SextantState =>
+    msgState(rows, { running: true, activity: { state, label: state.toLowerCase(), runId: "r", startedAt: 0, endedAt: null, turnAt: 0, tokens } });
+  const rowsAt = (s: SextantState, now: number, w = BW): string[] => buildRows(s, w, THEME, now).map((r) => " ".repeat(r.indent ?? 0) + rowText(r.segs));
+  expect(rowsAt(live(0), 0)).toEqual(["you  · sent", "  fix", "", "◆ rovecode  · thinking  0s"]); // the header exists before the first token; no count while it is 0
+  expect(rowsAt(live(1200), 14_000)).toEqual(["you  · sent", "  fix", "", "◆ rovecode  · mulling  14s · 1.2k tokens"]); // 14 s → the fourth word
+  expect([3_999, 4_000, 32_000, 406_000].map((t) => rowsAt(live(1200), t).at(-1))).toEqual([
+    "◆ rovecode  · thinking  3s · 1.2k tokens", // the familiar word for the first 4 s
+    "◆ rovecode  · brewing  4s · 1.2k tokens",
+    "◆ rovecode  · thinking  32s · 1.2k tokens", // eight words: wraps at 32 s
+    "◆ rovecode  · condensing  6m 46s · 1.2k tokens", // 101 steps → index 5
+  ]);
+  // width: the token count goes first, then the clock, the word never
+  expect(rowsAt(live(1200), 14_000, 40).at(-1)).toBe("◆ rovecode  · mulling  14s · 1.2k tokens"); // 40 cells exactly
+  expect(rowsAt(live(1200), 14_000, 39).at(-1)).toBe("◆ rovecode  · mulling  14s");
+  expect(rowsAt(live(1200), 14_000, 26).at(-1)).toBe("◆ rovecode  · mulling  14s"); // 26 cells exactly
+  expect(rowsAt(live(1200), 14_000, 25).at(-1)).toBe("◆ rovecode  · mulling");
+  // writing: the activity's own word, the tail stays and counts the answer too
+  const writing = live(301, "WRITING", [{ kind: "user", text: "fix" }, { kind: "assistant", text: "Hel", streaming: true }]);
+  expect(rowsAt(writing, 15_000)).toEqual(["you  · sent", "  fix", "", "◆ rovecode  · writing  15s · 301 tokens", "  Hel▌"]);
+  // a tool runs (no turn in flight): the plain label and no tail; idle: no header at all
+  const tooling = msgState([{ kind: "user", text: "fix" }, tool({ running: true })], { running: true, activity: { state: "READING", label: "reading callback.ts", runId: "r", startedAt: 0, endedAt: null } });
+  expect(rowsAt(tooling, 14_000)[3]).toBe("◆ rovecode  · reading callback.ts");
+  expect(rowsAt(msgState([{ kind: "user", text: "fix" }]), 14_000)).toEqual(["you  · sent", "  fix"]);
+  // one word per screen: the frame header rotates with the same clock, and keeps its plain label otherwise
+  expect(frameLabel(live(1200), 14_000)).toBe("mulling");
+  expect(frameLabel(tooling, 14_000)).toBe("reading callback.ts");
+  expect(activityLabel(live(1200))).toBe("thinking"); // without a clock (the pet's mood path) the word is the plain one
+  // the painted row at the 100×30 floor's narrowest messages panel (layout fallback: 40 cells inner) fits the frame
+  const narrow = new GridScreen(60, 10, "░");
+  drawMessages(narrow, { x: 0, y: 0, w: 44, h: 8 }, live(1200), THEME, 14_000);
+  expect(narrow.span(0, 4, 44)).toBe("│ ◆ rovecode  · mulling  14s · 1.2k tokens │"); // inner 40: the full line ends at the border
+  expect(narrow.row(4).slice(44)).toBe("░".repeat(16)); // nothing past it
 });

@@ -3,17 +3,24 @@
  *  without touching the app/loop. House code outside src/tui must not import vendor. */
 
 import type { QuestionAnswer, QuestionPrompt } from "../tools/ask-user.ts";
-import type { RunEvent } from "../core/types.ts";
+import type { PermissionLevel, ThinkingEffort, RunEvent } from "../core/types.ts";
 import type { SextantAttach } from "../sextant/types.ts";
 
 export type { QuestionAnswer, QuestionPrompt, SextantAttach };
 
-export type ApprovalAnswer = "once" | "always" | "deny";
+/** `all-edits` is offered only on an edit/write card: it answers THIS call and asks the surface to
+ *  drop to accept-edits for the rest of the session (writes inside the workspace stop prompting). */
+export type ApprovalAnswer = "once" | "always" | "all-edits" | "deny";
 
 export interface StatusInfo {
   provider: string;
   model: string;
   yolo: boolean;
+  /** the full permission tier; `yolo` stays for the surfaces that only know two. Optional so a
+   *  renderer that does not paint it needs no change. */
+  permission?: PermissionLevel;
+  /** the thinking dial, painted next to the model when it is on */
+  effort?: ThinkingEffort;
   turns: number;
   tokensIn: number;
   tokensOut: number;
@@ -39,7 +46,12 @@ export interface AssistantView {
   done(): void;
 }
 
-export interface SlashCommand { name: string; description: string }
+export interface SlashCommand {
+  name: string;
+  description: string;
+  /** /help topic the command is listed under (info-cmd.ts); the palette ignores it */
+  group?: string;
+}
 
 export interface PickItem { value: string; label: string; description?: string }
 

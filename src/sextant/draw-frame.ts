@@ -6,8 +6,10 @@
 import { ATTR, SPIN } from "./types.ts";
 import type { ActivityState, FileStatus, Rect, ScreenLike, Seg, SextantState, Theme } from "./types.ts";
 import { elapsed, fileCount, fmtClock, repoModified, treeGuides, treeRows, type Guide } from "./model.ts";
+import { EMPTY } from "../core/voice.ts";
 import { panel, segWidth } from "./layout.ts";
 import { st } from "./theme.ts";
+import { thinkingWord } from "./pet.ts";
 
 const gap: Seg = [" ", undefined];
 
@@ -35,23 +37,27 @@ export function activityColor(s: SextantState, theme: Theme): number {
   const m = modeOf(s);
   return m === "idle" ? theme.muted : m === "waiting" ? theme.warn : m === "complete" ? theme.ok : m === "error" ? theme.err : theme.accent;
 }
-/** what the header says: "needs you" over a card, else the model's activity label */
-export const activityLabel = (s: SextantState): string => (s.card ? "needs you" : s.activity.label || s.activity.state.toLowerCase());
+/** what the header says: "needs you" over a card, the rotating thinking word while a provider turn
+ *  is silent (the same word the messages header shows — one word per screen), else the activity label */
+export const activityLabel = (s: SextantState, now?: number): string =>
+  s.card ? "needs you"
+  : now !== undefined && s.activity.turnAt !== undefined && s.activity.state === "THINKING" ? thinkingWord(now - s.activity.turnAt)
+  : s.activity.label || s.activity.state.toLowerCase();
 
-/** Outer frame: `◆ aion · repo · branch · n modified` left, glyph + activity + run clock right,
+/** Outer frame: `◆ rovecode · repo · branch · n modified` left, glyph + activity + run clock right,
  *  key hints bottom-left, mode/yolo markers + `model · theme · vX` bottom-right. Without git the
  *  header shows the cwd basename only. */
 export function drawFrame(scr: ScreenLike, L: { frame: Rect }, s: SextantState, theme: Theme, now: number): void {
   const F = L.frame;
   scr.box(F.x, F.y, F.w, F.h, st(theme.frameDim));
   const [g, gc] = activityGlyph(s, theme, now);
-  const right: Seg[] = [gap, [g, st(gc)], [" " + activityLabel(s), st(activityColor(s, theme))]];
+  const right: Seg[] = [gap, [g, st(gc)], [" " + activityLabel(s, now), st(activityColor(s, theme))]];
   if (s.activity.startedAt !== null) right.push(["  " + fmtClock(elapsed(s, now)), st(theme.muted)]);
   right.push(gap);
   const rw = segWidth(right);
   scr.text(F.x + F.w - 2 - rw, F.y, right);
   const dot: Seg = ["  ·  ", st(theme.dim)];
-  const short: Seg[] = [gap, ["◆ ", st(theme.accent)], ["aion", st(theme.fg, -1, ATTR.BOLD)], dot, [s.repo.name, st(theme.fg2)], gap];
+  const short: Seg[] = [gap, ["◆ ", st(theme.accent)], ["rovecode", st(theme.fg, -1, ATTR.BOLD)], dot, [s.repo.name, st(theme.fg2)], gap];
   const full: Seg[] = s.repo.branch === null ? short
     : [...short.slice(0, -1), dot, [s.repo.branch, st(theme.fg2)], dot, [`${repoModified(s)} modified`, st(theme.fg2)], gap];
   const avail = F.w - 4 - rw - 2;
@@ -59,7 +65,9 @@ export function drawFrame(scr: ScreenLike, L: { frame: Rect }, s: SextantState, 
   // bottom: mode/yolo markers + `model · theme · vX` right; key hints left, whole hints dropped
   // (theme, diff, focus first) rather than clipped mid-word when the row is narrow
   const tag = [s.usage.model, s.theme, `v${s.version}`].filter(Boolean).join(" · ");
-  const ver: Seg[] = [gap, ...(s.mode === "plan" ? [["plan mode", st(theme.warn)] as Seg, dot] : []), ...(s.yolo ? [["yolo", st(theme.warn)] as Seg, dot] : []), [tag, st(theme.dim)], gap];
+  // one marker for the permission tier: auto wins over accept edits (it already covers writes)
+  const perm: Seg[] = s.yolo ? [["auto", st(theme.warn)], dot] : s.acceptEdits ? [["accept edits", st(theme.warn)], dot] : [];
+  const ver: Seg[] = [gap, ...(s.mode === "plan" ? [["plan mode", st(theme.warn)] as Seg, dot] : []), ...perm, [tag, st(theme.dim)], gap];
   const vw = segWidth(ver);
   const armed = now < s.escUntil;
   const key = (k: string, what: string, kc = theme.fg2): Seg[] => [[k, st(kc)], [what, st(theme.muted)]];
@@ -90,6 +98,11 @@ export function drawFiles(scr: ScreenLike, R: Rect, s: SextantState, theme: Them
   if (f.cursor < f.scroll) f.scroll = f.cursor;
   if (f.cursor >= f.scroll + B.h) f.scroll = f.cursor - B.h + 1;
   f.scroll = Math.max(0, Math.min(f.scroll, Math.max(0, rows.length - B.h)));
+  if (rows.length === 0) { // empty tree: one dim hint (a second line when the panel has room)
+    scr.put(B.x, B.y, EMPTY.files[0], st(theme.dim), B.w);
+    if (B.h > 1) scr.put(B.x, B.y + 1, EMPTY.files[1], st(theme.dim), B.w);
+    return;
+  }
   for (let i = 0; i < B.h; i++) {
     const idx = f.scroll + i, r = rows[idx];
     if (!r) break;

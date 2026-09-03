@@ -28,7 +28,7 @@ const MIN_CELL_H = 5, MIN_CELL_W = 12;
 const GOAL_ROWS = 2, GOAL_ROWS_FULL = 4;
 /** the activity sweep advances one cell per 100 ms */
 export const SWEEP_MS = 100;
-export const EMPTY_NOTE = "no background tasks — the model starts them with the task tool";
+export const EMPTY_NOTE = "no background tasks — I start them with the task tool for parallel work";
 const ESC_HINT = "esc back";
 
 // ------------------------------------------------------------------ pure lane helpers

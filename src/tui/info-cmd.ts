@@ -23,7 +23,7 @@ export interface InfoCmdCtx {
   renderer: Renderer;
   /** the runtime slices the info commands read: cwd, config provenance, sandbox rung, skills, tasks */
   rt: Pick<Runtime, "cwd" | "projectContext" | "sandbox" | "skillStore" | "tasks">;
-  /** <cwd>/.aion/sessions — todos.json lives under <sessionsDir>/<session id> */
+  /** <cwd>/.rovecode/sessions — todos.json lives under <sessionsDir>/<session id> */
   sessionsDir: string;
   /** the ACTIVE session store, read live (/sessions and a root /rewind swap it) */
   store(): SessionStore;
@@ -36,9 +36,20 @@ export interface InfoCmdCtx {
   catalog: ModelCatalog;
 }
 
-/** /help — the built-ins, then the "custom:" tail (port #30). */
+/** /help topics in display order; a command with an unknown or missing group lands under "more" at the end */
+export const HELP_GROUP_ORDER: readonly string[] = ["start here", "session", "model & provider", "modes & safety", "files & history", "info"];
+
+/** /help — the built-ins grouped by topic (SlashCommand.group), one plain line each, then the "custom:" tail (port #30). */
 export function cmdHelp(ctx: InfoCmdCtx): void {
-  ctx.renderer.addSystemNote(ctx.commands.builtin.map((c) => `/${c.name} — ${c.description}`).join("\n") + helpForCommands(ctx.commands.custom));
+  ctx.renderer.addSystemNote(groupedHelp(ctx.commands.builtin) + helpForCommands(ctx.commands.custom));
+}
+
+/** pure: the grouped body /help prints (tests read it without a renderer) */
+export function groupedHelp(builtin: readonly SlashCommand[]): string {
+  const groups = new Map<string, SlashCommand[]>();
+  for (const c of builtin) { const g = c.group !== undefined && HELP_GROUP_ORDER.includes(c.group) ? c.group : "more"; const l = groups.get(g) ?? []; l.push(c); groups.set(g, l); }
+  const order = [...HELP_GROUP_ORDER, "more"].filter((g) => groups.has(g));
+  return order.map((g) => `${g}\n` + groups.get(g)!.map((c) => `  /${c.name} — ${c.description}`).join("\n")).join("\n");
 }
 
 /** /status — provider/model/turns/tokens, the active executor rung + its origin (port #27), and

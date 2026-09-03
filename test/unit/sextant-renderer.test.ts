@@ -24,7 +24,7 @@ const CMDS = ["help", "exit", "plan", "act", "yolo", "new", "cost", "tasks", "st
 function make(o: { cols?: number; rows?: number; cwd?: string; env?: Record<string, string>; start?: boolean; git?: GitRunner | GitRunnerAsync } = {}) {
   let now = T0;
   const io = new MemoryIO(o.cols ?? 160, o.rows ?? 44, o.env ?? {});
-  const renderer = new SextantRenderer({ io, clock: () => now, cwd: o.cwd ?? "C:/repo", scan: false, pet: "nimbus", ...(o.git ? { git: o.git } : {}) });
+  const renderer = new SextantRenderer({ io, clock: () => now, cwd: o.cwd ?? "C:/repo", scan: false, pet: "rovecode", ...(o.git ? { git: o.git } : {}) });
   const spy = { submits: [] as string[], interrupts: 0, exits: 0 };
   const hooks: RendererHooks = { onSubmit: (t) => { spy.submits.push(t); }, onInterrupt: () => { spy.interrupts++; }, onExit: () => { spy.exits++; } };
   renderer.setCommands(CMDS);
@@ -60,8 +60,8 @@ test("start: raw mode + the enter sequence, then a first frame; after the boot r
   expect(io.output().includes("\x1b[2J")).toBe(true);                    // the first flush clears
   expect(renderer.active).toBe(true);
   const f = renderer.frameText();
-  for (const p of ["─ files ─", "─ code ─", "─ messages ─", "─ plan ─", "─ usage ─", "─ nimbus ─"]) expect(f).toContain(p);
-  expect(f).toContain("◆ aion  ·  repo");                                // the cwd basename until attach()
+  for (const p of ["─ files ─", "─ code ─", "─ messages ─", "─ plan ─", "─ usage ─", "─ rovecode ─"]) expect(f).toContain(p);
+  expect(f).toContain("◆ rovecode  ·  repo");                                // the cwd basename until attach()
   expect(f).toMatch(/night · v\d+\.\d+\.\d+ ─╯$/);                         // footer: theme · package version
   const before = renderer.frames;
   await new Promise((r) => setTimeout(r, 100));                           // the live 40 ms interval ticks (idle repaint after 170 ms of clock)
@@ -80,9 +80,9 @@ test("start: raw mode + the enter sequence, then a first frame; after the boot r
   expect(io.writes.length).toBe(n);                                       // a second stop writes nothing
 });
 
-test("AION_PET=0 removes the pet panel and the files column takes its rows; a 100×30 surface has neither side column", () => {
-  const a = make({ env: { AION_PET: "0" } });
-  expect(a.renderer.frameText()).not.toContain("─ nimbus ─");
+test("ROVECODE_PET=0 removes the pet panel and the files column takes its rows; a 100×30 surface has neither side column", () => {
+  const a = make({ env: { ROVECODE_PET: "0" } });
+  expect(a.renderer.frameText()).not.toContain("─ rovecode ─");
   expect(a.renderer.frameText()).toContain("─ files ─");
   a.renderer.stop();
   const b = make({ cols: 100, rows: 30 });
@@ -95,7 +95,7 @@ test("AION_PET=0 removes the pet panel and the files column takes its rows; a 10
 // ---------- slash routing ----------
 
 test("renderer-local slash commands never reach onSubmit: /theme recolors (SGR + toast + pet), /open reads the file, /diff switches the mode, /focus moves focus, /help opens the card AND passes through", () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-sx-unit-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-sx-unit-"));
   writeFileSync(join(cwd, "a.ts"), "const a = 1;\n");
   const { io, renderer, spy, feed } = make({ cwd });
   renderer.state.files.paths = ["a.ts", "src/b.ts"];
@@ -176,15 +176,15 @@ test("askApproval: the card renders (tool, preview, allow · always · deny) and
   const p1 = renderer.askApproval("edit", '{"path":"x.ts"}', detail);
   await settle();                                                                                         // the card opens through the one-at-a-time queue
   expect(frame()).toMatch(/needs your permission\s+edit/);
-  expect(frame()).toMatch(/allow\s+always\s+deny/);
+  expect(frame()).toMatch(/allow\s+always\s+all edits\s+deny/); // an edit card carries the accept-edits door
   expect(renderer.state.code).toMatchObject({ mode: "diff", diff: { file: "x.ts", add: 1, del: 1 } }); // the preview fills the diff view
   const p2 = renderer.askApproval("bash", '{"command":"ls"}');
   await settle();
-  expect(renderer.state.card).toMatchObject({ kind: "approval", tool: "edit" });                          // one card at a time
+  expect(renderer.state.card).toMatchObject({ kind: "approval", verdicts: ["once", "always", "all-edits", "deny"], tool: "edit" });                          // one card at a time
   feed("\r");
   expect(await p1).toBe("once");
   await settle();
-  expect(renderer.state.card).toMatchObject({ kind: "approval", tool: "bash" });                          // the queued one opened
+  expect(renderer.state.card).toMatchObject({ kind: "approval", verdicts: ["once", "always", "deny"], tool: "bash" });                          // the queued one opened
   feed("\x1b[C"); feed("\r");                                                                             // → then Enter = always
   expect(await p2).toBe("always");
   const p3 = renderer.askApproval("write", "{}");
@@ -330,14 +330,14 @@ test("setStatus → usage panel (tokens, model, mode + yolo markers) with `?`/`�
   expect(f).toContain("tokens    5.5k  4.2k/1.3k");
   expect(f).toContain("context   ?");
   expect(f).toContain("cost      —  claude-x");                            // provider/model does not fit the 30-cell row → model alone (fitText)
-  expect(f).toContain("plan mode  ·  yolo  ·  claude-x · night");
+  expect(f).toContain("plan mode  ·  auto  ·  claude-x · night"); // the yolo flag shows as "auto" (core/voice.ts)
   expect(renderer.state).toMatchObject({ mode: "plan", yolo: true, usage: { turns: 3, provider: "anthropic" } });
   renderer.stop();
 });
 
 test("attach: cwd + repo name, crew from tasks.list/subscribe (newest lane selected), todos.json → plan panel, usage() → cost + context bar, petName renames the pet; unsubscribed on stop", () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-sx-attach-"));
-  const sessionsDir = join(cwd, ".aion", "sessions");
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-sx-attach-"));
+  const sessionsDir = join(cwd, ".rovecode", "sessions");
   mkdirSync(join(sessionsDir, "sess-1"), { recursive: true });
   writeFileSync(join(sessionsDir, "sess-1", "todos.json"), JSON.stringify({ version: 1, items: [{ id: "a", content: "read", status: "completed" }, { id: "b", content: "write", status: "pending" }] }));
   const { renderer, frame, advance } = make({ start: false });
@@ -430,7 +430,7 @@ test("#46 wiring: ∷ paints the crew board through setAgentsPainter; an open la
 // ---------- re-verify pass: #44 LOW-2 · LOW-3 · MED-1 side fix ----------
 
 test("no `cannot read` flash: the file reload runs BEFORE the paint, so the first frame after an edit's start shows the old content and the first frame after its end shows the new one — never the placeholder", () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-sx-flash-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-sx-flash-"));
   const file = join(cwd, "a.ts");
   writeFileSync(file, "const a = 1;\n");
   const { renderer, frame } = make({ cwd, git: () => null });
@@ -457,7 +457,7 @@ test("git runs beside the frame loop: with a 300 ms git runner the live 40 ms in
     res(k.startsWith("ls-files") ? { status: 0, stdout: "a.ts\0src/b.ts\0" } : k.startsWith("status") ? { status: 0, stdout: " M a.ts\0" } : k === "rev-parse --abbrev-ref HEAD" ? { status: 0, stdout: "feature/slow\n" } : { status: 128, stdout: "" });
   }, 300));
   const io = new MemoryIO(160, 44, {});
-  const renderer = new SextantRenderer({ io, cwd: "C:/repo", git: slow, pet: "nimbus" });   // the real clock; the scan is on
+  const renderer = new SextantRenderer({ io, cwd: "C:/repo", git: slow, pet: "rovecode" });   // the real clock; the scan is on
   renderer.start({ onSubmit() {}, onInterrupt() {}, onExit() {} });
   const t0 = Date.now();
   let last = t0, maxGap = 0, frames = renderer.frames, sawInFlight = false;
@@ -478,7 +478,7 @@ test("git runs beside the frame loop: with a 300 ms git runner the live 40 ms in
 });
 
 test("a DENIED approval drops its pre-edit snapshot: a later ungated edit of the same file never diffs against that stale base (the row keeps the reducer's counts)", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-sx-deny-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-sx-deny-"));
   const file = join(cwd, "x.ts");
   writeFileSync(file, "a\n");
   const { renderer, feed } = make({ cwd, git: () => null });

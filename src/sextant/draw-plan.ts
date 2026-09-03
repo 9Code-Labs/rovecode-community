@@ -6,6 +6,7 @@
 import { ATTR } from "./types.ts";
 import type { Rect, ScreenLike, Seg, SextantState, Theme } from "./types.ts";
 import type { TaskInfo } from "../core/tasks.ts";
+import { EMPTY } from "../core/voice.ts";
 import type { TodoItem } from "../tools/todo.ts";
 import { fmtK, planCounts } from "./model.ts";
 import { crewSummary, laneGlyph, laneStatus, laneTone } from "./draw-agents.ts";
@@ -65,7 +66,10 @@ export function drawPlan(scr: ScreenLike, R: Rect, s: SextantState, theme: Theme
   if (nextRows && nextY < minY) { nextRows = 0; nextY = yEnd; }
   const stepsEnd = crewRows ? crewY - 1 : nextRows ? nextY - 1 : yEnd;
   scr.text(B.x, y++, [["steps", st(theme.muted)], [todos.length ? `  ${c.completed}/${c.total}` : "", st(theme.dim)]], B.w);
-  if (!todos.length && y < stepsEnd) scr.put(B.x, y++, "no plan yet", st(theme.dim), B.w);
+  if (!todos.length && y < stepsEnd) { // empty plan: the hint's second line only when there is room
+    scr.put(B.x, y++, EMPTY.plan[0], st(theme.dim), B.w);
+    if (y < stepsEnd) scr.put(B.x, y++, EMPTY.plan[1], st(theme.dim), B.w);
+  }
   let shown = 0;
   for (const t of todos) {
     if (y >= stepsEnd) break;
@@ -116,7 +120,8 @@ export function drawUsage(scr: ScreenLike, R: Rect, s: SextantState, theme: Them
   const label = (t: string): Seg => [t.padEnd(10), st(theme.muted)];
   const total = fmtK(u.tokensIn + u.tokensOut);
   const split = fitText([`  ${fmtK(u.tokensIn)} in · ${fmtK(u.tokensOut)} out`, `  ${fmtK(u.tokensIn)}/${fmtK(u.tokensOut)}`, ""], B.w - 10 - total.length);
-  scr.text(B.x, B.y, [label("tokens"), [total, st(theme.fg)], [split, st(theme.dim)]], B.w);
+  if (u.tokensIn + u.tokensOut === 0) scr.text(B.x, B.y, [label("tokens"), [EMPTY.usage, st(theme.dim)]], B.w); // nothing spent yet
+  else scr.text(B.x, B.y, [label("tokens"), [total, st(theme.fg)], [split, st(theme.dim)]], B.w);
   scr.text(B.x, B.y + 1, [label("context")]);
   if (u.contextPct === null) scr.put(B.x + 10, B.y + 1, "?", st(theme.dim));
   else {

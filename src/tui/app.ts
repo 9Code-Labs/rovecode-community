@@ -18,13 +18,18 @@ import { cmdCheckpoints, cmdRestore, type CheckpointCmdCtx } from "./checkpoints
 import { cmdRewind, cmdSessions, cmdNew, replayTranscript, usageOf, resolveBootSession, type SessionCmdCtx } from "./session-cmd.ts";
 import { cmdHelp, cmdStatus, cmdCost, cmdSkills, cmdMemory, cmdExport, cmdTodos, cmdTasks, todoLabel, type InfoCmdCtx } from "./info-cmd.ts";
 import { cmdAttach, carryOverAttachments, queuedAttachNote, userTurnLine, ATTACH_COMMAND, type AttachCtx } from "./attach.ts";
+import { cmdConnect, cmdModel as cmdModelSwitch, cmdModels, cmdProvider, cmdSetup, watchProviders, CONNECT_COMMAND, MODEL_COMMAND, PROVIDER_COMMANDS, SETUP_COMMAND, type ProviderCmdCtx } from "./providers-cmd.ts";
+import { acceptEditsNote, effortNote, modeSwitchNote, noModelHint, resumedLine, welcomeCard } from "../core/voice.ts";
 import { compactionNote } from "./replay-marker.ts";
 import { previewDiff } from "../coding/diff.ts";
 import { discoverCommands, commandsForPalette, dispatchCustomCommand, type CustomCommandCtx } from "./commands.ts";
-import type { Renderer, AssistantView, StatusInfo } from "./renderer.ts";
+import type { Renderer, AssistantView, SlashCommand, StatusInfo } from "./renderer.ts";
 import { PiTuiRenderer } from "./pi-renderer.ts";
 import { buildSextantAttach, SEXTANT_LOCAL_NAMES } from "./sextant-attach.ts";
-import type { RunEvent, StreamFn } from "../core/types.ts";
+import type { PermissionLevel, RunEvent, StreamFn } from "../core/types.ts";
+import { parseEffort, THINKING_EFFORTS } from "../core/types.ts";
+import { resolvePermission, saveSetting } from "../core/settings.ts";
+import type { ThinkingEffort } from "../core/types.ts";
 import { join } from "node:path";
 
 export { buildCostNote } from "./cost.ts"; // moved for the ADR-002 cap; re-exported for tests
@@ -46,42 +51,59 @@ export interface TuiAppOptions {
   platform?: NodeJS.Platform;
   /** port #44: the sextant pet's name (`--pet <name>`); the classic renderer ignores it */
   pet?: string;
+  /** start in the middle permission tier (`--accept-edits`, ROVECODE_ACCEPT_EDITS=1) */
+  acceptEdits?: boolean;
+  /** `--effort <level>`; overrides ROVECODE_EFFORT for this session */
+  effort?: ThinkingEffort;
 }
 
-export const TUI_COMMANDS = [
-  { name: "help", description: "Show commands" },
-  { name: "exit", description: "Quit aion" },
-  { name: "yolo", description: "Toggle gated/yolo permissions" },
-  { name: "model", description: "Switch model: /model <id>" },
-  { name: "status", description: "Provider, model, turns, tokens" },
-  { name: "skills", description: "List installed skills" },
-  { name: "memory", description: "Show memory blocks" },
-  { name: "new", description: "Branch back to session start" },
-  { name: "cost", description: "Session tokens, cache hits, USD estimate (/cost refresh: update pricing)" },
-  { name: "rewind", description: "Jump to an earlier turn and edit it (alias: /tree)" },
-  { name: "tree", description: "Alias of /rewind" },
-  { name: "sessions", description: "Pick a previous session to resume" },
-  { name: "resume", description: "Resume a session by id: /resume <id>" },
-  { name: "plan", description: "Switch to plan mode (read-only tools)" },
-  { name: "act", description: "Switch to act mode (full tools)" },
-  { name: "checkpoints", description: "List shadow-git snapshots of this session" },
-  { name: "restore", description: "Restore a checkpoint: /restore <ref> [files|conversation|both]" },
-  { name: "export", description: "Export this session: /export [--json] [path] [--force]" },
-  { name: "todos", description: "Show this session's todo list (agent-maintained via todo_write)" },
-  { name: "tasks", description: "Background tasks: /tasks [cancel <id>|cancel all]" },
-  ATTACH_COMMAND, // port #34: /attach <path> · /attach (list) · /attach clear — attach.ts
+/** The built-in slash commands, worded in rovecode's voice (core/voice.ts) and tagged with the /help topic
+ *  they are listed under (info-cmd.ts cmdHelp groups by `group`; the palette shows name + description). */
+export const TUI_COMMANDS: SlashCommand[] = [
+  { name: "help", description: "This list, by topic", group: "start here" },
+  CONNECT_COMMAND, // providers-cmd.ts: /connect — bare it is /setup; with an id it takes the answers on the line
+  SETUP_COMMAND, // providers-cmd.ts: /setup — pick a provider, name the model, hand over the key, one test call
+  { name: "exit", description: "Quit (Ctrl+C does the same)", group: "start here" },
+  { name: "new", description: "Start over in this session (branch back to the beginning)", group: "session" },
+  { name: "sessions", description: "Pick an earlier session to continue", group: "session" },
+  { name: "resume", description: "Continue a session by id: /resume <id>", group: "session" },
+  { name: "rewind", description: "Go back to an earlier turn and edit it (alias: /tree)", group: "session" },
+  { name: "tree", description: "Alias of /rewind", group: "session" },
+  { name: "export", description: "Save this session as markdown: /export [--json] [path] [--force]", group: "session" },
+  MODEL_COMMAND, // providers-cmd.ts: /model <provider/model | model> [--save]
+  ...PROVIDER_COMMANDS, // /models · /provider — providers-cmd.ts (live registry: no restart after add/key/use)
+  { name: "yolo", description: "Toggle ask first / auto (never asks)", group: "modes & safety" },
+  { name: "accept-edits", description: "Stop asking for writes inside this folder; shell, subagents and writes outside it still ask", group: "modes & safety" },
+  { name: "effort", description: "How hard I think before answering: /effort off | low | medium | high", group: "model & provider" },
+  { name: "plan", description: "Plan mode: I only read and plan, nothing changes", group: "modes & safety" },
+  { name: "act", description: "Act mode: I can edit and run again", group: "modes & safety" },
+  { name: "checkpoints", description: "Snapshots I took before each change (shadow git)", group: "files & history" },
+  { name: "restore", description: "Go back to a snapshot: /restore <ref> [files|conversation|both]", group: "files & history" },
+  { ...ATTACH_COMMAND, group: "files & history" }, // port #34: /attach <path> · /attach (list) · /attach clear — attach.ts
+  { name: "status", description: "Provider, model, turns, tokens, sandbox", group: "info" },
+  { name: "cost", description: "Tokens, cache hits and the USD estimate (/cost refresh updates prices)", group: "info" },
+  { name: "todos", description: "My step list for the current task", group: "info" },
+  { name: "tasks", description: "Background subagents: /tasks [cancel <id>|cancel all]", group: "info" },
+  { name: "skills", description: "Installed skills", group: "info" },
+  { name: "memory", description: "What I remember across turns (memory blocks)", group: "info" },
 ];
 
 interface TuiState {
-  yolo: boolean; provider: string; model: string; mode: AgentMode;
+  yolo: boolean;
+  /** the middle tier (port: Claude Code's acceptEdits): writes inside the workspace stop asking,
+   *  shell/spawn/network and writes outside it still do. Ignored while `yolo` is on — auto already
+   *  covers everything. Turned on by `/accept-edits`, `--accept-edits`, or the `all edits` button on
+   *  a write approval card. */
+  acceptEdits: boolean;
+  provider: string; model: string; mode: AgentMode;
   turns: number; tokensIn: number; tokensOut: number;
   busy: boolean;
 }
 
 export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
-  // opts.sessionId may be a unique id prefix (aion --resume <id>): resolved by the /resume rule
+  // opts.sessionId may be a unique id prefix (rovecode --resume <id>): resolved by the /resume rule
   // (session-cmd.ts) — exact/new ids pass, a unique prefix resolves, an ambiguous one starts fresh + warns
-  const boot = resolveBootSession(join(opts.cwd ?? process.cwd(), ".aion", "sessions"), opts.sessionId);
+  const boot = resolveBootSession(join(opts.cwd ?? process.cwd(), ".rovecode", "sessions"), opts.sessionId);
   // opts.stream passes through verbatim: a StreamFn overrides, explicit null forces
   // "no provider", undefined defers to the runtime's env-resolved provider
   // port #27: a sandbox MISCONFIG throws synchronously here (before any side effect) — a clean
@@ -98,11 +120,11 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   })();
   const renderer: Renderer = opts.renderer ?? new PiTuiRenderer({ cwd: rt.cwd });
   rt.setAskUser((q, signal) => renderer.askQuestion(q, signal)); // port #33: ask_user → the question overlay (Esc/abort dismisses it via signal)
-  const sessionsDir = join(rt.cwd, ".aion", "sessions");
+  const sessionsDir = join(rt.cwd, ".rovecode", "sessions");
   // /cost pricing + context window. Boots from the offline snapshot; the live models.dev
-  // half is user-invoked only (/cost refresh), cached to .aion/cache with a 24h TTL —
+  // half is user-invoked only (/cost refresh), cached to .rovecode/cache with a 24h TTL —
   // lookup() itself never fetches, so the TUI stays network-free unless asked.
-  const catalog = new ModelCatalog({ fetchFn: fetch, cacheDir: join(rt.cwd, ".aion", "cache") });
+  const catalog = new ModelCatalog({ fetchFn: fetch, cacheDir: join(rt.cwd, ".rovecode", "cache") });
   // session-scoped stores are swappable at runtime (/sessions, /rewind-to-root)
   let store = rt.store;
   let blocks = rt.blockStore;
@@ -110,19 +132,24 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   // next model turn; settled tasks also show in the transcript as they happen (failed → warn)
   const steering = rt.steering;
   rt.tasks.subscribe((t) => { if (isTerminal(t.status)) renderer.addSystemNote(taskNote(t), t.status === "failed" ? "warn" : "info"); });
-  // port #20: per-mode model slots from .aion/modes.json, restored from session entries
+  // port #20: per-mode model slots from .rovecode/modes.json, restored from session entries
   const modesCfg = loadModesConfig(rt.cwd);
   const modes = new ModeManager(modesCfg, {
     provider: rt.provider?.id ?? "mock",
-    model: opts.model ?? process.env.AION_MODEL ?? rt.defaultModel ?? "",
+    model: opts.model ?? process.env.ROVECODE_MODEL ?? rt.defaultModel ?? "",
   });
   modes.restore(modeFromEntries(store.messages()) ?? modes.mode);
-  // port #30: custom slash commands — .aion/commands/*.md, project shadows ~/.aion/commands (commands.ts);
+  // port #30: custom slash commands — .rovecode/commands/*.md, project shadows ~/.rovecode/commands (commands.ts);
   // LOW-1: /quit is a `case` alias of /exit below, not a TUI_COMMANDS entry — reserve it explicitly;
   // port #44: the sextant surface's own /theme /open /diff /focus /agents never reach handleSlash — reserved too
   const custom = discoverCommands(rt.cwd, { reserved: [...TUI_COMMANDS.map((c) => c.name), "quit", ...SEXTANT_LOCAL_NAMES] });
+  if (opts.effort !== undefined) rt.setEffort(opts.effort);
+  // one resolved answer instead of two independent booleans: flag → env → project file → user file →
+  // "ask" (core/settings.ts). This is what makes `/yolo --save` survive the terminal closing.
+  const startLevel = resolvePermission(rt.cwd, opts.yolo === true ? "auto" : opts.acceptEdits === true ? "accept-edits" : undefined, { ROVECODE_PERMISSION: process.env.ROVECODE_PERMISSION, ROVECODE_YOLO: process.env.ROVECODE_YOLO, ROVECODE_ACCEPT_EDITS: process.env.ROVECODE_ACCEPT_EDITS });
   const state: TuiState = {
-    yolo: opts.yolo ?? process.env.AION_YOLO === "1",
+    yolo: startLevel === "auto",
+    acceptEdits: startLevel === "accept-edits",
     provider: modes.modelFor().provider,
     model: modes.modelFor().model,
     mode: modes.mode,
@@ -137,6 +164,8 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     const todos = todoLabel(join(sessionsDir, store.id)); // port #32: "todos done/total"; key omitted while the list is empty
     return {
       provider: state.provider, model: state.model, yolo: state.yolo, mode: state.mode,
+      permission: state.yolo ? "auto" : state.acceptEdits ? "accept-edits" : "ask",
+      effort: rt.effort,
       turns: state.turns, tokensIn: state.tokensIn, tokensOut: state.tokensOut,
       ...(todos !== undefined ? { todos } : {}),
     };
@@ -223,22 +252,60 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   // port #30: custom command dispatch context (submit = the plain user-turn path, defined below)
   const cmdCtx: CustomCommandCtx = { renderer, modes, state, pushStatus, submit: (t) => submit(t) };
 
+  // /model /models /provider (providers-cmd.ts) read the live registry; built lazily so pushStatus is bound
+  const provCtx = (): ProviderCmdCtx => ({ rt, modes, state, renderer, pushStatus });
+  /** `--save` writes the level the toggles just produced, so the next launch starts there;
+   *  `--project` pins it to this checkout instead of to you. Without --save nothing is written —
+   *  a toggle you meant for one run must not follow you into the next. */
+  const persistLevel = (arg: string): string => {
+    const words = arg.split(/\s+/).filter((w) => w.length > 0);
+    if (!words.includes("--save")) return "this session only — add --save to make it the default (--project pins it to this repo)";
+    const scope = words.includes("--project") ? "project" : "user";
+    const level: PermissionLevel = state.yolo ? "auto" : state.acceptEdits ? "accept-edits" : "ask";
+    try {
+      const path = saveSetting("permission", level, scope, rt.cwd);
+      return `saved: ${level} is the default now (${path})`;
+    } catch (e) {
+      return `could not save it: ${e instanceof Error ? e.message : String(e)}`;
+    }
+  };
+
   const handleSlash = (text: string): boolean => {
     const [cmd, ...rest] = text.slice(1).split(/\s+/);
     const arg = rest.join(" ").trim();
     switch (cmd) {
       case "exit": case "quit": close(); return true;
       case "help": cmdHelp(infoCtx); return true;
+      case "effort": {
+        const want = arg.trim();
+        if (want.length === 0) { renderer.addSystemNote(effortNote(rt.effort)); return true; }
+        const level = parseEffort(want);
+        if (level === undefined) { renderer.addSystemNote(`"${want}" is not a level — ${THINKING_EFFORTS.join(" · ")}`, "warn"); return true; }
+        rt.setEffort(level);
+        renderer.addSystemNote(effortNote(level));
+        pushStatus(); return true;
+      }
+      case "accept-edits":
+        state.acceptEdits = !state.acceptEdits;
+        renderer.addSystemNote(state.yolo
+          ? `${acceptEditsNote(state.acceptEdits)}  (auto mode is on, so nothing asks either way — /yolo turns it off)`
+          : acceptEditsNote(state.acceptEdits));
+        renderer.addSystemNote(persistLevel(arg));
+        pushStatus(); return true;
       case "yolo":
         state.yolo = !state.yolo;
-        renderer.addSystemNote(`mode: ${state.yolo ? "yolo (all tools allowed)" : "gated (asks before writes/exec)"}`);
+        renderer.addSystemNote(modeSwitchNote(state.yolo)); // "ask first" / "auto (never asks)" — the flag keeps its name
+        renderer.addSystemNote(persistLevel(arg));
         pushStatus(); return true;
-      case "model":
-        // port #20: model writes land in the CURRENT mode's slot (mirrored to both
-        // when planActSeparateModels is off)
-        if (arg) { modes.setModel({ model: arg }); state.model = modes.modelFor().model; renderer.addSystemNote(`model → ${arg}${modes.separate ? ` (${modes.mode} mode)` : ""}`); pushStatus(); }
-        else renderer.addSystemNote("usage: /model <id>", "warn");
-        return true;
+      // port #20: model writes land in the CURRENT mode's slot (mirrored to both when
+      // planActSeparateModels is off); the selector may name another provider — the registry's
+      // dispatcher routes per call, so the switch needs no restart. --save persists the default.
+      case "model": cmdModelSwitch(provCtx(), arg); return true;
+      case "models": void cmdModels(provCtx(), arg); return true;
+      case "provider": void cmdProvider(provCtx(), arg); return true;
+      case "setup": void cmdSetup(provCtx()); return true; // guided connect: picker → model → key hand-off → test → default
+      // the same job on one line (cli/connect.ts through the live registry); bare, it hands over to /setup
+      case "connect": void cmdConnect(provCtx(), arg); return true;
       case "plan": case "act":
         togglePlanAct(modes, cmd as AgentMode, state, renderer, pushStatus);
         return true;
@@ -269,21 +336,37 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
 
   const startRun = async (goal: string) => {
     const stream = rt.stream; // runtime already applied any opts.stream override
-    if (!stream) {
-      renderer.addSystemNote("no provider — set AION_BASE_URL/AION_API_KEY or a <NAME>_API_KEY env and restart", "error");
+    // live check: /provider add + /provider key (or `rovecode provider add` in another terminal) clears
+    // it for the next prompt — no restart
+    const reason = rt.noProviderReason();
+    if (!stream || reason !== null) {
+      renderer.addSystemNote(reason !== null ? noModelHint("tui") : "no provider stream", "error");
       return;
     }
     state.busy = true;
     renderer.setBusy(true, "thinking…");
     pushStatus();
-    const cfg = rt.buildCfg(state.yolo, state.yolo ? undefined : async (req) => {
+    const level: PermissionLevel = state.yolo ? "auto" : state.acceptEdits ? "accept-edits" : "ask";
+    const cfg = rt.buildCfg(level, state.yolo ? undefined : async (req) => {
       // port #24: edit/write approvals carry a bounded unified diff of the pending change
       // (in-memory preview; any failure degrades to the plain overlay, never blocks the ask)
+      const isEdit = req.tool === "edit" || req.tool === "write";
+      // `all edits` pressed DURING this run: the rules were built before it, so the switch is honored
+      // here too — otherwise the mode would only start at the next prompt, which is not what the
+      // button says. The rules still gate the call; this only skips the card.
+      if (isEdit && state.acceptEdits) return "once";
       let detail: string | undefined;
-      if (req.tool === "edit" || req.tool === "write") {
-        try { detail = previewDiff(req.tool, req.revisedArgs, rt.cwd).text || undefined; } catch { detail = undefined; }
+      if (isEdit) {
+        try { detail = previewDiff(req.tool as "edit" | "write", req.revisedArgs, rt.cwd).text || undefined; } catch { detail = undefined; }
       }
-      return renderer.askApproval(req.tool, JSON.stringify(req.revisedArgs).slice(0, 140), detail);
+      const answer = await renderer.askApproval(req.tool, JSON.stringify(req.revisedArgs).slice(0, 140), detail);
+      if (answer !== "all-edits") return answer;
+      // the surface-level door: flip the session and let THIS call through once. The core approval
+      // engine stays a three-verdict system — "all-edits" never crosses into it.
+      state.acceptEdits = true;
+      renderer.addSystemNote(acceptEditsNote(true));
+      pushStatus();
+      return "once";
     });
     // port #20: per-mode model resolution + plan-mode rule/prompt enforcement
     const cur = modes.modelFor();
@@ -296,7 +379,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     run = agentLoop(def, goal, {}, cfg, {
       stream, registry: rt.registry, store,
       tools: rt.registry.list().map((t) => t.schema),
-      guard: rt.guard, signal: runAbort.signal, // port #21: Esc aborts this run's controller
+      guard: rt.guard, planReminder: rt.planReminder, signal: runAbort.signal, // port #21: Esc aborts this run's controller
       cwd: rt.cwd, // cwd must be threaded — tools resolve relative paths against it, same as checkpoints/LSP/preview
       hooks: rt.hooks, // port #29: pre_tool/approval/post_tool at dispatch, pre_run/compaction/post_run/on_event via the loop observer
     }, steering);
@@ -370,14 +453,17 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   });
   // resumed boot: restore the transcript and usage counters (a bare session open left both blank)
   if (boot.id !== undefined) { replayHistory(); refreshUsage(); }
-  renderer.addSystemNote(
-    `aion — session in ${rt.cwd}\nmode: ${state.yolo ? "yolo" : "gated"} · /help for commands` +
-    (rt.stream ? "" : "\nno provider configured — run `aion auth set <provider>`, or set AION_BASE_URL/AION_API_KEY or a <NAME>_API_KEY"),
-  );
+  // the welcome card (core/voice.ts): a fresh session opens with rovecode's card — connected, or the /setup
+  // pointer when no model is configured; a resumed session keeps its transcript and gets one line
+  const connected = rt.stream && rt.noProviderReason() === null ? { provider: state.provider, model: state.model } : null;
+  if (boot.id !== undefined) renderer.addSystemNote(resumedLine(store.id, rt.cwd, state.yolo));
+  else renderer.addSystemNote(welcomeCard({ connected, cwd: rt.cwd, yolo: state.yolo, mode: state.mode }));
   if (boot.warn) renderer.addSystemNote(boot.warn, "warn");
   for (const w of custom.warnings) renderer.addSystemNote(w, "warn"); // port #30: skipped/shadowed command files
+  for (const w of rt.providers.warnings()) renderer.addSystemNote(`providers: ${w}`, "warn"); // malformed providers.json entries
   rt.hooks.onWarning((w) => renderer.addSystemNote(`hooks: ${w}`, "warn")); // port #29: hook load/runtime notes (buffered ones replay first)
   pushStatus();
+  watchProviders(provCtx()); // follow a default-model change made elsewhere; announce the first provider
   // port #27: an unavailable configured rung (probe failed) is a clean one-line startup
   // error — stop the renderer first so the terminal is restored, reap the MCP children
   // construction spawned (LOW-3, as bootRuntime does), then exit 2 (embedders: rethrow)

@@ -211,8 +211,8 @@ export function paletteItems(s: SextantState): PaletteItem[] {
   return items;
 }
 
-export function openPalette(s: SextantState, items: PaletteItem[] = paletteItems(s)): void {
-  s.palette = { query: "", sel: 0, items };
+export function openPalette(s: SextantState, items: PaletteItem[] = paletteItems(s), title?: string): void {
+  s.palette = { query: "", sel: 0, items, ...(title !== undefined ? { title } : {}) };
 }
 export function closePalette(s: SextantState): void { s.palette = null; }
 
@@ -226,6 +226,7 @@ export function paletteVisible(p: PaletteState, fz: Fuzzy = fuzzy): PaletteItem[
 
 /** right-aligned hint: command description, theme label, key chord, or git status */
 export function paletteHint(s: SextantState, it: PaletteItem): string {
+  if (it.hint !== undefined) return it.hint; // an explicit hint wins, as PaletteState says it does
   if (it.action.startsWith("/")) return allCommands(s).find((c) => "/" + c.name === it.action)?.description ?? "";
   const i = it.action.indexOf(":"), kind = it.action.slice(0, i), rest = it.action.slice(i + 1);
   switch (kind) {
@@ -252,11 +253,15 @@ export function drawPalette(scr: ScreenLike, L: Layout, C: Theme, s: SextantStat
   const maxList = Math.max(3, Math.min(list.length || 1, Math.floor(L.h / 2)));
   const ph = maxList + 5, py = Math.max(2, Math.floor(L.h * 0.14));
   scr.box(px, py, pw, ph, st(C.accent), C.bg2);
-  scr.text(px + 2, py, [[" commands ", st(C.accent, -1, ATTR.BOLD)]]);
+  // the box says what it is. A picker's title comes from the caller, so it is CLIPPED to the box —
+  // leaving room for the corner and the `esc` label — rather than trusted to fit (an unclipped
+  // sentence ran past the right border and over the panel behind it).
+  const boxTitle = ` ${P.title ?? "commands"} `;
+  scr.clip(px + 2, py, boxTitle, st(C.accent, -1, ATTR.BOLD), Math.max(0, pw - 4));
   hits?.push({ rect: { x: px, y: py, w: pw, h: ph }, onClick: () => {} });
   scr.put(px + 2, py + 1, "▌", st(C.accent, C.bg2));
   if (P.query) scr.put(px + 4, py + 1, P.query, st(C.fg, C.bg2, ATTR.BOLD), pw - 12);
-  else scr.put(px + 4, py + 1, "commands, themes, views, files…", st(C.dim, C.bg2), pw - 12);
+  else scr.put(px + 4, py + 1, P.title === undefined ? "commands, themes, views, files…" : "type to filter…", st(C.dim, C.bg2), pw - 12);
   scr.put(px + pw - 6, py + 1, "esc", st(C.dim, C.bg2));
   scr.hline(px + 1, py + 2, pw - 2, st(C.rule2, C.bg2), "╌");
   const selRow = list.findIndex((r) => r.type === "item" && r.idx === P.sel);
@@ -266,7 +271,7 @@ export function drawPalette(scr: ScreenLike, L: Layout, C: Theme, s: SextantStat
     const r = list[off + i];
     if (!r) break;
     const y = py + 3 + i;
-    if (r.type === "group") { scr.put(px + 4, y, r.name, st(C.dim, C.bg2)); continue; }
+    if (r.type === "group") { scr.put(px + 4, y, r.name, st(C.dim, C.bg2), pw - 6); continue; } // clipped: a group name is data too
     const sel = r.idx === P.sel;
     scr.text(px + 2, y, [[sel ? "▸ " : "  ", st(C.accent, C.bg2)], [r.it.label, st(sel ? C.fg : C.fg2, C.bg2, sel ? ATTR.BOLD : 0)]], pw - 30);
     const hint = paletteHint(s, r.it);
@@ -294,7 +299,7 @@ export function onPaletteKey(s: SextantState, ev: KeyEvent, run: (action: string
 
 // ------------------------------------------------------------------ help card (app.js:1075-1089)
 
-/** the README keys table with aion names */
+/** the README keys table with rovecode names */
 export const HELP_KEYS: readonly (readonly [string, string])[] = [
   ["⏎", "send · confirm a card · run the suggestion"],
   ["tab ⇧tab", "complete a suggestion · cycle focus"],

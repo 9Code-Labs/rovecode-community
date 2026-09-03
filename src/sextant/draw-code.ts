@@ -9,6 +9,8 @@
 import type { DiffHunk, Rect, ScreenLike, Seg, SextantState, Style, Theme } from "./types.ts";
 import { ATTR } from "./types.ts";
 import { hardWrap, inner, panel, spinner, splitLines, st } from "./draw-util.ts";
+import { EMPTY } from "../core/voice.ts";
+import { moreMarker } from "../coding/diff.ts";
 
 /** a syntax token: text + either a prototype class name (kw str num dec cm ty fn key … plain,
  *  colored by `tokStyle`) or a ready Style (undefined = plain) */
@@ -71,8 +73,10 @@ export function codeTitle(s: SextantState, theme: Theme, now: number): { title: 
   const c = s.code;
   if (c.mode === "run") {
     if (!c.run) return { title: "run", extra: [] };
-    const tail: Seg = c.run.status === "running" ? ["  " + spinner(now), st(theme.accent)] : c.run.status === "ok" ? ["  exit 0", st(theme.muted)] : ["  failed", st(theme.err)];
-    return { title: "run", extra: [[c.run.cmd, st(theme.fg2)], tail] };
+    // the command lives in the body (drawRun's pinned `$ cmd` header), not here: the title clips it
+    // to one ellipsized segment while the body can budget it in rows, and one copy is enough
+    const tail: Seg = c.run.status === "running" ? [spinner(now), st(theme.accent)] : c.run.status === "ok" ? ["exit 0", st(theme.muted)] : ["failed", st(theme.err)];
+    return { title: "run", extra: [tail] };
   }
   if (c.mode === "search") {
     if (!c.search) return { title: "search", extra: [] };
@@ -171,7 +175,7 @@ function drawRail(scr: ScreenLike, R: Rect, s: SextantState, theme: Theme, viewT
 /** line numbers, change marks (▎), colored code, the highlight band with its "◂ reading" tag (app.js:398-427) */
 function drawFileView(scr: ScreenLike, B: Rect, s: SextantState, theme: Theme, top: number, tokenize: TokenizeFn): void {
   const file = s.code.file;
-  if (!file) { scr.put(B.x, B.y, "no file selected", st(theme.muted), B.w); return; }
+  if (!file) { scr.put(B.x, B.y, EMPTY.code, st(theme.muted), B.w); return; }
   if (s.code.content === null) { scr.clip(B.x, B.y, `cannot read ${file}`, st(theme.muted), B.w); return; }
   const lines = splitLines(s.code.content);
   if (!lines.length) { scr.put(B.x, B.y, "(empty)", st(theme.dim), B.w); return; }
@@ -198,27 +202,47 @@ function chip(scr: ScreenLike, x: number, y: number, pass: boolean, theme: Theme
   return scr.put(x, y, pass ? " PASS " : " FAIL ", st(theme.bg, pass ? theme.ok : theme.err, ATTR.BOLD));
 }
 
-/** The run view: `$ cmd`, the output verbatim (real newlines stay rows; long rows hard-wrap like a
- *  terminal — never one-lined with ⏎), then the tail: the spinner while running or the PASS/FAIL
- *  chip from run.status. Lines that start with PASS/FAIL get the chip too (app.js:428-449). */
+/** Rows the `$ cmd` header may take: two of text and the marker. At the 100-column floor the body
+ *  is ~50 cells, so two rows show the program and its leading arguments — what identifies a run —
+ *  and a 900-char pipeline (the screenshot that motivated this) folds into `… +N more lines`
+ *  instead of a dozen bold rows that push the output under them. */
+const CMD_ROWS = 3;
+
+/** the header rows: the wrapped command, clipped to `max` the way the approval card clips its
+ *  detail (moreMarker on the last budgeted row — the one clip convention on the surface) */
+export function runCmdRows(cmd: string, w: number, max: number): string[] {
+  if (max <= 0) return [];
+  const all = hardWrap("$ " + cmd, w);
+  return all.length > max ? [...all.slice(0, max - 1), moreMarker(all.length - max + 1)] : all;
+}
+
+/** The run view is a terminal tail with a pinned prompt: the `$ cmd` header stays at the top (the
+ *  title no longer names the command, so the header must survive the output scrolling past it),
+ *  then the output verbatim (real newlines stay rows; long rows hard-wrap like a terminal — never
+ *  one-lined with ⏎) and the tail: the spinner while running or the PASS/FAIL chip from run.status.
+ *  Output and tail sit against the BOTTOM of the panel — the newest line and the verdict are what
+ *  the eye looks for, so short output leaves its slack above, not a dead zone below. Lines that
+ *  start with PASS/FAIL get the chip too (app.js:428-449). */
 function drawRun(scr: ScreenLike, B: Rect, s: SextantState, theme: Theme, now: number): void {
   const run = s.code.run;
   if (!run) { scr.put(B.x, B.y, "nothing has run yet", st(theme.muted), B.w); return; }
-  type Row = { kind: "cmd" | "out" | "tail"; text: string; first: boolean };
-  const rows: Row[] = hardWrap("$ " + run.cmd, B.w).map((t, i) => ({ kind: "cmd", text: t, first: i === 0 }));
+  const cmd = runCmdRows(run.cmd, B.w, B.h >= 4 ? Math.min(CMD_ROWS, B.h - 2) : 0); // below 4 rows the output and the verdict win
+  cmd.forEach((t, i) => scr.put(B.x, B.y + i, t, t.startsWith("…") ? st(theme.dim) : st(theme.fg, -1, ATTR.BOLD), B.w));
+  type Row = { kind: "out" | "tail"; text: string; first: boolean };
+  const rows: Row[] = [];
   for (const line of run.lines) for (const [i, t] of hardWrap(line, B.w).entries()) rows.push({ kind: "out", text: t, first: i === 0 });
   rows.push({ kind: "tail", text: "", first: true });
-  const start = Math.max(0, rows.length - B.h);
-  for (let i = 0; i < B.h; i++) {
-    const r = rows[start + i];
-    if (!r) break;
-    const y = B.y + i;
+  const outH = B.h - cmd.length;
+  const start = Math.max(0, rows.length - outH);
+  const y0 = B.y + B.h - Math.min(rows.length, outH);
+  for (let i = 0; start + i < rows.length; i++) {
+    const r = rows[start + i]!;
+    const y = y0 + i;
     if (r.kind === "tail") {
       if (run.status === "running") scr.text(B.x, y, [[spinner(now), st(theme.accent)], ["  running", st(theme.muted)]], B.w);
       else { const cx = chip(scr, B.x, y, run.status === "ok", theme); scr.put(cx, y, run.status === "ok" ? "  exit 0" : "  non-zero exit", st(theme.muted), B.x + B.w - cx); }
       continue;
     }
-    if (r.kind === "cmd") { scr.put(B.x, y, r.text, st(theme.fg, -1, ATTR.BOLD), B.w); continue; }
     const m = r.first ? /^\s*(PASS|FAIL)\b\s?(.*)$/.exec(r.text) : null;
     if (m) { const cx = chip(scr, B.x, y, m[1] === "PASS", theme); scr.put(cx + 1, y, m[2] ?? "", st(theme.fg), B.x + B.w - cx - 1); continue; }
     scr.put(B.x, y, r.text, st(theme.fg2), B.w);

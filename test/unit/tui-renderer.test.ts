@@ -247,7 +247,7 @@ describe("PiTuiRenderer", () => {
 		});
 		let screen = await view(term);
 		expect(screen).toContain("anthropic/claude-sonnet");
-		expect(screen).toContain("gated");
+		expect(screen).toContain("ask first"); // the permission mode by its screen name
 		expect(screen).toContain("turns 1");
 		expect(screen).toContain("tokens 100/50");
 
@@ -260,7 +260,7 @@ describe("PiTuiRenderer", () => {
 			tokensOut: 90,
 		});
 		screen = await view(term);
-		expect(screen).toContain("yolo");
+		expect(screen).toContain("auto"); // yolo=true shows as "auto"
 		expect(screen).toContain("turns 2");
 		expect(screen).toContain("tokens 220/90");
 		expect(screen).not.toContain("turns 1");
@@ -273,7 +273,7 @@ describe("PiTuiRenderer", () => {
 		// install cache (or auto-installs from the network) and the native branch runs.
 		// The probe asserts the BRANCH (LOADED=NONE), not just the boolean, by mirroring
 		// the loader's exact candidate walk (native-module-path.ts defaults).
-		const dir = mkdtempSync(join(tmpdir(), "aion-native-fallback-"));
+		const dir = mkdtempSync(join(tmpdir(), "rovecode-native-fallback-"));
 		try {
 			cpSync(join(import.meta.dir, "../../vendor/pi-tui/src"), join(dir, "src"), { recursive: true });
 			const probe = join(dir, "src", "native-modifiers.ts").replace(/\\/g, "/");

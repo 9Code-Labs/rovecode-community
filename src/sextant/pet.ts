@@ -1,4 +1,4 @@
-/** Port #45 — nimbus, the weather-cloud pet of the sextant surface: sprite + quip tables, observation
+/** Port #45 — rovecode, the weather-cloud pet of the sextant surface: sprite + quip tables, observation
  *  of written lines, moods derived from real activity, storms, sleep, pokes. Ported from the user's own
  *  sextant v0.4.0 prototype `src/pet.js` (user-owned; the mock typing/scenario hooks are gone — every
  *  input is a RunEvent-derived call from the renderer). PURE: every method takes `now`; no wall clock,
@@ -33,14 +33,18 @@ export const CODE_RAIN = "{};=()<>:.";
 export type QuipKind =
   | "start" | "glob" | "grep" | "read" | "plan" | "permission" | "allowed" | "denied" | "edit" | "write"
   | "remove" | "run" | "pass" | "fail" | "error" | "done" | "stopped" | "fresh" | "theme" | "poke" | "idle"
-  | "sleep" | "todo" | "long" | "failLine" | "risk" | "spawn" | "laneDone" | "laneFail" | "merge";
+  | "sleep" | "todo" | "long" | "failLine" | "risk" | "spawn" | "laneDone" | "laneFail" | "merge" | "thinking"
+  | "fetch" | "crew" | "tinker"; // the network, a child's progress, housekeeping (providers/skills/memory/MCP) — acts no older kind covers
 
-/** what the cloud says on events; `{n} {f} {r} {a} {d} {changed}` are filled from the event data.
+/** what the cloud says on events; `{n} {f} {q} {r} {a} {d} {changed}` are filled from the event data.
  *  `poke` is ordered so the first poke greets ("hi.") and later pokes cycle the pool. */
 export const QUIPS: Readonly<Record<QuipKind, readonly string[]>> = {
   start: ["on it.", "let's see what we've got.", "rolling in."],
-  glob: ["sniffing around…", "where is everything…"],
+  glob: ["sniffing for {q}…", "where is {q}…", "looking for {q}."], // a search STARTS here (glob and grep, {q} = the pattern); grep's count lands in `grep`
   grep: ["found {n}.", "{n}. noted."],
+  fetch: ["fetching {f}.", "off to {f}.", "knocking on {f}."],
+  crew: ["checking on {a}.", "{a}, how's it going.", "peeking at {a}."],
+  tinker: ["poking at {f}.", "a look at {f}.", "fiddling with {f}."],
   read: ["reading {f}.", "let me skim {f}."],
   plan: ["{n} steps. easy.", "got a plan. {n} steps."],
   permission: ["your call ▸", "need a nod from you."],
@@ -68,7 +72,13 @@ export const QUIPS: Readonly<Record<QuipKind, readonly string[]>> = {
   laneDone: ["{a} is back · {r}.", "{a}: {r}. nice.", "{a} done. {r}."],
   laneFail: ["{a} tripped · {r}.", "hm. {a} didn't make it."],
   merge: ["stitching it together.", "all hands back. merging."],
+  // the run header's word while the model reasons and nothing else moves: weather for a cloud working
+  // something out — the familiar word first, and the rotation (not a stuck spinner) is what says "still alive"
+  thinking: ["thinking", "brewing", "gathering", "mulling", "sifting", "condensing", "circling", "weighing"],
 };
+
+/** the word for `elapsedMs` into a reasoning phase: one step every 4 s — slow enough to read, fast enough that 15 s changes it three times */
+export const thinkingWord = (elapsedMs: number): string => QUIPS.thinking[Math.floor(Math.max(0, elapsedMs) / 4000) % QUIPS.thinking.length] ?? "thinking";
 
 /** what the cloud notices in lines being written (first matching row wins, per line) */
 export const OBSERVE: readonly (readonly [RegExp, string])[] = [
@@ -145,6 +155,7 @@ export interface PetState {
   pokes: number;
   quip: PetQuip | null;
   lastQuipAt: number;
+  lastEventKind: PetEventKind | null; // the last event quip that took the bubble (the rate rule collapses same-kind repeats)
   /** null until the first tick/event — "born on first sight", since createPet takes no clock */
   lastActiveAt: number | null;
   fx: PetFx[];
@@ -217,9 +228,9 @@ export function seededRandom(seed: number): () => number {
   };
 }
 
-/** AION_PET=0 (or false/off/no) removes the panel; the renderer passes its environment map */
+/** ROVECODE_PET=0 (or false/off/no) removes the panel; the renderer passes its environment map */
 export function petEnabled(env: Readonly<Record<string, string | undefined>>): boolean {
-  const v = (env.AION_PET ?? "").trim().toLowerCase();
+  const v = (env.ROVECODE_PET ?? "").trim().toLowerCase();
   return !(v === "0" || v === "false" || v === "off" || v === "no");
 }
 
@@ -243,14 +254,17 @@ export function moodCtxFrom(s: SextantState, now: number): MoodCtx {
 
 // ------------------------------------------------------------------ the pet (pet.js makePet)
 
-const GLANCE_KINDS: readonly PetEventKind[] = ["read", "edit", "write", "plan", "grep", "glob", "run", "remove", "spawn", "laneDone"];
+const GLANCE_KINDS: readonly PetEventKind[] = ["read", "edit", "write", "plan", "grep", "glob", "run", "remove", "spawn", "laneDone", "fetch", "crew", "tinker"];
 const CALM_KINDS: readonly PetEventKind[] = ["done", "pass", "start", "fresh", "stopped"];
+/** kinds that always take the bubble (the rate rule in event()): outcomes, refusals, asks, the user */
+const URGENT_KINDS: ReadonlySet<PetEventKind> = new Set<PetEventKind>(["start", "done", "stopped", "pass", "fail", "error", "failLine", "denied", "permission", "allowed", "poke", "theme", "fresh", "laneDone", "laneFail", "merge", "risk", "long", "todo", "todo_done", "tool_fail"]);
+export const MIN_DWELL_MS = 1500; // a routine quip holds the floor at least this long before another routine kind may replace it
 
 export function createPet(opts: { name?: string; seed?: number } = {}): Pet {
   const rnd = seededRandom(opts.seed ?? 7);
   const P: PetState = {
-    name: (opts.name || "nimbus").slice(0, 14),
-    pokes: 0, quip: null, lastQuipAt: 0, lastActiveAt: null, fx: [], glance: null,
+    name: (opts.name || "rovecode").slice(0, 14),
+    pokes: 0, quip: null, lastQuipAt: 0, lastEventKind: null, lastActiveAt: null, fx: [], glance: null,
     nextObserveAt: 0, pendingObserve: null, nextSuggestAt: 0, lastSuggest: "", saidLong: false,
     stormUntil: 0, wasError: false, todosDone: 0,
   };
@@ -315,6 +329,14 @@ export function createPet(opts: { name?: string; seed?: number } = {}): Pet {
       return;
     }
     if (kind === "tool_fail") { say(fmt(pick(QUIPS.error), data), now); fx("shiver", now, 640); storm(now); return; }
+    // the rate rule — routine quips (tool starts) must not flap at machine speed: a live same-kind quip keeps the
+    // floor (ten reads name the first file), a different routine kind waits MIN_DWELL_MS (the time to read six
+    // words); verdicts, refusals, asks and the user's pokes always take it
+    if (!URGENT_KINDS.has(kind) && eventQuipActive(now) && (kind === P.lastEventKind || now - P.lastQuipAt < MIN_DWELL_MS)) {
+      if (GLANCE_KINDS.includes(kind)) glance(1, now, 2600); // the cloud still looks over at the work
+      return;
+    }
+    P.lastEventKind = kind;
     if (kind === "poke") P.pokes++; // counted here so event("poke") and poke() are the same click
     const pool = QUIPS[kind];
     const text = kind === "poke" ? pick(pool, P.pokes - 1) : pick(pool);

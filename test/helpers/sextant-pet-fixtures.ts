@@ -32,7 +32,7 @@ export function task(status: TaskStatus, id = "t1"): TaskInfo {
   return { id, label: "lane", agent: "worker", goal: "do it", isolated: false, depth: 1, status, createdAt: T0 };
 }
 
-export const approvalCard = (): CardState => ({ kind: "approval", tool: "edit", argsPreview: "src/a.ts", selected: 0, resolve: () => {} });
+export const approvalCard = (): CardState => ({ kind: "approval", verdicts: ["once", "always", "deny"], tool: "edit", argsPreview: "src/a.ts", selected: 0, resolve: () => {} });
 export const questionCard = (): CardState =>
   ({ kind: "question", prompt: { question: "which?", options: ["a", "b"] }, selected: 0, freeText: "", resolve: () => {} });
 

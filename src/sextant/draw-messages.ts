@@ -3,7 +3,7 @@
  *  prompt line with its cursor cell. Ported from the user's own sextant v0.4.0 prototype,
  *  src/app.js:561-672 (toolRow, buildRows, drawMessages); the mock welcome/"try" rows, permission
  *  items and click hit-boxes are gone — rows come from SextantState.messages, the card from
- *  SextantState.card, the agent label reads "aion". Pure painter: no clock, no timers, no state
+ *  SextantState.card, the agent label reads "rovecode". Pure painter: no clock, no timers, no state
  *  mutation; the prototype's msgScroll write-back became the `messagesScroll` seam. */
 
 import type { CardState, Rect, ScreenLike, Seg, SextantState, Theme, ToolRow } from "./types.ts";
@@ -11,11 +11,18 @@ import { ATTR } from "./types.ts";
 import { moreMarker } from "../coding/diff.ts";
 import { inner, panel, spinner, st, wrap } from "./draw-util.ts";
 import { clipText } from "./tool-rows.ts";
+import { segWidth } from "./layout.ts";
+import { fmtElapsed, fmtK } from "./model.ts";
+import { thinkingWord } from "./pet.ts";
 
 export interface Row { segs: Seg[]; indent?: number }
 
 /** prompt placeholder when the input is empty */
-export const PLACEHOLDER = "ask aion — e.g. fix the failing test";
+export const PLACEHOLDER = "ask rovecode — e.g. fix the failing test";
+/** button label per verdict — `all edits` reads as the mode it turns on, not as a third yes */
+export const VERDICT_LABEL: Record<"once" | "always" | "all-edits" | "deny", string> =
+  { once: "allow", always: "always", "all-edits": "all edits", deny: "deny" };
+/** the default row, for a card that offers no extra door */
 export const VERDICTS: readonly string[] = ["allow", "always", "deny"];
 export const FREE_TEXT_HINT = "type an answer…";
 export const SKIP_LABEL = "skip this question";
@@ -70,12 +77,13 @@ export function toolRow(t: ToolRow, w: number, theme: Theme, now: number): Seg[]
   return segs;
 }
 
-/** the status word after `◆ aion ·` for the current run: `needs you` while a card waits (the frame
+/** the status word after `◆ rovecode ·` for the current run: `needs you` while a card waits (the frame
  *  header's word, draw-frame.ts), else the live activity while running, else the outcome */
-export function activityLabel(s: SextantState): string {
+export function activityLabel(s: SextantState, now?: number): string {
   if (s.card) return "needs you";
   const a = s.activity;
-  if (s.running) return a.label || a.state.toLowerCase();
+  // a provider turn with no text yet: the word rotates with the clock so the eye can tell live from frozen
+  if (s.running) return now !== undefined && a.turnAt !== undefined && a.state === "THINKING" ? thinkingWord(now - a.turnAt) : a.label || a.state.toLowerCase();
   switch (a.state) {
     case "SUCCESS": return "done";
     case "ERROR": return "error";
@@ -85,13 +93,27 @@ export function activityLabel(s: SextantState): string {
   }
 }
 
+/** `  14s · 1.2k tokens` for the provider turn in flight — proof the run is alive while the model
+ *  is silent (a reasoning phase runs 15 s and more at high effort). The clock starts at turn_start,
+ *  the count is reasoning plus answer tokens so far. Degrades in steps to fit `room`: the token count
+ *  goes first, then the clock, so a narrow panel never overflows. Empty when no turn is in flight. */
+export function liveTail(s: SextantState, now: number, room: number): string {
+  const a = s.activity;
+  if (a.turnAt === undefined) return "";
+  const clock = fmtElapsed(now - a.turnAt);
+  const full = a.tokens ? `  ${clock} · ${fmtK(a.tokens)} tokens` : `  ${clock}`;
+  if ([...full].length <= room) return full;
+  const short = `  ${clock}`;
+  return [...short].length <= room ? short : "";
+}
+
 /** `@path` mentions in a user line get the accent (app.js:596) */
 function mentionSegs(line: string, theme: Theme): Seg[] {
   return line.split(/(@[\w./\\-]+)/).filter(Boolean).map((part): Seg => [part, part[0] === "@" ? st(theme.accent, -1, ATTR.BOLD) : st(theme.fg, -1, ATTR.BOLD)]);
 }
 
 /** Flatten s.messages into drawable rows for a panel `w` cells wide (app.js:572-637). Each run
- *  (the rows after a user row) opens with a `◆ aion · <status>` header before its first row of any
+ *  (the rows after a user row) opens with a `◆ rovecode · <status>` header before its first row of any
  *  kind — a permission refusal can be the first thing a run says; the current run carries the live
  *  status, earlier ones just the diamond. System/compaction rows outside a run (idle notes before
  *  any user row) get no header. */
@@ -107,9 +129,11 @@ export function buildRows(s: SextantState, w: number, theme: Theme, now: number)
   const outcome = s.activity.state === "SUCCESS" ? theme.ok : s.activity.state === "ERROR" ? theme.err : theme.accentDim;
   const header = (i: number): void => {
     const current = i > lastUser;
-    const label = current ? activityLabel(s) : "";
+    const label = current ? activityLabel(s, now) : "";
     const dc = !current ? theme.accentDim : s.running ? theme.accent : outcome;
-    rows.push({ segs: [["◆ ", st(dc)], ["aion", st(theme.fg, -1, ATTR.BOLD)], [label ? "  · " + label : "", st(s.running ? theme.accent : theme.muted)]] });
+    const segs: Seg[] = [["◆ ", st(dc)], ["rovecode", st(theme.fg, -1, ATTR.BOLD)], [label ? "  · " + label : "", st(s.running ? theme.accent : theme.muted)]];
+    if (current && s.running && !s.card) { const tail = liveTail(s, now, w - segWidth(segs)); if (tail) segs.push([tail, st(theme.muted)]); }
+    rows.push({ segs });
     headerDue = false;
   };
   s.messages.forEach((m, i) => {
@@ -156,6 +180,10 @@ export function buildRows(s: SextantState, w: number, theme: Theme, now: number)
     }
     prev = m;
   });
+  // a run that has not said anything yet still shows it is alive: the header with the live line
+  // is the ONLY thing between the sent prompt and a first token that may be 15 s away. Not under a
+  // card — the card is the status then, and the message rows above it are budgeted to the row.
+  if (headerDue && s.running && inRun && !s.card) { blank(); header(s.messages.length); }
   return rows;
 }
 
@@ -203,7 +231,7 @@ export function cardRows(card: CardState, w: number, maxDetail: number, theme: T
       for (const l of lines) rows.push({ segs: [diffLineStyle(l, theme)], indent: 2 });
     }
     const segs: Seg[] = [];
-    VERDICTS.forEach((v, i) => { segs.push(button(v, i === card.selected), ["  ", st(-1)]); });
+    card.verdicts.forEach((v, i) => { segs.push(button(VERDICT_LABEL[v], i === card.selected), ["  ", st(-1)]); });
     segs.push([" ⏎ confirm  ←→ choose  esc deny", st(theme.dim)]);
     rows.push({ segs, indent: 2 });
     return rows;

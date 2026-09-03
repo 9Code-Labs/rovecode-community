@@ -1,10 +1,11 @@
 /** Sextant model (port #41): the surface state and the pure RunEvent reducer. Ported from the
  *  user's sextant v0.4.0 app.js:100-161 (state S, fileStatus/changedFiles/expandTo, setState/
  *  elapsed/stateLabel, toast) and :272-301 (buildTree/treeRows); the mock session/scenario fields
- *  are replaced by state fed from aion's RunEvent stream (core/types.ts:135-149). Pure: `now` is a
+ *  are replaced by state fed from rovecode's RunEvent stream (core/types.ts:135-149). Pure: `now` is a
  *  parameter, no Date.now()/timers/process access; `applyEvent` mutates the state in place. */
 
 import { contextHealth } from "../core/usage.ts";
+import { estimateTokens } from "../core/context.ts";
 import { todoCounts, type TodoItem, type TodoCounts } from "../tools/todo.ts";
 import type { TaskInfo } from "../core/tasks.ts";
 import type { ActivityState, ApplyEvent, DiffHunk, FileStatus, MessageRow, SextantState, ThemeName, Toast, ToolRow, TreeRow } from "./types.ts";
@@ -79,24 +80,38 @@ function showFile(s: SextantState, path: string, hl: [number, number] | null): v
 export function makeApplyEvent(hooks: ApplyHooks = {}): ApplyEvent {
   const calls = new Map<string, CallInfo>();
   let sawText = false;
+  /** cumulative reasoning tokens of the turn in flight (reasoning_update); the answer side is the streaming row's text */
+  let reasoning = 0;
+  const liveTokens = (s: SextantState): void => {
+    if (s.activity.turnAt === undefined) return;
+    const last = s.messages[s.messages.length - 1];
+    s.activity.tokens = reasoning + (last && last.kind === "assistant" && last.streaming ? estimateTokens(last.text) : 0);
+  };
+  /** the provider turn is over (a tool runs, the turn or the run ended): the live line goes with it */
+  const settleTurn = (s: SextantState): void => { delete s.activity.turnAt; delete s.activity.tokens; };
   return (s, ev, now) => {
     switch (ev.type) {
       case "run_start":
         s.activity = { state: "THINKING", label: "thinking", runId: ev.runId, startedAt: now, endedAt: null };
-        s.running = true; s.stick = true; sawText = false; calls.clear();
+        s.running = true; s.stick = true; sawText = false; reasoning = 0; calls.clear();
         break;
       case "turn_start":
         finalizeAssistant(s); setActivity(s, "THINKING", "thinking"); s.usage.turns += 1;
+        s.activity.turnAt = now; s.activity.tokens = 0; reasoning = 0; // the live line's clock starts at the provider call, not the keystroke
         break;
       case "message_update": {
         const last = s.messages[s.messages.length - 1];
         if (last && last.kind === "assistant" && last.streaming) last.text += ev.delta;
         else { finalizeAssistant(s); pushRow(s, { kind: "assistant", text: ev.delta, streaming: true, id: ev.messageId }); }
         sawText = true; setActivity(s, "WRITING", "writing");
+        liveTokens(s);
         break;
       }
+      case "reasoning_update":
+        reasoning = ev.tokens; liveTokens(s);
+        break;
       case "tool_execution_start": {
-        finalizeAssistant(s);
+        finalizeAssistant(s); settleTurn(s);
         const d = describeCall(ev.tool, ev.args, s.cwd);
         calls.set(ev.callId, { tool: ev.tool, verb: d.verb, path: d.path, add: d.add, del: d.del, cmd: d.cmd });
         const row: ToolRow = { kind: "tool", callId: ev.callId, tool: ev.tool, verb: d.verb, label: d.label, running: true };
@@ -137,7 +152,7 @@ export function makeApplyEvent(hooks: ApplyHooks = {}): ApplyEvent {
         break;
       }
       case "tool_call_failed": {
-        calls.delete(ev.callId);
+        calls.delete(ev.callId); settleTurn(s);
         const row = findRow(s, ev.callId);
         const reason = ev.reason.replace(/_/g, " ");
         if (row) { row.running = false; row.ok = false; row.detail = reason; }
@@ -153,10 +168,10 @@ export function makeApplyEvent(hooks: ApplyHooks = {}): ApplyEvent {
         pushRow(s, { kind: "steer", text: ev.text });
         break;
       case "turn_end":
-        finalizeAssistant(s);
+        finalizeAssistant(s); settleTurn(s);
         break;
       case "run_end": {
-        finalizeAssistant(s);
+        finalizeAssistant(s); settleTurn(s);
         if (ev.status === "done") {
           setActivity(s, "SUCCESS", "done");
           if (!sawText && ev.summary) pushRow(s, { kind: "assistant", text: ev.summary, streaming: false });
@@ -295,6 +310,15 @@ export function fmtClock(ms: number): string {
 }
 /** 4200 → "4.2k" (engine.js fmtK) */
 export const fmtK = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(Math.max(0, Math.round(n))));
+/** whole seconds for the live line: "0s" · "59s" · "1m 0s" · "6m 46s" · "1h 0m" — the run clock keeps
+ *  fmtClock's mm:ss.t; this one is read in prose next to a word and a count, so it drops the tenths */
+export function fmtElapsed(ms: number): string {
+  const sec = Math.floor(Math.max(0, ms) / 1000);
+  if (sec < 60) return `${sec}s`;
+  const m = Math.floor(sec / 60);
+  if (m < 60) return `${m}m ${sec - m * 60}s`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
+}
 
 export interface UsagePatch {
   provider?: string; model?: string; turns?: number; tokensIn?: number; tokensOut?: number;

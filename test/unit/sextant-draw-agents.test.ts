@@ -122,7 +122,7 @@ test("empty crew: the muted note and nothing else — no fake agents, no cells",
   for (let y = R60.y + 1; y < R60.y + R60.h; y++) expect(draw(state([])).span(R60.x, y, R60.w)).toBe("");
   const text = draw(state([]), R140).toText();
   for (const fake of ["◇", "◈", "◆", "worker", "claude", "codex", "crew", "╭"]) expect(text).not.toContain(fake);
-  expect(EMPTY_NOTE).toBe("no background tasks — the model starts them with the task tool");
+  expect(EMPTY_NOTE).toBe("no background tasks — I start them with the task tool for parallel work");
 });
 
 // ------------------------------------------------------------------ one cell
@@ -361,9 +361,9 @@ test("a task update changes its cell within one frame: the painter is pure over 
 
 test("the board never starts a task: draw-agents.ts imports only the TaskInfo type from core/tasks.ts and calls nothing on a manager; no clock, timers, random or process; ≤400 lines; provenance header; no NUL", () => {
   const src = readFileSync(join(import.meta.dir, "../../src/sextant/draw-agents.ts"), "utf8");
-  const taskImports = src.split("\n").filter((l) => /^import\b.*tasks\.ts/.test(l));
+  const taskImports = src.split(/\r?\n/).filter((l) => /^import\b.*tasks\.ts/.test(l));
   expect(taskImports).toEqual(['import type { TaskInfo } from "../core/tasks.ts";']);
-  expect(src.split("\n").filter((l) => /^import\b/.test(l))).toEqual([ // the whole import surface: types + two pure helper modules
+  expect(src.split(/\r?\n/).filter((l) => /^import\b/.test(l))).toEqual([ // the whole import surface: types + two pure helper modules
     'import type { TaskInfo } from "../core/tasks.ts";',
     'import { ATTR, type Rect, type ScreenLike, type Seg, type SextantState, type Theme } from "./types.ts";',
     'import { spinner, st, wrap } from "./draw-util.ts";',
@@ -372,7 +372,7 @@ test("the board never starts a task: draw-agents.ts imports only the TaskInfo ty
   const code = src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, ""); // comments may NAME the manager; code may not touch it
   for (const bad of [/TaskManager/, /\.start\(/, /\.cancel\(/, /\.cancelAll\(/, /\.subscribe\(/, /\.list\(/, /\.result\(/, /runChild/, /SpawnRequest/, /\bspawn\b/]) expect(code).not.toMatch(bad);
   for (const bad of [/Math\.random/, /Date\.now/, /new Date\b/, /setTimeout|setInterval|setImmediate|queueMicrotask/, /\bprocess\s*[.[]/, /performance\.now/]) expect(src).not.toMatch(bad);
-  expect(src.split("\n").length).toBeLessThanOrEqual(400);
+  expect(src.split(/\r?\n/).length).toBeLessThanOrEqual(400);
   expect(src.includes("\0")).toBe(false);
   expect(src.startsWith("/** Port #46 ")).toBe(true);
   const tests = readFileSync(join(import.meta.dir, "sextant-draw-agents.test.ts"), "utf8");

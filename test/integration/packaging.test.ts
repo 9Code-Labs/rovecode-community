@@ -19,12 +19,12 @@ const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
 };
 
 /** Host env minus provider credentials (PORTS.md #6 lesson): a host
- *  AION_BASE_URL or any *_API_KEY must not steer a spawned CLI onto a real
+ *  ROVECODE_BASE_URL or any *_API_KEY must not steer a spawned CLI onto a real
  *  endpoint. Mirrors scripts/build.ts scrubbedEnv. */
 function scrubbedEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
-    if (v === undefined || /^AION_/i.test(k) || /_API_KEY$/i.test(k)) continue;
+    if (v === undefined || /^ROVECODE_/i.test(k) || /_API_KEY$/i.test(k)) continue;
     env[k] = v;
   }
   return env;
@@ -42,12 +42,12 @@ describe("packaging: package.json publish invariants", () => {
   });
 
   test("name + semver version", () => {
-    expect(pkg.name).toBe("aion");
+    expect(pkg.name).toBe("rovecode");
     expect(pkg.version).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
-  test("bin.aion points at an existing file with a bun shebang", () => {
-    const target = pkg.bin["aion"];
+  test("bin.rovecode points at an existing file with a bun shebang", () => {
+    const target = pkg.bin["rovecode"];
     expect(target).toBeDefined();
     const abs = join(root, target!);
     expect(statSync(abs).isFile()).toBe(true);
@@ -70,7 +70,7 @@ describe("packaging: package.json publish invariants", () => {
       expect(pkg.files).toContain(required);
     }
     // bin target must live inside a shipped dir
-    expect(pkg.bin["aion"]!.startsWith("src/")).toBe(true);
+    expect(pkg.bin["rovecode"]!.startsWith("src/")).toBe(true);
   });
 
   test("NOTICE copy is non-hollow (Apache attributions present)", () => {
@@ -91,7 +91,7 @@ describe("packaging: package.json publish invariants", () => {
 });
 
 describe("packaging: --version", () => {
-  test("dev-mode `aion --version` prints exactly package.json version, exit 0", () => {
+  test("dev-mode `rovecode --version` prints exactly package.json version, exit 0", () => {
     // --version exits before dispatch, so no TUI/provider path can start.
     const p = cli(["src/cli/main.ts", "--version"]);
     expect(p.exitCode).toBe(0);
@@ -120,12 +120,12 @@ const DEV_ONLY = "smoke-tui is dev-only — run from a source checkout with devD
 
 describe("packaging: smoke-tui is dev-only", () => {
   test("help annotates smoke-tui as (dev-only)", () => {
-    const p = cli(["src/cli/main.ts", "help"]);
+    const p = cli(["src/cli/main.ts", "help", "all"]); // smoke-tui is on the advanced page
     expect(p.exitCode).toBe(0);
-    expect(p.stdout).toMatch(/^\s*aion smoke-tui\s.*\(dev-only\)\s*$/m);
+    expect(p.stdout).toMatch(/^\s*rovecode smoke-tui\s.*\(dev-only\)\s*$/m);
   }, 30_000);
 
-  test("with @xterm/headless unresolvable (the npm-installed tree) `aion smoke-tui` exits 1 with the dev-only message, no crash", () => {
+  test("with @xterm/headless unresolvable (the npm-installed tree) `rovecode smoke-tui` exits 1 with the dev-only message, no crash", () => {
     // The copied tree plus a NEARER stub of the devDependency whose empty
     // `exports` map makes it unresolvable — the same "Cannot find module
     // '@xterm/headless'" a production install produces. (A `main`-only stub falls

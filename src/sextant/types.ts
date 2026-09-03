@@ -1,7 +1,7 @@
 /** Sextant surface (Wave 4, ports #40-#46) — the shared type contract every `src/sextant/*`
  *  module builds against. Ported from the user's own sextant v0.4.0 prototype (term.js cell
  *  buffer, app.js state `S`, layout(), themes); the mock scenario/fixture fields are gone and
- *  every panel is fed by real aion seams (RunEvent stream, SessionStore, TaskManager, todos.json,
+ *  every panel is fed by real rovecode seams (RunEvent stream, SessionStore, TaskManager, todos.json,
  *  approval + ask_user seams, model catalog).
  *
  *  Rules for the whole directory (ADR-001/002/003 + the Bun test hazards):
@@ -11,7 +11,7 @@
  *    parameter — no Date.now(), no timers, no process access; the ONE interval lives in
  *    sextant-renderer.ts;
  *  - one cell per code point unless screen.ts measures otherwise; -1 means "unset" for colors;
- *  - this file is types + tiny constants only: no I/O, no imports beyond aion type modules. */
+ *  - this file is types + tiny constants only: no I/O, no imports beyond rovecode type modules. */
 
 import type { RunEvent } from "../core/types.ts";
 import type { TaskInfo } from "../core/tasks.ts";
@@ -104,7 +104,7 @@ export interface HitZone {
 
 /** The terminal the renderer drives (#44): the ONE place raw stdin/stdout live. tui/sextant-io.ts
  *  implements it over the process streams (+ the Windows VT-input helper); tests and the smoke use
- *  an in-memory double. `env` is the process environment the renderer reads AION_PET/AION_THEME from. */
+ *  an in-memory double. `env` is the process environment the renderer reads ROVECODE_PET/ROVECODE_THEME from. */
 export interface TerminalIO {
   write(s: string): void;
   /** raw input chunks (utf8); returns the unsubscribe */
@@ -182,6 +182,11 @@ export interface ActivityInfo {
   endedAt: number | null;
   /** clock of the transition into ERROR (the pet's storm trigger); absent until the first error */
   errorAt?: number;
+  /** the provider turn in flight: when the loop called the model (turn_start) — absent once a tool
+   *  runs, the turn ends or the run ends, so the live line only paints while the model itself is busy */
+  turnAt?: number;
+  /** estimated output tokens streamed so far in that turn — reasoning plus answer text */
+  tokens?: number;
 }
 
 export type CodeMode = "code" | "diff" | "run" | "agents" | "search";
@@ -256,9 +261,12 @@ export type CardState =
       argsPreview: string;
       /** port #24 unified diff preview when the tool is edit/write */
       detail?: string;
-      /** 0 allow(once) · 1 always · 2 deny */
-      selected: 0 | 1 | 2;
-      resolve: (answer: "once" | "always" | "deny") => void;
+      /** the buttons this card offers, in order — an edit/write card carries the extra `all-edits`
+       *  door, everything else keeps allow · always · deny */
+      verdicts: readonly ("once" | "always" | "all-edits" | "deny")[];
+      /** index into `verdicts` */
+      selected: number;
+      resolve: (answer: "once" | "always" | "all-edits" | "deny") => void;
     }
   | {
       kind: "question";
@@ -310,6 +318,10 @@ export interface PaletteState {
   /** flat items: label + what pressing enter does (a slash line, a renderer-local action, or
    *  `pick:<value>` for a Renderer.pickOne picker); `hint` overrides the derived right-hand hint */
   items: { label: string; group: string; action: string; hint?: string }[];
+  /** what this palette IS, shown on the box: the command palette says nothing and keeps its default,
+   *  a Renderer.pickOne picker names what is being picked. Painted clipped — a caller's sentence is
+   *  not a layout contract. */
+  title?: string;
 }
 
 /** the whole surface state — owned by model.ts (pure `applyEvent`) and mutated by keys.ts */
@@ -340,6 +352,8 @@ export interface SextantState {
   running: boolean;
   mode: "plan" | "act";
   yolo: boolean;
+  /** the middle permission tier — painted next to plan/auto in the frame footer */
+  acceptEdits?: boolean;
   theme: ThemeName;
   /** boot clock for the staggered panel reveal (90 ms steps) */
   bootAt: number;

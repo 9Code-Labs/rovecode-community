@@ -1,8 +1,9 @@
 /** Port #42 — code panel painter. Pins: title per mode (+a −b stats, activity word, spinner/exit
  *  chip, crew counts, search summary), rail glyphs + active mode, minimap thumb/marks, file view
  *  (line numbers, highlight band + "◂ reading", auto-center while reading, scroll clamp, tokenizer
- *  seam with class names and ready styles), run view (verbatim rows, hard-wrap, PASS/FAIL chips,
- *  spinner, tail-follow, 10k chars), search rows, diff unified + split (>110), hunksFromUnified
+ *  seam with class names and ready styles), run view (pinned `$ cmd` header budgeted to 3 rows with
+ *  the `… +N more lines` marker, output + verdict anchored to the bottom, verbatim rows, hard-wrap,
+ *  PASS/FAIL chips, spinner, tail-follow, 10k chars), search rows, diff unified + split (>110), hunksFromUnified
  *  over real previewDiff output, agents seam, empty states, nothing outside the rect. */
 
 import { test, expect } from "bun:test";
@@ -10,7 +11,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ATTR, SPIN, type CodeMode, type DiffHunk, type SextantState } from "../../src/sextant/types.ts";
-import { codeScrollTop, codeTitle, diffRows, drawCode, hunkMarks, hunksFromUnified, langOf, setAgentsPainter, tokStyle } from "../../src/sextant/draw-code.ts";
+import { codeScrollTop, codeTitle, diffRows, drawCode, hunkMarks, hunksFromUnified, langOf, runCmdRows, setAgentsPainter, tokStyle } from "../../src/sextant/draw-code.ts";
 import { previewDiff } from "../../src/coding/diff.ts";
 import { GridScreen, THEME, baseState, untouchedOutside } from "../helpers/sextant-grid.ts";
 import type { TaskInfo } from "../../src/core/tasks.ts";
@@ -58,13 +59,14 @@ test("title: diff / run / agents / search modes", () => {
   expect(diff).toContain(" diff ");
   expect(diff).toContain(`${FILE}  +1 −1`);
   const running = codeState({ mode: "run", run: { cmd: "bun test", lines: [], status: "running" } });
-  expect(draw(running, 280).row(RECT.y)).toContain(`bun test  ${SPIN[2]}`); // spinner phase from `now`
-  expect(draw(running, 0).row(RECT.y)).toContain(`bun test  ${SPIN[0]}`);
+  expect(draw(running, 280).row(RECT.y)).toContain(`─ ${SPIN[2]} ╮`); // spinner phase from `now`; the status is the only extra
+  expect(draw(running, 0).row(RECT.y)).toContain(`─ ${SPIN[0]} ╮`);
+  expect(draw(running).row(RECT.y)).not.toContain("bun test"); // the command is the body's pinned header, not a second copy in the title
   running.code.run!.status = "ok";
-  expect(draw(running).row(RECT.y)).toContain("bun test  exit 0");
+  expect(draw(running).row(RECT.y)).toContain("─ exit 0 ╮");
   running.code.run!.status = "fail";
   const failed = draw(running);
-  expect(failed.row(RECT.y)).toContain("bun test  failed");
+  expect(failed.row(RECT.y)).toContain("─ failed ╮");
   expect(failed.cell(failed.row(RECT.y).indexOf("failed"), RECT.y).fg).toBe(THEME.err);
   expect(draw(codeState({ mode: "run", run: null })).row(RECT.y)).toMatch(/^░{3}╭─ run ─+╮/);
   const crew = codeState({ mode: "agents" }, { crew: [task("t1", "running"), task("t2", "queued"), task("t3", "done"), task("t4", "failed")] });
@@ -196,7 +198,7 @@ test("file view: tokenizer seam — class names go through tokStyle, ready style
 });
 
 test("empty states: no file / unreadable / empty content / nothing run / no diff / no search", () => {
-  expect(draw(codeState({ file: null, content: null })).span(BX, BY, BODY_W)).toMatch(/^no file selected/);
+  expect(draw(codeState({ file: null, content: null })).span(BX, BY, BODY_W)).toMatch(/^nothing open/);
   expect(draw(codeState({ content: null })).span(BX, BY, BODY_W)).toMatch(/^cannot read src\/auth\/callback\.ts/);
   expect(draw(codeState({ content: "" })).span(BX, BY, BODY_W)).toMatch(/^\(empty\)/);
   expect(draw(codeState({ mode: "run", run: null })).span(BX, BY, BODY_W)).toMatch(/^nothing has run yet/);
@@ -207,43 +209,84 @@ test("empty states: no file / unreadable / empty content / nothing run / no diff
 
 // ------------------------------------------------------------------ run
 
-test("run: `$ cmd` bold, output rows verbatim, PASS/FAIL line chips, the status chip on the tail row", () => {
+const TAIL = BY + 17; // the body's last row (inner h = 18): output and the verdict sit against it
+
+test("run: `$ cmd` bold at the top, output rows verbatim against the bottom, PASS/FAIL line chips, the status chip on the tail row", () => {
   const s = codeState({ mode: "run", run: { cmd: "bun test", lines: ["ran 3 files", "PASS test/a.test.ts", "FAIL test/b.test.ts  expected 1", "done ⏎ kept"], status: "ok" } });
   const g = draw(s);
   expect(g.span(BX, BY, BODY_W)).toBe("$ bun test");
   expect(g.cell(BX, BY)).toMatchObject({ fg: THEME.fg, at: ATTR.BOLD });
-  expect(g.span(BX, BY + 1, BODY_W)).toBe("ran 3 files");
-  expect(g.span(BX, BY + 2, BODY_W)).toBe(" PASS  test/a.test.ts");
-  for (let i = 0; i < 6; i++) expect(g.cell(BX + i, BY + 2)).toMatchObject({ bg: THEME.ok, fg: THEME.bg, at: ATTR.BOLD });
-  expect(g.span(BX, BY + 3, BODY_W)).toBe(" FAIL  test/b.test.ts  expected 1");
-  expect(g.cell(BX + 1, BY + 3).bg).toBe(THEME.err);
-  expect(g.span(BX, BY + 4, BODY_W)).toBe("done ⏎ kept"); // a literal ⏎ in the output is just a character
-  expect(g.span(BX, BY + 5, BODY_W)).toBe(" PASS   exit 0"); // the verdict from run.status
-  expect(g.cell(BX + 2, BY + 5).bg).toBe(THEME.ok);
+  for (let y = BY + 1; y < TAIL - 4; y++) expect(g.span(BX, y, BODY_W)).toBe(""); // the slack is above the output, not below it
+  expect(g.span(BX, TAIL - 4, BODY_W)).toBe("ran 3 files");
+  expect(g.span(BX, TAIL - 3, BODY_W)).toBe(" PASS  test/a.test.ts");
+  for (let i = 0; i < 6; i++) expect(g.cell(BX + i, TAIL - 3)).toMatchObject({ bg: THEME.ok, fg: THEME.bg, at: ATTR.BOLD });
+  expect(g.span(BX, TAIL - 2, BODY_W)).toBe(" FAIL  test/b.test.ts  expected 1");
+  expect(g.cell(BX + 1, TAIL - 2).bg).toBe(THEME.err);
+  expect(g.span(BX, TAIL - 1, BODY_W)).toBe("done ⏎ kept"); // a literal ⏎ in the output is just a character
+  expect(g.span(BX, TAIL, BODY_W)).toBe(" PASS   exit 0"); // the verdict from run.status
+  expect(g.cell(BX + 2, TAIL).bg).toBe(THEME.ok);
   s.code.run!.status = "fail";
   const f = draw(s);
-  expect(f.span(BX, BY + 5, BODY_W)).toBe(" FAIL   non-zero exit");
-  expect(f.cell(BX + 2, BY + 5).bg).toBe(THEME.err);
+  expect(f.span(BX, TAIL, BODY_W)).toBe(" FAIL   non-zero exit");
+  expect(f.cell(BX + 2, TAIL).bg).toBe(THEME.err);
   s.code.run!.status = "running";
   const r = draw(s, 280);
-  expect(r.span(BX, BY + 5, BODY_W)).toBe(`${SPIN[2]}  running`);
-  expect(r.cell(BX, BY + 5).fg).toBe(THEME.accent);
+  expect(r.span(BX, TAIL, BODY_W)).toBe(`${SPIN[2]}  running`);
+  expect(r.cell(BX, TAIL).fg).toBe(THEME.accent);
   expect(r.toText()).not.toContain("PASS   exit"); // no verdict chip while running
 });
 
-test("run: 10k chars of output stay verbatim rows (tail-follow, no ⏎ one-lining) and long rows hard-wrap like a terminal", () => {
+test("run: 10k chars of output stay verbatim rows (tail-follow under the pinned `$ cmd`, no ⏎ one-lining) and long rows hard-wrap like a terminal", () => {
   const lines = Array.from({ length: 250 }, (_, i) => `L${String(i + 1).padStart(3, "0")} ${"x".repeat(35)}`); // 250 × 40 = 10 000 chars
   expect(lines.join("").length).toBe(10_000);
   const g = draw(codeState({ mode: "run", run: { cmd: "bun run big", lines, status: "ok" } }));
-  for (let i = 0; i < 17; i++) expect(g.span(BX, BY + i, BODY_W)).toBe(lines[250 - 17 + i]!); // the last 17 lines above the tail row
-  expect(g.span(BX, BY + 17, BODY_W)).toBe(" PASS   exit 0");
+  expect(g.span(BX, BY, BODY_W)).toBe("$ bun run big"); // the header does not scroll off: the title no longer names the command
+  for (let i = 0; i < 16; i++) expect(g.span(BX, BY + 1 + i, BODY_W)).toBe(lines[250 - 16 + i]!); // the last 16 lines between the header and the tail row
+  expect(g.span(BX, TAIL, BODY_W)).toBe(" PASS   exit 0");
   expect(g.toText()).not.toContain("⏎");
-  expect(g.toText()).not.toContain("$ bun run big"); // scrolled off: the tail wins
   const long = "y".repeat(200);
   const w = draw(codeState({ mode: "run", run: { cmd: "echo", lines: [long, "next"], status: "ok" } }));
   expect(w.span(BX, BY, BODY_W)).toBe("$ echo");
-  expect(w.span(BX, BY + 1, BODY_W) + w.span(BX, BY + 2, BODY_W) + w.span(BX, BY + 3, BODY_W)).toBe(long); // 200 = 71 + 71 + 58
-  expect(w.span(BX, BY + 4, BODY_W)).toBe("next");
+  expect(w.span(BX, TAIL - 4, BODY_W) + w.span(BX, TAIL - 3, BODY_W) + w.span(BX, TAIL - 2, BODY_W)).toBe(long); // 200 = 71 + 71 + 58
+  expect(w.span(BX, TAIL - 1, BODY_W)).toBe("next");
+  expect(w.span(BX, TAIL, BODY_W)).toBe(" PASS   exit 0");
+});
+
+test("run: a long command is budgeted to 3 rows — two of text + `… +N more lines` — and the output keeps the bottom", () => {
+  const cmd = `cd "C:/Users/x/site" && ffmpeg -v error -i hero.mp4 -vf scale=1920:-2 out.mp4 | node -e "${"j".repeat(800)}"`; // 902 cells with `$ ` → 13 rows at 71
+  const lines = ["frame 1", "frame 2", "frame 3", "frame 4", "frame 5", "done"];
+  const g = draw(codeState({ mode: "run", run: { cmd, lines, status: "ok" } }));
+  const all = [..."$ " + cmd];
+  expect(Math.ceil(all.length / BODY_W)).toBe(13);
+  expect(g.span(BX, BY, BODY_W)).toBe(all.slice(0, 71).join(""));
+  expect(g.span(BX, BY + 1, BODY_W)).toBe(all.slice(71, 142).join(""));
+  expect(g.span(BX, BY + 2, BODY_W)).toBe("… +11 more lines"); // 13 wrapped rows − 2 shown = 11 folded into the marker row
+  expect(g.cell(BX, BY)).toMatchObject({ fg: THEME.fg, at: ATTR.BOLD });
+  expect(g.cell(BX, BY + 2).fg).toBe(THEME.dim);
+  for (let y = BY + 3; y < TAIL - 6; y++) expect(g.span(BX, y, BODY_W)).toBe(""); // nothing of the command leaks past its budget
+  lines.forEach((l, i) => expect(g.span(BX, TAIL - 6 + i, BODY_W)).toBe(l));
+  expect(g.span(BX, TAIL, BODY_W)).toBe(" PASS   exit 0");
+  // the budget boundary is exact: three rows fit whole, a fourth folds two into the marker (never a marker for one hidden row)
+  expect(runCmdRows("x".repeat(211), BODY_W, 3)).toEqual(["$ " + "x".repeat(69), "x".repeat(71), "x".repeat(71)]);
+  expect(runCmdRows("x".repeat(212), BODY_W, 3)).toEqual(["$ " + "x".repeat(69), "x".repeat(71), "… +2 more lines"]);
+  expect(runCmdRows("x".repeat(212), BODY_W, 0)).toEqual([]);
+});
+
+test("run: short output is anchored to the bottom rows of a tall panel; a body under 4 rows drops the header for the output", () => {
+  const s = codeState({ mode: "run", run: { cmd: "bun test", lines: ["a", "b", "c"], status: "running" } });
+  const g = draw(s, 280);
+  expect(g.span(BX, BY, BODY_W)).toBe("$ bun test");
+  for (let y = BY + 1; y <= TAIL - 4; y++) expect(g.span(BX, y, BODY_W)).toBe("");
+  expect([TAIL - 3, TAIL - 2, TAIL - 1].map((y) => g.span(BX, y, BODY_W))).toEqual(["a", "b", "c"]);
+  expect(g.span(BX, TAIL, BODY_W)).toBe(`${SPIN[2]}  running`);
+  const short = { x: 3, y: 2, w: 80, h: 5 }; // inner h = 3: no room for a header that would leave less than output + verdict
+  const t = new GridScreen(100, 30, "░");
+  drawCode(t, short, codeState({ mode: "run", run: { cmd: "bun test", lines: ["a"], status: "ok" } }), THEME, 0);
+  expect([3, 4, 5].map((y) => t.span(BX, y, BODY_W))).toEqual(["", "a", " PASS   exit 0"]);
+  const four = { x: 3, y: 2, w: 80, h: 6 }; // inner h = 4: the header gets min(3, h − 2) = 2 rows, so a long command is one row + the marker
+  const u = new GridScreen(100, 30, "░");
+  drawCode(u, four, codeState({ mode: "run", run: { cmd: "x".repeat(300), lines: ["a"], status: "ok" } }), THEME, 0);
+  expect([3, 4, 5, 6].map((y) => u.span(BX, y, BODY_W))).toEqual(["$ " + "x".repeat(69), "… +4 more lines", "a", " PASS   exit 0"]); // 302 cells → 5 rows; 5 − 2 + 1 = 4
 });
 
 // ------------------------------------------------------------------ search
@@ -300,7 +343,7 @@ test("diff split view when the body is wider than 110: equal lines mirrored, a d
 });
 
 test("hunksFromUnified: previewDiff output on a real file → hunks the diff view renders; create = all adds from 0; garbage → []", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-p42-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-p42-"));
   try {
     const before = numbered(10, "line-");
     writeFileSync(join(dir, "f.txt"), before);

@@ -101,7 +101,7 @@ test("suggestions are closed while the palette, the help card or a card is open"
   expect(suggestions(s, s.files.paths).length).toBe(2);
   openPalette(s); expect(suggestions(s, s.files.paths)).toEqual([]); closePalette(s);
   s.help = true; expect(suggestions(s, s.files.paths)).toEqual([]); s.help = false;
-  s.card = { kind: "approval", tool: "edit", argsPreview: "", selected: 0, resolve: () => {} };
+  s.card = { kind: "approval", verdicts: ["once", "always", "deny"], tool: "edit", argsPreview: "", selected: 0, resolve: () => {} };
   expect(suggestions(s, s.files.paths)).toEqual([]);
 });
 
@@ -297,4 +297,67 @@ test("drawHelp fits a short terminal: the command list is cut with an '… N mor
   drawHelp(tall, makeLayout(160, 60), THEME, s);
   expect(tall.toText()).toContain("/c29");
   expect(tall.toText()).not.toContain("more ·");
+});
+
+// ---------- the picker box: a caller's title is data, not a layout contract ----------
+
+/** the shape Renderer.pickOne produces (sextant-cards.ts pick): rows in one empty group, the title
+ *  on the palette itself */
+const pickerRows = (n: number) => Array.from({ length: n }, (_, i) => ({
+  label: `${i === 0 ? "* " : "  "}anthropic/claude-model-${i}-20251101`, group: "", action: `pick:anthropic/m${i}`,
+  ...(i === 0 ? { hint: "current" } : {}),
+}));
+
+test("a long picker title is clipped to the box and paints nothing outside it", () => {
+  const s = makeState();
+  const long = "pick a model — 128 from 9 providers (Esc = keep anthropic/claude-opus-5) " + "x".repeat(200);
+  openPalette(s, pickerRows(6), long);
+  const g = new GridScreen(100, 26);
+  drawPalette(g, makeLayout(100, 26), THEME, s);
+  const text = g.toText();
+  expect(text).toContain("pick a model");
+  expect(text).not.toContain("xxxx");            // the tail never reaches the screen
+  expect(text).toMatch(/….?─*╮/);                 // it ends in an ellipsis before the corner
+  // every cell outside the box is still blank: nothing was painted there
+  const pw = Math.min(72, 100 - 10), px = Math.floor((100 - pw) / 2);
+  for (const row of g.cells) {
+    for (let x = 0; x < px; x++) expect(row[x]).toBe(" ");
+    for (let x = px + pw; x < 100; x++) expect(row[x]).toBe(" ");
+  }
+});
+
+test("a long GROUP name is clipped too — a group is data as much as a title is", () => {
+  const s = makeState();
+  const rows = pickerRows(3);
+  rows[0]!.group = "g".repeat(300);
+  openPalette(s, rows, "pick a model");
+  const g = new GridScreen(100, 26);
+  drawPalette(g, makeLayout(100, 26), THEME, s);
+  const pw = Math.min(72, 100 - 10), px = Math.floor((100 - pw) / 2);
+  for (const row of g.cells) for (let x = px + pw; x < 100; x++) expect(row[x]).toBe(" ");
+});
+
+test("the command palette keeps its own title and placeholder; a picker says what it is", () => {
+  const cmd = makeState();
+  openPalette(cmd, [{ label: "/help", group: "start here", action: "/help" }]);
+  const g1 = new GridScreen(100, 26);
+  drawPalette(g1, makeLayout(100, 26), THEME, cmd);
+  expect(g1.toText()).toContain(" commands ");
+  expect(g1.toText()).toContain("commands, themes, views, files…");
+
+  const pick = makeState();
+  openPalette(pick, pickerRows(2), "pick a model · 11 from 1 provider");
+  const g2 = new GridScreen(100, 26);
+  drawPalette(g2, makeLayout(100, 26), THEME, pick);
+  expect(g2.toText()).toContain("pick a model · 11 from 1 provider");
+  expect(g2.toText()).not.toContain(" commands ");
+  expect(g2.toText()).toContain("type to filter…");
+});
+
+test("an explicit hint is shown — PaletteState says it overrides the derived one, and now it does", () => {
+  const s = makeState();
+  openPalette(s, pickerRows(3), "pick a model");
+  const g = new GridScreen(100, 26);
+  drawPalette(g, makeLayout(100, 26), THEME, s);
+  expect(g.toText()).toContain("current");
 });

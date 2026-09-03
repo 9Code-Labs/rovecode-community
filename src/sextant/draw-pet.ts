@@ -1,4 +1,4 @@
-/** Port #45 — paints nimbus into its panel: a rounded frame titled `<name>  lv N  <mood>`, the cloud
+/** Port #45 — paints rovecode into its panel: a rounded frame titled `<name>  lv N  <mood>`, the cloud
  *  sprite on the prototype's 1.8 s step sway (pet.js:196), weather (code drizzle while editing, lightning while running/testing,
  *  sun on success, zzz when sleepy), the storm (dark filled body, furrowed brows, red eyes, rain + bolts,
  *  panel flash, reddened border), sparkles/hearts, and a ≤2-line speech bubble — everything clipped to
@@ -20,6 +20,11 @@ export const STORM_PERIOD_MS = 2600;
 export const STORM_FLASH_MS = 260;
 export const SPRITE_W = 18;
 
+/** the interior shading, per sprite row: light at the top, heaviest along the base (see the fill in
+ *  drawPet). Rows past the end fall back to ░, so a re-drawn sprite cannot crash the painter. */
+export const FILL_GLYPH: readonly string[] = ["░", "░", "░", "▒", "▓", "▓"];
+export const FILL_MIX: readonly number[] = [0.10, 0.12, 0.14, 0.18, 0.24, 0.26];
+
 /** the click zone the input layer registers (a click anywhere in the panel pokes); null when hidden */
 export function petHit(rect: Rect | null): Rect | null { return rect; }
 
@@ -34,20 +39,27 @@ export function moodColor(m: Mood, theme: Theme): number {
 /** vertical sway phase: a step that flips every SWAY_MS (frames within one step are identical — no per-frame jitter) */
 export function swayBob(now: number): 0 | 1 { return (Math.floor(now / SWAY_MS) % 2) as 0 | 1; }
 
-/** word wrap to w cells; a single over-long word is left whole (put() clips it) */
+/** word wrap to w cells (code points); a word longer than a row — a host, a path — is hard-split, so a
+ *  bubble line is never wider than the row and the closing ” survives put()'s clip (it used to be left
+ *  whole and the quote fell off the edge) */
 export function wrapText(text: string, w: number): string[] {
   const out: string[] = [];
-  let line = "";
-  for (const word of text.split(" ")) {
-    if (!line) { line = word; continue; }
-    if (line.length + 1 + word.length <= w) line += " " + word;
-    else { out.push(line); line = word; }
+  const width = Math.max(1, w);
+  let line = "", len = 0;
+  for (const raw of text.split(" ")) {
+    const cps = [...raw];
+    while (cps.length > width) { if (line) { out.push(line); line = ""; len = 0; } out.push(cps.splice(0, width).join("")); }
+    if (!cps.length) continue;
+    const word = cps.join("");
+    if (!line) { line = word; len = cps.length; continue; }
+    if (len + 1 + cps.length <= width) { line += " " + word; len += 1 + cps.length; }
+    else { out.push(line); line = word; len = cps.length; }
   }
   if (line) out.push(line);
   return out;
 }
 
-/** no-op when the layout hides the pet (rect null below 34 rows, or AION_PET=0) */
+/** no-op when the layout hides the pet (rect null below 34 rows, or ROVECODE_PET=0) */
 export function drawPet(scr: ScreenLike, rect: Rect | null, pet: Pet, s: SextantState, theme: Theme, now: number): void {
   if (!rect || rect.w < 8 || rect.h < 4) return;
   const ctx = moodCtxFrom(s, now);
@@ -95,7 +107,11 @@ function drawCloud(scr: ScreenLike, B: Rect, pet: Pet, ctx: MoodCtx, m: Mood, th
   else if (stormy) body = flash ? theme.warn : mix(theme.bg, theme.err, 0.7);
   else if (sleeping) body = theme.mixDim;
   else if (ctx.state === "EDITING" || ctx.running) body = theme.fg;
-  const fill = stormy ? mix(theme.bg, theme.fg, flash ? 0.35 : 0.22) : null;
+  // the interior is always painted now: ░ across the top rows, ▒ through the middle, ▓ along the base —
+  // two shading steps that read as volume without touching the outline. The tone is mixed from the body
+  // colour, so the cloud dims asleep and brightens while busy with the rest of the sprite. A storm keeps
+  // its own flat, brighter fill (and its flash), which is what makes it read as a different thing.
+  const stormFill = stormy ? mix(theme.bg, theme.fg, flash ? 0.35 : 0.22) : null;
   const faceFg = stormy ? theme.err : sleeping ? theme.muted : theme.fg;
   const mouthFg = stormy ? theme.fg2 : sleeping ? theme.muted : theme.fg;
   // motion: bounce fx hops every 200 ms, shiver fx jitters sideways, a strike shakes the cloud,
@@ -122,7 +138,10 @@ function drawCloud(scr: ScreenLike, B: Rect, pet: Pet, ctx: MoodCtx, m: Mood, th
     for (let i = 0; i < row.length; i++) {
       const ch = row[i] ?? " ";
       if (ch !== " ") putSafe(sx + i, y, ch, st(body));
-      else if (fill != null && i > a && i < b) putSafe(sx + i, y, "░", st(fill));
+      else if (i > a && i < b) {
+        putSafe(sx + i, y, stormFill != null ? "░" : (FILL_GLYPH[r] ?? "░"),
+                st(stormFill ?? mix(theme.bg, body, FILL_MIX[r] ?? 0.14)));
+      }
     }
     if (r === FACE.EYE_ROW) {
       putSafe(sx + FACE.EYE_L + eyeShift, y, eyes[0] ?? "•", st(faceFg, -1, ATTR.BOLD));

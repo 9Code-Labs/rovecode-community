@@ -138,7 +138,7 @@ for (const [name, build] of Object.entries(SCENARIOS)) {
 
 test("goldens pin the panel content: header, activity + clock, files statuses, plan steps, crew, usage", () => {
   const f = dumpFrame(editing(), 160, 44, NOW, theme);
-  expect(f).toContain("◆ aion  ·  atlas  ·  feature/auth  ·  4 modified");
+  expect(f).toContain("◆ rovecode  ·  atlas  ·  feature/auth  ·  4 modified");
   expect(f).toContain("editing callback.ts  00:14.0");
   expect(f).toMatch(/callback\.ts [◇◈◆] +M/); // touched spinner + M status
   expect(f).toMatch(/guard\.ts +A/);
@@ -163,7 +163,7 @@ test("goldens pin the panel content: header, activity + clock, files statuses, p
   expect(f).toContain("claude-sonnet-4 · night · v0.2.0");
   expect(f).toContain("─ code ─");
   expect(f).toContain("─ messages ─");
-  expect(f).toContain("─ nimbus ─");
+  expect(f).toContain("─ rovecode ─");
 });
 
 test("welcome at 100x30: no files/plan/usage columns, idle header, no clock, toast top-right, hints drop whole keys", () => {
@@ -185,7 +185,7 @@ test("running frame footer: esc stop, then 'again to stop' while armed; plan mod
   s.escUntil = NOW + 1500;
   expect(dumpFrame(s, 160, 44, NOW, theme)).toContain("esc again to stop   ⌃k commands");
   s.mode = "plan"; s.yolo = true;
-  expect(dumpFrame(s, 160, 44, NOW, theme)).toContain("plan mode  ·  yolo  ·  claude-sonnet-4 · night · v0.2.0");
+  expect(dumpFrame(s, 160, 44, NOW, theme)).toContain("plan mode  ·  auto  ·  claude-sonnet-4 · night · v0.2.0"); // the yolo flag shows as "auto" (core/voice.ts)
 });
 
 test("done frame: SUCCESS header with the clock frozen at endedAt; denied frame: ERROR 'denied' + system row", () => {
@@ -205,7 +205,7 @@ test("no-git repo: header shows the cwd basename only (no branch, no modified co
   const s = welcome();
   s.repo.branch = null;
   const f = dumpFrame(s, 160, 44, NOW, theme);
-  expect(f).toContain("◆ aion  ·  atlas ─");
+  expect(f).toContain("◆ rovecode  ·  atlas ─");
   expect(f).not.toContain("modified");
   expect(f).not.toContain("null");
 });
@@ -220,7 +220,7 @@ test("painters seam: an injected painter replaces the placeholder; missing paint
   expect(f).toContain("CODE HERE");
   expect(f).not.toContain("─ code ─");
   expect(f).toContain("─ messages ─");
-  expect(f).toContain("─ nimbus ─");
+  expect(f).toContain("─ rovecode ─");
   expect(Object.keys(defaultPainters).sort()).toEqual(["code", "files", "frame", "messages", "pet", "plan", "usage"]);
 });
 
@@ -230,7 +230,7 @@ test("layout seam: an injected layout() is used instead of layoutFallback", () =
   const f = dumpFrame(welcome(), 160, 44, NOW, theme, deps);
   expect(calls).toBe(1);
   expect(f).not.toContain("─ files ─");
-  expect(f).not.toContain("─ nimbus ─");
+  expect(f).not.toContain("─ rovecode ─");
 });
 
 test("layoutFallback breakpoints: files ≥ 140 (30 wide ≥ 150), right column ≥ 110 (34 / 28), pet needs 36 content rows", () => {
@@ -267,8 +267,8 @@ test("boot reveal: panels appear in 90 ms steps after bootAt", () => {
   expect(at(269)).not.toContain("─ plan ─");
   expect(at(270)).toContain("─ plan ─");
   expect(at(360)).toContain("─ usage ─");
-  expect(at(449)).not.toContain("─ nimbus ─");
-  expect(at(450)).toContain("─ nimbus ─");
+  expect(at(449)).not.toContain("─ rovecode ─");
+  expect(at(450)).toContain("─ rovecode ─");
 });
 
 test("renderFrame paints onto any ScreenLike and returns the layout; expired toasts are pruned from state", () => {
@@ -276,7 +276,7 @@ test("renderFrame paints onto any ScreenLike and returns the layout; expired toa
   const scr = new GridScreen(100, 30);
   const L = renderFrame(scr, s, theme, NOW + 10_000);
   expect(L.w).toBe(100);
-  expect(scr.toText()).toContain("◆ aion");
+  expect(scr.toText()).toContain("◆ rovecode");
   expect(s.toasts).toEqual([]);
 });
 

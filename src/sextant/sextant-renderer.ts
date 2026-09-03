@@ -1,4 +1,4 @@
-/** SextantRenderer (port #44): the sextant surface as aion's `Renderer` — the ONE controller stays
+/** SextantRenderer (port #44): the sextant surface as rovecode's `Renderer` — the ONE controller stays
  *  runTui (ADR-003, no second loop); this class maps the Renderer seam plus the optional onEvent/attach
  *  members onto the SextantState (#41 model), paints through FrameLoop (#40 screen, #41-#46 painters)
  *  and routes keys through #43. Ported from the user's sextant v0.4.0 app.js:1599-1632 (boot: enter
@@ -45,7 +45,7 @@ export interface SextantRendererOptions {
   io: TerminalIO;
   /** the frame clock (Date.now in production; tests inject a controllable one) */
   clock?: () => number;
-  /** starting palette (AION_THEME / --theme); an unknown name falls back to night */
+  /** starting palette (ROVECODE_THEME / --theme); an unknown name falls back to night */
   theme?: string;
   /** the pet's name (`--pet <name>`); attach() may override it */
   pet?: string;
@@ -90,7 +90,7 @@ export class SextantRenderer implements Renderer {
   /** per cwd-relative path: the content when its edit/write was APPROVED (null = did not exist) — the
    *  pre-edit diff base. Captured at askApproval (the one moment before the tool runs), NOT at
    *  tool_execution_start: that event reaches the renderer through the loop's buffered pump after
-   *  aion's synchronous edit/write already wrote, so a snapshot then is the post-edit file. Ungated
+   *  rovecode's synchronous edit/write already wrote, so a snapshot then is the post-edit file. Ungated
    *  calls (yolo / always) rebuild their base from the hashline ops instead (sextant-diff-base.ts). */
   private readonly before = new Map<string, string | null>();
   /** per live edit callId: its hashline ops (the base of an ungated edit is rebuilt from them at the end) */
@@ -300,7 +300,7 @@ export class SextantRenderer implements Renderer {
 
   setStatus(info: StatusInfo): void {
     const s = this.state;
-    s.yolo = info.yolo; if (info.mode) s.mode = info.mode;
+    s.yolo = info.yolo; s.acceptEdits = info.permission === "accept-edits"; if (info.mode) s.mode = info.mode;
     const u = this.ctx?.usage?.();
     setUsage(s, {
       provider: info.provider, model: info.model, turns: info.turns, tokensIn: info.tokensIn, tokensOut: info.tokensOut,

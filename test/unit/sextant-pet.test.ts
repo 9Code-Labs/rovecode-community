@@ -1,4 +1,4 @@
-/** Port #45 nimbus brain (src/sextant/pet.ts): the pinned mood table (direct MoodCtx and moodCtxFrom over
+/** Port #45 rovecode brain (src/sextant/pet.ts): the pinned mood table (direct MoodCtx and moodCtxFrom over
  *  a SextantState fixture), storm on tool_fail within one frame / seeded 5-7 s / cleared by SUCCESS and by
  *  done / edge-triggered on the state's entry into ERROR (two episodes = two storms, a lingering ERROR = one),
  *  observe table + 5.5 s rate limit + deferral behind event quips (dropped past 10 s), react, poke (event
@@ -408,9 +408,9 @@ test("event quips fill {f} {n} {a} {r}; read/edit/... glance at the code panel; 
   pet.event("read", { f: "auth.ts" }, T0);
   expect(["reading auth.ts.", "let me skim auth.ts."]).toContain(pet.state.quip!.text);
   expect(pet.state.glance).toEqual({ dir: 1, until: T0 + 2600 });
-  pet.event("grep", { n: 3 }, T0 + 10);
+  pet.event("grep", { n: 3 }, T0 + 1600); // past MIN_DWELL_MS: a different routine kind may take the floor
   expect(["found 3.", "3. noted."]).toContain(pet.state.quip!.text);
-  pet.event("spawn", { a: "codex" }, T0 + 20);
+  pet.event("spawn", { a: "codex" }, T0 + 3200);
   expect(pet.state.quip!.text).toContain("codex");
   pet.event("permission", undefined, T0 + 30);
   expect(QUIPS.permission).toContain(pet.state.quip!.text);
@@ -494,23 +494,23 @@ test("same seed + same script → identical state; other seeds choose differentl
   expect([r1(), r1(), r1()]).toEqual([r2(), r2(), r2()]);
 });
 
-test("name defaults to nimbus and is capped at 14 chars; INNER spans the outline interior per row", () => {
-  expect(createPet().state.name).toBe("nimbus");
+test("name defaults to rovecode and is capped at 14 chars; INNER spans the outline interior per row", () => {
+  expect(createPet().state.name).toBe("rovecode");
   expect(createPet({ name: "cumulonimbus-maximus" }).state.name).toBe("cumulonimbus-m");
   expect(SPRITE.every((r) => r.length === 18)).toBe(true);
   expect(INNER[0]).toEqual([7, 12]);
   expect(INNER[3]).toEqual([2, 16]);
 });
 
-test("petEnabled: AION_PET=0/false/off/no hides the panel; unset, empty or anything else shows it", () => {
-  expect(petEnabled({ AION_PET: "0" })).toBe(false);
-  expect(petEnabled({ AION_PET: "false" })).toBe(false);
-  expect(petEnabled({ AION_PET: " OFF " })).toBe(false);
-  expect(petEnabled({ AION_PET: "no" })).toBe(false);
+test("petEnabled: ROVECODE_PET=0/false/off/no hides the panel; unset, empty or anything else shows it", () => {
+  expect(petEnabled({ ROVECODE_PET: "0" })).toBe(false);
+  expect(petEnabled({ ROVECODE_PET: "false" })).toBe(false);
+  expect(petEnabled({ ROVECODE_PET: " OFF " })).toBe(false);
+  expect(petEnabled({ ROVECODE_PET: "no" })).toBe(false);
   expect(petEnabled({})).toBe(true);
-  expect(petEnabled({ AION_PET: undefined })).toBe(true);
-  expect(petEnabled({ AION_PET: "" })).toBe(true);
-  expect(petEnabled({ AION_PET: "1" })).toBe(true);
+  expect(petEnabled({ ROVECODE_PET: undefined })).toBe(true);
+  expect(petEnabled({ ROVECODE_PET: "" })).toBe(true);
+  expect(petEnabled({ ROVECODE_PET: "1" })).toBe(true);
 });
 
 test("source pins: pet.ts and draw-pet.ts have no wall clock, timers, Math.random or process access; ≤400 lines; provenance header", () => {

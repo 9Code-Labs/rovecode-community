@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   applyEvent, makeApplyEvent, initialState, setFiles, treeRows, treeGuides, repoModified, fileCount, expandTo,
-  pushToast, pruneToasts, elapsed, fmtClock, fmtK, contextPercent, setUsage, setPlan, planCounts, setCrew, TOUCH_MS, TOAST_MS,
+  pushToast, pruneToasts, elapsed, fmtClock, fmtElapsed, fmtK, contextPercent, setUsage, setPlan, planCounts, setCrew, TOUCH_MS, TOAST_MS,
 } from "../../src/sextant/model.ts";
 import { describeCall, summarizeEnd, relPath } from "../../src/sextant/tool-rows.ts";
 import { drawFiles } from "../../src/sextant/draw-frame.ts";
@@ -434,4 +434,45 @@ test("negative: the pure modules never read the clock, start timers or touch pro
   ];
   for (const [e, at] of events) { applyEvent(a, e, at); applyEvent(b, e, at); }
   expect(JSON.stringify(a, (_k, v) => (v instanceof Map ? [...v] : v instanceof Set ? [...v] : v))).toBe(JSON.stringify(b, (_k, v) => (v instanceof Map ? [...v] : v instanceof Set ? [...v] : v)));
+});
+
+// ------------------------------------------------------------------ the live turn (thinking indicator)
+
+test("live turn: turn_start stamps turnAt + zero tokens; reasoning_update is cumulative, message_update adds the answer estimate; a tool start / turn_end / run_end settles both", () => {
+  const s = state(); run(s);
+  expect(s.activity.turnAt).toBeUndefined();
+  applyEvent(s, { type: "reasoning_update", messageId: "m0", tokens: 7 }, T + 100);
+  expect(s.activity.tokens).toBeUndefined(); // no turn in flight yet: nothing to attribute it to
+  applyEvent(s, { type: "turn_start", turn: 1 }, T + 500);
+  expect(s.activity).toMatchObject({ state: "THINKING", label: "thinking", turnAt: T + 500, tokens: 0 }); // the clock starts at the provider call
+  applyEvent(s, { type: "reasoning_update", messageId: "m1", tokens: 120 }, T + 900);
+  expect(s.activity).toMatchObject({ state: "THINKING", tokens: 120 });
+  expect(s.messages.some((m) => m.kind === "assistant")).toBe(false); // reasoning is not writing: no row, no caret
+  applyEvent(s, { type: "reasoning_update", messageId: "m1", tokens: 300 }, T + 1200);
+  expect(s.activity.tokens).toBe(300); // replaces, never adds
+  applyEvent(s, { type: "message_update", messageId: "m1", delta: "x".repeat(40) }, T + 1300); // 40 chars → 10 tokens
+  expect(s.activity).toMatchObject({ state: "WRITING", tokens: 310 });
+  applyEvent(s, { type: "message_update", messageId: "m1", delta: "yyyy" }, T + 1400); // 44 → 11
+  expect(s.activity.tokens).toBe(311);
+  start(s, "c1", "read", { path: "a.ts" }, T + 2000);
+  expect(s.activity.turnAt).toBeUndefined(); expect(s.activity.tokens).toBeUndefined(); // a tool runs: the provider turn is over
+  applyEvent(s, { type: "tool_execution_end", callId: "c1", ok: true, output: "ok", durationMs: 1 }, T + 2100);
+  applyEvent(s, { type: "turn_start", turn: 2 }, T + 2200);
+  expect(s.activity).toMatchObject({ turnAt: T + 2200, tokens: 0 }); // fresh per turn
+  applyEvent(s, { type: "reasoning_update", messageId: "m2", tokens: 5 }, T + 2300);
+  applyEvent(s, { type: "turn_end", turn: 2, stopReason: "end_turn" }, T + 2400);
+  expect(s.activity.turnAt).toBeUndefined();
+  applyEvent(s, { type: "turn_start", turn: 3 }, T + 2500);
+  applyEvent(s, { type: "tool_call_failed", callId: "c9", reason: "permission_denied", detail: "no" }, T + 2550);
+  expect(s.activity.turnAt).toBeUndefined();
+  applyEvent(s, { type: "turn_start", turn: 4 }, T + 2600);
+  applyEvent(s, { type: "run_end", status: "done", summary: "ok" }, T + 2700);
+  expect(s.activity.turnAt).toBeUndefined(); expect(s.activity.tokens).toBeUndefined();
+});
+
+test("fmtElapsed: whole seconds, then `Nm Ns`, then `Nh Nm` — boundaries at 1 s, 60 s and 1 h; fmtK is the token count's format", () => {
+  expect([fmtElapsed(0), fmtElapsed(999), fmtElapsed(1000), fmtElapsed(-5)]).toEqual(["0s", "0s", "1s", "0s"]);
+  expect([fmtElapsed(59_999), fmtElapsed(60_000), fmtElapsed(406_000)]).toEqual(["59s", "1m 0s", "6m 46s"]);
+  expect([fmtElapsed(3_599_999), fmtElapsed(3_600_000), fmtElapsed(3_900_000), fmtElapsed(36_000_000)]).toEqual(["59m 59s", "1h 0m", "1h 5m", "10h 0m"]);
+  expect([fmtK(0), fmtK(999), fmtK(1000), fmtK(11_400)]).toEqual(["0", "999", "1.0k", "11.4k"]);
 });

@@ -26,6 +26,9 @@ export interface CardHostDeps {
   onAllowed?(): void;
 }
 
+/** tools whose approval card offers the accept-edits door */
+const EDIT_TOOLS = new Set(["edit", "write"]);
+
 export class CardHost {
   /** cancel thunks of every open or queued card and the picker */
   private readonly pending = new Set<() => void>();
@@ -41,7 +44,12 @@ export class CardHost {
   approval(tool: string, argsPreview: string, detail: string | undefined): Promise<ApprovalAnswer> {
     return this.enqueue<ApprovalAnswer>("deny", (settle) => {
       this.d.onApprovalOpen?.();
-      const card: CardState = { kind: "approval", tool, argsPreview, selected: 0, resolve: (a) => { if (a !== "deny") this.d.onAllowed?.(); settle(a); } };
+      // the `all edits` door is offered only where it means something: a write/edit card. On a bash or
+      // a network card it would read as "allow everything", which is what auto mode is for.
+      const verdicts: readonly ApprovalAnswer[] = EDIT_TOOLS.has(tool)
+        ? ["once", "always", "all-edits", "deny"]
+        : ["once", "always", "deny"];
+      const card: CardState = { kind: "approval", tool, argsPreview, verdicts, selected: 0, resolve: (a) => { if (a !== "deny") this.d.onAllowed?.(); settle(a); } };
       if (detail) card.detail = detail;
       return card;
     });
@@ -96,10 +104,12 @@ export class CardHost {
     this.picker?.(null);
     return new Promise((resolve) => {
       const s = this.d.state;
+      // the title is the BOX's, not a group row: as a group it was painted unclipped inside the list
+      // and ran past the border. Rows keep one short group so the list has no repeated header.
       openPalette(s, items.map((i) => ({
-        label: i.description ? `${i.label} · ${i.description}` : i.label, group: title ?? "pick one", action: PICK + i.value,
+        label: i.description ? `${i.label} · ${i.description}` : i.label, group: "", action: PICK + i.value,
         ...(i.description !== undefined ? { hint: i.description } : {}),
-      })));
+      })), title ?? "pick one");
       const settle = (v: string | null): void => {
         if (this.picker !== settle) return;
         this.picker = null; this.pending.delete(cancel);

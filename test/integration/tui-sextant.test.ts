@@ -56,9 +56,9 @@ const systemTexts = (r: SextantRenderer): string[] => r.state.messages.filter((m
 const LEAVE = ["\x1b[?1049l", "\x1b[?25h", "\x1b[?1006l"];
 
 function surface(cols = 160, rows = 44) {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-sextant-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-sextant-"));
   const io = new MemoryIO(cols, rows, { COLORTERM: "truecolor" });
-  const renderer = new SextantRenderer({ io, cwd, pet: "nimbus" });
+  const renderer = new SextantRenderer({ io, cwd, pet: "rovecode" });
   return { cwd, io, renderer };
 }
 
@@ -88,12 +88,12 @@ async function quit(io: MemoryIO, renderer: SextantRenderer, app: Promise<void>,
 
 // ---------- approval card: deny / allow ----------
 
-test("gated edit: the card names the edit + allow · always · deny (the approver runs BEFORE tool_execution_start, so no row yet); Esc denies, the file is untouched, the run continues", async () => {
+test("gated edit: the card names the edit + allow · always · all edits · deny (the approver runs BEFORE tool_execution_start, so no row yet); Esc denies, the file is untouched, the run continues", async () => {
   const { cwd, io, renderer } = surface();
   const { app, target, content } = gatedEditApp(cwd, io, renderer, "after denial.");
   const card = await until(renderer, (f) => f.includes("needs your permission"));
   expect(card).toMatch(/needs your permission\s+edit\s+\{/);      // the card header: tool + args preview
-  expect(card).toMatch(/allow\s+always\s+deny/);                  // the verdict buttons
+  expect(card).toMatch(/allow\s+always\s+all edits\s+deny/);      // the verdict buttons (an edit card carries the accept-edits door)
   expect(card).toContain("edit it");                             // the user echo
   expect(card).toContain("◆ needs you");                         // the frame header follows the card
   expect(readFileSync(target, "utf8")).toBe(content);            // nothing applied before consent
@@ -138,7 +138,7 @@ test("/theme ember recolors with no model turn; /open /diff /focus stay local; /
   const inner = mockStream({ turns: [textTurn("never")] });
   const stream: StreamFn = (m, msgs, o) => { turns++; return inner(m, msgs, o); };
   const app = runTui({ renderer, stream, cwd, yolo: false, exitOnClose: false, model: "scripted" });
-  await until(renderer, (f) => f.includes("/help for commands"));
+  await until(renderer, (f) => f.includes("/help lists commands"));
   const before = io.writes.length;
   io.feed("/theme ember\r");
   await until(renderer, () => renderer.themeName === "ember");
@@ -161,7 +161,7 @@ test("/theme ember recolors with no model turn; /open /diff /focus stay local; /
   await until(renderer, () => systemTexts(renderer).some((t) => t.includes("(no background tasks)")));
   const notes = systemTexts(renderer).join("\n");
   expect(notes).toContain("read-only tools");                        // /plan → togglePlanAct
-  expect(notes).toContain("mode: yolo (all tools allowed)");         // /yolo
+  expect(notes).toContain("mode: auto (never asks)");                // /yolo — the screen name (core/voice.ts)
   expect(notes).toContain("nothing to branch — no turns yet");       // /new → cmdNew
   expect(notes).toMatch(/tokens: 0 in \/ 0 out/);                    // /cost → buildCostNote
   expect(notes).toContain("(no background tasks)");                  // /tasks
@@ -237,7 +237,7 @@ class RecordingRenderer implements Renderer {
 }
 
 test("onEvent sees every RunEvent BEFORE the app's per-event handlers (order pinned); attach is called exactly once, before start, with the live runtime handles", async () => {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-sextant-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-sextant-"));
   const r = new RecordingRenderer();
   const probe = join(cwd, "o.txt");
   const stream = mockStream({ turns: [toolTurn([{ id: "t1", tool: "write", args: { path: probe, content: "x\n" } }]), textTurn("done text")] });
@@ -259,7 +259,7 @@ test("onEvent sees every RunEvent BEFORE the app's per-event handlers (order pin
   expect(L.filter((l) => l === "attach")).toHaveLength(1);
   const ctx = r.ctx!;
   expect(ctx.cwd).toBe(cwd);
-  expect(ctx.sessionsDir).toBe(join(cwd, ".aion", "sessions"));
+  expect(ctx.sessionsDir).toBe(join(cwd, ".rovecode", "sessions"));
   expect(typeof ctx.store().id).toBe("string");
   expect(ctx.model().model).toBe("scripted");                     // the mode's model (the provider id follows the host env)
   expect(ctx.contextWindow()).toBeUndefined();                     // a scripted model is not in the catalog
@@ -321,7 +321,7 @@ test("crew board (#46): a running task from rt.tasks appears as a ∷ lane cell 
 test("resize mid-session re-layouts: the files column disappears at 139 columns and returns at 160", async () => {
   const { cwd, io, renderer } = surface();
   const app = runTui({ renderer, stream: mockStream({ turns: [textTurn("x")] }), cwd, yolo: true, exitOnClose: false, model: "scripted" });
-  const wide = await until(renderer, (f) => f.includes("─ files ─") && f.includes("─ nimbus ─")); // past the boot reveal (every panel shown)
+  const wide = await until(renderer, (f) => f.includes("─ files ─") && f.includes("─ rovecode ─")); // past the boot reveal (every panel shown)
   expect(wide).toContain("─ files ─");
   io.resize(139, 44); renderer.tick();
   const narrow = renderer.frameText();
@@ -349,7 +349,7 @@ test("sextantSmoke(): the CLI smoke passes in-process (two approval cards, both 
 test("`/ex` + shift+wheel over the `/exit` suggestion row scrolls instead of clicking: the session stays open and the prompt keeps its text; a plain click on that row still runs /exit", async () => {
   const { cwd, io, renderer } = surface();
   const app = runTui({ renderer, stream: mockStream({ turns: [textTurn("never")] }), cwd, yolo: true, exitOnClose: false, model: "scripted" });
-  await until(renderer, (f) => f.includes("/help for commands"));
+  await until(renderer, (f) => f.includes("/help lists commands"));
   io.feed("/ex"); renderer.tick();
   const rowOf = (): { x: number; y: number } => {
     const lines = renderer.frameText().split("\n");
@@ -382,7 +382,7 @@ const git = (cwd: string, ...args: string[]): void => {
 };
 /** a repo with notes.txt COMMITTED as `committed`, then dirtied on disk by appending `dirty` (uncommitted) */
 function dirtyRepo(committed: string, dirty: string): { cwd: string; target: string; content: string } {
-  const cwd = mkdtempSync(join(tmpdir(), "aion-sextant-git-"));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-sextant-git-"));
   git(cwd, "init", "-q"); git(cwd, "config", "user.email", "t@example.com"); git(cwd, "config", "user.name", "t"); git(cwd, "config", "core.autocrlf", "false");
   const target = join(cwd, "notes.txt");
   writeFileSync(target, committed);
@@ -397,7 +397,7 @@ const changes = (r: SextantRenderer) => r.state.code.diff!.hunks.flatMap((h) => 
 test.if(haveGit)("yolo edit of ONE committed line in a file dirtied by 5 uncommitted lines: the row stays `+1 −1`, the diff view holds exactly that hunk and the title reads `+1 −1` with no `vs HEAD` (the base is rebuilt from the hashline ops — git itself would say +6 −1)", async () => {
   const { cwd, target, content } = dirtyRepo("keep-1\nold-line\nkeep-2\n", "extra-1\nextra-2\nextra-3\nextra-4\nextra-5\n");
   const io = new MemoryIO(160, 44, { COLORTERM: "truecolor" });
-  const renderer = new SextantRenderer({ io, cwd, pet: "nimbus" });
+  const renderer = new SextantRenderer({ io, cwd, pet: "rovecode" });
   const stream = mockStream({ turns: [toolTurn([{ id: "t1", tool: "edit", args: editOf(target, content, 2, ["new-line"]) }]), textTurn("edited.")] });
   const app = runTui({ renderer, stream, cwd, yolo: true, exitOnClose: false, model: "scripted" });
   io.feed("edit it\r");
@@ -418,7 +418,7 @@ test.if(haveGit)("yolo edit of ONE committed line in a file dirtied by 5 uncommi
 test.if(haveGit)("yolo edit of a line that is itself uncommitted (no line in HEAD or on disk carries its hash): the row keeps the reducer's `+1 −1` while the view falls back to HEAD vs disk, flagged `vs HEAD`", async () => {
   const { cwd, target, content } = dirtyRepo("keep-1\nkeep-2\n", "extra-1\nextra-2\n");
   const io = new MemoryIO(160, 44, { COLORTERM: "truecolor" });
-  const renderer = new SextantRenderer({ io, cwd, pet: "nimbus" });
+  const renderer = new SextantRenderer({ io, cwd, pet: "rovecode" });
   const stream = mockStream({ turns: [toolTurn([{ id: "t1", tool: "edit", args: editOf(target, content, 3, ["changed"]) }]), textTurn("edited.")] });
   const app = runTui({ renderer, stream, cwd, yolo: true, exitOnClose: false, model: "scripted" });
   io.feed("edit it\r");
@@ -433,7 +433,7 @@ test.if(haveGit)("yolo edit of a line that is itself uncommitted (no line in HEA
 test.if(haveGit)("gated edit in a dirty repo: the pre-approval snapshot beats HEAD as the base — allow → the row and the view show the ONE landed change, not the file's whole uncommitted delta", async () => {
   const { cwd, target, content } = dirtyRepo("keep-1\nold-line\nkeep-2\n", "extra-1\nextra-2\nextra-3\n");
   const io = new MemoryIO(160, 44, { COLORTERM: "truecolor" });
-  const renderer = new SextantRenderer({ io, cwd, pet: "nimbus" });
+  const renderer = new SextantRenderer({ io, cwd, pet: "rovecode" });
   const stream = mockStream({ turns: [toolTurn([{ id: "t1", tool: "edit", args: editOf(target, content, 2, ["new-line"]) }]), textTurn("applied.")] });
   const app = runTui({ renderer, stream, cwd, yolo: false, exitOnClose: false, model: "scripted" });
   io.feed("edit it\r");

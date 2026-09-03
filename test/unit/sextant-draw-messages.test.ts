@@ -1,6 +1,6 @@
 /** Port #42 — messages panel painter. Pins: tool row wording per verb (spinner while running,
  *  detail when done, +a −b stats, failure color, narrow widths), user rows (`you · sent` on the
- *  latest, @mentions, image chips), the `◆ aion · <status>` run header, streaming caret, steer /
+ *  latest, @mentions, image chips), the `◆ rovecode · <status>` run header, streaming caret, steer /
  *  compaction / system / error rows, the approval card (previewDiff text from a real file, bounded
  *  detail, three verdicts with the selected one inverted), the question card (options, free-text
  *  row, skip row, selection), the ╌ rule, the prompt line + placeholder + cursor cell, stick /
@@ -48,7 +48,7 @@ test("tool rows: `· read <base> … N lines`, `~ edit <base> +a −b`, `+ write
   const r = rows(g, BY, TALL.y + TALL.h - 2).filter(Boolean);
   expect(r[0]).toBe("you  · sent");
   expect(r[1]).toBe("  go");
-  expect(r[2]).toBe("◆ aion"); // idle → header without a status word
+  expect(r[2]).toBe("◆ rovecode"); // idle → header without a status word
   expect(r[3]).toMatch(/^ {2}· read {3}callback\.ts {2,}… 12 lines$/);
   expect(r[3]!.length).toBe(BW); // detail right-aligned to the inner edge
   expect(r[4]).toMatch(/^ {2}~ edit {3}callback\.ts {2,}\+21 −4$/);
@@ -125,27 +125,27 @@ test("user rows: `you  · sent` only on the latest user message, bold text, @men
   expect(g.cell(BX + 3, y + 2).bg).toBe(THEME.selBg);
 });
 
-test("run header `◆ aion  · <status>`: live activity while running, done/error/needs you after, older runs keep just the diamond", () => {
+test("run header `◆ rovecode  · <status>`: live activity while running, done/error/needs you after, older runs keep just the diamond", () => {
   const live = draw(msgState([{ kind: "user", text: "fix" }, { kind: "assistant", text: "Looking.", streaming: false }], running));
-  const y = rowOf(live, "◆ aion");
-  expect(live.span(BX, y, BW)).toBe("◆ aion  · editing callback.ts");
+  const y = rowOf(live, "◆ rovecode");
+  expect(live.span(BX, y, BW)).toBe("◆ rovecode  · editing callback.ts");
   expect(live.cell(BX, y).fg).toBe(THEME.accent);
   expect(live.cell(live.row(y).indexOf("editing"), y).fg).toBe(THEME.accent); // the live status word takes the accent
   expect(live.cell(BX + 2, y)).toMatchObject({ fg: THEME.fg, at: ATTR.BOLD });
   expect(live.span(BX, y + 1, BW)).toBe("  Looking.");
   const done = draw(msgState([{ kind: "user", text: "fix" }, { kind: "assistant", text: "Fixed.", streaming: false }], { activity: { state: "SUCCESS", label: "done", runId: "r", startedAt: 0, endedAt: 1 } }));
-  const dy = rowOf(done, "◆ aion");
-  expect(done.span(BX, dy, BW)).toBe("◆ aion  · done");
+  const dy = rowOf(done, "◆ rovecode");
+  expect(done.span(BX, dy, BW)).toBe("◆ rovecode  · done");
   expect(done.cell(BX, dy).fg).toBe(THEME.ok);
   expect(done.cell(done.row(dy).indexOf("done"), dy).fg).toBe(THEME.muted);
   const err = draw(msgState([{ kind: "user", text: "fix" }, tool({ verb: "run", label: "bun test", ok: false })], { activity: { state: "ERROR", label: "", runId: "r", startedAt: 0, endedAt: 1 } }));
-  const ey = rowOf(err, "◆ aion");
-  expect(err.span(BX, ey, BW)).toBe("◆ aion  · error"); // the header precedes a run that opened with a tool
+  const ey = rowOf(err, "◆ rovecode");
+  expect(err.span(BX, ey, BW)).toBe("◆ rovecode  · error"); // the header precedes a run that opened with a tool
   expect(err.cell(BX, ey).fg).toBe(THEME.err);
   const two = draw(msgState([{ kind: "user", text: "one" }, { kind: "assistant", text: "A", streaming: false }, { kind: "user", text: "two" }, { kind: "assistant", text: "B", streaming: false }], { activity: { state: "WAITING", label: "waiting for you", runId: "r", startedAt: 0, endedAt: null } }));
-  const heads = rows(two).filter((r) => r.startsWith("◆ aion"));
-  expect(heads).toEqual(["◆ aion", "◆ aion  · needs you"]);
-  expect(two.cell(BX, rowOf(two, "◆ aion")).fg).toBe(THEME.accentDim);
+  const heads = rows(two).filter((r) => r.startsWith("◆ rovecode"));
+  expect(heads).toEqual(["◆ rovecode", "◆ rovecode  · needs you"]);
+  expect(two.cell(BX, rowOf(two, "◆ rovecode")).fg).toBe(THEME.accentDim);
   expect(activityLabel(baseState({ running: true, activity: { state: "THINKING", label: "", runId: "r", startedAt: 0, endedAt: null } }))).toBe("thinking");
   expect(activityLabel(baseState())).toBe("");
 });
@@ -176,7 +176,7 @@ test("assistant text wraps to the inner width; the streaming caret ▌ rides the
 test("steer », compaction ▸ (italic), system ▸ info / warn, error ×", () => {
   const g = draw(msgState([{ kind: "steer", text: "task t1 finished: tests green" }, { kind: "compaction", text: "compacted 12 turns" }, { kind: "system", text: "plan mode on", tone: "info" }, { kind: "system", text: "careful", tone: "warn" }, { kind: "system", text: "boom", tone: "error" }]));
   const r = rows(g).filter(Boolean);
-  expect(r).toEqual(["◆ aion", "» task t1 finished: tests green", "▸ compacted 12 turns", "▸ plan mode on", "▸ careful", "× boom"]);
+  expect(r).toEqual(["◆ rovecode", "» task t1 finished: tests green", "▸ compacted 12 turns", "▸ plan mode on", "▸ careful", "× boom"]);
   expect(g.cell(BX, rowOf(g, "» task")).fg).toBe(THEME.accent);
   const cy = rowOf(g, "compacted");
   expect(g.cell(BX + 2, cy)).toMatchObject({ fg: THEME.muted, at: ATTR.ITALIC });
@@ -190,12 +190,12 @@ test("steer », compaction ▸ (italic), system ▸ info / warn, error ×", () =
 // ------------------------------------------------------------------ cards
 
 function approval(selected: 0 | 1 | 2, detail?: string): CardState {
-  return { kind: "approval", tool: "edit", argsPreview: "src/auth/callback.ts", detail, selected, resolve: noop };
+  return { kind: "approval", verdicts: ["once", "always", "deny"], tool: "edit", argsPreview: "src/auth/callback.ts", detail, selected, resolve: noop };
 }
 const verdictCells = (g: GridScreen, y: number, label: string) => { const x = g.row(y).indexOf(` ${label} `); return Array.from({ length: label.length + 2 }, (_, i) => g.cell(x + i, y)); };
 
 test("approval card: `◆ needs your permission  <tool> <args>`, the previewDiff text colored, verdicts allow · always · deny with the selection inverted", () => {
-  const dir = mkdtempSync(join(tmpdir(), "aion-p42-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-p42-"));
   let text: string;
   try {
     const before = Array.from({ length: 10 }, (_, i) => `line-${i + 1}`).join("\n") + "\n";
@@ -306,7 +306,7 @@ test("prompt line: `▌ <text>` bold with the cursor cell from promptCursor; pla
   expect(g.row(RULE_Y).slice(BX, BX + BW)).toBe("╌".repeat(BW));
   expect(g.cell(BX, RULE_Y).fg).toBe(THEME.frameDim);
   const empty = draw(baseState());
-  expect(empty.span(BX, PROMPT_Y, BW)).toBe("▌ ask aion — e.g. fix the failing test"); // the bar's literal wording, not the constant
+  expect(empty.span(BX, PROMPT_Y, BW)).toBe("▌ ask rovecode — e.g. fix the failing test"); // the bar's literal wording, not the constant
   expect(empty.cell(BX + 2, PROMPT_Y).fg).toBe(THEME.dim);
   expect(empty.cell(BX, PROMPT_Y).fg).toBe(THEME.accent); // focused → accent bar even when empty
   expect(promptCursor(RECT, baseState())).toEqual({ x: BX + 2, y: PROMPT_Y });
@@ -380,7 +380,7 @@ test("nothing is drawn outside the rect: long rows, wide cards, huge prompt text
   const states: SextantState[] = [
     msgState([{ kind: "user", text: long, images: [long] }, { kind: "assistant", text: long, streaming: true }, tool({ verb: "run", label: long, detail: long })], running),
     msgState(Array.from({ length: 40 }, (_, i) => ({ kind: "system", text: `msg ${i} ${long}`, tone: "error" })), { stick: false, msgScroll: 3, input: { text: long, cur: 250, history: [], histIdx: -1, sgSel: 0 } }),
-    msgState([], { card: { kind: "approval", tool: long, argsPreview: long, detail: Array.from({ length: 80 }, () => "+" + long).join("\n"), selected: 2, resolve: noop } }),
+    msgState([], { card: { kind: "approval", verdicts: ["once", "always", "deny"], tool: long, argsPreview: long, detail: Array.from({ length: 80 }, () => "+" + long).join("\n"), selected: 2, resolve: noop } }),
     msgState([], { card: question(1, { prompt: { question: long, options: [long, long, long], allowFreeText: true }, freeText: long }) }),
     msgState([{ kind: "user", text: "hi", images: [long] }, { kind: "steer", text: long }]), // the chip row is the one unclipped row kind; it stays on screen here
   ];

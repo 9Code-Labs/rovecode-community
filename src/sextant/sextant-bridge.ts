@@ -1,8 +1,9 @@
-/** Sextant bridge (port #44): pure helpers between aion's app/Renderer seam and the surface state —
+/** Sextant bridge (port #44): pure helpers between rovecode's app/Renderer seam and the surface state —
  *  a user line → row (image chips split off), a replayed tool card → row, how many duplicate app
  *  notes a RunEvent triggers (the #41 reducer already produced the row), and the RunEvent / TaskInfo
- *  → nimbus forwarding table (#45's report: start/read/edit/write/remove/run/glob/grep/plan/spawn on
- *  starts + observe over written content and edit newLines; tool_fail/pass/fail + a fail-line
+ *  → rovecode forwarding table (#45's report: start/read/edit/write/remove/run/glob/plan/spawn/
+ *  permission/fetch/crew/tinker on starts — every tool says its specific thing, a risky command gets
+ *  the risk line — + observe over written content and edit newLines; grep's count, tool_fail/pass/fail + a fail-line
  *  reaction on tool ends; denied on a permission refusal; done/stopped/error at run_end; laneDone /
  *  laneFail from the task manager). Pure: `now` is a parameter, no I/O, no timers. */
 
@@ -15,6 +16,9 @@ import type { MessageRow, ToolRow } from "./types.ts";
 type UserRow = Extract<MessageRow, { kind: "user" }>;
 const CHIP_RE = /\[image: ([^\]]*)\]/g;
 const TEST_CMD = /\b(tests?|vitest|jest|pytest|mocha|spec)\b/i;
+/** commands worth a second look before they run: recursive deletes, force pushes, history rewrites,
+ *  world-writable modes, piping the network into a shell, dropping tables */
+const RISKY_CMD = /\brm\s+(-[a-z]*r[a-z]*f|-[a-z]*f[a-z]*r)\b|--force\b|\bpush\s+-f\b|\breset\s+--hard\b|\bchmod\s+777\b|\bcurl\b[^|]*\|\s*(ba|z)?sh\b|\bdrop\s+(table|database)\b/i;
 const RUN_TOOLS = new Set(["bash", "shell", "run"]);
 const REMOVE_TOOLS = new Set(["remove", "rm", "delete", "unlink"]);
 
@@ -71,7 +75,7 @@ export function duplicateNotes(ev: RunEvent): number {
 /** what the renderer remembers per live call so the end event can find its tool/command */
 export interface LiveCall { tool: string; cmd: string }
 
-/** RunEvent → nimbus (see the header table) */
+/** RunEvent → rovecode (see the header table) */
 export function petOnEvent(pet: Pet, ev: RunEvent, calls: Map<string, LiveCall>, cwd: string, now: number): void {
   switch (ev.type) {
     case "run_start": pet.event("start", undefined, now); break;
@@ -99,6 +103,14 @@ export function petOnEvent(pet: Pet, ev: RunEvent, calls: Map<string, LiveCall>,
   }
 }
 
+/** the host of a URL for the fetch quip; a bare or broken URL keeps its first 30 chars */
+const hostOf = (u: string): string => { try { return new URL(u).host || oneLine(u, 30); } catch { return oneLine(u, 30) || "the web"; } };
+
+/** Every tool the agent has says something SPECIFIC — the file, the pattern, the host, the child,
+ *  the thing being tinkered with — because a bubble that only says "working" is worse than silence.
+ *  Kinds are the existing ones where they fit (a directory listing is a read, an ask is a permission,
+ *  a search start is glob's line with the pattern); fetch / crew / tinker are the three acts that
+ *  had none. Unknown tools (an MCP server's own, a future one) fall to tinker with their name. */
 function petOnStart(pet: Pet, tool: string, a: Record<string, unknown>, f: string, now: number): void {
   const data: PetEventData = { f };
   if (tool === "read") pet.event("read", data, now);
@@ -108,10 +120,33 @@ function petOnStart(pet: Pet, tool: string, a: Record<string, unknown>, f: strin
     if (lines.length) pet.observe(lines.join("\n"), "ins", now);
   } else if (tool === "write") { pet.event("write", data, now); if (str(a.content)) pet.observe(str(a.content), "ins", now); }
   else if (REMOVE_TOOLS.has(tool)) pet.event("remove", data, now);
-  else if (RUN_TOOLS.has(tool)) pet.event("run", undefined, now);
-  else if (tool === "glob") pet.event("glob", undefined, now);
+  else if (RUN_TOOLS.has(tool)) {
+    // a destructive-looking command gets the risk line instead of "thunder time" — keyed off the
+    // command text the agent asked for, never off an error message (the validator owns those)
+    const cmd = str(a.command) || str(a.cmd);
+    if (RISKY_CMD.test(cmd)) pet.react("risk", now); else pet.event("run", undefined, now);
+  }
+  else if (tool === "glob" || tool === "grep") pet.event("glob", { q: oneLine(str(a.pattern), 24) || "it" }, now);
+  else if (tool === "ls") pet.event("read", { f: (baseName(str(a.path)) || ".") + "/" }, now);
+  else if (tool === "web_fetch") pet.event("fetch", { f: hostOf(str(a.url)) }, now);
   else if (tool === "todo_write") { const n = Array.isArray(a.todos) ? a.todos.length : 0; if (n) pet.event("plan", { n }, now); }
+  else if (tool === "todo_read") pet.event("read", { f: "the plan" }, now);
+  else if (tool === "ask_user") pet.event("permission", undefined, now);
   else if (tool === "task") pet.event("spawn", { a: oneLine(str(a.label) || str(a.agent) || "a worker", 20) }, now);
+  else if (tool === "task_status") pet.event("crew", { a: str(a.action) === "list" ? "the crew" : oneLine(str(a.id), 20) || "the crew" }, now);
+  else pet.event("tinker", { f: tinkerTarget(tool, a) }, now);
+}
+
+/** what the housekeeping tools are about, by name: `providers`, `skills`, `memory`, `notes`, `search/issues` */
+function tinkerTarget(tool: string, a: Record<string, unknown>): string {
+  if (tool.startsWith("provider_")) return str(a.action) === "use" && str(a.selector) ? oneLine(str(a.selector), 24) : "providers";
+  if (tool === "skill_view") return oneLine(str(a.name) || str(a.skill), 24) || "a skill";
+  if (tool === "skills_list") return "the skills";
+  if (tool === "memory_edit") return "memory";
+  if (tool === "recall") return oneLine(str(a.query), 24) ? `notes on ${oneLine(str(a.query), 24)}` : "the notes";
+  if (tool === "eval_cell") return "a scratch cell";
+  if (tool === "mcp_call" || tool === "mcp_list") return [str(a.server), str(a.tool)].filter(Boolean).map((s) => oneLine(s, 16)).join(" ") || "mcp";
+  return oneLine(tool, 24);
 }
 
 function petOnEnd(pet: Pet, c: LiveCall | undefined, ok: boolean, output: string, now: number): void {

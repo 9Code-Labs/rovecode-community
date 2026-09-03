@@ -1,4 +1,4 @@
-/** Port #45 nimbus panel (src/sextant/draw-pet.ts) on a local GridScreen: title (name · lv · mood, degrading
+/** Port #45 rovecode panel (src/sextant/draw-pet.ts) on a local GridScreen: title (name · lv · mood, degrading
  *  on a narrow panel), the 1.8 s step sway (frames at t, t+40 and t+3600 identical, t+1800 differs by one row),
  *  determinism at identical clocks, weather per state (drizzle / lightning / sun + sparkles / zzz / thinking
  *  dots / patient ?), the storm (░ body, brows, red eyes, rain, bolts + panel flash + reddened border on strike
@@ -43,17 +43,17 @@ test("title: name left, `lv N  mood` right in the top border; a narrow panel kee
   s.usage.tokensIn = 5000; s.usage.tokensOut = 1000; // 6000 tokens → lv 3
   const f = frame(born(), s, T0 + 1000);
   const top = f.row(RECT.y);
-  expect(top).toContain(" nimbus ");
+  expect(top).toContain(" rovecode ");
   expect(top).toContain(" lv 3  humming ");
   expect(f.at(RECT.x, RECT.y)!.ch).toBe("╭");
   expect(f.at(RECT.x + RECT.w - 1, RECT.y)!.ch).toBe("╮");
   expect(f.at(RECT.x, RECT.y + RECT.h - 1)!.ch).toBe("╰");
   expect(f.at(RECT.x, RECT.y)!.fg).toBe(theme.frame);
   expect(f.at(top.indexOf("humming"), RECT.y)!.fg).toBe(theme.muted);
-  expect(f.at(top.indexOf("nimbus"), RECT.y)!.fg).toBe(theme.fg2);
+  expect(f.at(top.indexOf("rovecode"), RECT.y)!.fg).toBe(theme.fg2);
   const n = frame(born(), s, T0 + 1000, NARROW);
   const ntop = n.row(NARROW.y);
-  expect(ntop).toContain(" nimbus ");
+  expect(ntop).toContain(" rovecode ");
   expect(ntop).toContain(" humming ");
   expect(ntop).not.toContain("lv 3");
   expect(n.at(NARROW.x + NARROW.w - 1, NARROW.y)!.ch).toBe("╮");
@@ -211,7 +211,7 @@ describe("storm frames", () => {
     const f = frame(stormPet(), READING(), T0 + 100);
     expect(f.row(RECT.y)).toContain("furious");
     expect(f.at(RECT.x, RECT.y)!.fg).toBe(border);
-    expect(f.at(f.row(RECT.y).indexOf("nimbus"), RECT.y)!.fg).toBe(border);
+    expect(f.at(f.row(RECT.y).indexOf("rovecode"), RECT.y)!.fg).toBe(border);
     expect(f.at(f.row(RECT.y).indexOf("furious"), RECT.y)!.fg).toBe(theme.err);
     expect(f.at(B.x, B.y)!.bg).toBe(mix(theme.bg, theme.warn, 0.07));
     expect(f.at(B.x + B.w - 1, B.y + B.h - 1)!.bg).toBe(mix(theme.bg, theme.warn, 0.07));
@@ -251,7 +251,9 @@ describe("storm frames", () => {
     const f = frame(stormPet(), READING(), T0 + 8000);
     expect(f.at(RECT.x, RECT.y)!.fg).toBe(theme.frame);
     expect(f.row(RECT.y)).toContain("humming");
-    expect(f.toText()).not.toContain("░");
+    // the storm fill is gone; what is left is the calm body shading (░ over the crown, ▒ then ▓ lower),
+    // which the storm never draws — it fills flat with ░
+    expect(f.toText()).toContain("▒");
   });
 });
 
@@ -287,7 +289,7 @@ test("speech bubble: at most two lines, clipped to the panel width, opening quot
     expect(f.at(RECT.x + RECT.w - 2, y)!.ch).toBe(" "); // the margin cell is never written
   }
   expect(wrapText("a bb ccc", 5)).toEqual(["a bb", "ccc"]);
-  expect(wrapText("supercalifragilistic x", 6)).toEqual(["supercalifragilistic", "x"]);
+  expect(wrapText("supercalifragilistic x", 6)).toEqual(["superc", "alifra", "gilist", "ic x"]); // an over-long word (a host, a path) is hard-split: a bubble row is never wider than the panel, so the closing ” below survives
 });
 
 test("speech bubble: a quip that exactly fills the line keeps both quotes — the closing ” lands on the last inner column, never clipped", () => {
@@ -363,7 +365,9 @@ test("petHit returns the panel rect as the click zone, or null when hidden", () 
 });
 
 test("glyph inventory: every non-ASCII glyph drawn comes from the prototype's set", () => {
-  const ALLOWED = new Set([..."╭╮╰╯─│╲╱╷░•◡◠∩○▪☼·◌…♥“”♪▸"]);
+  // ▒▓ join ░ as of the filled body: the interior is shaded light→heavy top to bottom, a deliberate
+  // step past the prototype (which drew a hollow cloud outside a storm)
+  const ALLOWED = new Set([..."╭╮╰╯─│╲╱╷░▒▓•◡◠∩○▪☼·◌…♥“”♪▸"]);
   const seen = new Set<string>();
   const runs: [SextantState, (p: Pet) => void, number[]][] = [
     [EDITING(), (p) => p.event("edit", { f: "a.ts" }, T0), [T0 + 1000, T0 + 1420]],
