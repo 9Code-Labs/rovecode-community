@@ -1,10 +1,10 @@
 /**
  * Project context inheritance (port #8): auto-import instruction files from
  * other coding-agent "harnesses" (Claude, Gemini, Cursor, Copilot, plain
- * AGENTS.md) so aion projects don't need to duplicate repo conventions.
+ * AGENTS.md) so rovecode projects don't need to duplicate repo conventions.
  *
  * Pattern + precedence order modeled on oh-my-pi's context-file discovery
- * (E:\9code\research\source_snapshots\can1357-oh-my-pi):
+ * (research/source_snapshots/can1357-oh-my-pi):
  *   - docs/context-files.md, "Other supported context conventions" and
  *     "Load order and shadowing" tables — the provider-priority idea
  *     (higher priority wins at a shared scope) and the per-tool path
@@ -15,14 +15,14 @@
  *   - packages/coding-agent/src/discovery/cursor.ts — `.cursor/rules/*.mdc`
  *     carries MDC frontmatter that must be separated from the rule body.
  *
- * Discovery + precedence (aion's documented spec):
+ * Discovery + precedence (rovecode's documented spec):
  *   - Ancestor walk: cwd UPWARD via dirname until parent === current (the
  *     filesystem root). The walk additionally stops — INCLUSIVELY — at the
  *     first directory containing `.git` (file or directory; worktrees use a
  *     file), so a repository never inherits context from outside itself.
  *     `opts.stopAt` bounds the walk at an explicit dir (also inclusive).
  *   - Precedence: NEARER directories first (nearest wins); within one
- *     directory, family order aion > agents > claude > gemini > cursor >
+ *     directory, family order rovecode > agents > claude > gemini > cursor >
  *     copilot (the harvest list in `buildCandidates`). Earlier position wins
  *     dedupe and total-cap priority.
  *   - Shadowing (dedupe by depth): the same relative path (e.g. `AGENTS.md`)
@@ -34,7 +34,7 @@
  *     the earlier (higher-precedence) occurrence wins and later duplicates
  *     never reach `sources` — unlike total-cap drops, which keep a stub.
  *
- * Budgets (aion-specific; OMP has no cap on context-file loading):
+ * Budgets (rovecode-specific; OMP has no cap on context-file loading):
  *   - `maxPerFileChars` caps each file's content. Truncation is fence-safe:
  *     cut at the last newline inside the window and close an odd ``` fence
  *     count so the following sections aren't swallowed by an open code block.
@@ -46,13 +46,13 @@
  * Freshness: callers snapshot the result once per runtime (cli/runtime.ts)
  * so the system prompt stays byte-stable for prompt caching (port #5).
  * Mid-session edits to config files are intentionally not picked up —
- * restart aion (a new runtime) to refresh.
+ * restart rovecode (a new runtime) to refresh.
  *
  * Remaining deliberate deviations from OMP: no provider-priority shadowing
  * table (content dedupe + path shadowing instead); `.cursor/rules/*.mdc`
  * harvested unconditionally as plain text (frontmatter stripped, never
  * parsed/acted on) and restricted to `*.mdc`; the character/file budgets are
- * aion's own.
+ * rovecode's own.
  */
 
 import { readFileSync, readdirSync, existsSync } from "node:fs";
@@ -62,7 +62,7 @@ export interface ContextSource {
   /** Display path relative to cwd, "/"-separated with one "../" segment per
    *  ancestor level — used verbatim in the rendered "## From <path>" header. */
   path: string;
-  family: "aion" | "agents" | "claude" | "gemini" | "cursor" | "copilot";
+  family: "rovecode" | "agents" | "claude" | "gemini" | "cursor" | "copilot";
   chars: number;
   truncated: boolean;
 }
@@ -102,11 +102,11 @@ interface Candidate {
 }
 
 /** Harvest list for ONE directory, in family precedence order (first =
- *  highest): aion > agents > claude > gemini > cursor > copilot. */
+ *  highest): rovecode > agents > claude > gemini > cursor > copilot. */
 function buildCandidates(dir: string): Candidate[] {
   const candidates: Candidate[] = [
-    { relPath: ".aion/AION.md", family: "aion", mdc: false },
-    { relPath: "AION.md", family: "aion", mdc: false },
+    { relPath: ".rovecode/ROVECODE.md", family: "rovecode", mdc: false },
+    { relPath: "ROVECODE.md", family: "rovecode", mdc: false },
     { relPath: "AGENTS.md", family: "agents", mdc: false },
     { relPath: "CLAUDE.md", family: "claude", mdc: false },
     { relPath: ".claude/CLAUDE.md", family: "claude", mdc: false },

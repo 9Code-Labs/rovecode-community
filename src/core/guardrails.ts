@@ -1,6 +1,6 @@
 /**
  * Tool-loop guardrails — ported from hermes-agent `agent/tool_guardrails.py`
- * (snapshot: E:\9code\research\source_snapshots\hermes-agent). Bare `:N`
+ * (snapshot: research/source_snapshots/hermes-agent). Bare `:N`
  * citations refer to that file; `run_agent.py:N` cites the runtime wiring.
  *
  * Pure and injectable: no I/O, no globals, no clock. State is one consecutive
@@ -31,7 +31,7 @@
  *
  * Deliberate deviations (also listed in the port report):
  *  - `hardStop` defaults to true (upstream hard_stop_enabled false, :118):
- *    the aion GuardVerdict contract requires warn→stub escalation by
+ *    the rovecode GuardVerdict contract requires warn→stub escalation by
  *    default. Pass `hardStop: false` for upstream's warn-only default.
  *  - Upstream escalates on failed / idempotent-no-progress completions
  *    (:443-520); the port escalates on consecutive same-signature repetition
@@ -43,7 +43,7 @@
  *    upstream omits it, :646-650) and points at the per-turn call ordinal
  *    instead of a tool_call_id (this API has none; upstream likewise omits
  *    the pointer when no id exists, :644-645).
- *  - Poller exemption reaches THROUGH aion's mcp_call indirection: every
+ *  - Poller exemption reaches THROUGH rovecode's mcp_call indirection: every
  *    MCP tool is funneled via the single mcp_call house tool
  *    (src/mcp/tools.ts), so upstream's suffix exemption — aimed at
  *    "generated / MCP tool surfaces" (:74-76) — checks the INNER args.tool
@@ -188,7 +188,7 @@ function signatureOf(tool: string, args: unknown): string {
   return `${tool}\u0000${sha256(canonicalJson(coerceArgs(args)))}`;
 }
 
-/** Poller-exemption name: aion routes all MCP tools through the one `mcp_call`
+/** Poller-exemption name: rovecode routes all MCP tools through the one `mcp_call`
  *  house tool, so upstream's MCP-surface poller suffixes (:74-80) can never
  *  match the outer name — unwrap to inner args.tool (module doc "deviations").
  *  Exemption only; signatures stay outer name + full args. */
@@ -296,7 +296,7 @@ export class ToolGuard {
       return {
         action: "stub",
         note:
-          `[aion loop guard: blocked ${tool} — this is the ${ordinal(count)} consecutive call ` +
+          `[rovecode loop guard: blocked ${tool} — this is the ${ordinal(count)} consecutive call ` +
           `with identical arguments. Stop repeating it unchanged; change arguments or strategy, ` +
           `use a different tool, or proceed with what you already have.]`,
       };
@@ -306,7 +306,7 @@ export class ToolGuard {
       return {
         action: "warn",
         note:
-          `[aion loop guard: this is the ${ordinal(count)} consecutive call to ${tool} ` +
+          `[rovecode loop guard: this is the ${ordinal(count)} consecutive call to ${tool} ` +
           `with identical arguments. This looks like a loop — change arguments, use a ` +
           `different tool, or proceed with what you have.]`,
       };
@@ -392,7 +392,7 @@ export class ToolGuard {
       preview = preview.slice(0, this.opts.argsPreviewChars) + "…"; // (:642-643)
     }
     return (
-      `[aion note: this result is byte-identical to the ${tool} result of call ` +
+      `[rovecode note: this result is byte-identical to the ${tool} result of call ` +
       `#${firstCallIndex} earlier this turn (original ${originalLen} chars). ` +
       `Refer to that result; it has not changed. Args: ${preview}]`
     );

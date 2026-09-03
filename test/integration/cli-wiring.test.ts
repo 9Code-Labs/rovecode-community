@@ -1,11 +1,11 @@
-/** Wiring pass through the REAL CLI (Bun.spawn; hermetic env like output-modes.test.ts: AION_* and
- *  *_API_KEY scrubbed, AION_HOME → an empty temp dir, cwd → a temp workspace):
- *  - `aion help` pins every new env knob, the --output paragraph and the /name expansion note
- *  - `aion tools` lists ask_user (port #33 critic LOW-1)
- *  - `aion run "/hello …"` expands .aion/commands/hello.md on BOTH the `run` and the bare-prompt path:
+/** Wiring pass through the REAL CLI (Bun.spawn; hermetic env like output-modes.test.ts: ROVECODE_* and
+ *  *_API_KEY scrubbed, ROVECODE_HOME → an empty temp dir, cwd → a temp workspace):
+ *  - `rovecode help` pins every new env knob, the --output paragraph and the /name expansion note
+ *  - `rovecode tools` lists ask_user (port #33 critic LOW-1)
+ *  - `rovecode run "/hello …"` expands .rovecode/commands/hello.md on BOTH the `run` and the bare-prompt path:
  *    the session store's first user message is the RENDERED prompt; an unknown /name passes verbatim
- *  - `aion serve` banner lists GET /session/:id/tasks (+ DELETE /session/:id/prompt)
- *  - `aion --plain` binds ask_user to readline: numbered options print, the typed number answers,
+ *  - `rovecode serve` banner lists GET /session/:id/tasks (+ DELETE /session/:id/prompt)
+ *  - `rovecode --plain` binds ask_user to readline: numbered options print, the typed number answers,
  *    and the next model turn sees `answer: sqlite` */
 
 import { test, expect, beforeAll, afterAll } from "bun:test";
@@ -22,10 +22,10 @@ const T = 60_000;
 
 let work = "", home = "";
 beforeAll(() => {
-  work = mkdtempSync(join(tmpdir(), "aion-cliwire-"));
-  home = mkdtempSync(join(tmpdir(), "aion-cliwire-home-"));
-  mkdirSync(join(work, ".aion", "commands"), { recursive: true });
-  writeFileSync(join(work, ".aion", "commands", "hello.md"), "---\ndescription: Say hello\nmodel: not-applied-headlessly\n---\nSay hi to $ARGUMENTS\n");
+  work = mkdtempSync(join(tmpdir(), "rovecode-cliwire-"));
+  home = mkdtempSync(join(tmpdir(), "rovecode-cliwire-home-"));
+  mkdirSync(join(work, ".rovecode", "commands"), { recursive: true });
+  writeFileSync(join(work, ".rovecode", "commands", "hello.md"), "---\ndescription: Say hello\nmodel: not-applied-headlessly\n---\nSay hi to $ARGUMENTS\n");
 });
 afterAll(() => {
   rmSync(work, { recursive: true, force: true });
@@ -35,9 +35,9 @@ afterAll(() => {
 function hermeticEnv(extra: Record<string, string> = {}): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
-    if (v !== undefined && !/^AION_/i.test(k) && !/_API_KEY$/i.test(k)) env[k] = v;
+    if (v !== undefined && !/^ROVECODE_/i.test(k) && !/_API_KEY$/i.test(k)) env[k] = v;
   }
-  env.AION_HOME = home;
+  env.ROVECODE_HOME = home;
   return Object.assign(env, extra);
 }
 
@@ -50,7 +50,7 @@ async function cli(args: string[], extra: Record<string, string> = {}): Promise<
 
 /** The first user message the run stored — what the model was actually asked. */
 function firstUserText(sessionId: string): string {
-  const m = new SessionStore(join(work, ".aion", "sessions"), sessionId).messages().find((x) => x.role === "user");
+  const m = new SessionStore(join(work, ".rovecode", "sessions"), sessionId).messages().find((x) => x.role === "user");
   return m ? partsText(m.parts) : "";
 }
 
@@ -75,18 +75,18 @@ function spawnPumped(args: string[], extra: Record<string, string>, stdin: "pipe
 
 // ---------- help / tools ----------
 
-test("help: the env block documents the retry / webfetch / compaction / tasks knobs; `aion run` documents /name expansion and --output", async () => {
-  const r = await cli(["help"]);
+test("help: the env block documents the retry / webfetch / compaction / tasks knobs; `rovecode run` documents /name expansion and --output", async () => {
+  const r = await cli(["help", "all"]); // the default page is short; `help all` is the full reference
   expect(r.code).toBe(0);
   const out = r.stdout;
-  expect(out).toMatch(/^\s*AION_RETRY_MAX\s+.*default 3.*0 = off/m);
-  expect(out).toMatch(/^\s*AION_RETRY_BASE_MS\s+.*2000.*jitter.*Retry-After/m);
-  expect(out).toMatch(/^\s*AION_WEBFETCH_TIMEOUT_MS\s+.*30000/m);
-  expect(out).toMatch(/^\s*AION_WEBFETCH_ALLOW_PRIVATE=1\s+.*private/m);
-  expect(out).toMatch(/^\s*AION_COMPACTION\s+.*head-summarize.*keep-window.*provider-native/m);
-  expect(out).toMatch(/^\s*AION_TASKS_MAX\s+.*default 3/m);
-  expect(out).toMatch(/^\s*AION_SANDBOX\s+.*direct.*wsl.*docker/m); // still there
-  // --output paragraph under `aion run`
+  expect(out).toMatch(/^\s*ROVECODE_RETRY_MAX\s+.*default 3.*0 = off/m);
+  expect(out).toMatch(/^\s*ROVECODE_RETRY_BASE_MS\s+.*2000.*jitter.*Retry-After/m);
+  expect(out).toMatch(/^\s*ROVECODE_WEBFETCH_TIMEOUT_MS\s+.*30000/m);
+  expect(out).toMatch(/^\s*ROVECODE_WEBFETCH_ALLOW_PRIVATE=1\s+.*private/m);
+  expect(out).toMatch(/^\s*ROVECODE_COMPACTION\s+.*head-summarize.*keep-window.*provider-native/m);
+  expect(out).toMatch(/^\s*ROVECODE_TASKS_MAX\s+.*default 3/m);
+  expect(out).toMatch(/^\s*ROVECODE_SANDBOX\s+.*direct.*wsl.*docker/m); // still there
+  // --output paragraph under `rovecode run`
   expect(out).toContain("--output <text|json|ndjson>");
   for (const key of ["status", "summary", "sessionId", "origin", "cacheRead", "cacheWrite", "costUsd", "toolCalls", "durationMs", "exitCode"]) expect(out).toContain(key);
   expect(out).toContain('{type:"result"}');
@@ -107,9 +107,9 @@ test("tools: the registry listing includes ask_user (port #33) next to todo_writ
   expect(r.stdout).toMatch(/^ask_user\s+read\s+sequential=true/m);
 }, T);
 
-// ---------- aion run "/name args" ----------
+// ---------- rovecode run "/name args" ----------
 
-test("aion run \"/hello …\" expands .aion/commands/hello.md: the stored first user message is the RENDERED prompt (spaces intact), model: is not applied headlessly; unknown /name passes verbatim; the bare-prompt path expands too", async () => {
+test("rovecode run \"/hello …\" expands .rovecode/commands/hello.md: the stored first user message is the RENDERED prompt (spaces intact), model: is not applied headlessly; unknown /name passes verbatim; the bare-prompt path expands too", async () => {
   const r = await cli(["run", "/hello big   world", "--output", "json"]);
   expect(r.code).toBe(0);
   const res = JSON.parse(r.stdout.trim()) as RunResult;
@@ -126,25 +126,25 @@ test("aion run \"/hello …\" expands .aion/commands/hello.md: the stored first 
   expect(firstUserText((JSON.parse(r3.stdout.trim()) as RunResult).sessionId!)).toBe("Say hi to bare"); // mutation: drop the bare-branch expansion → "/hello bare"
 }, T);
 
-// ---------- aion serve banner ----------
+// ---------- rovecode serve banner ----------
 
 test("serve: the startup banner lists GET /session/:id/tasks and DELETE /session/:id/prompt", async () => {
-  // a free port, released for the child (AION_PORT=0 would read as "default 4100" in main.ts)
+  // a free port, released for the child (ROVECODE_PORT=0 would read as "default 4100" in main.ts)
   const probe = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("") });
   const port = probe.port!;
   await probe.stop(true);
-  const child = spawnPumped(["serve"], { AION_PORT: String(port) }, "ignore");
+  const child = spawnPumped(["serve"], { ROVECODE_PORT: String(port) }, "ignore");
   try {
-    await child.waitOut((o) => o.includes("aion server listening"));
+    await child.waitOut((o) => o.includes("rovecode server listening"));
   } finally {
     await child.stop();
   }
-  expect(child.buf.out).toContain(`aion server listening on http://127.0.0.1:${port}`);
+  expect(child.buf.out).toContain(`rovecode server listening on http://127.0.0.1:${port}`);
   expect(child.buf.out).toContain("GET /session/:id/tasks");
   expect(child.buf.out).toContain("DELETE /session/:id/prompt");
 }, T);
 
-// ---------- aion --plain: ask_user over readline ----------
+// ---------- rovecode --plain: ask_user over readline ----------
 
 test("--plain binds ask_user to readline: the question and numbered options print, the typed number answers, and the next model turn sees `answer: sqlite`", async () => {
   let calls = 0;
@@ -165,9 +165,9 @@ test("--plain binds ask_user to readline: the question and numbered options prin
       return Response.json({ choices: [{ message: { content: `MODEL-SAW ${toolMsg?.content ?? "(no tool result)"}` }, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
     },
   });
-  const child = spawnPumped(["--plain"], { AION_BASE_URL: `http://127.0.0.1:${server.port}`, AION_API_KEY: "test-key", AION_MODEL: "m", AION_NO_REPOMAP: "1" }, "pipe");
+  const child = spawnPumped(["--plain"], { ROVECODE_BASE_URL: `http://127.0.0.1:${server.port}`, ROVECODE_API_KEY: "test-key", ROVECODE_MODEL: "m", ROVECODE_NO_REPOMAP: "1" }, "pipe");
   try {
-    await child.waitOut((o) => o.includes("aion>"));
+    await child.waitOut((o) => o.includes("rovecode>"));
     child.type("pick a db\n");
     await child.waitOut((o) => o.includes("2) sqlite"));            // the asker printed the numbered options (mutation: no setAskUser → "ask_user unavailable")
     expect(child.buf.out).toContain("question: Which database?");

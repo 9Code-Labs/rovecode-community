@@ -4,7 +4,7 @@ import { parseCli, VALUE_FLAGS } from "../../src/cli/dispatch.ts";
 const argv = (...args: string[]) => ["bun", "main.ts", ...args];
 
 test("bare invocation → interactive default", () => {
-  expect(parseCli(argv())).toEqual({ cmd: "", plain: false, yolo: false, classic: false, rest: [] });
+  expect(parseCli(argv())).toEqual({ cmd: "", plain: false, yolo: false, acceptEdits: false, classic: false, rest: [] });
 });
 
 // ---------- port #44: --classic / --pet <name> ----------
@@ -17,7 +17,7 @@ test("--classic is a boolean flag, never the command; absent → false (sextant 
 });
 
 test("--pet <name> is a value flag: the name never becomes the command, is exposed as `pet`, and the key is absent when not given", () => {
-  expect(parseCli(argv("--pet", "stormy"))).toEqual({ cmd: "", plain: false, yolo: false, classic: false, pet: "stormy", rest: [] });
+  expect(parseCli(argv("--pet", "stormy"))).toEqual({ cmd: "", plain: false, yolo: false, acceptEdits: false, classic: false, pet: "stormy", rest: [] });
   expect(parseCli(argv("--pet", "stormy", "--resume", "abc"))).toMatchObject({ cmd: "", pet: "stormy" });
   expect(parseCli(argv("--pet", "--classic"))).toMatchObject({ cmd: "", classic: true }); // a flag-shaped "value" is not a value
   expect("pet" in parseCli(argv("--pet", "--classic"))).toBe(false);
@@ -25,7 +25,7 @@ test("--pet <name> is a value flag: the name never becomes the command, is expos
   expect(parseCli(argv("--pet", "s", "trace", "abc"))).toMatchObject({ cmd: "trace", rest: ["abc"], pet: "s" }); // value skipped when locating cmd
 });
 
-test("--plain stays a flag, never the command (regression: aion --plain ran a one-shot)", () => {
+test("--plain stays a flag, never the command (regression: rovecode --plain ran a one-shot)", () => {
   const c = parseCli(argv("--plain"));
   expect(c.cmd).toBe("");
   expect(c.plain).toBe(true);
@@ -55,7 +55,7 @@ test("--help and -h route to the help command, not the TUI", () => {
 // A value flag's VALUE must never be taken for the command: an unknown cmd falls
 // through to the bare-prompt one-shot, which spends tokens on a real provider.
 
-test("--out <path> before export: cmd is export, not the path (regression: `aion --out o.md export abc` ran a one-shot named o.md)", () => {
+test("--out <path> before export: cmd is export, not the path (regression: `rovecode --out o.md export abc` ran a one-shot named o.md)", () => {
   expect(parseCli(argv("--out", "o.md", "export", "abc"))).toMatchObject({ cmd: "export", rest: ["abc"] });
 });
 
@@ -64,7 +64,7 @@ test("--key <name> before auth: cmd is auth, not the key name", () => {
 });
 
 test("--resume <id> alone → interactive default (main.ts opens the TUI on cmd \"\" and reads the id from argv itself)", () => {
-  expect(parseCli(argv("--resume", "abc"))).toEqual({ cmd: "", plain: false, yolo: false, classic: false, rest: [] });
+  expect(parseCli(argv("--resume", "abc"))).toEqual({ cmd: "", plain: false, yolo: false, acceptEdits: false, classic: false, rest: [] });
   expect(parseCli(argv("--resume", "abc", "--plain"))).toMatchObject({ cmd: "", plain: true });
   // a flag-shaped "value" is not a value: the flag after it stays a flag, cmd stays ""
   expect(parseCli(argv("--resume", "--plain"))).toMatchObject({ cmd: "", plain: true });
@@ -81,7 +81,7 @@ test("a value flag AFTER the command leaves its value in rest (contract cmdAuth/
   expect(parseCli(argv("run", "hi", "--output", "json"))).toMatchObject({ cmd: "run", rest: ["hi", "json"] }); // output.ts runPromptWords drops "json"
 });
 
-// port #35: --output is a value flag — `aion --output json run hi` must dispatch run, not a
+// port #35: --output is a value flag — `rovecode --output json run hi` must dispatch run, not a
 // one-shot prompt named "json" (which would spend tokens on a real provider)
 test("--output <mode> before the command: cmd is the command, the mode is never the command", () => {
   expect(parseCli(argv("--output", "json", "run", "hi"))).toMatchObject({ cmd: "run", rest: ["hi"] });
@@ -89,6 +89,13 @@ test("--output <mode> before the command: cmd is the command, the mode is never 
   expect(parseCli(argv("--output=json", "run", "hi"))).toMatchObject({ cmd: "run", rest: ["hi"] }); // = form is a plain flag
 });
 
-test("VALUE_FLAGS is the inventory of every value flag main.ts/export.ts/output.ts/dispatch.ts hand-parse", () => {
-  expect([...VALUE_FLAGS].sort()).toEqual(["--key", "--out", "--output", "--pet", "--resume"]);
+test("VALUE_FLAGS is the inventory of every value flag main.ts/export.ts/output.ts/dispatch.ts/registry.ts hand-parse", () => {
+  // --protocol --key-env --model --scope: `rovecode provider add` (providers/registry.ts parseAddArgs)
+  expect([...VALUE_FLAGS].sort()).toEqual(["--effort", "--key", "--key-env", "--model", "--out", "--output", "--pet", "--protocol", "--resume", "--scope"]);
+});
+
+test("--accept-edits is a boolean flag, never the command", () => {
+  expect(parseCli(argv("--accept-edits"))).toMatchObject({ cmd: "", acceptEdits: true, yolo: false });
+  expect(parseCli(argv("run", "x", "--accept-edits"))).toMatchObject({ cmd: "run", acceptEdits: true, rest: ["x"] });
+  expect(parseCli(argv()).acceptEdits).toBe(false);
 });

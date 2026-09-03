@@ -67,7 +67,7 @@ test("allow rules keep parent breadth when not isolated", () => {
 });
 
 test("isolated children get path-glob allows re-rooted under the isolation dir", () => {
-  const isoDir = join("tmp", "aion-iso-x", "work");
+  const isoDir = join("tmp", "rovecode-iso-x", "work");
   const child = deriveChildRules(parentRules, isoDir, true);
   const write = child.find((r) => r.action === "file.write" && r.resource !== ".env*" && r.resource !== "*");
   expect(write?.resource).toBe(join(isoDir, "src/**"));
@@ -79,7 +79,7 @@ test("isolated children get path-glob allows re-rooted under the isolation dir",
 // ---------- createIsolation: Windows-safe smoke ----------
 
 function tempGitRepo(): string {
-  const dir = mkdtempSync(join(tmpdir(), "aion-orch-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-orch-"));
   mkdirSync(join(dir, "src"), { recursive: true });
   writeFileSync(join(dir, "src", "app.ts"), "export const x = 1;\n");
   Bun.spawnSync(["git", "init", "-q"], { cwd: dir });
@@ -109,7 +109,7 @@ test("worktree isolation: diff after a change, cleanup removes dir", async () =>
 });
 
 test("copy isolation: same contract without git", async () => {
-  const repo = mkdtempSync(join(tmpdir(), "aion-orch-"));
+  const repo = mkdtempSync(join(tmpdir(), "rovecode-orch-"));
   mkdirSync(join(repo, "src"), { recursive: true });
   writeFileSync(join(repo, "src", "app.ts"), "export const x = 1;\n");
   try {
@@ -132,14 +132,14 @@ test("copy isolation: same contract without git", async () => {
 });
 
 test("copy patch applies back onto the parent tree", async () => {
-  const repo = mkdtempSync(join(tmpdir(), "aion-orch-"));
+  const repo = mkdtempSync(join(tmpdir(), "rovecode-orch-"));
   mkdirSync(join(repo, "src"), { recursive: true });
   writeFileSync(join(repo, "src", "app.ts"), "export const x = 1;\n");
   try {
     const iso = await createIsolation(repo, { prefer: "copy" });
     writeFileSync(join(iso.dir, "src", "app.ts"), "export const x = 2;\n");
     const patch = await iso.diff();
-    const p = Bun.spawnSync(["git", "apply", "-"], { cwd: repo, stdin: new Blob([patch]), stdout: "pipe", stderr: "pipe" });
+    const p = Bun.spawnSync(["git", "-c", "core.autocrlf=false", "apply", "-"], { cwd: repo, stdin: new Blob([patch]), stdout: "pipe", stderr: "pipe" });
     expect(p.exitCode).toBe(0);
     expect(readFileSync(join(repo, "src", "app.ts"), "utf8")).toBe("export const x = 2;\n");
     await iso.cleanup();
@@ -149,7 +149,7 @@ test("copy patch applies back onto the parent tree", async () => {
 });
 
 test("prefer none returns the root with no-op diff/cleanup", async () => {
-  const repo = mkdtempSync(join(tmpdir(), "aion-orch-"));
+  const repo = mkdtempSync(join(tmpdir(), "rovecode-orch-"));
   try {
     const iso = await createIsolation(repo, { prefer: "none" });
     expect(iso.kind).toBe("none");

@@ -1,8 +1,8 @@
 /** PORT #27 boot wiring: createRuntime/bootRuntime select the executor rung
- *  from .aion/sandbox.json / AION_SANDBOX, probe it through an INJECTED runner
+ *  from .rovecode/sandbox.json / ROVECODE_SANDBOX, probe it through an INJECTED runner
  *  (a real wsl.exe/docker is never spawned here), expose rt.sandbox, and turn
  *  an unavailable rung into ONE typed one-line startup error. Entrypoint pins:
- *  the real CLI (`aion run` → exit 2 + one stderr line) and `serve` (503 JSON);
+ *  the real CLI (`rovecode run` → exit 2 + one stderr line) and `serve` (503 JSON);
  *  the acp pin lives in test/unit/acp.test.ts (rig reuse). The TUI applies the
  *  same bootRuntime catch (app.ts hunk) and renders describeSandbox in /status. */
 
@@ -27,19 +27,19 @@ const MAIN = join(ROOT, "src", "cli", "main.ts");
 /** Sandbox env under test control, checkpoints off (no shadow-git in tmp);
  *  returns the restore fn. */
 function envScope(set: Record<string, string> = {}): () => void {
-  const keys = ["AION_SANDBOX", "AION_SANDBOX_IMAGE", "AION_NO_CHECKPOINTS"];
+  const keys = ["ROVECODE_SANDBOX", "ROVECODE_SANDBOX_IMAGE", "ROVECODE_NO_CHECKPOINTS"];
   const saved = new Map(keys.map((k) => [k, process.env[k]] as const));
-  delete process.env.AION_SANDBOX;
-  delete process.env.AION_SANDBOX_IMAGE;
-  process.env.AION_NO_CHECKPOINTS = "1";
+  delete process.env.ROVECODE_SANDBOX;
+  delete process.env.ROVECODE_SANDBOX_IMAGE;
+  process.env.ROVECODE_NO_CHECKPOINTS = "1";
   for (const [k, v] of Object.entries(set)) process.env[k] = v;
   return () => { for (const [k, v] of saved) { if (v === undefined) delete process.env[k]; else process.env[k] = v; } };
 }
 
-function tmpCwd(): string { return mkdtempSync(join(tmpdir(), "aion-rt-sbx-")); }
+function tmpCwd(): string { return mkdtempSync(join(tmpdir(), "rovecode-rt-sbx-")); }
 function sandboxFile(cwd: string, cfg: unknown): void {
-  mkdirSync(join(cwd, ".aion"), { recursive: true });
-  writeFileSync(join(cwd, ".aion", "sandbox.json"), JSON.stringify(cfg));
+  mkdirSync(join(cwd, ".rovecode"), { recursive: true });
+  writeFileSync(join(cwd, ".rovecode", "sandbox.json"), JSON.stringify(cfg));
 }
 
 interface Call { argv: string[]; cwd?: string }
@@ -64,7 +64,7 @@ async function runBash(rt: Runtime, command: string): Promise<{ ok: boolean; out
 
 // ---------- boot wiring via fake runner ----------
 
-test("wsl in .aion/sandbox.json + probe FAILS → bootRuntime rejects with SandboxConfigError (one line, probe detail inside); seam poisoned, never lazy direct", async () => {
+test("wsl in .rovecode/sandbox.json + probe FAILS → bootRuntime rejects with SandboxConfigError (one line, probe detail inside); seam poisoned, never lazy direct", async () => {
   const cwd = tmpCwd();
   const restore = envScope();
   try {
@@ -76,7 +76,7 @@ test("wsl in .aion/sandbox.json + probe FAILS → bootRuntime rejects with Sandb
     const err = thrown as SandboxConfigError;
     expect(err.name).toBe("SandboxConfigError");
     expect(err.message).toContain('sandbox rung "wsl"');
-    expect(err.message).toContain("from .aion/sandbox.json");
+    expect(err.message).toContain("from .rovecode/sandbox.json");
     expect(err.message).toContain("unavailable");
     expect(err.message).toContain("execvpe(bash) failed"); // the PROBE's own detail rides along
     expect(err.message).toContain("default: direct");      // and the fix
@@ -95,7 +95,7 @@ test("wsl in .aion/sandbox.json + probe FAILS → bootRuntime rejects with Sandb
   } finally { restore(); rmSync(cwd, { recursive: true, force: true }); }
 });
 
-test("wsl in .aion/sandbox.json + probe ok → rt.sandbox is wsl/file and the registered bash tool dispatches through `wsl.exe --cd <cwd> --exec bash -c <cmd>`", async () => {
+test("wsl in .rovecode/sandbox.json + probe ok → rt.sandbox is wsl/file and the registered bash tool dispatches through `wsl.exe --cd <cwd> --exec bash -c <cmd>`", async () => {
   const cwd = tmpCwd();
   const restore = envScope();
   try {
@@ -137,21 +137,21 @@ test("no config → direct from default: the runner is never asked to probe; dis
   } finally { restore(); rmSync(cwd, { recursive: true, force: true }); }
 });
 
-test("env AION_SANDBOX=docker (+ AION_SANDBOX_IMAGE) beats a file saying wsl → rt.sandbox docker/env with the image; probe and dispatch use it against the mounted cwd", async () => {
+test("env ROVECODE_SANDBOX=docker (+ ROVECODE_SANDBOX_IMAGE) beats a file saying wsl → rt.sandbox docker/env with the image; probe and dispatch use it against the mounted cwd", async () => {
   const cwd = tmpCwd();
-  const restore = envScope({ AION_SANDBOX: "docker", AION_SANDBOX_IMAGE: "aion/dev:1" });
+  const restore = envScope({ ROVECODE_SANDBOX: "docker", ROVECODE_SANDBOX_IMAGE: "rovecode/dev:1" });
   try {
     sandboxFile(cwd, { rung: "wsl" });
     const { runner, calls } = fakeRunner((argv) => (isProbe(argv) ? ok() : ok("in-container\n")));
     const rt = await bootRuntime({ cwd, stream: null, spawnRunner: runner });
     expect(rt.sandbox.rung).toBe("docker");
-    expect(rt.sandbox.dockerImage).toBe("aion/dev:1");
+    expect(rt.sandbox.dockerImage).toBe("rovecode/dev:1");
     expect(rt.sandbox.source).toBe("env");
     // mutation: env no longer overrides the file → rung wsl, probe argv wsl.exe → fails here
-    expect(calls.map((c) => c.argv)).toEqual([["docker", "run", "--rm", "aion/dev:1", "bash", "-c", "true"]]);
+    expect(calls.map((c) => c.argv)).toEqual([["docker", "run", "--rm", "rovecode/dev:1", "bash", "-c", "true"]]);
     const out = await runBash(rt, "ls");
     expect(out).toEqual({ ok: true, output: "exit=0\nin-container\n" });
-    expect(calls[1]!.argv).toEqual(["docker", "run", "--rm", "-v", `${cwd}:/workspace`, "-w", "/workspace", "aion/dev:1", "bash", "-c", "ls"]);
+    expect(calls[1]!.argv).toEqual(["docker", "run", "--rm", "-v", `${cwd}:/workspace`, "-w", "/workspace", "rovecode/dev:1", "bash", "-c", "ls"]);
   } finally { restore(); rmSync(cwd, { recursive: true, force: true }); }
 });
 
@@ -162,7 +162,7 @@ test("unknown rung in the file → createRuntime throws SandboxConfigError synch
     sandboxFile(cwd, { rung: "bubblewrap" });
     const { runner, calls } = fakeRunner(() => ok());
     expect(() => createRuntime({ cwd, stream: null, spawnRunner: runner })).toThrow(SandboxConfigError);
-    expect(existsSync(join(cwd, ".aion", "sessions"))).toBe(false); // mutation: load config after mkdir → a dir appears
+    expect(existsSync(join(cwd, ".rovecode", "sessions"))).toBe(false); // mutation: load config after mkdir → a dir appears
     expect(calls).toHaveLength(0);
     expect(getExecutor().rung).toBe("direct"); // no desire was recorded
     // the boot path surfaces the sync throw as the same rejection
@@ -178,7 +178,7 @@ test("a failed boot reaps the MCP children construction spawned (no orphan proce
   McpManager.prototype.close = async function (this: McpManager) { closed.push(this); return orig.call(this); };
   try {
     sandboxFile(cwd, { rung: "wsl" });
-    writeFileSync(join(cwd, ".mcp.json"), JSON.stringify({ mcpServers: { toy: { command: "aion-not-a-real-binary-sbx" } } }));
+    writeFileSync(join(cwd, ".mcp.json"), JSON.stringify({ mcpServers: { toy: { command: "rovecode-not-a-real-binary-sbx" } } }));
     const { runner } = fakeRunner(() => fail(1, "no wsl here"));
     await expect(bootRuntime({ cwd, stream: null, spawnRunner: runner, platform: "win32" })).rejects.toBeInstanceOf(SandboxConfigError);
     expect(closed).toHaveLength(1); // mutation: drop rt.mcp?.close() in bootRuntime → 0
@@ -203,7 +203,7 @@ test("serve: POST /session under a broken sandbox config → 503 JSON with the o
     expect(body.error).toContain('sandbox rung "bubblewrap"');
     expect(body.error).toContain("default: direct");
     expect(body.error).not.toMatch(/[\r\n]/);
-    expect(existsSync(join(cwd, ".aion", "sessions"))).toBe(false);
+    expect(existsSync(join(cwd, ".rovecode", "sessions"))).toBe(false);
     expect((await fetch(`${s.url}/doc`)).status).toBe(200); // alive
   } finally {
     await s.stop();
@@ -212,20 +212,20 @@ test("serve: POST /session under a broken sandbox config → 503 JSON with the o
   }
 });
 
-/** Host env minus AION_* and provider keys (a host AION_SANDBOX would override
+/** Host env minus ROVECODE_* and provider keys (a host ROVECODE_SANDBOX would override
  *  the file under test; a host key must not steer the CLI onto a real endpoint);
- *  AION_HOME → the temp cwd so no stored credential is found either. */
+ *  ROVECODE_HOME → the temp cwd so no stored credential is found either. */
 function hermeticEnv(home: string): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
-    if (v === undefined || /^AION_/i.test(k) || /_API_KEY$/i.test(k)) continue;
+    if (v === undefined || /^ROVECODE_/i.test(k) || /_API_KEY$/i.test(k)) continue;
     env[k] = v;
   }
-  env.AION_HOME = home;
+  env.ROVECODE_HOME = home;
   return env;
 }
 
-test("CLI: `aion run` in a cwd with an unknown rung → exit 2, exactly one `error:` line on stderr, nothing on stdout", () => {
+test("CLI: `rovecode run` in a cwd with an unknown rung → exit 2, exactly one `error:` line on stderr, nothing on stdout", () => {
   const cwd = tmpCwd();
   try {
     sandboxFile(cwd, { rung: "bubblewrap" });
@@ -240,10 +240,10 @@ test("CLI: `aion run` in a cwd with an unknown rung → exit 2, exactly one `err
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 }, 30_000);
 
-test("CLI: help documents AION_SANDBOX and AION_SANDBOX_IMAGE in the env section", () => {
-  const p = Bun.spawnSync([process.execPath, MAIN, "help"], { cwd: ROOT, env: hermeticEnv(ROOT), stdout: "pipe", stderr: "pipe" });
+test("CLI: help documents ROVECODE_SANDBOX and ROVECODE_SANDBOX_IMAGE in the env section", () => {
+  const p = Bun.spawnSync([process.execPath, MAIN, "help", "env"], { cwd: ROOT, env: hermeticEnv(ROOT), stdout: "pipe", stderr: "pipe" }); // the env page
   expect(p.exitCode).toBe(0);
   const out = p.stdout.toString();
-  expect(out).toMatch(/^\s*AION_SANDBOX\s+.*direct.*wsl.*docker.*sandbox\.json/m);
-  expect(out).toMatch(/^\s*AION_SANDBOX_IMAGE\s+.*docker rung/m);
+  expect(out).toMatch(/^\s*ROVECODE_SANDBOX\s+.*direct.*wsl.*docker.*sandbox\.json/m);
+  expect(out).toMatch(/^\s*ROVECODE_SANDBOX_IMAGE\s+.*docker rung/m);
 }, 30_000);

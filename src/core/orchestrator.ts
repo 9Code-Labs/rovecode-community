@@ -48,8 +48,8 @@ export async function createIsolation(rootDir: string, opts: { prefer: "worktree
   }
   const id = randomUUID().slice(0, 8);
   if (opts.prefer === "worktree") {
-    const dir = join(rootDir, ".aion", "worktrees", id);
-    // --detach (fix-wave L3): `-b aion/task/<id>` left one branch per isolated task behind in
+    const dir = join(rootDir, ".rovecode", "worktrees", id);
+    // --detach (fix-wave L3): `-b rovecode/task/<id>` left one branch per isolated task behind in
     // the root repo after `worktree remove`; a detached checkout at HEAD leaves only the
     // worktree, which cleanup removes
     if (git(["worktree", "add", "--detach", dir], rootDir).code === 0) {
@@ -64,7 +64,7 @@ export async function createIsolation(rootDir: string, opts: { prefer: "worktree
   }
   // copy fallback: work/ is the live copy the child mutates; baseline/ is the pristine snapshot
   // (node fs.cpSync/fs.rmSync — POSIX `cp -r`/`rm -rf` don't exist on Windows)
-  const dir = mkdtempSync(join(tmpdir(), "aion-iso-"));
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-iso-"));
   try {
     mkdirSync(join(dir, "baseline"));
     cpSync(rootDir, join(dir, "baseline"), { recursive: true });
@@ -173,7 +173,9 @@ function lastText(store: SessionStore): string {
 /** Best-effort merge-back into the parent tree (omp worktree → git apply). */
 function applyPatch(patch: string, parentDir: string): boolean {
   if (!patch.trim()) return true; // nothing changed
-  return git(["apply", "--whitespace=nowarn", "-"], parentDir, patch).code === 0;
+  // -c core.autocrlf=false: apply the patch byte-exact — Git for Windows' system-level autocrlf=true
+  // would rewrite every patched file to CRLF, even in a non-repo parent dir (measured on the copy rung)
+  return git(["-c", "core.autocrlf=false", "apply", "--whitespace=nowarn", "-"], parentDir, patch).code === 0;
 }
 
 /** Children never exceed parent grants:

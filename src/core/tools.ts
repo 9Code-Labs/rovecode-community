@@ -8,6 +8,7 @@ import type {
   ApprovalRequest, ToolCallPart, RunEvent,
 } from "./types.ts";
 import type { ToolGuard } from "./guardrails.ts";
+import { formatIssues, validateArgs } from "./validate.ts";
 import { cloneForHook, type HookCtx, type HookRunner } from "./hooks.ts";
 import { isAbsolute, join } from "node:path";
 
@@ -80,6 +81,18 @@ export class ToolRegistry {
     let args = call.args;
     if (hooks?.reviseToolArgs) args = await hooks.reviseToolArgs(call.tool, args);
 
+    // 1a. validate against the tool's OWN published schema (ADR-005's first step; core/validate.ts).
+    // After revision, so a hook that repairs args is judged on what it produced; before the guard and
+    // policy, because a call that cannot execute should not consume a loop-guard slot, an approval
+    // card, or the human's attention. The failure shape matches the others here: a tool_call_failed
+    // event and an ok:false result the model reads and corrects on the next turn.
+    const issues = validateArgs(tool.schema.args, args);
+    if (issues.length > 0) {
+      const detail = formatIssues(call.tool, issues);
+      emit({ type: "tool_call_failed", callId: call.id, reason: "invalid_args", detail });
+      return { ok: false, output: detail };
+    }
+
     // 1b. loop guard (port #4, hermes): stub repeated identical calls BEFORE the user is
     // prompted for them; warn notes ride along on the result
     let warnNote: string | undefined;
@@ -116,7 +129,13 @@ export class ToolRegistry {
     // IS the chain: execpolicy refinement → approval hook → human (cli/runtime.ts buildCfg), so a
     // hook is consulted only where the human would be — never ahead of a forbidden-argv hard stop
     if (decision.effect === "prompt") {
-      const cached = this.approvalCache.get(cacheKey(call.tool, args));
+      // "always" is remembered by what the RULES are about — action + resource — not by the whole
+      // argument blob. Keyed on the args, an "always" on `write {path, content}` never matched again:
+      // the next write to the same file carries different content, so the cache missed and the card
+      // came back. The pair below is the same identity evaluatePermissions just decided on, so
+      // "always" now means what the card says: this action, on this file / this command / this host.
+      const key = approvalKey(actionFor(tool), resource, tool.schema.name, args);
+      const cached = this.approvalCache.get(key);
       if (!cached) {
         if (!approve) {
           emit({ type: "tool_call_failed", callId: call.id, reason: "permission_denied", detail: "approval required but no approver connected" });
@@ -128,7 +147,7 @@ export class ToolRegistry {
           return { ok: false, output: "Permission denied by user" };
         }
         // "once" means once: only "always" verdicts persist across calls
-        if (verdict === "always") this.approvalCache.set(cacheKey(call.tool, args), verdict);
+        if (verdict === "always") this.approvalCache.set(key, verdict);
       }
     }
 
@@ -252,10 +271,15 @@ function hostOf(url: string): string {
   try { const h = new URL(url).hostname; return (h.endsWith(".") ? h.slice(0, -1) : h).toLowerCase() || url; } catch { return url; }
 }
 
-function cacheKey(tool: string, args: unknown): string { return tool + "|" + JSON.stringify(sortK(args)); }
-function sortK(v: unknown): unknown {
-  if (v && typeof v === "object" && !Array.isArray(v)) {
-    return Object.fromEntries(Object.entries(v as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)));
-  }
-  return v;
+/** The identity an "always" verdict is remembered under.
+ *
+ *  Where the card names a real target — a path, a shell command, a host — that pair IS the decision
+ *  the human made ("always allow writing THIS file"), and it is the same identity the rules evaluate.
+ *  Where the tool declares none of those, describeResource falls back to the tool NAME, and widening
+ *  to it would turn "always" on one `mcp_call` into "always" on every MCP call. So those keep the
+ *  exact-arguments key they always had: the narrow reading is the safe one when the card cannot say
+ *  what the decision is about. */
+function approvalKey(action: string, resource: string, toolName: string, args: unknown): string {
+  const base = action + "|" + resource;
+  return resource === toolName ? base + "|" + JSON.stringify(args) : base;
 }

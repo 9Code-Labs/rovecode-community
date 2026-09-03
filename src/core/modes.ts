@@ -1,6 +1,6 @@
 /**
  * Plan/Act agent modes with per-mode model config — ported from cline
- * (snapshot: E:\9code\research\source_snapshots\cline-cline @ 8eb5f3d).
+ * (snapshot: research/source_snapshots/cline-cline @ 8eb5f3d).
  * Citations are snapshot-relative path:line.
  *
  * Ported behavior:
@@ -30,29 +30,29 @@
  *    sdk/packages/shared/src/prompt/cline.ts:34-45 (base) + :52-59 (the
  *    no-self-switch tail used by hosts without a switch_to_act_mode tool).
  *
- * Deliberate deviations (aion-specific, per ADR-005 deny-default policy):
+ * Deliberate deviations (rovecode-specific, per ADR-005 deny-default policy):
  *  - Enforcement rides the EXISTING permission pipeline: plan mode is a rule
  *    set appended to RunConfig.permissionRules and evaluated by the one
  *    evaluatePermissions ladder (src/core/tools.ts:17-27, last match wins).
  *    No second enforcement path.
  *  - Upstream plan mode keeps shell access with a file-editing command
  *    blacklist (presets.ts:48, sdk/packages/core/src/extensions/tools/
- *    command-guard.ts:1-74, runtime-builder.ts:477-489). aion plan mode
+ *    command-guard.ts:1-74, runtime-builder.ts:477-489). rovecode plan mode
  *    denies shell.exec outright — the task bar mandates a read/grep-class
  *    toolset, and a blacklist is a weaker guarantee than a deny rule.
- *  - Upstream plan mode allows spawning sub-agents (presets.ts:55); aion
+ *  - Upstream plan mode allows spawning sub-agents (presets.ts:55); rovecode
  *    denies spawn in plan mode because children could write.
  *  - memory.write is denied in plan mode EXCEPT `todo_write` (port #32): the
  *    todo list is the plan's own artifact (agent-private session metadata,
  *    never workspace state), so planning may record it; memory_edit stays denied.
  *  - The mode switch is preserved durably as a session entry (a system-role
  *    Message carrying the upstream notice text) instead of a prefix on the
- *    next user message — aion sessions are an append-only tree, so the entry
+ *    next user message — rovecode sessions are an append-only tree, so the entry
  *    lands exactly where the switch happened. Round-trip cancellation is
  *    kept: a cancelled switch never becomes an entry.
  *
  * Scope: modes are a TUI feature — only src/tui consumes this module;
- * `aion run`/acp/serve ignore .aion/modes.json (incl. defaultMode) and own
+ * `rovecode run`/acp/serve ignore .rovecode/modes.json (incl. defaultMode) and own
  * their RunConfig outright (R2 #20 LOW-4 decision: documented, not wired).
  */
 
@@ -72,7 +72,7 @@ function isMode(v: unknown): v is AgentMode {
   return v === "plan" || v === "act";
 }
 
-// ---------- Per-mode model config (.aion/modes.json) ----------
+// ---------- Per-mode model config (.rovecode/modes.json) ----------
 
 /** One mode's provider/model selection (upstream planMode… / actMode… fields). */
 export interface ModeModelSelection {
@@ -101,13 +101,13 @@ function asSelection(v: unknown): ModeModelSelection | undefined {
   return { provider, model };
 }
 
-/** Load `<cwd>/.aion/modes.json`. Missing, unreadable, or malformed files and
+/** Load `<cwd>/.rovecode/modes.json`. Missing, unreadable, or malformed files and
  *  junk fields all degrade to defaults — config can never crash startup
  *  (house pattern: src/core/config.ts tryReadFile / src/mcp config). */
 export function loadModesConfig(cwd: string): ModesConfig {
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(join(cwd, ".aion", "modes.json"), "utf8"));
+    raw = JSON.parse(readFileSync(join(cwd, ".rovecode", "modes.json"), "utf8"));
   } catch {
     return {};
   }
@@ -132,7 +132,7 @@ export function loadModesConfig(cwd: string): ModesConfig {
  * actionFor() emits (src/core/tools.ts:145-154).
  *
  * Upstream basis: ToolPresets.plan disables editing (presets.ts:50-51); the
- * shell/spawn/memory denies are the aion deviations documented above.
+ * shell/spawn/memory denies are the rovecode deviations documented above.
  */
 export function planModeRules(allowTools: readonly string[] = []): PermissionRule[] {
   const rules: PermissionRule[] = [
@@ -175,7 +175,7 @@ export function applyModeRules(
  * Behavioral contract appended to the system prompt in plan mode. Adapted
  * from PLAN_MODE_INSTRUCTIONS_BASE (sdk/packages/shared/src/prompt/
  * cline.ts:34-45) with the no-self-switch tail (:52-59). The upstream
- * run_commands paragraph is replaced: aion plan mode has no shell at all.
+ * run_commands paragraph is replaced: rovecode plan mode has no shell at all.
  */
 export function planModePromptSection(): string {
   return `# Plan Mode
@@ -289,7 +289,7 @@ interface Slots {
  *   1. runtime writes via setModel() to that mode's slot (latest wins —
  *      upstream: the settings UI writes the current mode's field,
  *      updateApiConfiguration.ts:108-117)
- *   2. `.aion/modes.json` per-mode entry (seeds the slot — upstream reads
+ *   2. `.rovecode/modes.json` per-mode entry (seeds the slot — upstream reads
  *      planMode… / actMode… fields per mode, cline-session-factory.ts:552-558)
  *   3. constructor fallback (session default provider/model)
  *

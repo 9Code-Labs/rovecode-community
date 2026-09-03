@@ -1,13 +1,13 @@
 /** Interactive agent chat (omp/claude-code style): persistent session, streaming
- *  output, y/n/a approvals, slash commands. Bare `aion` drops here. */
+ *  output, y/n/a approvals, slash commands. Bare `rovecode` drops here. */
 
 import readline from "node:readline";
 import { agentLoop } from "../core/loop.ts";
 import { resetTurnFailureCount } from "../memory/tools.ts";
-import { providerStream } from "../providers/stream.ts";
 import type { ApprovalFn, RunEvent } from "../core/types.ts";
 import type { AskFn } from "../tools/ask-user.ts";
-import { bootRuntime } from "./runtime.ts";
+import { bootRuntime, NO_PROVIDER_HINT } from "./runtime.ts";
+import { modeSwitchNote } from "../core/voice.ts";
 import { SandboxConfigError, describeSandbox } from "../core/sandbox-config.ts";
 
 export interface ReplState {
@@ -61,35 +61,29 @@ export async function runRepl( /* eslint-disable-line complexity */
   });
 
   const state: ReplState = {
-    yolo: opts.yolo ?? process.env.AION_YOLO === "1",
+    yolo: opts.yolo ?? process.env.ROVECODE_YOLO === "1",
     provider: "mock",
-    model: opts.model ?? process.env.AION_MODEL ?? "",
+    model: opts.model ?? process.env.ROVECODE_MODEL ?? "",
     turns: 0, tokensIn: 0, tokensOut: 0,
   };
 
-  // interactive fallback when no provider is configured (stays out of runtime.ts)
-  let cfgProvider = rt.provider;
-  let stream = rt.stream ?? undefined;
-  if (!cfgProvider) {
-    const rl0 = readline.createInterface({ input: process.stdin, output: process.stdout });
-    console.log("no provider configured (run `aion auth set <provider>`, or set AION_BASE_URL/AION_API_KEY or a <NAME>_API_KEY env).");
-    const base = await ask(rl0, "base url [https://api.kaesra.tech/v1]: ");
-    const key = await ask(rl0, "api key: ");
-    rl0.close();
-    if (base && key) {
-      cfgProvider = { id: "custom", baseUrl: base || "https://api.kaesra.tech/v1", apiKey: key, protocol: base.includes("anthropic") ? "anthropic" : "openai", defaultModel: state.model || undefined };
-      stream = providerStream(cfgProvider);
-    }
-  }
-  if (cfgProvider) { state.provider = cfgProvider.id; state.model = state.model || cfgProvider.defaultModel || "gpt-4o-mini"; }
+  // the registry is live: `rovecode provider add …` / `rovecode auth set …` from another terminal is
+  // picked up on the next line — no restart and no ad-hoc base-url prompt here
+  const stream = rt.stream ?? undefined;
+  const adoptDefault = (): void => {
+    const d = rt.providers.defaultRef();
+    if (d !== null) { state.provider = d.provider; state.model = state.model || d.model || "gpt-4o-mini"; }
+  };
+  adoptDefault();
+  if (state.provider === "mock") console.log(NO_PROVIDER_HINT);
   rt.hooks.onWarning((w) => console.error(`hooks: ${w}`)); // port #29: load + runtime hook notes → stderr (cmdRun idiom)
 
-  console.log(`aion — interactive agent (${state.provider}/${state.model})`);
+  console.log(`◆ rovecode here — plain chat with ${state.provider}/${state.model}`);
   console.log(`session ${rt.sessionId.slice(0, 8)} in ${rt.cwd}`);
-  console.log(`mode: ${state.yolo ? "yolo (all tools allowed)" : "gated (asks before writes/exec)"}`);
-  console.log(`commands: /exit /new /yolo /model <id> /status /skills /memory`);
+  console.log(modeSwitchNote(state.yolo));
+  console.log(`commands: /exit /new /yolo /model <provider/model> /status /skills /memory`);
 
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: "aion> " });
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: "rovecode> " });
 
   rt.setAskUser(readlineAsker(rl)); // port #33: ask_user over the same readline (readlineAsker above)
 
@@ -115,14 +109,20 @@ export async function runRepl( /* eslint-disable-line complexity */
     const text = line.trim();
     if (!text) { rl.prompt(); return; }
     if (text === "/exit" || text === "/quit") { rl.close(); return; }
-    if (text === "/yolo") { state.yolo = !state.yolo; console.log(`mode: ${state.yolo ? "yolo" : "gated"}`); rl.prompt(); return; }
+    if (text === "/yolo") { state.yolo = !state.yolo; console.log(modeSwitchNote(state.yolo)); rl.prompt(); return; }
     if (text === "/status") { console.log(`provider=${state.provider} model=${state.model} turns=${state.turns} tokens=${state.tokensIn}in/${state.tokensOut}out\nsandbox: ${describeSandbox(rt.sandbox)}`); rl.prompt(); return; }
     if (text === "/skills") { for (const s of rt.skillStore.list()) console.log(`  ${s.name.padEnd(20)} ${s.description}`); rl.prompt(); return; }
     if (text === "/memory") { console.log(rt.blockStore.renderForPrompt() || "(empty)"); rl.prompt(); return; }
-    if (text.startsWith("/model ")) { state.model = text.slice(7).trim(); console.log(`model → ${state.model}`); rl.prompt(); return; }
+    if (text.startsWith("/model ")) {
+      const ref = rt.providers.resolveSelector(text.slice(7), state.provider);
+      if ("error" in ref) console.log(ref.error); else { state.provider = ref.provider; state.model = ref.model; console.log(`model → ${ref.provider}/${ref.model}`); }
+      rl.prompt(); return;
+    }
     if (text === "/new") { rt.store.branch(rt.store.messages()[0]?.id ?? ""); console.log("branched to session start"); rl.prompt(); return; }
 
-    if (!stream) { console.log("no provider — set AION_BASE_URL/AION_API_KEY and restart"); rl.prompt(); return; }
+    const reason = rt.noProviderReason(); // live — a provider added since boot is picked up here
+    if (!stream || reason !== null) { console.log(reason ?? "no provider stream"); rl.prompt(); return; }
+    if (state.provider === "mock") adoptDefault();
 
     const def = rt.buildDef({ provider: state.provider, model: state.model });
 
@@ -130,7 +130,7 @@ export async function runRepl( /* eslint-disable-line complexity */
     rt.tasks.bindRun(ac.signal); // port #26: Ctrl-C (ac.abort above) also cancels the background tasks this run started
     // port #29: hooks ride the deps like every surface; port #26: the runtime's ONE steering queue (not a
     // fresh one) so background-task completion notes — and any hook-pushed steer — reach the next turn
-    const gen = agentLoop(def, text, {}, rt.buildCfg(state.yolo, approval), { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, cwd: rt.cwd, signal: ac.signal, hooks: rt.hooks }, rt.steering);
+    const gen = agentLoop(def, text, {}, rt.buildCfg(state.yolo, approval), { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, planReminder: rt.planReminder, cwd: rt.cwd, signal: ac.signal, hooks: rt.hooks }, rt.steering);
     running = { ac, gen };
     try {
       let live = "";
