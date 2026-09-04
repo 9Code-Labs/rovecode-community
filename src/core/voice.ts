@@ -76,9 +76,9 @@ export function resumedLine(id: string, cwd: string, yolo: boolean): string {
 /** the /effort note. Says what the level costs, because that is the part that surprises people:
  *  thinking tokens are billed as output and they arrive before any answer does. */
 export function effortNote(level: string): string {
-  return level === "off"
-    ? "thinking: off — I answer straight away."
-    : `thinking: ${level} — I reason before answering. It costs output tokens and delays the first word.`;
+  if (level === "off") return "thinking: off — I answer straight away.";
+  if (level === "auto") return "thinking: auto — the model decides how much to reason; I send no dial.";
+  return `thinking: ${level} — I reason before answering. It costs output tokens and delays the first word.`;
 }
 
 /** the /yolo toggle's note */

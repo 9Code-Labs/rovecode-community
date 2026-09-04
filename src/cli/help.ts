@@ -20,7 +20,7 @@ everyday
   rovecode run "<prompt>" --output json   machine-readable result (ndjson: one line per event)
   rovecode model               pick the default from a numbered menu (rovecode models lists them)
   rovecode model use <provider/model>     set it directly · --project pins it to this repo
-  --effort off|low|medium|high  how hard I think before answering (/effort in the TUI, ROVECODE_EFFORT=…)
+  --effort auto|off|low|medium|high  how hard I think before answering (/effort in the TUI, ROVECODE_EFFORT=…)
   rovecode provider list|add|remove|test  endpoints in ~/.rovecode/providers.json — live, no restart
   rovecode auth set <id>          store an API key (hidden prompt) · auth list · auth remove <id>
   rovecode --resume <id>          reopen a session · rovecode export <session> writes it as markdown
@@ -113,10 +113,10 @@ const ENV = `env — every ROVECODE_* setting
                   the next candidate serves. Roles: DEFAULT SMOL PLAN COMMIT TASK
                   (e.g. ROVECODE_MODEL_DEFAULT=kaesra/zai-org/glm-5.3-flash,openai/gpt-4o-mini)
   ROVECODE_STREAM     streaming is on by default (both protocols); =off|json uses the one-shot JSON adapters
-  ROVECODE_EFFORT     off|low|medium|high thinking before the answer (default off). Anthropic gets
-                    output_config.effort or a thinking budget, whichever the model takes (learned from
-                    its own 400, then remembered); OpenAI gets reasoning_effort. Thinking is billed as
-                    output and delays the first word.
+  ROVECODE_EFFORT     auto|off|low|medium|high thinking before the answer (default auto: the provider's
+                    own default stands). Anthropic gets output_config.effort or a thinking budget,
+                    whichever the model takes (learned from its own 400, then remembered); OpenAI gets
+                    reasoning_effort. Thinking is billed as output and delays the first word.
   ROVECODE_PROFILE    model profile: off, or an id (glm-5.3 | glm-5.3-plain) whose PROMPT section is forced onto
                     every model (request fields always follow the model id). Unset = by model id: GLM-5.3 / -Flash
                     get the Claude Sonnet 5 persona + the working agreement appended to the system prompt
