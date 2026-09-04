@@ -1,0 +1,50 @@
+# Build site/ and ship it to the VPS on every push to main that touches it. The deploy key on the
+# server is bound to a forced command that only accepts a tar of the build (scripts/deploy-site.sh
+# does the same flip by hand). Secrets: DEPLOY_SSH_KEY (the private key), DEPLOY_KNOWN_HOSTS (the
+# server's host key line), DEPLOY_HOST (user@ip). Optional var SITE_URL for absolute social tags.
+name: site
+on:
+  push:
+    branches: [main]
+    paths: ["site/**", ".github/workflows/site.yml"]
+  workflow_dispatch:
+concurrency:
+  group: site-deploy
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - name: install
+        working-directory: site
+        run: bun install --frozen-lockfile
+      - name: build
+        working-directory: site
+        env:
+          VITE_SITE_URL: ${{ vars.SITE_URL }}
+        run: |
+          if [ -n "$VITE_SITE_URL" ]; then bun run build; else unset VITE_SITE_URL; bun run build; fi
+          test -f dist/index.html
+      - name: ship
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key && chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          tar -C site/dist -czf - . | ssh -i ~/.ssh/deploy_key -o BatchMode=yes -o StrictHostKeyChecking=yes "$DEPLOY_HOST" deploy
+      - name: verify
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          url="http://${DEPLOY_HOST#*@}/"
+          code="$(curl -s -o /dev/null -w '%{http_code}' "$url")"
+          echo "$url → $code"
+          test "$code" = "200"
