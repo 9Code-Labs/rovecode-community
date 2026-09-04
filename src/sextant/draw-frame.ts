@@ -97,7 +97,7 @@ const statusColor = (s: FileStatus, theme: Theme): number => (s === "M" ? theme.
 export function drawFiles(scr: ScreenLike, R: Rect, s: SextantState, theme: Theme, now: number): void {
   const focused = s.focus === "files";
   const B = panel(scr, R, "files", focused, [[String(fileCount(s)), st(theme.muted)]], theme);
-  const rows = treeRows(s), guides = treeGuides(rows), f = s.files;
+  const rows = treeRows(s, now), guides = treeGuides(rows), f = s.files;
   f.cursor = Math.max(0, Math.min(f.cursor, rows.length - 1));
   if (f.cursor < f.scroll) f.scroll = f.cursor;
   if (f.cursor >= f.scroll + B.h) f.scroll = f.cursor - B.h + 1;

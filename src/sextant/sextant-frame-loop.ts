@@ -163,7 +163,7 @@ export class FrameLoop {
     if (!scr) return;
     const s = this.d.state, theme = this.d.theme(), pet = this.d.pet;
     scr.begin(theme.bg);
-    this.rows = treeRows(s);
+    this.rows = treeRows(s, now); // the same (version, now) key drawFiles uses → one build per frame (model.ts cache)
     const hits: HitZone[] = [];
     const L = renderFrame(scr, s, theme, now, {
       layout: layoutFn,

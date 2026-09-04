@@ -62,7 +62,7 @@ export const THEME: Theme = {
 export function baseState(over: Partial<SextantState> = {}): SextantState {
   return {
     cwd: "/repo", repo: { name: "repo", branch: "main", modified: 0 },
-    files: { paths: [], statuses: new Map(), expanded: new Set(), touched: new Map(), cursor: 0, scroll: 0 },
+    files: { paths: [], statuses: new Map(), expanded: new Set(), touched: new Map(), cursor: 0, scroll: 0, version: 0 },
     activity: { state: "IDLE", label: "", runId: null, startedAt: null, endedAt: null },
     code: { mode: "code", file: null, content: null, hl: null, scroll: 0, search: null, run: null, diff: null, lane: 0, laneOpen: false },
     messages: [], msgScroll: 0, stick: true, card: null, plan: { todos: [] }, crew: [],

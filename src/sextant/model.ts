@@ -34,7 +34,7 @@ export function initialState(o: InitOptions): SextantState {
   return {
     cwd: o.cwd,
     repo: { name: o.repo.name, branch: o.repo.branch, modified: o.repo.modified ?? 0 },
-    files: { paths: [], statuses: new Map(), expanded: new Set(), touched: new Map(), cursor: 0, scroll: 0 },
+    files: { paths: [], statuses: new Map(), expanded: new Set(), touched: new Map(), cursor: 0, scroll: 0, version: 0 },
     activity: { state: "IDLE", label: "idle", runId: null, startedAt: null, endedAt: null },
     code: { mode: "code", file: null, content: null, hl: null, scroll: 0, search: null, run: null, diff: null, lane: 0, laneOpen: false },
     messages: [], msgScroll: 0, stick: true, card: null,
@@ -120,7 +120,7 @@ export function makeApplyEvent(hooks: ApplyHooks = {}): ApplyEvent {
         if (d.verb === "edit" || d.verb === "write") { row.add = d.add; row.del = d.del; }
         pushRow(s, row);
         setActivity(s, d.state, d.activity);
-        if (d.path && d.touch) { s.files.touched.set(d.path, now + TOUCH_MS); expandTo(s, d.path); }
+        if (d.path && d.touch) { s.files.touched.set(d.path, now + TOUCH_MS); expandTo(s, d.path); s.files.version++; }
         if (d.path && (d.verb === "read" || d.verb === "edit" || d.verb === "write")) showFile(s, d.path, d.hl);
         if (d.verb === "run") { s.code.mode = "run"; s.code.run = { cmd: d.cmd ?? d.label, lines: [], status: "running" }; }
         if (d.verb === "search") { s.code.mode = "search"; s.code.search = { query: d.label, lines: [] }; }
@@ -189,7 +189,7 @@ export function makeApplyEvent(hooks: ApplyHooks = {}): ApplyEvent {
         }
         s.activity.endedAt = now; s.running = false;
         for (const r of s.messages) if (r.kind === "tool" && r.running) { r.running = false; r.ok = false; r.detail ??= "interrupted"; }
-        for (const [p, until] of s.files.touched) if (until <= now) s.files.touched.delete(p);
+        { const pre = s.files.touched.size; for (const [p, until] of s.files.touched) if (until <= now) s.files.touched.delete(p); if (s.files.touched.size !== pre) s.files.version++; }
         calls.clear();
         break;
       }
@@ -213,15 +213,18 @@ export function setFiles(s: SextantState, paths: readonly string[], statuses: Re
   s.files.paths = [...new Set(paths.map(normPath).filter(Boolean))].sort(pathCompare);
   s.files.statuses = new Map(statuses ? [...statuses].map(([p, st]) => [normPath(p), st] as const) : []);
   s.repo.modified = s.files.statuses.size;
+  s.files.version++;
 }
 function addPath(s: SextantState, path: string): void {
   if (s.files.paths.includes(path)) return;
-  s.files.paths.push(path); s.files.paths.sort(pathCompare);
+  s.files.paths.push(path); s.files.paths.sort(pathCompare); s.files.version++;
 }
 /** open every ancestor directory of `path` */
 export function expandTo(s: SextantState, path: string): void {
   const parts = path.split("/");
-  for (let i = 1; i < parts.length; i++) s.files.expanded.add(parts.slice(0, i).join("/"));
+  let added = false;
+  for (let i = 1; i < parts.length; i++) { const seg = parts.slice(0, i).join("/"); if (!s.files.expanded.has(seg)) { s.files.expanded.add(seg); added = true; } }
+  if (added) s.files.version++;
 }
 export const repoModified = (s: SextantState): number => s.files.statuses.size;
 /** files shown in the tree (tracked ∪ status-only paths, minus deleted) */
@@ -233,8 +236,11 @@ export function fileCount(s: SextantState): number {
 
 interface Node { name: string; path: string; kids: Map<string, Node> | null }
 
+let _treeCache: { version: number; expSz: number; now: number; rows: TreeRow[] } | null = null;
 /** Flatten the tree (dirs first, expanded set honored); GUIDE glyphs are the drawer's job. */
-export function treeRows(s: SextantState): TreeRow[] {
+export function treeRows(s: SextantState, now = -1): TreeRow[] {
+  const expSz = s.files.expanded.size;
+  if (_treeCache && _treeCache.version === s.files.version && _treeCache.expSz === expSz && _treeCache.now === now) return _treeCache.rows;
   const all = new Set(s.files.paths);
   for (const p of s.files.statuses.keys()) all.add(p);
   const root: Node = { name: "", path: "", kids: new Map() };
@@ -269,6 +275,7 @@ export function treeRows(s: SextantState): TreeRow[] {
     }
   };
   walk(root, 0);
+  _treeCache = { version: s.files.version, expSz, now, rows };
   return rows;
 }
 

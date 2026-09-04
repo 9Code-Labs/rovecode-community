@@ -169,6 +169,8 @@ export interface FilesState {
   touched: Map<string, number>;
   cursor: number;
   scroll: number;
+  /** bumped at every mutation of paths/statuses/expanded/touched so treeRows can cache by (version, now) */
+  version: number;
 }
 
 export interface RepoInfo { name: string; branch: string | null; modified: number }
