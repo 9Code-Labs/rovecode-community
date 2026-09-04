@@ -18,6 +18,20 @@ import { scrollbar } from "./scrollbar.ts";
 
 export interface Row { segs: Seg[]; indent?: number }
 
+/** 1-slot cache: buildRows is called twice per frame (once in drawMessages, once in messagesScroll).
+ *  Within a single frame now/w/theme are constant and messages is the same array, so the second call
+ *  is always a cache hit. Keyed by array identity + length (cheap mutation guard) + w + theme.name + now. */
+let _rowsCache: { msgs: readonly unknown[]; len: number; w: number; name: string; now: number; rows: Row[] } | null = null;
+function cachedBuildRows(s: SextantState, w: number, theme: Theme, now: number): Row[] {
+  if (_rowsCache && _rowsCache.msgs === s.messages && _rowsCache.len === s.messages.length
+      && _rowsCache.w === w && _rowsCache.name === theme.name && _rowsCache.now === now) {
+    return _rowsCache.rows;
+  }
+  const rows = buildRows(s, w, theme, now);
+  _rowsCache = { msgs: s.messages, len: s.messages.length, w, name: theme.name, now, rows };
+  return rows;
+}
+
 /** the attachment cap the chip row quotes (core/images.ts MAX_IMAGES_PER_MESSAGE; a literal here keeps this painter free of node:fs) */
 const MAX_STAGED_HINT = 8;
 /** prompt placeholder when the input is empty */
@@ -294,7 +308,7 @@ export function areas(B: Rect, s: SextantState): { h: number; cardH: number; msg
 export function messagesScroll(rect: Rect, s: SextantState, theme: Theme, now: number): { offset: number; max: number } {
   const B = inner(rect);
   const { msgH } = areas(B, s);
-  const rows = buildRows(s, B.w, theme, now);
+  const rows = cachedBuildRows(s, B.w, theme, now);
   const max = Math.max(0, rows.length - msgH);
   return { offset: s.stick ? max : Math.max(0, Math.min(s.msgScroll, max)), max };
 }
@@ -332,7 +346,7 @@ export function drawMessages(scr: ScreenLike, rect: Rect, s: SextantState, theme
   const B = panel(scr, rect, "messages", focused, count ? [[String(count), st(theme.muted)]] : [], theme);
   const { h, cardH, msgH, maxDetail } = areas(B, s);
   if (h > 0) {
-    const rows = buildRows(s, B.w, theme, now);
+    const rows = cachedBuildRows(s, B.w, theme, now);
     const max = Math.max(0, rows.length - msgH);
     const offset = s.stick ? max : Math.max(0, Math.min(s.msgScroll, max));
     const sbGeom = scrollbar(scr, theme, B.x + B.w - 1, B.y, msgH, rows.length, msgH, offset);

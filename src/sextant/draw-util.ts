@@ -20,6 +20,16 @@ export function splitLines(s: string): string[] {
   return l;
 }
 
+/** 1-slot cache: splitLines is called twice per frame (drawFileView + codeScrollTop/rowCount).
+ *  File content is a stable string reference within a frame; reference equality is the cheapest guard. */
+let _splitCache: { src: string; lines: string[] } | null = null;
+export function splitLinesCached(s: string): string[] {
+  if (_splitCache && _splitCache.src === s) return _splitCache.lines;
+  const lines = splitLines(s);
+  _splitCache = { src: s, lines };
+  return lines;
+}
+
 /** Word-wrap to `width` cells — one cell per code point (types.ts), so an emoji counts once and a
  *  surrogate pair never straddles two rows — keeping explicit newlines (a blank paragraph stays a
  *  blank row); a word longer than the width is hard-split wherever it starts. Never returns []. */

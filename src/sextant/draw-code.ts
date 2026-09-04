@@ -8,7 +8,7 @@
 
 import type { DiffHunk, Rect, ScreenLike, Seg, SextantState, Style, Theme } from "./types.ts";
 import { ATTR } from "./types.ts";
-import { hardWrap, inner, panel, spinner, splitLines, st } from "./draw-util.ts";
+import { hardWrap, inner, panel, spinner, splitLines, splitLinesCached, st } from "./draw-util.ts";
 import { EMPTY } from "../core/voice.ts";
 import { moreMarker } from "../coding/diff.ts";
 import { scrollbar } from "./scrollbar.ts";
@@ -126,7 +126,7 @@ const marksFor = (s: SextantState): Map<number, "added" | "changed"> =>
 /** the rows the current mode would draw (for scroll clamping); split diff depends on the body width */
 export function rowCount(s: SextantState, bodyW: number): number {
   const c = s.code;
-  if (c.mode === "code") return c.content === null ? 0 : splitLines(c.content).length;
+  if (c.mode === "code") return c.content === null ? 0 : splitLinesCached(c.content).length;
   if (c.mode === "diff") return c.diff ? diffRows(c.diff.hunks, bodyW > 110).length : 0;
   if (c.mode === "search") return c.search ? c.search.lines.length : 0;
   return 0;
@@ -157,7 +157,7 @@ function drawRail(scr: ScreenLike, R: Rect, s: SextantState, theme: Theme, viewT
   });
   const top = R.y + 6, h = R.h - 7;
   if (h < 3 || (s.code.mode !== "code" && s.code.mode !== "diff") || s.code.content === null || !s.code.file) return;
-  const n = Math.max(1, splitLines(s.code.content).length);
+  const n = Math.max(1, splitLinesCached(s.code.content).length);
   const marks = marksFor(s);
   const rows = Math.min(h, n);
   for (let i = 0; i < rows; i++) {
@@ -178,7 +178,7 @@ function drawFileView(scr: ScreenLike, B: Rect, s: SextantState, theme: Theme, t
   const file = s.code.file;
   if (!file) { scr.put(B.x, B.y, EMPTY.code, st(theme.muted), B.w); return; }
   if (s.code.content === null) { scr.clip(B.x, B.y, `cannot read ${file}`, st(theme.muted), B.w); return; }
-  const lines = splitLines(s.code.content);
+  const lines = splitLinesCached(s.code.content);
   if (!lines.length) { scr.put(B.x, B.y, "(empty)", st(theme.dim), B.w); return; }
   const lang = langOf(file), marks = marksFor(s), hl = s.code.hl;
   const tag = readingThis(s) ? `◂ ${s.activity.state.toLowerCase()}` : null;
