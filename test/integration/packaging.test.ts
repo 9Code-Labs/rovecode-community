@@ -69,8 +69,9 @@ describe("packaging: package.json publish invariants", () => {
     for (const required of ["src", "vendor", "tsconfig.json", "THIRD_PARTY_NOTICES.md"]) {
       expect(pkg.files).toContain(required);
     }
-    // bin target must live inside a shipped dir
-    expect(pkg.bin["rovecode"]!.startsWith("src/")).toBe(true);
+    // bin target must live inside a shipped dir (src/ for source entry, bin/ for the wrapper)
+    const binTarget = pkg.bin["rovecode"]!;
+    expect(binTarget.startsWith("src/") || binTarget.startsWith("bin/")).toBe(true);
   });
 
   test("NOTICE copy is non-hollow (Apache attributions present)", () => {

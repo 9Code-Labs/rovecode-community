@@ -12,9 +12,10 @@
   "type": "module",
   "module": "src/index.ts",
   "bin": {
-    "rovecode": "src/cli/main.ts"
+    "rovecode": "bin/rovecode.ts"
   },
   "files": [
+    "bin",
     "src",
     "vendor",
     "tsconfig.json",
@@ -25,6 +26,8 @@
   },
   "scripts": {
     "build": "bun run scripts/build.ts",
+    "build:cli": "bun build --target=bun --sourcemap=external src/cli/main.ts --outdir dist/cli",
+    "smoke:cli": "bun dist/cli/main.js --version",
     "test": "bun test",
     "gauntlet": "bun src/cli/main.ts gauntlet",
     "typecheck": "tsc --noEmit",

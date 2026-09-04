@@ -45,6 +45,7 @@ Requires [Bun](https://bun.sh) ≥ 1.3.14 (the CLI entry is TypeScript, executed
 # from source
 git clone https://github.com/9Code-Labs/rovecode.git && cd rovecode && bun install
 bun run src/cli/main.ts --help          # or: bun link → `rovecode` on PATH
+bun run build:cli                       # optional: pre-bundle (TUI cold start ~230 ms → ~80 ms); re-run after git pull
 
 # single binary (~110 MB: bun runtime + bundled deps + embedded native addons)
 bun run build                           # scripts/build.ts → dist/rovecode(.exe) + smoke
