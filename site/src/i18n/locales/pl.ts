@@ -3,7 +3,7 @@ import type { PartialDict } from "../en";
 export const pl: PartialDict = {
   meta: {
     title: "Rovecode — agent kodujący do terminala",
-    description: "Otwartoźródłowy agent programistyczny do terminala: kokpit TUI z panelami, 16 dostawców lub dowolny endpoint zgodny z OpenAI, polityka deny-default. Bun, AGPL-3.0.",
+    description: "Otwartoźródłowy agent programistyczny do terminala: kokpit TUI, 16 dostawców lub dowolny endpoint zgodny z OpenAI, polityka deny-default. Bun, AGPL-3.0.",
   },
   nav: { cockpit: "Kokpit", capabilities: "Możliwości", terminal: "Terminal", quickstart: "Szybki start", providers: "Dostawcy", faq: "FAQ" },
   ui: {

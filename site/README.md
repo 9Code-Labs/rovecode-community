@@ -46,6 +46,7 @@ One page, no client routes: unknown paths return `404.html`. Hashed assets under
 - No animation library: the page arrives prerendered and holds still; the transcript replay and the count-up (dev only) use `src/lib/motion.ts`.
 - `media-src/` (raw and encoded video, ~120 MB) and `screenshots/` are working files, git-ignored.
 - Regenerate the terminal frames after a copy change in `scripts/out/*.html`: `node scripts/shoot.ts frames`.
+- `bun run live-check [site-url]` verifies every URL in the deployed sitemap (status, lang/dir, title, canonical, hreflang, og, console, axe-core).
 - `bun run lighthouse [url]` runs Lighthouse (mobile + desktop) against the live site by default, or any URL, on the local Playwright Chromium; Lighthouse itself is installed on first use into `scripts/.lh/` (git-ignored), not a dependency of the site. `bun run og` re-renders the social card, `bun run images` the image variants.
 - `scripts/prerender.mjs` also inlines the single stylesheet into `dist/index.html` (one fewer render-blocking request on slow links).
 - Dev server: `bun run dev` → http://localhost:5173/. In dev the root is empty, so entrances animate; in production the page arrives prerendered and components render their finished state (see `src/lib/boot.ts`).
