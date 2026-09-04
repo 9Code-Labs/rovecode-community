@@ -306,7 +306,7 @@ test("LOW-1: a custom quit.md loses to the /quit alias — boot warning names it
   const fake = new FakeRenderer();
   try {
     const app = runTui({ renderer: fake, stream: mockStream({ turns: [textTurn("x")] }), cwd, yolo: true, exitOnClose: false, model: "scripted" });
-    expect(fake.warns()).toContain(`${join(cwd, ".rovecode", "commands", "quit.md")}: /quit is a built-in command — built-in kept`); // mutation: "quit" not reserved → no warning
+    expect(fake.warns()).toContain(`/quit is a built-in command — built-in kept (${join(cwd, ".rovecode", "commands", "quit.md")})`); // mutation: "quit" not reserved → no warning
     fake.hooks.onSubmit("/quit");
     await deadline(app, 4000, "runTui after /quit");         // close() ran (an impostor dispatch would leave the app open)
     expect(fake.users).toEqual([]);                          // nothing was submitted as a user turn

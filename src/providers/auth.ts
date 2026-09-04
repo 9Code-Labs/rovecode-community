@@ -40,8 +40,13 @@ export interface StoredCredential {
 /** User-scope rovecode dir: ROVECODE_HOME overrides ~/.rovecode wholesale (tests point it at a temp
  *  dir). homedir() already respects HOME on POSIX and USERPROFILE on Windows. Mirrors the
  *  skills store's user-scope default (skills/index.ts: join(homedir(), ".rovecode", ...)). */
+/** what node's homedir() promises, spelled out so every runtime agrees on every host: HOME on POSIX,
+ *  USERPROFILE on Windows, the OS account's directory only when neither is set (tests point HOME at a
+ *  scratch dir and expect the home to follow) */
+const userHome = (): string => (process.platform === "win32" ? process.env.USERPROFILE : process.env.HOME) || homedir();
+
 export function rovecodeHome(): string {
-  const home = process.env.ROVECODE_HOME ?? join(homedir(), ".rovecode");
+  const home = process.env.ROVECODE_HOME ?? join(userHome(), ".rovecode");
   migrateLegacyHome(home);
   return home;
 }
@@ -61,7 +66,7 @@ function migrateLegacyHome(home: string): void {
   migrated = true;
   try {
     if (existsSync(home)) return;                        // already living in the new place
-    const legacy = join(homedir(), ".cumulus");
+    const legacy = join(userHome(), ".cumulus");
     if (home === legacy || !existsSync(legacy)) return;
     cpSync(legacy, home, { recursive: true });
     // the credentials file carries the 0600 the old one had only on POSIX; re-assert it here

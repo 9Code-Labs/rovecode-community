@@ -141,7 +141,9 @@ export function discoverCommands(cwd: string, opts: DiscoverOptions = {}): Disco
   const byName = new Map<string, CustomCommand>();
   for (const [scope, dir] of dirs) {
     for (const cmd of scanCommandDir(dir, scope, warnings)) {
-      if (reserved.has(cmd.name)) { warnings.push(`${cmd.path}: /${cmd.name} is a built-in command — built-in kept`); continue; }
+      // the verdict first, the path last: an 80-column terminal wraps a long path mid-line and the
+      // sentence must survive at the line start
+      if (reserved.has(cmd.name)) { warnings.push(`/${cmd.name} is a built-in command — built-in kept (${cmd.path})`); continue; }
       const prev = byName.get(cmd.name);
       if (prev?.scope === scope) { warnings.push(`${cmd.path}: /${cmd.name} already defined by ${prev.path} — first kept`); continue; }
       byName.set(cmd.name, cmd); // project (scanned second) shadows user

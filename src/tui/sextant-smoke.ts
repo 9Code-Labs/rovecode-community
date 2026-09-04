@@ -60,10 +60,16 @@ export async function sextantSmoke(opts: { cols?: number; rows?: number; deadlin
     if (want !== undefined && want.test(frame) && frame.includes("allow")) { cardFrames.push(frame); io.feed("\r"); } // Enter = allow once
     await sleep(25);
   }
+  // the boot reveal paints panels in 90 ms steps after bootAt (frame.ts REVEAL_STEP_MS); a fast host
+  // finishes the scripted run before the right column and the pet have appeared — give the reveal its time
+  const PANELS = ["─ files ─", "─ code ─", "─ messages ─", "─ plan ─", "─ usage ─", "─ rovecode ─"];
+  const shown = (p: string): boolean => frame.includes(p) || (p === "─ code ─" && frame.includes("─ diff ─"));
+  const revealBy = Date.now() + 2_000;
+  while (done && Date.now() < revealBy && !PANELS.every(shown)) { await sleep(25); renderer.tick(); frame = renderer.frameText(); }
   if (!done) reasons.push(`final frame not reached (approval cards seen ${cardFrames.length}/${CARDS.length})`);
   if (!/~ edit\s+smoke\.txt/.test(frame)) reasons.push("no `~ edit smoke.txt` tool row in the messages panel");
   if (!/\+ write\s+smoke\.txt/.test(frame)) reasons.push("no `+ write smoke.txt` tool row in the messages panel");
-  for (const p of ["─ files ─", "─ code ─", "─ messages ─", "─ plan ─", "─ usage ─", "─ rovecode ─"]) if (!frame.includes(p) && !(p === "─ code ─" && frame.includes("─ diff ─"))) reasons.push(`panel ${p.trim()} missing at ${io.cols}×${io.rows}`);
+  for (const p of PANELS) if (!shown(p)) reasons.push(`panel ${p.trim()} missing at ${io.cols}×${io.rows}`);
   const wasActive = renderer.active;
   io.feed("\x03");
   await app;

@@ -67,9 +67,16 @@ export function relPath(cwd: string, p: string): string {
   if (isAbsolute(p)) {
     const rel = relative(cwd, p);
     r = rel && !rel.startsWith("..") && !isAbsolute(rel) ? rel : p;
+  } else if (WIN_ABS.test(p)) {
+    // a drive-letter path on a POSIX host (a session replayed from Windows, a model that writes them):
+    // node's path module does not know it is absolute, so relativize by prefix, case-insensitively
+    const P = posixly(p), C = posixly(cwd).replace(/\/+$/, "");
+    if (C && P.toLowerCase().startsWith(C.toLowerCase() + "/")) r = P.slice(C.length + 1);
   }
-  return r.replace(/\\/g, "/").replace(/^\.\/+/, "");
+  return posixly(r).replace(/^\.\/+/, "");
 }
+const WIN_ABS = /^[A-Za-z]:[\\/]/;
+const posixly = (s: string): string => s.replace(/\\/g, "/");
 export const baseName = (p: string): string => p.slice(p.lastIndexOf("/") + 1) || p;
 
 function hostOf(url: string): string {

@@ -152,7 +152,9 @@ export function saveTodos(sessionDir: string, items: readonly TodoItem[]): void 
 /** A session id must be a plain directory name: `<root>/<id>/todos.json` may never
  *  resolve outside the sessions root (listSessions identity = directory name). */
 function sessionDirFor(root: string, sessionId: string): string | null {
-  if (!sessionId || sessionId === "." || sessionId === ".." || basename(sessionId) !== sessionId) return null;
+  // both slashes are refused on every host: a backslash is a legal file-name byte on POSIX, but an id
+  // that would be a path on Windows is not a plain directory name anywhere
+  if (!sessionId || sessionId === "." || sessionId === ".." || /[\\/]/.test(sessionId) || basename(sessionId) !== sessionId) return null;
   return join(root, sessionId);
 }
 

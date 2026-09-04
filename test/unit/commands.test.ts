@@ -165,8 +165,8 @@ test("collision: a built-in name is dropped with a boot warning — the built-in
   const { commands, warnings } = discoverCommands(cwd, { home, reserved: ["help", "exit"] });
   expect(commands.map((c) => c.name)).toEqual(["mine"]);
   expect(warnings).toEqual([
-    `${join(home, "commands", "exit.md")}: /exit is a built-in command — built-in kept`,
-    `${projectPath("help.md")}: /help is a built-in command — built-in kept`,
+    `/exit is a built-in command — built-in kept (${join(home, "commands", "exit.md")})`,
+    `/help is a built-in command — built-in kept (${projectPath("help.md")})`,
   ]);
 });
 

@@ -376,6 +376,7 @@ test("hunksFromUnified: previewDiff output on a real file → hunks the diff vie
 // ------------------------------------------------------------------ agents seam
 
 test("agents: crew summary from s.crew until a painter is registered; setAgentsPainter receives the body rect", () => {
+  setAgentsPainter(null); // a SextantRenderer built by another test file leaves drawAgents registered (bun shares the module cache across files; file order differs per OS)
   const s = codeState({ mode: "agents" }, { crew: [task("t1", "done", "write tests"), task("t2", "queued", "review")] });
   const g = draw(s);
   expect(g.span(BX, BY, BODY_W)).toBe("crew: 2 tasks");
