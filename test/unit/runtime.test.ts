@@ -3,6 +3,7 @@ import { createRuntime } from "../../src/cli/runtime.ts";
 import type { ApprovalFn, StreamFn } from "../../src/core/types.ts";
 import { textTurn } from "../../src/providers/stream.ts";
 import { GLM_53_PROFILE } from "../../src/providers/profiles.ts";
+import { designPromptSection } from "../../src/design/rules.ts";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -30,7 +31,8 @@ test("createRuntime registers the full CLI tool set", () => {
   // ports #17 recall, #22 glob/grep/ls, #26 task (spawn) + task_status (read — MED-2 split), #31 web_fetch, #32 todo_read/todo_write,
   // #33 ask_user (every surface; headless fail closed at execute); eval_cell must stay ABSENT while ROVECODE_EVAL_CELL is unset (port #18 flag door)
   // provider_list (read) + provider_edit (custom → tool.provider_edit, prompted): the live provider registry (tools/provider.ts)
-  expect(names).toEqual(["ask_user", "bash", "edit", "glob", "grep", "ls", "memory_edit", "provider_edit", "provider_list", "read", "recall", "skill_view", "skills_list", "task", "task_status", "todo_read", "todo_write", "web_fetch", "write"]);
+  // design_audit (read — self-checking must never prompt) + design_direction (custom → tool.design_direction, prompted): the design protocol (design/rules.ts)
+  expect(names).toEqual(["ask_user", "bash", "design_audit", "design_direction", "edit", "glob", "grep", "ls", "memory_edit", "provider_edit", "provider_list", "read", "recall", "skill_view", "skills_list", "task", "task_status", "todo_read", "todo_write", "web_fetch", "write"]);
   const kinds = Object.fromEntries(rt.registry.list().map((t) => [t.schema.name, t.kind]));
   expect(kinds["task"]).toBe("spawn");        // gated rules prompt once per start
   expect(kinds["task_status"]).toBe("read");  // gated rules allow: never prompts, headless-safe
@@ -71,7 +73,8 @@ test("buildDef returns main agent with wildcard tools and the runtime prompt", (
   expect(def.name).toBe("main");
   expect(def.tools).toEqual(["*"]);
   expect(def.model).toEqual({ provider: "p", model: "m-1", effort: "off" }); // buildDef stamps the runtime's thinking dial onto every ref
-  expect(def.systemPrompt).toBe(rt.systemPrompt());
+  // no profile matches "m-1", so the prompt is base + the always-on design section (design/rules.ts)
+  expect(def.systemPrompt).toBe(`${rt.systemPrompt()}\n\n${designPromptSection(cwd)}`);
   rmSync(cwd, { recursive: true, force: true });
 });
 
@@ -96,6 +99,7 @@ test("buildCfg gated: repl defaults with memory/skill allows and prompt gates", 
     { action: "spawn", resource: "*", effect: "prompt" },
     { action: "tool.mcp_call", resource: "*", effect: "prompt" },  // port #3: MCP execution is gated
     { action: "tool.provider_edit", resource: "*", effect: "prompt" }, // providers.json / default-model writes ask first
+    { action: "tool.design_direction", resource: "*", effect: "prompt" }, // .rovecode/design.json: the once-per-project design identity
     { action: "net.fetch", resource: "*", effect: "prompt" },      // port #31: web_fetch prompts unless a host is explicitly allowed
   ]);
   // port #9: the passed approver is WRAPPED by execPolicyApprover (shell prompts
@@ -172,8 +176,13 @@ test("buildDef appends the GLM-5.3 profile section after the base prompt, leaves
   const cwd = tmpCwd();
   const home = mkdtempSync(join(tmpdir(), "rovecode-home-"));
   const prevProfile = process.env.ROVECODE_PROFILE, prevHome = process.env.ROVECODE_HOME;
+  const prevDesign = process.env.ROVECODE_DESIGN;
   delete process.env.ROVECODE_PROFILE;
   process.env.ROVECODE_HOME = home; // never read the developer's real ~/.rovecode/profiles
+  // this test is about the PROFILE section's exact composition, so the always-on design section is
+  // switched off to keep the byte-equality assertions readable; it has its own wiring test
+  // (test/integration/design-wiring.test.ts), including that it sits AFTER the profile section
+  process.env.ROVECODE_DESIGN = "off";
   try {
     const rt = createRuntime({ cwd, stream: null });
     const glm = { provider: "kaesra", model: "zai-org/glm-5.3-flash" };
@@ -203,6 +212,7 @@ test("buildDef appends the GLM-5.3 profile section after the base prompt, leaves
     expect(rt.buildDef(claude).systemPrompt).toBe(`${rt.systemPrompt()}\n\n# Custom rules\nbe brief`);
   } finally {
     if (prevProfile === undefined) delete process.env.ROVECODE_PROFILE; else process.env.ROVECODE_PROFILE = prevProfile;
+    if (prevDesign === undefined) delete process.env.ROVECODE_DESIGN; else process.env.ROVECODE_DESIGN = prevDesign;
     if (prevHome === undefined) delete process.env.ROVECODE_HOME; else process.env.ROVECODE_HOME = prevHome;
     rmSync(cwd, { recursive: true, force: true });
     rmSync(home, { recursive: true, force: true });

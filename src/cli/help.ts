@@ -114,6 +114,14 @@ const ENV = `env — every ROVECODE_* setting
                     request fields (thinking always on, reasoning_effort low|high|max — off leaves the endpoint's
                     max, medium rounds up to high, high means max — and tool_stream when streaming). The text
                     comes from .rovecode/profiles/<id>.md (project) or ~/.rovecode/profiles/<id>.md when present.
+  ROVECODE_DESIGN     off drops the interface-design section from the system prompt (for runs with no UI in
+                    them). Otherwise every run carries it: propose two or three directions before the first
+                    UI in a project, let the human choose, record it with design_direction, then build to it.
+                    The section prescribes NO palette, typeface or layout -- there is no default look, on
+                    purpose -- and names the patterns to climb out of (amber accents, the reflex full-viewport
+                    hero, Inter/Roboto/Poppins, hairlines round everything, all-square corners, everything
+                    centred, violet gradients). The choice lives in .rovecode/design.json; design_audit counts
+                    those patterns in the files you touched and checks them against it.
   ROVECODE_PERMISSION  ask|accept-edits|auto — the level this run starts at. Ladder, widest first:
                     a CLI flag, then this, then <cwd>/.rovecode/settings.json, then ~/.rovecode/settings.json,
                     then "ask". Write the files with /yolo --save or /accept-edits --save [--project].

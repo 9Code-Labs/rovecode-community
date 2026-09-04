@@ -13,6 +13,8 @@ import { memoryEditTool } from "../memory/tools.ts";
 import type { ProviderConfig } from "../providers/stream.ts";
 import { ProviderRegistry } from "../providers/registry.ts";
 import { providerEditTool, providerListTool } from "../tools/provider.ts";
+import { designAuditTool, designDirectionTool } from "../tools/design.ts";
+import { designPromptSection } from "../design/rules.ts";
 import { withToolCallParsing, toolPromptBlock } from "../providers/middleware.ts";
 import { ModelCatalog } from "../providers/catalog.ts";
 import { profileFor, profilePromptSection } from "../providers/profiles.ts";
@@ -227,6 +229,10 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   // allowed); provider_edit is kind custom → tool.provider_edit, PROMPT under the gated rules below
   const providers = new ProviderRegistry(cwd);
   registry.register(providerListTool(providers), providerEditTool(providers));
+  // design protocol (design/rules.ts): design_audit is kind read (free, never prompts -- checking your
+  // own work must cost nothing); design_direction is kind custom -> tool.design_direction, PROMPT under
+  // the gated rules, because it records the project's design identity and is asked once per project.
+  registry.register(designAuditTool(), designDirectionTool());
   // port #33: ask_user on EVERY surface (kind read → auto-runs under gated/plan rules); only an
   // interactive surface binds an asker via setAskUser — unbound, the tool fails closed
   let askUser: AskFn | undefined;
@@ -336,7 +342,11 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     // .rovecode/profiles/<id>.md replaces the built-in text, ROVECODE_PROFILE=off drops it
     const profile = profileFor(model);
     const section = profile === null ? "" : profilePromptSection(profile, cwd); // "" = an empty override file: no section, no separator
-    const base = section.length > 0 ? `${systemPrompt(opts.cwd)}\n\n${section}` : systemPrompt(opts.cwd);
+    // design protocol (design/rules.ts): the ban list plus this project's recorded direction, read
+    // once per run start like the profile so the system prefix stays byte-stable (prompt cache).
+    // ROVECODE_DESIGN=off drops it for a run that has nothing to do with interfaces.
+    const design = process.env.ROVECODE_DESIGN === "off" ? "" : designPromptSection(opts.cwd ?? cwd);
+    const base = [systemPrompt(opts.cwd), section, design].filter((p) => p.length > 0).join("\n\n");
     return {
       name: "main", model, tools: ["*"],
       systemPrompt: nonNative
@@ -372,6 +382,8 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
           // provider_edit (tools/provider.ts) rewrites providers.json / the default model: ask first.
           // provider_list is kind read → covered by the file.read allow above
           { action: "tool.provider_edit", resource: "*", effect: "prompt" },
+          // design_direction writes .rovecode/design.json -- the once-per-project design identity
+          { action: "tool.design_direction", resource: "*", effect: "prompt" },
           // port #31: resource = canonical host (lowercased, no trailing dot), so `allow
           // net.fetch <host>` auto-runs THAT host only; web_fetch stops at a redirect to
           // another host and reports it, so the new host gets its own decision here

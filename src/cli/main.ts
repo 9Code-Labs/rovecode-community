@@ -16,6 +16,7 @@ import { saveCredential, removeCredential, listProviders, credentialsPath, readS
 import { ProviderRegistry, formatProviderList, parseAddArgs, ADD_USAGE } from "../providers/registry.ts";
 import { isConfigured, providersPathFor } from "../providers/provider-config.ts";
 import { providerEditTool, providerListTool } from "../tools/provider.ts";
+import { designAuditTool, designDirectionTool } from "../tools/design.ts";
 import { runGauntlet, reportResults, providerPreflight, basicTasks, codingTasks, failureTasks, adversarialTasks } from "../eval/gauntlet.ts";
 import { liveGauntletTasks, runTask, runTaskLive } from "../eval/gauntlet-runner.ts";
 import { profileFor, profileHint } from "../providers/profiles.ts";
@@ -209,6 +210,7 @@ function cmdTools(): void {
   registry.register(askUserTool(() => undefined)); // port #33: listing only — no asker is bound here
   const tasks = new TaskManager({ deps: () => null }); registry.register(createTaskTool(tasks), createTaskStatusTool(tasks)); // port #26: listing only — no provider, nothing can start
   const providers = new ProviderRegistry(process.cwd()); registry.register(providerListTool(providers), providerEditTool(providers)); // listing only — reads providers.json, writes nothing
+  registry.register(designAuditTool(), designDirectionTool()); // listing only — neither is called here
   for (const t of registry.list()) {
     console.log(`${t.schema.name.padEnd(8)} ${t.kind.padEnd(8)} sequential=${t.sequential !== false}`);
     console.log(`         ${t.schema.description}`);

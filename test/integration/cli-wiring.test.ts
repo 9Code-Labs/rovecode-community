@@ -105,6 +105,12 @@ test("tools: the registry listing includes ask_user (port #33) next to todo_writ
   expect(names).toContain("todo_read");
   expect(names).toContain("web_fetch");
   expect(r.stdout).toMatch(/^ask_user\s+read\s+sequential=true/m);
+  // cmdTools builds its OWN listing-only registry, separate from createRuntime's — so a tool added to
+  // one and not the other makes `rovecode tools` lie about what exists. Pinned here and in
+  // test/unit/runtime.test.ts so the two cannot drift apart silently.
+  expect(names).toContain("design_audit");
+  expect(names).toContain("design_direction");
+  expect(r.stdout).toMatch(/^design_audit\s+read\s+sequential=false/m);
 }, T);
 
 // ---------- rovecode run "/name args" ----------
