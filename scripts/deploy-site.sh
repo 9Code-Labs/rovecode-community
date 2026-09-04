@@ -59,8 +59,16 @@ echo "$code $title"
 
 if [[ "$CHECK" == 1 ]]; then
   echo "== live-check $URL (every sitemap URL: status, meta, console, axe)"
-  if ! (cd "$SITE" && node scripts/live-check.mjs "$URL" | tail -1); then
-    echo "live-check failed — rolling back"
+  # two attempts: a headless-Chromium crash or a network blip must not roll back a good release;
+  # the failing rows are printed so a real failure names its page
+  ok=0
+  for attempt in 1 2; do
+    if (cd "$SITE" && node scripts/live-check.mjs "$URL" > /tmp/rovecode-live-check.log 2>&1); then ok=1; break; fi
+    echo "-- live-check attempt $attempt failed:"; grep -E "^  (crash|msgs|axe)|false|TOTALS|Error" /tmp/rovecode-live-check.log | head -8
+  done
+  tail -1 /tmp/rovecode-live-check.log
+  if [[ "$ok" == 0 ]]; then
+    echo "live-check failed twice — rolling back"
     "$0" --rollback
     exit 1
   fi

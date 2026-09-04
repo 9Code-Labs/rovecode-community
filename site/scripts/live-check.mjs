@@ -22,7 +22,7 @@ const browser = await chromium.launch({ executablePath: exe, headless: true });
 const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, locale: "en-US" });
 let totals = { pages: 0, consoleMsgs: 0, http4xx: 0, axe: { critical: 0, serious: 0, moderate: 0, minor: 0 } };
 const rows = [];
-for (const { expected, url } of urls) {
+async function checkPage(expected, url) {
   const page = await ctx.newPage(); const msgs = [], bad = [];
   page.on("console", m => { if (["error","warning"].includes(m.type())) msgs.push(m.text().slice(0,100)); });
   page.on("pageerror", e => msgs.push("pageerror " + e.message.slice(0,100)));
@@ -40,10 +40,23 @@ for (const { expected, url } of urls) {
   for (const k in counts) totals.axe[k] += counts[k];
   totals.pages++; totals.consoleMsgs += msgs.length; totals.http4xx += bad.length;
   const ok = res.status() === 200 && meta.canonical === expected && meta.ogUrl === expected && meta.hreflang === 16 && meta.h1 === 1 && msgs.length === 0 && bad.length === 0;
-  rows.push({ url: url.replace(base, ""), status: res.status(), ...meta, console: msgs.length, http4xx: bad.length, axe: counts, ok });
   if (axe.length) console.log("  axe", url.replace(base, "") || "/", JSON.stringify(axe));
   if (msgs.length || bad.length) console.log("  msgs", url.replace(base, ""), JSON.stringify({ msgs, bad }));
   await page.close();
+  return { url: url.replace(base, ""), status: res.status(), ...meta, console: msgs.length, http4xx: bad.length, axe: counts, ok };
+}
+// Headless Chromium occasionally drops a tab ("Target crashed"); one retry per page, and a crash that repeats is a
+// failing row rather than an aborted run — the gate must name the page, not die.
+for (const { expected, url } of urls) {
+  let row;
+  for (let attempt = 1; ; attempt++) {
+    try { row = await checkPage(expected, url); break; }
+    catch (e) {
+      console.log("  crash", url.replace(base, "") || "/", `attempt ${attempt}:`, String(e?.message ?? e).split("\n")[0].slice(0, 120));
+      if (attempt >= 2) { totals.pages++; row = { url: url.replace(base, ""), status: 0, console: 0, http4xx: 0, axe: { critical: 0, serious: 0, moderate: 0, minor: 0 }, ok: false }; break; }
+    }
+  }
+  rows.push(row);
 }
 console.table(rows.map(r => ({ url: r.url || "/", st: r.status, lang: r.lang, dir: r.dir, title: r.title, desc: r.desc, hreflang: r.hreflang, ogLocale: r.ogLocale, h1: r.h1, con: r.console, x4: r.http4xx, crit: r.axe.critical, ser: r.axe.serious, mod: r.axe.moderate, min: r.axe.minor, ok: r.ok })));
 const allOk = rows.every(r => r.ok) && totals.axe.critical === 0 && totals.axe.serious === 0;
