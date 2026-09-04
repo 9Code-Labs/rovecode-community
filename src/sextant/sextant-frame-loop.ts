@@ -21,7 +21,7 @@ import { petEnabled, type Pet } from "./pet.ts";
 import { Screen } from "./screen.ts";
 import { cardHits } from "./card-hits.ts";
 import { fileRowHits } from "./panel-hits.ts";
-import { scrollThumbHits } from "./scroll-hits.ts";
+import { followTailIfAtEnd, scrollThumbHits } from "./scroll-hits.ts";
 import { frameHits } from "./frame-hits.ts";
 import { drawTabs, mainPage } from "./draw-tabs.ts";
 import type { HitZone, InputEvent, Layout, SextantState, TerminalIO, Theme, TreeRow } from "./types.ts";
@@ -202,6 +202,7 @@ export class FrameLoop {
     }
     // scrollbar thumbs (scroll-hits.ts): grab + drag scrolls; after the row zones so the thumb column wins
     for (const hit of scrollThumbHits(L, main, s, theme, now, this.rows)) hits.push(hit);
+    followTailIfAtEnd(L, s, theme, now); // scrolled back to the end → follow new text again
     // the modal card's buttons (card-hits.ts). Registered BEFORE the palette/help so those overlays,
     // which draw over the card, still win the last-registered-wins walk in keys.ts.
     for (const hit of cardHits(L.messages, s, theme)) {

@@ -5,6 +5,7 @@
 import { test, expect } from "bun:test";
 import { focusOrder, ESC_WINDOW_MS, type HitZone } from "../../src/sextant/keys.ts";
 import { ALIAS_NOTE } from "../../src/sextant/local-commands.ts";
+import { treeRows } from "../../src/sextant/model.ts";
 import { MAX_SUGGESTIONS, suggestions } from "../../src/sextant/overlays.ts";
 import type { CardState, SextantState, TreeRow } from "../../src/sextant/types.ts";
 import { makeState, makeLayout, spyCtx, key, ctrl, mouse, paste, press, type } from "../helpers/sextant-fixtures-keys.ts";
@@ -426,6 +427,8 @@ test("keys while the palette or help card is open never reach the prompt; Ctrl+C
 
 test("wheel 64/65 scrolls the panel under the pointer: messages (stick off on up), code, files; clamped at 0", () => {
   const L = makeLayout(160, 44), s = makeState({ msgScroll: 10 }), spy = spyCtx(L);
+  s.files.paths = Array.from({ length: 80 }, (_, i) => `f${String(i).padStart(2, "0")}.ts`); // enough rows to scroll (the wheel clamps to the tree)
+  spy.ctx.rows = treeRows(s);
   const at = (r: { x: number; y: number }) => [r.x + 2, r.y + 2] as const;
   press(s, spy, mouse(64, ...at(L.messages)));
   expect(s.msgScroll).toBe(8);

@@ -22,6 +22,15 @@ function thumbZone(g: ScrollbarGeom, total: number, viewport: number, set: (offs
   return { rect: thumbRect(g), onClick: () => {}, onDrag: (_y, dy) => set(slideOffset(g, dy, total, viewport)) };
 }
 
+/** Wheeling the messages up unsticks the view from the tail; once the person scrolls back down to the end
+ *  (wheel, drag, keys) the view follows the tail again — otherwise a conversation that has been scrolled
+ *  once never follows new text until pgdn/end. Called by the frame loop after the paint. */
+export function followTailIfAtEnd(L: Layout, s: SextantState, theme: Theme, now: number): void {
+  if (s.stick) return;
+  const { max } = messagesScroll(L.messages, s, theme, now);
+  if (s.msgScroll >= max) { s.stick = true; s.msgScroll = max; }
+}
+
 /** one zone per visible scrollbar thumb: messages, the files tree (in its panel or paged into the
  *  main slot), and the code panel in a scrolling mode (file / diff / search; run and agents tail) */
 export function scrollThumbHits(L: Layout, main: Page, s: SextantState, theme: Theme, now: number, rows: TreeRow[]): HitZone[] {

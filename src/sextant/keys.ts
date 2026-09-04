@@ -383,7 +383,7 @@ function wordJump(text: string, cur: number, d: -1 | 1): number {
 function onMouse(s: SextantState, ev: MouseEvent, ctx: KeyCtx, now: number): KeyEffect[] {
   const kind = mouseKind(ev);
   const L = ctx.layout;
-  if (kind === "wheel-up" || kind === "wheel-down") return onWheel(s, ev, L, kind === "wheel-up" ? -1 : 1);
+  if (kind === "wheel-up" || kind === "wheel-down") return onWheel(s, ev, L, kind === "wheel-up" ? -1 : 1, ctx);
   // a grabbed zone (a scrollbar thumb) follows the pointer until the button is released
   if (kind === "release") { const had = ctx.drag.zone !== null; ctx.drag.zone = null; return had ? R() : NONE(); }
   if (kind === "drag") { const z = ctx.drag.zone; if (z?.onDrag) { z.onDrag(ev.y, ev.y - ctx.drag.y0); return R(); } return NONE(); }
@@ -413,14 +413,25 @@ function onMouse(s: SextantState, ev: MouseEvent, ctx: KeyCtx, now: number): Key
 
 /** the panel under the pointer scrolls: messages by 2 (wheel-up unsticks the tail), code by 3,
  *  files by 2; wheel-down never re-sticks — only the drawer knows maxScroll (#44 handoff) */
-function onWheel(s: SextantState, ev: MouseEvent, L: Layout, d: -1 | 1): KeyEffect[] {
+/** the wheel scrolls the panel under the pointer. Messages: up unsticks (the frame loop re-sticks when the
+ *  view reaches the tail again — scroll-hits.ts followTailIfAtEnd); code clamps in codeScrollTop; the files
+ *  tree — in its panel, or paged into the main slot on a narrow terminal — clamps to its rows here and
+ *  pulls the cursor along, because drawFiles snaps the window back to the cursor otherwise. */
+function onWheel(s: SextantState, ev: MouseEvent, L: Layout, d: -1 | 1, ctx: KeyCtx): KeyEffect[] {
   if (s.palette || s.help) return NONE();
   if (inRect(ev.x, ev.y, L.messages)) {
     s.msgScroll = Math.max(0, s.msgScroll + d * 2);
     if (d < 0) s.stick = false;
     return R();
   }
-  if (inRect(ev.x, ev.y, L.code)) { s.code.scroll = Math.max(0, s.code.scroll + d * 3); return R(); }
-  if (L.files && inRect(ev.x, ev.y, L.files)) { s.files.scroll = Math.max(0, s.files.scroll + d * 2); return R(); }
+  const main = mainPage(L, s);
+  const filesRect = L.files ?? (main === "files" ? L.code : null);
+  if (filesRect && inRect(ev.x, ev.y, filesRect)) {
+    const h = Math.max(1, filesRect.h - 2), f = s.files;
+    f.scroll = Math.max(0, Math.min(f.scroll + d * 2, Math.max(0, ctx.rows.length - h)));
+    f.cursor = Math.max(f.scroll, Math.min(f.cursor, f.scroll + h - 1));
+    return R();
+  }
+  if (main === "code" && inRect(ev.x, ev.y, L.code)) { s.code.scroll = Math.max(0, s.code.scroll + d * 3); return R(); }
   return NONE();
 }

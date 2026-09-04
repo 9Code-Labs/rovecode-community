@@ -236,11 +236,12 @@ export function fileCount(s: SextantState): number {
 
 interface Node { name: string; path: string; kids: Map<string, Node> | null }
 
-let _treeCache: { version: number; expSz: number; now: number; rows: TreeRow[] } | null = null;
+// keyed on the FilesState object too: two states with the same version (tests, a second surface) must not share rows
+let _treeCache: { files: SextantState["files"]; version: number; expSz: number; now: number; rows: TreeRow[] } | null = null;
 /** Flatten the tree (dirs first, expanded set honored); GUIDE glyphs are the drawer's job. */
 export function treeRows(s: SextantState, now = -1): TreeRow[] {
   const expSz = s.files.expanded.size;
-  if (_treeCache && _treeCache.version === s.files.version && _treeCache.expSz === expSz && _treeCache.now === now) return _treeCache.rows;
+  if (_treeCache && _treeCache.files === s.files && _treeCache.version === s.files.version && _treeCache.expSz === expSz && _treeCache.now === now) return _treeCache.rows;
   const all = new Set(s.files.paths);
   for (const p of s.files.statuses.keys()) all.add(p);
   const root: Node = { name: "", path: "", kids: new Map() };
@@ -275,7 +276,7 @@ export function treeRows(s: SextantState, now = -1): TreeRow[] {
     }
   };
   walk(root, 0);
-  _treeCache = { version: s.files.version, expSz, now, rows };
+  _treeCache = { files: s.files, version: s.files.version, expSz, now, rows };
   return rows;
 }
 
