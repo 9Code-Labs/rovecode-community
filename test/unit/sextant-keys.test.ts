@@ -169,11 +169,13 @@ test("the ctrl map: ⌃k palette, ⌃t theme cycle, ⌃n → onSubmit('/new'), �
   type(s, spy, "abc");
   press(s, spy, ctrl("u"));
   expect(s.input.text).toBe("");
-  // ⌃e with the files column hidden toasts instead of focusing a hidden panel
+  // ⌃e with the files column hidden PAGES files into the main slot (draw-tabs.ts) — it used to toast
+  // "the files panel needs ≥ 140 columns" and leave files unreachable on a narrow terminal
   const n = makeState(), ns = spyCtx(makeLayout(139, 44));
   press(n, ns, ctrl("e"));
-  expect(n.focus).toBe("messages");
-  expect(ns.toasts.length).toBe(1);
+  expect(n.page).toBe("files");
+  expect(n.focus).toBe("files");
+  expect(ns.toasts.length).toBe(0);
 });
 
 // ---------- focus / panels ----------

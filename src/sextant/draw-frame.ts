@@ -10,6 +10,7 @@ import { EMPTY } from "../core/voice.ts";
 import { panel, segWidth } from "./layout.ts";
 import { st } from "./theme.ts";
 import { thinkingWord } from "./pet.ts";
+import { scrollbar } from "./scrollbar.ts";
 
 const gap: Seg = [" ", undefined];
 
@@ -103,6 +104,9 @@ export function drawFiles(scr: ScreenLike, R: Rect, s: SextantState, theme: Them
     if (B.h > 1) scr.put(B.x, B.y + 1, EMPTY.files[1], st(theme.dim), B.w);
     return;
   }
+  // draw scrollbar before the row loop; status glyphs (M/A/D) are written after and overlay it
+  const filesSbGeom = scrollbar(scr, theme, B.x + B.w - 1, B.y, B.h, rows.length, B.h, f.scroll);
+  void filesSbGeom; // geometry exported for nimbus-6d's hit-zone (drag-to-scroll)
   for (let i = 0; i < B.h; i++) {
     const idx = f.scroll + i, r = rows[idx];
     if (!r) break;

@@ -310,6 +310,12 @@ export interface InputState {
 
 export type Focus = "messages" | "code" | "files";
 
+/** Which panel occupies the MAIN slot when the terminal is too narrow to show them side by side
+ *  (layout.ts hides files under 140 columns and the plan column under 110). The tab strip on the main
+ *  panel's border pages between them; on a wide terminal every panel is on screen and `page` is inert. */
+export type Page = "code" | "files" | "plan";
+export const PAGES: readonly Page[] = ["code", "files", "plan"];
+
 export interface Toast { text: string; until: number; tone: "info" | "warn" | "error" }
 
 export interface PaletteState {
@@ -341,6 +347,8 @@ export interface SextantState {
   usage: UsageState;
   input: InputState;
   focus: Focus;
+  /** the panel in the main slot on a narrow terminal (see Page); "code" on a wide one */
+  page: Page;
   palette: PaletteState | null;
   help: boolean;
   toasts: Toast[];

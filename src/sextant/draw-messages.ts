@@ -14,6 +14,7 @@ import { clipText } from "./tool-rows.ts";
 import { segWidth } from "./layout.ts";
 import { fmtElapsed, fmtK } from "./model.ts";
 import { thinkingWord } from "./pet.ts";
+import { scrollbar } from "./scrollbar.ts";
 
 export interface Row { segs: Seg[]; indent?: number }
 
@@ -257,7 +258,7 @@ export function cardRows(card: CardState, w: number, maxDetail: number, theme: T
 const detailBudget = (h: number): number => Math.max(2, h - 5);
 
 /** message rows above the rule, card rows (bounded so ≥1 message row survives), rows per message area */
-function areas(B: Rect, s: SextantState): { h: number; cardH: number; msgH: number; maxDetail: number } {
+export function areas(B: Rect, s: SextantState): { h: number; cardH: number; msgH: number; maxDetail: number } {
   const h = Math.max(0, B.h - 2);
   const maxDetail = detailBudget(h);
   const cardH = s.card ? Math.min(cardShape(s.card, B.w, maxDetail).total, Math.max(0, h - 1)) : 0;
@@ -308,13 +309,14 @@ export function drawMessages(scr: ScreenLike, rect: Rect, s: SextantState, theme
     const rows = buildRows(s, B.w, theme, now);
     const max = Math.max(0, rows.length - msgH);
     const offset = s.stick ? max : Math.max(0, Math.min(s.msgScroll, max));
+    const sbGeom = scrollbar(scr, theme, B.x + B.w - 1, B.y, msgH, rows.length, msgH, offset);
+    void sbGeom; // geometry exported for nimbus-6d's hit-zone (drag-to-scroll)
     for (let i = 0; i < msgH; i++) {
       const r = rows[offset + i];
       if (!r) break;
       const cx = B.x + (r.indent ?? 0);
       scr.text(cx, B.y + i, r.segs, B.x + B.w - cx);
     }
-    if (max > 0 && offset < max && msgH > 0) scr.put(B.x + B.w - 1, B.y + msgH - 1, "▾", st(theme.accent));
     if (s.card && cardH > 0) {
       const all = cardRows(s.card, B.w, maxDetail, theme);
       const shown = all.slice(all.length - cardH); // when clipped keep the tail: the buttons must stay reachable

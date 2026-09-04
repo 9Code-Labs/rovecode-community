@@ -87,7 +87,9 @@ test("ROVECODE_PET=0 removes the pet panel and the files column takes its rows; 
   a.renderer.stop();
   const b = make({ cols: 100, rows: 30 });
   const f = b.renderer.frameText();
-  expect(f).not.toContain("─ files ─"); expect(f).not.toContain("─ plan ─"); expect(f).toContain("─ code ─"); expect(f).toContain("─ messages ─");
+  // no side columns — and the main slot's title becomes the tab strip that pages to the hidden ones (draw-tabs.ts)
+  expect(f).not.toContain("─ files ─"); expect(f).not.toContain("─ plan ─"); expect(f).toContain("─ messages ─");
+  expect(f).toContain("─ code  ·  files  ·  plan ─");
   expect(f.split("\n")).toHaveLength(30);
   b.renderer.stop();
 });
@@ -396,11 +398,12 @@ test("resize re-layouts the next frame: 139 columns drops the files column, 109 
   expect(renderer.frameText()).toContain("─ files ─");
   io.resize(139, 44); renderer.tick();
   let f = renderer.frameText();
-  expect(f).not.toContain("─ files ─"); expect(f).toContain("─ plan ─");
+  // the files column is gone and the main slot's title is now the tab strip that pages to it (draw-tabs.ts)
+  expect(f).not.toContain("─ files ─"); expect(f).toContain("─ plan ─"); expect(f).toContain("─ code  ·  files ─");
   for (const line of f.split("\n")) expect([...line].length).toBeLessThanOrEqual(139);
   io.resize(109, 30); renderer.tick();
   f = renderer.frameText();
-  expect(f).not.toContain("─ plan ─"); expect(f).toContain("─ code ─");
+  expect(f).not.toContain("─ plan ─"); expect(f).toContain("─ code  ·  files  ·  plan ─");
   expect(f.split("\n")).toHaveLength(30);
   renderer.stop();
 });

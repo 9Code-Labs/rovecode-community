@@ -19,6 +19,9 @@ import { treeRows } from "./model.ts";
 import { drawHelp, drawPalette, drawSuggest, suggestions } from "./overlays.ts";
 import { petEnabled, type Pet } from "./pet.ts";
 import { Screen } from "./screen.ts";
+import { cardHits } from "./card-hits.ts";
+import { fileRowHits } from "./panel-hits.ts";
+import { drawTabs, mainPage } from "./draw-tabs.ts";
 import type { HitZone, InputEvent, Layout, SextantState, TerminalIO, Theme, TreeRow } from "./types.ts";
 
 /** the interval (app.js: setInterval(tick, 40)) */
@@ -170,10 +173,36 @@ export class FrameLoop {
     });
     this.L = L;
     if (L.pet) hits.push({ rect: L.pet, onClick: () => pet.poke(this.d.clock()) });
+    // paging (draw-tabs.ts): on a narrow terminal the main slot may be showing files or plan instead
+    // of code; the strip is painted over the slot's top border and each tab is a click zone
+    const main = mainPage(L, s);
+    for (const t of drawTabs(scr, L, s, theme)) {
+      hits.push({ rect: t.rect, onClick: () => { s.page = t.page; s.focus = t.page === "files" ? "files" : "code"; } });
+    }
     // the body rect drawCode hands its mode painter (inner rect minus the 3-wide rail and its gutter)
     const body = { x: L.code.x + 2, y: L.code.y + 1, w: L.code.w - 9, h: L.code.h - 2 };
-    if (s.code.mode === "agents" && !s.code.laneOpen) {
+    if (main === "code" && s.code.mode === "agents" && !s.code.laneOpen) {
       for (const { index, rect } of laneCells(body, s).cells) hits.push({ rect, onClick: () => { s.code.lane = index; s.focus = "code"; } });
+    }
+    // the files tree rows (panel-hits.ts): click = select + Enter, i.e. fold a dir / open a file.
+    // The rows live in the files panel, or in the main slot when files is paged in there.
+    const filesRect = L.files ?? (main === "files" ? L.code : null);
+    for (const hit of fileRowHits(filesRect, s, this.rows)) {
+      hits.push({
+        rect: hit.rect,
+        onClick: () => { s.focus = "files"; s.files.cursor = hit.index; },
+        key: { type: "key", name: "enter" },
+      });
+    }
+    // the modal card's buttons (card-hits.ts). Registered BEFORE the palette/help so those overlays,
+    // which draw over the card, still win the last-registered-wins walk in keys.ts.
+    for (const hit of cardHits(L.messages, s, theme)) {
+      hits.push({
+        rect: hit.rect,
+        onClick: () => { if (s.card) s.card.selected = hit.index; },
+        // a click on a labelled button IS the decision; the free-text row only takes the caret
+        ...(hit.confirm ? { key: { type: "key" as const, name: "enter" } } : {}),
+      });
     }
     drawSuggest(scr, L.messages, s, suggestions(s, s.files.paths, fuzzy).slice(0, MAX_SUGGESTIONS), theme, hits);
     const paletteCursor = drawPalette(scr, L, theme, s, fuzzy, hits);

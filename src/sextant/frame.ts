@@ -11,6 +11,7 @@ import { drawPlan, drawUsage } from "./draw-plan.ts";
 import { panel } from "./layout.ts";
 import { pruneToasts } from "./model.ts";
 import type { DumpFrame, Layout, LayoutOptions, Rect, ScreenLike, SextantState, Theme } from "./types.ts";
+import { mainPage } from "./draw-tabs.ts";
 
 export type Painter = (scr: ScreenLike, rect: Rect, s: SextantState, theme: Theme, now: number) => void;
 export interface Painters { frame: Painter; files: Painter; code: Painter; messages: Painter; plan: Painter; usage: Painter; pet: Painter }
@@ -74,7 +75,14 @@ export function renderFrame(scr: ScreenLike, s: SextantState, theme: Theme, now:
   const age = now - s.bootAt;
   P.frame(scr, L.frame, s, theme, now);
   if (L.files && age >= 0) P.files(scr, L.files, s, theme, now);
-  if (age >= REVEAL_STEP_MS) P.code(scr, L.code, s, theme, now);
+  // paging (draw-tabs.ts): on a narrow terminal the main slot shows the panel `s.page` names when
+  // the layout hid it; the tab strip itself is painted by the frame loop after the panels
+  const main = mainPage(L, s);
+  if (age >= REVEAL_STEP_MS) {
+    if (main === "files") P.files(scr, L.code, s, theme, now);
+    else if (main === "plan") P.plan(scr, L.code, s, theme, now);
+    else P.code(scr, L.code, s, theme, now);
+  }
   if (age >= REVEAL_STEP_MS * 2) P.messages(scr, L.messages, s, theme, now);
   if (L.plan && age >= REVEAL_STEP_MS * 3) P.plan(scr, L.plan, s, theme, now);
   if (L.usage && age >= REVEAL_STEP_MS * 4) P.usage(scr, L.usage, s, theme, now);

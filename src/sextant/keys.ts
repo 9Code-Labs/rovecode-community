@@ -28,7 +28,7 @@
  *  renderer-local names (theme open diff focus agents) so a custom command file cannot shadow them. */
 
 import {
-  THEME_ORDER, type CodeMode, type Focus, type HitZone, type InputEvent, type KeyEvent, type Layout, type MouseEvent,
+  THEME_ORDER, type CodeMode, type Focus, type HitZone, type InputEvent, type KeyEvent, type Layout, type MouseEvent, type Page,
   type Rect, type SextantState, type ThemeName, type TreeRow,
 } from "./types.ts";
 import { type Fuzzy, type Suggestion, onPaletteKey, openPalette, parseInput, resolveFile, suggestions } from "./overlays.ts";
@@ -36,6 +36,7 @@ import { dispatch, openFile, runAction, setFocus, setMode, setTheme, showAgents 
 import { dismissCard, onCardKey } from "./card-keys.ts";
 import { gridFor } from "./draw-agents.ts";
 import { mouseKind } from "./input.ts";
+import { mainPage, nextPage } from "./draw-tabs.ts";
 
 // ------------------------------------------------------------------ contract
 
@@ -71,7 +72,10 @@ const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(v, hi
 const inRect = (x: number, y: number, r: Rect) => x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
 
 /** messages→code→files, files only while the layout shows the column (app.js:1520) */
-export function focusOrder(L: Layout): Focus[] { return FOCUS_ORDER.filter((f) => f !== "files" || L.files !== null); }
+/** files is in the Tab cycle when its panel is on screen — its own column, or paged into the main slot */
+export function focusOrder(L: Layout, page: Page = "code"): Focus[] {
+  return FOCUS_ORDER.filter((f) => f !== "files" || L.files !== null || page === "files");
+}
 
 // ------------------------------------------------------------------ entry
 
@@ -111,6 +115,12 @@ function onCtrl(s: SextantState, ev: KeyEvent, ctx: KeyCtx): KeyEffect[] {
       return R();
     }
     case "e": setFocus(s, ctx, "files"); return R();
+    // ⌃o: cycle the tab strip (draw-tabs.ts) — code → files → plan on a narrow terminal; inert when wide
+    case "o": {
+      const next = nextPage(ctx.layout, s);
+      if (next !== s.page) { s.page = next; s.focus = next === "files" ? "files" : "code"; }
+      return R();
+    }
     case "s": setMode(s, ctx, "code"); s.focus = "code"; return R();
     case "d": setMode(s, ctx, s.code.mode === "diff" ? "code" : "diff"); return R();
     case "r": setMode(s, ctx, "run"); return R();
@@ -154,7 +164,7 @@ function onEscape(s: SextantState, ctx: KeyCtx, now: number): KeyEffect[] {
 function onTab(s: SextantState, name: string, ctx: KeyCtx): KeyEffect[] {
   const sugs = openSuggestions(s, ctx);
   if (s.focus === "messages" && sugs.length) { applySuggestion(s, sugs[clamp(s.input.sgSel, 0, sugs.length - 1)]!); return R(); }
-  const order = focusOrder(ctx.layout), i = Math.max(0, order.indexOf(s.focus));
+  const order = focusOrder(ctx.layout, s.page), i = Math.max(0, order.indexOf(s.focus));
   s.focus = order[(i + (name === "tab" ? 1 : order.length - 1)) % order.length]!;
   return R();
 }
@@ -359,7 +369,14 @@ function onMouse(s: SextantState, ev: MouseEvent, ctx: KeyCtx, now: number): Key
     return R();
   }
   if (s.palette || s.help) return NONE();
-  for (const [f, r] of [["messages", L.messages], ["code", L.code], ["files", L.files]] as [Focus, Rect | null][]) {
+  // the main slot is code unless the layout hid the paged panel and it is showing there instead
+  const main = mainPage(L, s);
+  const panels: [Focus, Rect | null][] = [
+    ["messages", L.messages],
+    ["code", main === "code" ? L.code : null],
+    ["files", L.files ?? (main === "files" ? L.code : null)],
+  ];
+  for (const [f, r] of panels) {
     if (r && inRect(ev.x, ev.y, r)) { s.focus = f; return R(); }
   }
   return NONE();

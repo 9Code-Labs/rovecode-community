@@ -281,9 +281,10 @@ test("question card: the question, options, free-text row (hint / typed text), `
 test("the card is pinned above the rule even when the user scrolled up, and keeps ≥1 message row in a short panel", () => {
   const many: MessageRow[] = Array.from({ length: 30 }, (_, i) => ({ kind: "system", text: `msg ${i + 1}`, tone: "info" }));
   const g = draw(msgState(many, { card: approval(1), stick: false, msgScroll: 0 }));
-  expect(g.span(BX, BY, BW)).toBe("▸ msg 1");
+  expect(g.span(BX, BY, BW - 1)).toBe("▸ msg 1"); // BW-1 excludes the scrollbar column
   expect(g.span(BX, RULE_Y - 1, BW)).toContain(" allow ");
-  expect(g.span(BX, RULE_Y - 4, BW)).toMatch(/^▸ msg 9\s+▾$/); // 12 rows − 3 card rows = 9 message rows (+ the more-below marker), then the card
+  // 12 rows − 3 card rows = 9 msg rows; scrollbar replaces the old ▾ at the end
+  expect(g.span(BX, RULE_Y - 4, BW - 1)).toBe("▸ msg 9"); // 12 rows − 3 card rows = 9 message rows (+ the more-below marker), then the card
   expect(g.span(BX, RULE_Y - 3, BW)).toBe(""); // the card's blank separator
   expect(g.span(BX, RULE_Y - 2, BW)).toContain("needs your permission");
   const short = new GridScreen(90, 24, "░");
@@ -340,26 +341,30 @@ test("promptCursor: null under the palette/help or an approval card; on the ques
 
 // ------------------------------------------------------------------ scroll
 
-test("stick follows the tail; msgScroll is an offset from the top, clamped; ▾ marks hidden rows below; messagesScroll reports the geometry", () => {
+test("stick follows the tail; msgScroll is an offset from the top, clamped; scrollbar replaces ▾; messagesScroll reports the geometry", () => {
   const many: MessageRow[] = Array.from({ length: 30 }, (_, i) => ({ kind: "system", text: `msg ${i + 1}`, tone: "info" }));
   const stuck = draw(msgState(many, { stick: true, msgScroll: 0 }));
-  expect(stuck.span(BX, BY, BW)).toBe("▸ msg 19");
-  expect(stuck.span(BX, RULE_Y - 1, BW)).toBe("▸ msg 30");
+  // BW-1: exclude the scrollbar column when checking message content
+  expect(stuck.span(BX, BY, BW - 1)).toBe("▸ msg 19");
+  expect(stuck.span(BX, RULE_Y - 1, BW - 1)).toBe("▸ msg 30");
   expect(stuck.toText()).not.toContain("▾");
+  // scrollbar visible: track (│) or thumb (▌) in the last column
+  expect(["│", "▌"]).toContain(stuck.cell(BX + BW - 1, BY).ch);
   expect(messagesScroll(RECT, msgState(many, { stick: true, msgScroll: 0 }), THEME, 0)).toEqual({ offset: 18, max: 18 });
   const top = draw(msgState(many, { stick: false, msgScroll: 0 }));
-  expect(top.span(BX, BY, BW)).toBe("▸ msg 1");
+  expect(top.span(BX, BY, BW - 1)).toBe("▸ msg 1");
   expect(top.row(RULE_Y - 1).slice(BX, BX + 8)).toBe("▸ msg 12");
-  expect(top.cell(BX + BW - 1, RULE_Y - 1)).toMatchObject({ ch: "▾", fg: THEME.accent });
+  // scrollbar replaces the old ▾ marker: last column holds track or thumb glyph
+  expect(["│", "▌"]).toContain(top.cell(BX + BW - 1, RULE_Y - 1).ch);
   const mid = msgState(many, { stick: false, msgScroll: 5 });
-  expect(draw(mid).span(BX, BY, BW)).toBe("▸ msg 6");
+  expect(draw(mid).span(BX, BY, BW - 1)).toBe("▸ msg 6");
   expect(messagesScroll(RECT, mid, THEME, 0)).toEqual({ offset: 5, max: 18 });
   const over = msgState(many, { stick: false, msgScroll: 999 });
-  expect(draw(over).span(BX, BY, BW)).toBe("▸ msg 19");
+  expect(draw(over).span(BX, BY, BW - 1)).toBe("▸ msg 19");
   expect(draw(over).toText()).not.toContain("▾");
   expect(messagesScroll(RECT, over, THEME, 0)).toEqual({ offset: 18, max: 18 });
   const few = msgState(many.slice(0, 3), { stick: false, msgScroll: 7 });
-  expect(draw(few).span(BX, BY, BW)).toBe("▸ msg 1");
+  expect(draw(few).span(BX, BY, BW)).toBe("▸ msg 1"); // no scrollbar when content fits
   expect(messagesScroll(RECT, few, THEME, 0)).toEqual({ offset: 0, max: 0 });
   expect(buildRows(msgState(many), BW, THEME, 0).length).toBe(30);
 });

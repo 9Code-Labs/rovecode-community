@@ -309,6 +309,7 @@ export const HELP_KEYS: readonly (readonly [string, string])[] = [
   ["⌃s ⌃d ⌃r", "code · diff · run view"],
   ["⌃a", "agents board"],
   ["⌃e", "files panel"],
+  ["⌃o", "next tab (narrow terminal)"],
   ["⌃t", "next theme"],
   ["⌃n", "new session (/new)"],
   ["↑↓ ←→", "files: pick · fold — code: scroll · mode — prompt: history"],

@@ -54,8 +54,10 @@ export function openFile(s: SextantState, ctx: KeyCtx, path: string): void {
 
 /** the files panel only takes focus while the layout shows it (≥ 140 columns) */
 export function setFocus(s: SextantState, ctx: KeyCtx, f: Focus): void {
-  if (f === "files" && !ctx.layout.files) ctx.local.toast("the files panel needs ≥ 140 columns");
-  else s.focus = f;
+  // a narrow terminal has no files column: page files into the main slot (draw-tabs.ts) instead of
+  // refusing — "the files panel needs ≥ 140 columns" was the old answer, and it left files unreachable
+  if (f === "files" && !ctx.layout.files) s.page = "files";
+  s.focus = f;
 }
 
 // ------------------------------------------------------------------ dispatch

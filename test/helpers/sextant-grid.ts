@@ -68,7 +68,7 @@ export function baseState(over: Partial<SextantState> = {}): SextantState {
     messages: [], msgScroll: 0, stick: true, card: null, plan: { todos: [] }, crew: [],
     usage: { provider: "mock", model: "m", turns: 0, tokensIn: 0, tokensOut: 0, contextPct: null, costUsd: null },
     input: { text: "", cur: 0, history: [], histIdx: -1, sgSel: 0 },
-    focus: "messages", palette: null, help: false, toasts: [], escUntil: 0, running: false, mode: "act", yolo: false,
+    focus: "messages", page: "code", palette: null, help: false, toasts: [], escUntil: 0, running: false, mode: "act", yolo: false,
     theme: "night", bootAt: 0, commands: [], version: "0.0.0-test", ...over,
   };
 }
