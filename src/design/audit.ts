@@ -159,6 +159,49 @@ export function isAmberish(hex: string): boolean {
   return c.h >= 20 && c.h <= 55 && c.s >= 45 && c.l >= 35 && c.l <= 80;
 }
 
+const HEX_RE = /#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})\b/g;
+
+/** HSL back to a hex string, so one colour pipeline serves every syntax a stylesheet writes. */
+export function hslToHex(h: number, s: number, l: number): string {
+  const sn = Math.min(100, Math.max(0, s)) / 100;
+  const ln = Math.min(100, Math.max(0, l)) / 100;
+  const c = (1 - Math.abs(2 * ln - 1)) * sn;
+  const hp = (((h % 360) + 360) % 360) / 60;
+  const x = c * (1 - Math.abs((hp % 2) - 1));
+  const [r1, g1, b1] = hp < 1 ? [c, x, 0] : hp < 2 ? [x, c, 0] : hp < 3 ? [0, c, x]
+    : hp < 4 ? [0, x, c] : hp < 5 ? [x, 0, c] : [c, 0, x];
+  const m = ln - c / 2;
+  const to = (v: number): string => Math.round((v + m) * 255).toString(16).padStart(2, "0");
+  return `#${to(r1!)}${to(g1!)}${to(b1!)}`;
+}
+
+/** Every colour a stylesheet DECLARES, normalised to hex.
+ *
+ *  Hex alone is not enough. Measured on shadcn-ui/taxonomy (2026-09-04): a current Next.js + Tailwind
+ *  project declares its entire palette as bare HSL triplets on custom properties — `--primary: 222.2
+ *  47.4% 11.2%` — and contains ZERO hex literals, so every colour rule here saw an empty document and
+ *  `off-palette` could not fire at all. That convention is most of the ecosystem rovecode's users build
+ *  in, so reading only `#rrggbb` made the colour half of the audit blind exactly where it is needed.
+ *
+ *  Three forms are read: a hex literal, a custom property holding a bare `H S% L%` triplet (Tailwind's
+ *  `hsl(var(--x))` convention), and a written `hsl()` / `hsla()` in either the comma or the space
+ *  syntax. An alpha component is dropped — transparency is not a hue decision. Anything else (a
+ *  `color-mix`, an `oklch()` literal, a value behind another variable) is still unread, and that is the
+ *  documented limit rather than a silent one. */
+export function declaredColours(text: string): string[] {
+  const out = new Set<string>();
+  for (const h of text.match(HEX_RE) ?? []) out.add(h.toLowerCase());
+  // `--token: 222.2 47.4% 11.2%` — the percent signs are what tell a colour from any other triplet
+  for (const m of text.matchAll(/--[\w-]+\s*:\s*(-?[\d.]+)\s+([\d.]+)%\s+([\d.]+)%/g)) {
+    out.add(hslToHex(Number(m[1]), Number(m[2]), Number(m[3])));
+  }
+  // `hsl(222 47% 11%)`, `hsl(222, 47%, 11%)`, with or without an alpha
+  for (const m of text.matchAll(/hsla?\(\s*(-?[\d.]+)(?:deg)?\s*[, ]\s*([\d.]+)%\s*[, ]\s*([\d.]+)%/gi)) {
+    out.add(hslToHex(Number(m[1]), Number(m[2]), Number(m[3])));
+  }
+  return [...out];
+}
+
 /** A colour that is doing neutral duty — grey, ink, paper. Never counted as an accent.
  *
  *  The mid-tone bar is s < 20, widened from s < 12 on calibration §3.8: at 12, every Tailwind body-text
@@ -173,7 +216,6 @@ export function isNeutral(hex: string): boolean {
   return c.l > 92 && c.s < 30;             // tinted paper
 }
 
-const HEX_RE = /#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})\b/g;
 
 // ---------- typefaces ----------
 
@@ -372,7 +414,7 @@ export function amberAccentPositions(text: string): string[] {
   // accent" is the checker guessing at intent it cannot see.
   for (const m of src.matchAll(/--(?:color-)?(?:primary|accent|brand)\b\s*:\s*([^;}\n]+)/gi)) {
     const val = m[1] ?? "";
-    const hex = (val.match(HEX_RE) ?? []).find(isAmberish);
+    const hex = declaredColours(val).find(isAmberish);
     if (hex !== undefined && !WARNING_CTX.test(m[0])) hits.push(`${m[0].split(":")[0]?.trim()}: ${hex}`);
   }
   // Tailwind utilities in accent positions. The 300-700 band is the same window isAmberish applies to a
@@ -391,7 +433,7 @@ export function amberAccentPositions(text: string): string[] {
  *  among many, not as the accent. */
 export function saturatedFamilies(text: string): number {
   const fams = new Set<number>();
-  for (const h of stripNonAccent(text).match(HEX_RE) ?? []) {
+  for (const h of declaredColours(stripNonAccent(text))) {
     const f = hueFamily(h);
     if (f !== null) fams.add(f);
   }
@@ -505,7 +547,7 @@ export function auditSource(text: string, opts: AuditOptions = {}): Finding[] {
   const clean = stripNonAccent(text);
   const gradTw = /from-(?:purple|violet|indigo|fuchsia)-\d00[\s\S]{0,80}?to-(?:blue|pink|cyan|indigo|purple)-\d00/.test(clean);
   const gradCss = (clean.match(/linear-gradient\([^)]*\)/g) ?? []).some((g) => {
-    const stops = (g.match(HEX_RE) ?? []).map(hexToHsl).filter((c): c is { h: number; s: number; l: number } => c !== null && c.s >= 40);
+    const stops = declaredColours(g).map(hexToHsl).filter((c): c is { h: number; s: number; l: number } => c !== null && c.s >= 40);
     return stops.some((a) => a.h >= 250 && a.h <= 290) && stops.some((b) => b.h >= 180 && b.h <= 330) && stops.length >= 2;
   });
   if (gradTw || gradCss) {
@@ -522,11 +564,11 @@ export function auditSource(text: string, opts: AuditOptions = {}): Finding[] {
   if (direction?.palette !== undefined) {
     const chosen = new Set<number>();
     for (const v of Object.values(direction.palette)) {
-      const f = hueFamily(v);
-      if (f !== null) chosen.add(f);
+      // the human may have recorded "hsl(210 40% 96%)" as readily as a hex
+      for (const c of declaredColours(v)) { const f = hueFamily(c); if (f !== null) chosen.add(f); }
     }
     const seen = new Map<number, string[]>();
-    for (const h of new Set((stripNonAccent(text).match(HEX_RE) ?? []).map((x) => x.toLowerCase()))) {
+    for (const h of declaredColours(stripNonAccent(text))) {
       const f = hueFamily(h);
       if (f === null || chosen.has(f)) continue;
       seen.set(f, [...(seen.get(f) ?? []), h]);
@@ -564,6 +606,32 @@ export function wantsRestraint(d: DesignDirection): boolean {
 }
 
 // ---------- page and project scope ----------
+
+/** The layout files a route is WRAPPED in, which it never imports.
+ *
+ *  Next.js and the routers that copy it nest `layout.tsx` implicitly: `app/(docs)/guides/page.tsx` renders
+ *  inside `app/(docs)/guides/layout.tsx`, then `app/(docs)/layout.tsx`, then `app/layout.tsx`, and imports
+ *  none of them. Measured on shadcn-ui/taxonomy (2026-09-04): the chain carries 8-24 elements per route and
+ *  on four of its fourteen routes it is LARGER than the page file — the settings page is 4 elements of its
+ *  own inside 17 of layout. That is where a site's nav, footer and section rules live, so scoring "the page"
+ *  without it measured the smaller and quieter half and called it the page.
+ *
+ *  Astro, SvelteKit and the rest import their layouts explicitly, so `importsOf` already has them; this only
+ *  adds what the convention hides. Only files actually passed to the audit are used — nothing is read from
+ *  disk here. */
+function layoutChain(page: SourceFile, byPath: ReadonlyMap<string, SourceFile>): SourceFile[] {
+  const out: SourceFile[] = [];
+  let dir = norm(page.path).replace(/\/[^/]*$/, "");
+  for (;;) {
+    for (const ext of ["tsx", "jsx", "ts", "js"]) {
+      const f = byPath.get(dir === "" ? `layout.${ext}` : `${dir}/layout.${ext}`);
+      if (f !== undefined && f.path !== page.path) { out.push(f); break; }
+    }
+    if (dir === "") break;
+    dir = dir.includes("/") ? dir.replace(/\/[^/]*$/, "") : "";
+  }
+  return out;
+}
 
 /** Which audited files a page pulls in. Relative specifiers are resolved against the importer; alias
  *  forms (`@/x`, `~/x`, `src/x`) are matched by path suffix. One level deep, which is what the
@@ -614,11 +682,16 @@ export function auditProject(files: readonly SourceFile[], opts: Omit<AuditOptio
 
   for (const page of asPages) {
     if (isCentringExempt(page.path)) continue;
-    const parts = [page, ...importsOf(page, byPath)].filter((f) => !isUiPrimitive(f.path));
+    const chain = layoutChain(page, byPath);
+    const parts = [page, ...chain, ...importsOf(page, byPath), ...chain.flatMap((l) => importsOf(l, byPath))]
+      .filter((f, i, a) => a.findIndex((x) => x.path === f.path) === i && !isUiPrimitive(f.path));
     const text = parts.map((f) => f.text).join("\n");
     const els = elementCount(text);
     if (els < 10) continue;
-    const scope = parts.length > 1 ? `${page.path} + ${parts.length - 1} imported component${parts.length === 2 ? "" : "s"}` : page.path;
+    const others = parts.length - 1;
+    const scope = others > 0
+      ? `${page.path} + ${others} file${others === 1 ? "" : "s"} it renders inside or imports${chain.length > 0 ? ` (incl. ${chain.length} layout${chain.length === 1 ? "" : "s"})` : ""}`
+      : page.path;
 
     // Threshold stays 0.4. The calibration swept it per FILE and found good and slop within noise at
     // every value (2% vs 3%, §3.4) — the fix was scope, not the number, and at page scope a framed

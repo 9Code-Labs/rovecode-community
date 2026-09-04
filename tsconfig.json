@@ -20,5 +20,11 @@
     "useDefineForClassFields": false,
     "noEmit": true
   },
-  "include": ["src", "test", "scripts"]
+  "include": ["src", "test", "scripts"],
+  // test/fixtures/design-site is INPUT to design_audit, not project code: a synthetic Next.js app-router
+  // tree whose .tsx files exist to be read as text (the audit matches route files by path, so they have to
+  // keep their real names). They are never imported and never run, and compiling them would only demand a
+  // React/JSX setup for files nothing renders. Every other fixture stays in: fixtures/images.ts and
+  // fixtures/fake-lsp.ts are real modules that tests import.
+  "exclude": ["test/fixtures/design-site"]
 }

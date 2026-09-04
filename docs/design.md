@@ -117,10 +117,19 @@ design. Pass the page file **together with the components it imports** — densi
 page, and "no rounded corner anywhere" is scored per project, so a single-component run cannot see them.
 
 A **page** means a route file: `app/**/page.tsx`, `app/page.tsx`, anything under `pages/` that is not
-`pages/api/`, `routes/**/+page.svelte`, or any `.html`. The audit pulls in that file's own imports one level
-deep and leaves `components/ui/**` out of the count. Pass only components and the two page-scoped rules
-produce nothing at all — a clean report there means "not measured", not "fine". Text passed as `source` is
-treated as one page, so pasted markup does get the page checks.
+`pages/api/`, `routes/**/+page.svelte`, or any `.html`.
+
+A page is scored as what it **renders**, not as what its file contains. That means the route file, the
+components it imports one level deep, and — because Next.js and its imitators nest them implicitly — every
+`layout.*` from its own directory up to the root, plus what those layouts import. `components/ui/**` is left
+out of the count wherever it comes from. This matters more than it sounds: measured on a fourteen-route
+Next.js app, the layout chain carried 8–24 elements per route and on four routes was *larger* than the page
+file, and that is exactly where a site keeps the nav, the footer and the section rules a density check is
+looking for. Every finding names the files it counted, so you can disagree with the scope itself.
+
+Pass only components and the two page-scoped rules produce nothing at all — a clean report there means "not
+measured", not "fine". Text passed as `source` is treated as one page, so pasted markup does get the page
+checks.
 
 ### Slop and deviation
 
@@ -172,6 +181,10 @@ trust than one missed cliché costs quality.
 ### Known limits
 
 The checker greps source. It reports what is **written**, misses what is computed at runtime, and can be
-fooled by indirection. It cannot see rhythm, whether the copy is filler, or whether the layout has one
+fooled by indirection. Colour is read as a hex literal, as a bare `H S% L%` triplet on a custom property
+(the Tailwind `hsl(var(--x))` convention), or as a written `hsl()`; a colour behind `color-mix`, an
+`oklch()` literal, or a second level of variable indirection is still unread. Path prefixes matter too: the
+`components/ui/**` exemption and the route patterns are matched against the paths you pass, so auditing from
+inside `components/` rather than from the project root quietly turns them off. It cannot see rhythm, whether the copy is filler, or whether the layout has one
 organising idea. The calibration measured the ceiling honestly: without a recorded direction, a deliberate
 choice and a reflex look identical, which is why the deviation half is where the value is.
