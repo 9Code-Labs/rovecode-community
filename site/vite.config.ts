@@ -15,9 +15,12 @@ export default defineConfig({
     rollupOptions: {
       output: {
         // long-lived vendor chunks apart from the page, so a copy change does not re-download React
-        manualChunks: {
-          motion: ["motion"],
-          ui: ["radix-ui", "lucide-react", "class-variance-authority", "clsx", "tailwind-merge"],
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return undefined;
+          if (/[\/]node_modules[\/](react|react-dom|scheduler)[\/]/.test(id)) return "react";
+          if (/[\/]node_modules[\/]motion/.test(id)) return "motion";
+          if (/[\/]node_modules[\/](radix-ui|@radix-ui|lucide-react|class-variance-authority|clsx|tailwind-merge)[\/]/.test(id)) return "ui";
+          return undefined;
         },
       },
     },

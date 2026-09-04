@@ -11,15 +11,8 @@
     "shoot": "node scripts/shoot.ts"
   },
   "dependencies": {
-    "@fontsource-variable/fraunces": "^5.3.0",
-    "@fontsource-variable/geist": "^5.3.0",
-    "@fontsource-variable/geist-mono": "^5.3.0",
     "@fontsource-variable/hanken-grotesk": "^5.3.0",
-    "@fontsource-variable/ibm-plex-sans": "^5.3.0",
-    "@fontsource-variable/instrument-sans": "^5.3.0",
-    "@fontsource/commit-mono": "^5.3.0",
     "@fontsource/ibm-plex-mono": "^5.3.0",
-    "@fontsource/ibm-plex-sans-condensed": "^5.3.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.39.0",

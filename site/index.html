@@ -11,8 +11,14 @@
     <meta property="og:title" content="Rovecode — a coding agent for the terminal" />
     <meta property="og:description" content="Panelled TUI cockpit, 16 providers or any OpenAI-compatible endpoint, deny-default tool policy, session tree with rewind. Free software, AGPL-3.0." />
     <meta property="og:type" content="website" />
-    <meta property="og:image" content="/shots/editing-160x44.png" />
+    <!-- %VITE_SITE_URL% comes from .env (fallback) or the build environment; see README -->
+    <link rel="canonical" href="%VITE_SITE_URL%/" />
+    <meta property="og:url" content="%VITE_SITE_URL%/" />
+    <meta property="og:image" content="%VITE_SITE_URL%/shots/editing-160x44.png" />
+    <meta property="og:image:width" content="2497" />
+    <meta property="og:image:height" content="1496" />
     <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="%VITE_SITE_URL%/shots/editing-160x44.png" />
     <meta name="theme-color" content="#f6f6f4" />
   </head>
   <body>

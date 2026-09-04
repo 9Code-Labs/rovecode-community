@@ -1,38 +1,25 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { en, type Dict, type PartialDict } from "./en";
-import { tr } from "./locales/tr";
-import { de } from "./locales/de";
-import { fr } from "./locales/fr";
-import { es } from "./locales/es";
-import { pt } from "./locales/pt";
-import { it } from "./locales/it";
-import { nl } from "./locales/nl";
-import { pl } from "./locales/pl";
-import { ru } from "./locales/ru";
-import { uk } from "./locales/uk";
-import { ja } from "./locales/ja";
-import { ko } from "./locales/ko";
-import { zh } from "./locales/zh";
-import { ar } from "./locales/ar";
 
 /** `code` is what goes in <html lang>, `name` is the language written in itself — never in English, a picker
- *  that says "Turkish" is useless to the person looking for "Türkçe". */
+ *  that says "Turkish" is useless to the person looking for "Türkçe". English ships in the main bundle; every
+ *  other dictionary is its own chunk, fetched the first time that language is shown. */
 export const LOCALES = [
-  { code: "en", name: "English", dict: en as PartialDict },
-  { code: "tr", name: "Türkçe", dict: tr },
-  { code: "de", name: "Deutsch", dict: de },
-  { code: "fr", name: "Français", dict: fr },
-  { code: "es", name: "Español", dict: es },
-  { code: "pt", name: "Português", dict: pt },
-  { code: "it", name: "Italiano", dict: it },
-  { code: "nl", name: "Nederlands", dict: nl },
-  { code: "pl", name: "Polski", dict: pl },
-  { code: "ru", name: "Русский", dict: ru },
-  { code: "uk", name: "Українська", dict: uk },
-  { code: "ja", name: "日本語", dict: ja },
-  { code: "ko", name: "한국어", dict: ko },
-  { code: "zh", name: "简体中文", dict: zh },
-  { code: "ar", name: "العربية", dict: ar, rtl: true },
+  { code: "en", name: "English", load: async () => en as PartialDict },
+  { code: "tr", name: "Türkçe", load: () => import("./locales/tr").then((m) => m.tr) },
+  { code: "de", name: "Deutsch", load: () => import("./locales/de").then((m) => m.de) },
+  { code: "fr", name: "Français", load: () => import("./locales/fr").then((m) => m.fr) },
+  { code: "es", name: "Español", load: () => import("./locales/es").then((m) => m.es) },
+  { code: "pt", name: "Português", load: () => import("./locales/pt").then((m) => m.pt) },
+  { code: "it", name: "Italiano", load: () => import("./locales/it").then((m) => m.it) },
+  { code: "nl", name: "Nederlands", load: () => import("./locales/nl").then((m) => m.nl) },
+  { code: "pl", name: "Polski", load: () => import("./locales/pl").then((m) => m.pl) },
+  { code: "ru", name: "Русский", load: () => import("./locales/ru").then((m) => m.ru) },
+  { code: "uk", name: "Українська", load: () => import("./locales/uk").then((m) => m.uk) },
+  { code: "ja", name: "日本語", load: () => import("./locales/ja").then((m) => m.ja) },
+  { code: "ko", name: "한국어", load: () => import("./locales/ko").then((m) => m.ko) },
+  { code: "zh", name: "简体中文", load: () => import("./locales/zh").then((m) => m.zh) },
+  { code: "ar", name: "العربية", load: () => import("./locales/ar").then((m) => m.ar), rtl: true },
 ] as const;
 
 export type LocaleCode = (typeof LOCALES)[number]["code"];
@@ -48,6 +35,13 @@ function detect(): LocaleCode {
     if (isCode(base)) return base;
   }
   return "en";
+}
+
+/** the locale the page should open in: the saved choice, else the browser's */
+export function initialLocale(): LocaleCode {
+  if (typeof window === "undefined") return "en";
+  const saved = window.localStorage.getItem(KEY);
+  return isCode(saved) ? saved : detect();
 }
 
 /** fill every key missing from `part` with the English one; arrays merge element by element so a locale can
@@ -67,6 +61,20 @@ function merge<T>(base: T, part: unknown): T {
   return (part as T) ?? base;
 }
 
+/** merged dictionaries, one per locale once fetched */
+const cache = new Map<LocaleCode, Dict>([["en", en]]);
+
+/** resolve a locale's full dictionary (fetching its chunk the first time) */
+export async function loadDict(code: LocaleCode): Promise<Dict> {
+  const hit = cache.get(code);
+  if (hit) return hit;
+  const entry = LOCALES.find((l) => l.code === code) ?? LOCALES[0];
+  const part = await entry.load();
+  const dict = code === "en" ? en : merge(en, part);
+  cache.set(code, dict);
+  return dict;
+}
+
 interface Ctx {
   locale: LocaleCode;
   setLocale: (c: LocaleCode) => void;
@@ -75,16 +83,19 @@ interface Ctx {
 }
 const I18nContext = createContext<Ctx | null>(null);
 
-export function I18nProvider({ children }: { children: ReactNode }) {
-  const [locale, setLocaleState] = useState<LocaleCode>(() => {
-    if (typeof window === "undefined") return "en";
-    const saved = window.localStorage.getItem(KEY);
-    return isCode(saved) ? saved : detect();
-  });
+/** `initial` should be the locale main.tsx already awaited with loadDict(), so the first paint is in the right
+ *  language; later switches show the previous language until the new chunk lands (tens of ms). */
+export function I18nProvider({ children, initial }: { children: ReactNode; initial: LocaleCode }) {
+  const [locale, setLocaleState] = useState<LocaleCode>(initial);
+  const [t, setT] = useState<Dict>(() => cache.get(initial) ?? en);
 
-  const entry = LOCALES.find((l) => l.code === locale) ?? LOCALES[0];
-  const rtl = "rtl" in entry && entry.rtl === true;
-  const t = useMemo(() => (locale === "en" ? en : merge(en, entry.dict)), [locale, entry.dict]);
+  useEffect(() => {
+    let live = true;
+    loadDict(locale).then((d) => { if (live) setT(d); });
+    return () => { live = false; };
+  }, [locale]);
+
+  const rtl = useMemo(() => { const e = LOCALES.find((l) => l.code === locale); return !!e && "rtl" in e && e.rtl === true; }, [locale]);
 
   useEffect(() => {
     const root = document.documentElement;

@@ -21,17 +21,20 @@ server {
   root /var/www/rovecode-site;      # contents of site/dist
   index index.html;
   location /assets/ { add_header Cache-Control "public, max-age=31536000, immutable"; }
-  location / { try_files $uri $uri/ /index.html; }
+  error_page 404 /404.html;
+  location / { try_files $uri $uri/ =404; }
 }
 ```
 
-Single-page: every route falls back to `index.html`. Hashed assets under `/assets/` are immutable.
+One page, no client routes: unknown paths return `404.html`. Hashed assets under `/assets/` are immutable.
 
 ## Notes
 
 - Root-absolute asset URLs (`/assets`, `/brand`, `/shots`). To host under a sub-path, set `base` in `vite.config.ts`.
-- No canonical tag and no absolute `og:url`; `og:image` is root-relative — add the domain to both once there is one.
-- Locale: 15 languages, picked from `navigator.language`, persisted in `localStorage` (`rovecode.locale`).
+- Canonical, `og:url` and `og:image` are absolute, built from `VITE_SITE_URL`: `.env` holds the current fallback
+  (`http://64.177.43.110`); set the variable in the deploy environment to override (`VITE_SITE_URL=https://… bun run build`).
+- Single page, no client-side routes: unknown paths should 404 (`public/404.html`), not fall back to index.html.
+- Locale: 15 languages, picked from `navigator.language`, persisted in `localStorage` (`rovecode.locale`). English is in the main bundle; each other language is its own chunk, fetched on first use.
 - Design direction is recorded in `.rovecode/design.json` (read by rovecode's `design_audit`).
 - `media-src/` (raw and encoded video, ~120 MB) and `screenshots/` are working files, git-ignored.
 - Regenerate the terminal frames after a copy change in `scripts/out/*.html`: `node scripts/shoot.ts frames`.
