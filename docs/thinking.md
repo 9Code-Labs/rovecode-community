@@ -33,10 +33,10 @@ dialect in `thinking.ts`, not the caller.
 
 | wire · family (dialect id) | auto | off | low / medium / high | status |
 |---|---|---|---|---|
-| **Anthropic Messages**, effort-shape models (claude-opus-5, claude-sonnet-5, claude-opus-4-5) | — | `thinking: {type: "disabled"}` | `output_config: {effort: "low"/"medium"/"high"}` | measured |
-| **Anthropic Messages**, budget-shape models (claude-sonnet-4-5, claude-haiku-4-5, older) | — | `thinking: {type: "disabled"}` | `thinking: {type: "enabled", budget_tokens: 2048 / 8192 / 24576}`; `max_tokens` raised to at least budget + 4096 | measured |
+| **Anthropic Messages**, effort shape — measured on claude-opus-5, claude-sonnet-5, claude-opus-4-5; the shape is *learned*, never hard-coded, and `effort` is the first guess for any Anthropic model | — | `thinking: {type: "disabled"}` | `output_config: {effort: "low"/"medium"/"high"}` | measured |
+| **Anthropic Messages**, budget shape — measured on claude-sonnet-4-5, claude-haiku-4-5; reached by flipping after the effort shape's 400 | — | `thinking: {type: "disabled"}` | `thinking: {type: "enabled", budget_tokens: 2048 / 8192 / 24576}`; `max_tokens` raised to at least budget + 4096 | measured |
 | OpenAI-compat · **OpenRouter** (any model, `provider === "openrouter"`) | — | `reasoning: {enabled: false}` | `reasoning: {effort: "low"/"medium"/"high"}` | doc |
-| OpenAI-compat · **GLM-5.3 / 5.3-flash** (`glm-5.3`) | — | — (cannot be disabled; the endpoint default is max) | `reasoning_effort: "low" / "high" / "max"` (+ the profile's `thinking: {type: "enabled", clear_thinking: false}`) | measured |
+| OpenAI-compat · **GLM-5.3 / 5.3-flash** (`glm-5.3`) | — | — (cannot be disabled; the endpoint default is max) | `reasoning_effort: "low" / "high" / "max"` (+ the profile's `thinking: {type: "enabled", clear_thinking: false}`); under `ROVECODE_PROFILE=off` the plain OpenAI word goes instead — that A/B is what the switch is for | measured |
 | OpenAI-compat · **GLM 4.5 – 5.x** other than 5.3 (`glm`) | — | `thinking: {type: "disabled"}` | `thinking: {type: "enabled"}` (no levels) | doc |
 | OpenAI-compat · **DeepSeek** chat / V3.x (`deepseek`) | — | `thinking: {type: "disabled"}` | `thinking: {type: "enabled"}` (no levels) | doc |
 | OpenAI-compat · **DeepSeek** reasoner / R1 | — | — (always thinks) | — | doc |
@@ -47,7 +47,7 @@ dialect in `thinking.ts`, not the caller.
 | OpenAI-compat · **Kimi K2 instruct** | — | — (no thinking mode) | — | doc |
 | OpenAI-compat · **Gemini** via Google's OpenAI layer (`gemini`) | — | Flash: `extra_body.google.thinking_config.thinking_budget: 0` · Pro: — (minimum budget) | `reasoning_effort: "low"/"medium"/"high"` (Google maps to a budget) | doc |
 | OpenAI-compat · **grok-3-mini** (`grok`) | — | — | `reasoning_effort: "low" / "high" / "high"` | doc |
-| OpenAI-compat · **grok-4** and later | — | — (always reasons; rejects the field) | — | doc |
+| OpenAI-compat · **grok-4** and later, and any `-non-reasoning` variant | — | — (always reasons and rejects the field; the non-reasoning variants have no mode) | — | doc |
 | OpenAI-compat · **gpt-oss** (`gpt-oss`) | — | — (low is the floor) | `reasoning_effort: "low"/"medium"/"high"` | doc |
 | OpenAI-compat · **o1 / o3 / o4** (`openai o-series`) | — | — (cannot be disabled) | `reasoning_effort: "low"/"medium"/"high"` | doc |
 | OpenAI-compat · **gpt-5.1** and later (`openai gpt-5`) | — | `reasoning_effort: "none"` | `reasoning_effort: "low"/"medium"/"high"` | doc |

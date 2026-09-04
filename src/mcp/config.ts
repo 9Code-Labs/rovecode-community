@@ -19,7 +19,7 @@ export function fileDigest(file: string): string | undefined {
 
 /** the one line an untrusted project file gets — names the file, the count, the review and the approval command */
 export function untrustedNote(file: string, count: number): string {
-  return `${file}: not trusted on this machine — its ${count} MCP server${count === 1 ? "" : "s"} stay off (they would run commands from this repo). Review: rovecode mcp show --project · approve: rovecode mcp trust`;
+  return `${file}: not trusted on this machine — its ${count} MCP server${count === 1 ? "" : "s"} stay off (they would run commands from this repo). Review: rovecode mcp show · approve: rovecode mcp trust`;
 }
 
 /** where each scope's file lives; the market's `add`/`remove` write exactly these */

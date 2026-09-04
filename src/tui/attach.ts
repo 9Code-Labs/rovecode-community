@@ -31,7 +31,7 @@ import type { Renderer, SlashCommand } from "./renderer.ts";
 /** The TUI_COMMANDS entry (/help, palette, custom-command reserved names). */
 export const ATTACH_COMMAND: SlashCommand = {
   name: "attach",
-  description: "Attach an image to your next message (text required): /attach <path> · /attach = list · /attach clear",
+  description: "Attach an image to your next message (text required): /attach <path> · /attach = list · /attach clear · or drag an image file onto the terminal",
 };
 
 export interface AttachCtx {

@@ -8,16 +8,20 @@ OpenHands) — every port traces to file:line in a snapshotted source and lands 
 fresh-context critic verifies it against a pre-written bar (ledger: `PORTS.md`, kept outside this
 repository for now).
 
-## Status (2026-09-02, post wave 3)
+## Status (2026-09-04, post wave 4)
 
 - **All 20 BLUEPRINT §3 ports landed** (P1 8/8 · P2 6/6 · P3 4/4 · P4 2/2) **+ all 19 Wave-3 parity ports (#21–#39)** landed
   through the gauntlet-loop (builder → fresh-context critic → fix wave → re-verify; ledger: `PORTS.md`)
-- **Tests**: 1574 pass / 0 fail / 1 skip (109 files, unit + integration; run in ≤4-file chunks)
+- **Tests**: 1901 pass / 0 fail / 1 skip (146 files, unit + integration; run in ≤4-file chunks)
 - **Gauntlet**: 10/10 (basic, coding, failure-recovery, adversarial: loop-guard, huge-output, permission-bypass)
 - **Typecheck**: 0 errors · TUI render smoke: PASS
 - **Wave 4**: the sextant surface (`src/sextant/*`, the new default TUI ported from the user's prototype) is merged —
-  core, model/panels, code/messages, input, pet, crew board and the renderer integration; the last row (#47 external
-  agentic-CLI lanes) is building; the pi-tui chat stays available as `--classic`
+  core, model/panels, code/messages, input, pet, crew board and the renderer integration; external agentic-CLI
+  lanes (#47) are not implemented in this repository; the pi-tui chat stays available as `--classic`
+- **After wave 4**, five surfaces landed that the ports ledger does not cover: the plugin format (`src/plugins`),
+  the MCP market and its project trust gate (`src/mcp`), the interface-design protocol (`src/design`,
+  `docs/design.md`), three permission tiers (ask first · accept edits · auto) and model profiles
+  (`src/providers/profiles.ts`)
 
 ## Install
 
@@ -44,14 +48,17 @@ reinstall to update).
 ```bash
 rovecode connect                # connect a model, step by step: pick a provider, paste the key (hidden), one test call
 rovecode connect anthropic      # the same in one line — see Providers for the flags (rovecode setup = the wizard)
-rovecode                        # TUI chat — the sextant surface on a truecolor TTY ≥ 100×30, else the classic pi-tui chat
+rovecode                        # TUI chat — sextant on a colour TTY ≥ 100×30 (truecolor or 256), else the classic chat
 rovecode --classic              # force the classic chat; --plain = readline REPL; --pet <name> names the sextant pet
 rovecode "fix the failing test" # one-shot task
 rovecode run "<prompt>" --yolo  # one-shot in auto mode (never asks)
-rovecode --effort high          # how hard the model thinks first: off | low | medium | high (/effort in the
-                              # TUI, ROVECODE_EFFORT=…). Anthropic takes output_config.effort or a thinking
-                              # budget depending on the model — rovecode learns which from the endpoint's own
-                              # 400 and remembers it; OpenAI takes reasoning_effort. Billed as output tokens.
+rovecode --effort high          # how hard the model thinks first: auto (default) | off | low | medium | high (/effort in the
+                              # TUI, ROVECODE_EFFORT=…). auto sends no thinking field and leaves the
+                              # endpoint's own default standing. Anthropic takes output_config.effort or a
+                              # thinking budget depending on the model — rovecode learns which from the
+                              # endpoint's own 400 and remembers it; OpenAI takes reasoning_effort. Billed as
+                              # output tokens. `rovecode model show` prints what YOUR model receives per level
+                              # (docs/thinking.md).
 rovecode --accept-edits         # middle tier: writes INSIDE this folder stop asking; shell, subagents,
 /yolo --save                  # make it stick: the level is written to ~/.rovecode/settings.json and the
 /accept-edits --save --project  # next launch starts there. --project pins it to this checkout instead.
@@ -71,6 +78,7 @@ rovecode provider add <id> <url> # register any OpenAI-compatible or Anthropic e
 rovecode model                # pick from a numbered menu of every configured provider's models
 rovecode models               # just list them (* = current); alias for `model list`
 rovecode model use <provider/model>  # persist the default model directly (--project pins it to this repo)
+rovecode model show           # the model, its protocol, and the exact thinking field each --effort level sends
 rovecode trace <session-id>     # replay a session's JSONL tree
 rovecode acp                    # Agent Client Protocol v1 over stdio (Zed/JetBrains)
 rovecode serve                  # headless HTTP + SSE server (ROVECODE_PORT, loopback-only)
@@ -88,6 +96,7 @@ rovecode connect anthropic --model claude-opus-5   # pin the model too
 rovecode connect ollama --no-key             # a local server: nothing to store
 rovecode connect gw https://gw.corp/v1 --protocol anthropic --key --project   # your own endpoint
 echo "$KEY" | rovecode connect groq --key-stdin    # scripts and CI: no terminal needed
+rovecode connect gw https://gw.corp/v1 --key-env GW_TOKEN --no-test   # register only, skip the test call
 ```
 
 It registers the endpoint, stores the key, picks the model, makes one tiny real call and persists the
@@ -143,11 +152,17 @@ ROVECODE_MODEL=zai-org/glm-5.3           # model id
 ROVECODE_MODEL_DEFAULT=prov/a,prov/b     # role fallback chains (DEFAULT SMOL PLAN COMMIT TASK); advance on 429/5xx
 ```
 
-TUI slash commands: `/help /setup /status /cost /model /yolo /plan /act /rewind /sessions /resume /new
-/checkpoints /restore /skills /memory /export /todos /tasks /exit`, plus one `/name` per custom command
+TUI slash commands: `/help /setup /status /cost /model /effort /yolo /accept-edits /plan /act /rewind /tree
+/sessions /resume /new /checkpoints /restore /skills /memory /export /todos /tasks /attach /paste /mcp /exit`,
+plus one `/name` per custom command
 file in `.rovecode/commands/` (project) or `~/.rovecode/commands/` (user scope). The sextant surface adds its own
-renderer-local `/theme night|ember|contrast`, `/open <file>`, `/diff [file]`, `/focus messages|code|files`
-and `/agents` (they never reach the agent; the names are reserved against custom commands).
+renderer-local `/theme night|ember|contrast`, `/open <file>`, `/diff [file]`, `/focus messages|code|files`,
+`/agents` and `/notices` (the notification history, also `⌃b`) — they never reach the agent; the names are
+reserved against custom commands.
+
+Images: `/attach <path>` stages an image for your next message (text is still required, at most 8 per
+message, `ROVECODE_IMAGE_MAX_BYTES` caps each), `/paste` (or `⌃v`) takes the image on the clipboard, and
+dragging an image file onto the terminal attaches it directly.
 
 **The sextant surface** (wave 4, ports #40–#46 — ported from the user's own sextant v0.4.0 prototype):
 a panelled cockpit instead of a chat log — `files` (git tree with M/A/D, touched-file spinner) · `code`
@@ -164,8 +179,10 @@ beats both. After an edit the `code` panel's diff is the ONE change that landed 
 approved edit, rebuilt from the edit's own anchors after an ungated one — and falls back to a `vs HEAD`
 view (every uncommitted change) only when neither is possible. Git runs beside the frame loop: a slow
 `git status` never stalls the spinner or the keys. Keys: `⏎` send · `tab`
-complete/cycle focus · `esc esc` stop the run · `⌃c` quit (interrupts first) · `⌃k` palette · `⌃s ⌃d ⌃r ⌃a`
-code/diff/run/agents · `⌃e` files · `⌃t` theme · mouse clicks/wheel. `rovecode smoke-tui --sextant` renders a
+complete/cycle focus · `esc esc` stop the run · `⌃c` quit (interrupts first) · `⌃k`/`⌃p` palette · `⌃s` code
+(and focus it) · `⌃d` diff (press again to go back to code) · `⌃r` run output · `⌃a` agents board · `⌃e` files · `⌃o` cycle the page tabs (code/files/plan, narrow terminals) · `⌃b`
+notifications · `⌃v` paste a clipboard image · `⌃t` theme · `⌃n` new session · `⌃u` clear the prompt ·
+`⌃←`/`⌃→` word jump · mouse clicks, wheel and scrollbar drag. `rovecode smoke-tui --sextant` renders a
 160×44 frame through the real pipeline and prints PASS.
 
 ## Features beyond the 20 ports (wave 3, verified per port in `PORTS.md`)
@@ -262,7 +279,15 @@ core/tools.ts          validate → revise(hooks) → policy(deny-default, last-
 core/session.ts        append-only JSONL tree: branch=rewind, sha256 hash chain
 coding/                hashline anchored edits · repomap · lsp gate · checkpoints
 memory/                bounded blocks + versioned edits + cross-session recall
-mcp/ acp/ server/ tui/ surfaces over the same loop (no second loop generation)
+tools/                 the non-coding built-ins: task, todo, ask_user, webfetch,
+                       design, eval cell — each a Tool the registry gates
+design/                the interface-design protocol: prompt section, the
+                       design_direction record, the design_audit checker
+skills/                SKILL.md discovery + the versioned skill tools
+plugins/               plugin.json folders: tools, hooks, commands, skills, MCP
+telemetry/             OpenTelemetry spans and the OTLP exporter
+mcp/ acp/ server/ tui/ sextant/  surfaces over the same loop (no second loop
+                       generation); sextant is the default TUI, tui the --classic one
 eval/                  scripted-provider gauntlet + deterministic benches
 ```
 
@@ -272,7 +297,9 @@ Defaults < project config chunks (harvested, capped) < env < CLI flags.
 
 - `~/.rovecode/providers.json` (user) and `.rovecode/providers.json` (project) — model providers and the
   default model; see Providers below
-- `.rovecode/mcp.json` (+ harvested `.mcp.json`, + `~/.rovecode/mcp.json` for you) — MCP servers; `rovecode mcp add` writes them
+- `.rovecode/mcp.json` (+ harvested `.mcp.json`, + `~/.rovecode/mcp.json` for you) — MCP servers; `rovecode mcp add`
+  writes them. PROJECT files are gated: until you approve them (`rovecode mcp show` to review,
+  `rovecode mcp trust` to approve) their servers stay off, and any edit asks again (`docs/mcp-market.md`)
 - `.rovecode/modes.json` — per-mode model config (TUI-scoped; see limitations)
 - `.rovecode/sandbox.json` — `{"rung": "direct"|"wsl"|"docker", "dockerImage"?: "…"}` selects where `bash` runs (#27);
   `ROVECODE_SANDBOX=<rung>` / `ROVECODE_SANDBOX_IMAGE=<image>` override it; default `direct`
@@ -280,8 +307,12 @@ Defaults < project config chunks (harvested, capped) < env < CLI flags.
   `ROVECODE_HOME`-aware) is scanned first and shadowed by the project's (#30)
 - `.rovecode/profiles/<id>.md` (project) / `~/.rovecode/profiles/<id>.md` (user) — replaces a model profile's
   prompt section (see Model profiles below); `ROVECODE_PROFILE=off|<id>` turns profiles off or forces one
+- `.rovecode/design.json` — the interface-design direction this project chose; written by `design_direction`,
+  checked by `design_audit` (`ROVECODE_DESIGN=off` drops the prompt section). See `docs/design.md`
+- `.rovecode/settings.json` (project) / `~/.rovecode/settings.json` (user) — the persisted permission level,
+  written by `/yolo --save` and `/accept-edits --save [--project]`
 - `.rovecode/` also holds sessions (each with its `todos.json`), checkpoints, repo-map cache
-- Permission rules: deny-by-default, last-match wildcard (`file.read/write`, `shell.exec`, `spawn`, `memory.write`, `net.fetch`, `tool.*`). Two permission modes, as the screen names them: **ask first** (default — I ask before every write, shell command and subagent) and **auto (never asks)** (`--yolo` / `ROVECODE_YOLO=1` / `/yolo` in the TUI); auto skips the prompts, never the deny rules or plan mode
+- Permission rules: deny-by-default, last-match wildcard (`file.read/write`, `shell.exec`, `spawn`, `memory.write`, `net.fetch`, `tool.*`). Three permission levels, as the screen names them: **ask first** (default — I ask before every write, shell command and subagent), **accept edits** (`--accept-edits` / `ROVECODE_ACCEPT_EDITS=1` / `/accept-edits` — writes inside this folder stop asking; shell, subagents, network and writes outside it still ask) and **auto (never asks)** (`--yolo` / `ROVECODE_YOLO=1` / `/yolo` in the TUI). `ROVECODE_PERMISSION=ask|accept-edits|auto` sets the level a run starts at; auto skips the prompts, never the deny rules or plan mode
 - `.rovecode/hooks.ts` (+ `~/.rovecode/hooks.ts`, `ROVECODE_HOME`-aware) — typed hook set (#29; see Extending → Hooks);
   `ROVECODE_NO_HOOKS=1` skips the files, `ROVECODE_HOOK_TIMEOUT_MS` bounds every call
 
@@ -326,7 +357,7 @@ one shape:
   [--save]`; agent tools `provider_list` (kind read: list/models/test) and `provider_edit` (kind custom →
   `tool.provider_edit`, prompted in ask-first mode, denied in plan mode; add/remove/use; refuses API keys).
 
-Environment knobs (`rovecode help` prints the same list):
+Environment knobs (`rovecode help env` is the full reference; this list is the commentary):
 
 - `ROVECODE_BASE_URL` / `ROVECODE_API_KEY` — any OpenAI-compatible or Anthropic endpoint; always wins over stored and named keys
 - `ROVECODE_MODEL` — model id (beats the providers.json `default`); `ROVECODE_MODEL_<ROLE>` — fallback chain per role
@@ -345,16 +376,23 @@ Environment knobs (`rovecode help` prints the same list):
 - `ROVECODE_REFLECTION=0` disables the reflection nudges; `ROVECODE_REFLECTION_MAX` (default 2) caps them per run (#28)
 - `ROVECODE_SANDBOX` / `ROVECODE_SANDBOX_IMAGE` — executor rung for `bash` and the docker image (#27)
 - `--output text|json|ndjson` (flag, `rovecode run` only) — output mode (#35); `ROVECODE_YOLO=1` — allow all tool actions;
-  `ROVECODE_STREAM` — streaming is ON by default for both protocols; `off`/`json` falls back to the one-shot
-  JSON adapters (a proxy with no SSE route), `sse` still means "stream"; `ROVECODE_HOME` — credentials +
-  user-scope commands dir (default `~/.rovecode`)
+  `ROVECODE_STREAM` — streaming is ON by default for both protocols; `off`/`json`/`0`/`false`/`none` fall back
+  to the one-shot JSON adapters (a proxy with no SSE route); `sse` selects the raw OpenAI-compatible SSE
+  adapter for `rovecode run` — still streaming, but without the text-tool-call middleware wrap;
+  `ROVECODE_HOME` — credentials + user-scope commands dir (default `~/.rovecode`)
 - `ROVECODE_TUI=sextant|classic` — force the TUI surface (#44; sextant still needs a TTY of at least 40×12,
   `--classic` wins); `ROVECODE_THEME=night|ember|contrast` — the sextant palette at boot (`/theme` switches it
   live); `ROVECODE_PET=0` — hide the sextant pet panel (`--pet <name>` renames it); the surface picks itself
   at ≥ 100×30 cells with truecolor or a 256-color `TERM` — below that, or on a pipe, `rovecode` opens the
   classic pi-tui chat
-- Kill switches / budgets: `ROVECODE_NO_CHECKPOINTS=1`, `ROVECODE_NO_REPOMAP=1`, `ROVECODE_REPOMAP_TOKENS`,
-  `ROVECODE_NO_TOOL_MIDDLEWARE=1`, `ROVECODE_TOOL_MIDDLEWARE=1`, `ROVECODE_EVAL_CELL=1`
+- `ROVECODE_DESIGN=off` — drop the interface-design section from the system prompt (for runs with no UI in
+  them). Otherwise every run carries it: propose three distinct directions before the first UI in a project,
+  let the human choose, record it with `design_direction`, then build to it. See `docs/design.md`
+- `ROVECODE_IMAGE_MAX_BYTES` (default 5 MB) — per-image cap for pasted (`⌃v`) and attached (`/attach`) images;
+  at most 8 images ride on one message, and an oversized one is refused by name rather than dropped
+- Kill switches / budgets: `ROVECODE_NO_CHECKPOINTS=1`, `ROVECODE_NO_REPOMAP=1`, `ROVECODE_REPOMAP_TOKENS`
+  (default 1024), `ROVECODE_NO_TOOL_MIDDLEWARE=1`, `ROVECODE_TOOL_MIDDLEWARE=1`, `ROVECODE_EVAL_CELL=1`,
+  `ROVECODE_NO_PLUGINS=1`, `ROVECODE_PLUGIN_TIMEOUT_MS` (default 5000, per plugin import + `tools()`)
 
 ### Model profiles
 
@@ -496,11 +534,19 @@ tokens, cache hits, and catalog-priced spend.
   `.rovecode/mcp.json`); loaded once per process, restart to pick up edits; `ROVECODE_NO_HOOKS=1` skips the files.
   The programmatic `ExtensionHooks.reviseToolArgs` still rewrites args before policy + approval (approval
   sees revised args).
-- **MCP** (`src/mcp`, `docs/mcp-market.md`): `rovecode mcp search|info|add|remove|list` and `/mcp` in the TUI install servers
-  from a curated shelf and the official registry — the exact command/URL, publisher and version are shown before a yes,
-  keys are asked masked by name and written as values only to `~/.rovecode/mcp.json` (a `--project` file gets `${NAME}`).
-  Servers live in `~/.rovecode/mcp.json` < `.mcp.json` < `.rovecode/mcp.json`; tools arrive lazily through
-  `mcp_list`/`mcp_call` under the same policy pipeline.
+- **MCP** (`src/mcp`, `docs/mcp-market.md`): `rovecode mcp search|info|add|remove|list|show|trust|untrust` and `/mcp`
+  in the TUI install servers from a curated shelf and the official registry — the exact command/URL, publisher and
+  version are shown before a yes, keys are asked masked by name and written as values only to `~/.rovecode/mcp.json`
+  (a `--project` file gets `${NAME}`). Servers live in `~/.rovecode/mcp.json` < `.mcp.json` < `.rovecode/mcp.json`;
+  tools arrive lazily through `mcp_list`/`mcp_call` under the same policy pipeline. A server a **repository** brings
+  with it is listed but never connected until you trust it: `mcp show` prints every configured file and what it would
+  run, `mcp trust` records the project files' content digest in your home (`--yes` to skip the prompt; an edit to
+  either file asks again) and `mcp untrust` revokes it. User-scope servers need no gate.
+- **Interface design** (`src/design`, `docs/design.md`): no default palette, typeface or layout ships — instead a
+  protocol (propose three distinct directions, the human picks, `design_direction` records it in
+  `.rovecode/design.json`) and `design_audit`, which counts template patterns in source and reports them as
+  *slop* only while nothing is recorded, or as *deviation* from what the project chose. `ROVECODE_DESIGN=off`
+  drops the section for runs with no UI in them.
 
 ## License & notices
 
@@ -513,9 +559,15 @@ Third-party attributions (Apache-2.0 NOTICE entries + MIT credits): `THIRD_PARTY
 (shipped in the npm tarball). No code from crush (FSL), claw-code, nanocoder, iflow, or the Claude
 Agent SDK.
 
-## Roadmap (wave 3, `PORTS.md` §Wave-3)
+## What wave 3 added (`PORTS.md` §Wave-3)
 
-Ports #21–#39: mid-turn cancellation, first-class grep/glob/ls tools, retry-with-backoff,
-approval diff previews, compaction v2, background subagents, sandbox rung config, reflection
-retries, hooks v2, custom slash commands, web fetch, todo/ask_user tools, image input,
+Landed, not planned. Ports #21–#39: mid-turn cancellation, first-class grep/glob/ls tools,
+retry-with-backoff, approval diff previews, compaction v2, background subagents, sandbox rung config,
+reflection retries, hooks v2, custom slash commands, web fetch, todo/ask_user tools, image input,
 JSON/NDJSON output modes, session export, OTel spans.
+
+### Not built
+
+- **#47 external agentic-CLI lanes** — the one wave-4 row that was never implemented here
+- **Publishing**: no npm package; the binary is built locally (see Known limitations)
+- **Linux/macOS CI**: POSIX paths are exercised in tests, but only Windows is gated

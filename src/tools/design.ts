@@ -41,7 +41,7 @@ export function designAuditTool(): Tool {
         properties: {
           files: { type: "array", items: { type: "string" }, description: "paths inside the project to audit (html/css/jsx/tsx/vue/svelte)" },
           source: { type: "string", description: "audit this markup/CSS directly instead of reading files" },
-          ignore: { type: "array", items: { type: "string" }, description: "rule ids to skip, e.g. all-square" },
+          ignore: { type: "array", items: { type: "string" }, description: "rule ids to skip (the full table is in docs/design.md): cliche-font, font-deviation, cliche-accent-amber, accent-deviation, template-grid, template-icons, reflex-hero, cliche-gradient, off-palette, decoration-density, rule-line-density, everything-centered, all-square" },
         },
       },
     },
@@ -86,7 +86,7 @@ export function designDirectionTool(): Tool {
     schema: {
       name: "design_direction",
       description:
-        "Read or record this project's design direction (.rovecode/design.json). `get` returns the recorded direction, or says none is recorded. `set` records the direction THE HUMAN CHOSE after you proposed two or three — do not call it with a direction you picked yourself. Recording it is what makes the choice a once-per-project question and lets design_audit check later screens for consistency.",
+        "Read or record this project's design direction (.rovecode/design.json). `get` returns the recorded direction, or says none is recorded. `set` records the direction THE HUMAN CHOSE after you proposed three — do not call it with a direction you picked yourself. Recording it is what makes the choice a once-per-project question and lets design_audit check later screens for consistency.",
       args: {
         type: "object",
         properties: {
@@ -115,7 +115,7 @@ export function designDirectionTool(): Tool {
       if (a["action"] === "get") {
         const d = loadDirection(ctx.cwd);
         return d === null
-          ? { ok: true, output: `No design direction recorded for this project (${designPath(ctx.cwd)} does not exist). Propose two or three directions and let the human choose before writing UI.` }
+          ? { ok: true, output: `No design direction recorded for this project (${designPath(ctx.cwd)} does not exist). Propose three distinct directions and let the human choose before writing UI.` }
           : { ok: true, output: renderDirection(d), data: d };
       }
       if (a["action"] !== "set") return { ok: false, output: "design_direction: action must be \"get\" or \"set\"." };

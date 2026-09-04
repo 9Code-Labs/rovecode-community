@@ -35,14 +35,17 @@ safety
   plan mode (/plan in the TUI)  read-only: I can look and plan, not change anything
 
 more
-  rovecode help env               every ROVECODE_* setting
-  rovecode help advanced          acp · serve · gauntlet · bench · trace · tools · smoke-tui · output modes · sandbox
+  rovecode help env               every ROVECODE_* setting (incl. the bash sandbox rungs)
+  rovecode help advanced          acp · serve · gauntlet · bench · trace · tools · smoke-tui · output modes
   rovecode help all               everything on one page`;
 
 const ADVANCED = `advanced — the full command reference
   rovecode                      interactive TUI chat — the sextant surface (files · code · messages · plan · usage · pet)
-                            on a truecolor TTY of at least 100x30, else the classic pi-tui chat;
+                            on a colour TTY of at least 100x30 (truecolor, or 256 colours through the
+                            quantizer), else the classic pi-tui chat;
                             --classic forces the classic chat · --pet <name> names the pet · --plain = readline REPL
+  rovecode chat · rovecode repl  the same as bare rovecode (repl still needs --plain for the readline REPL)
+  rovecode --help | -h          this help (only with no command in front of it) · rovecode --version prints the version
   rovecode --resume <id>        open the TUI resuming a session (full id or unique prefix)
   rovecode "prompt"             one-shot task (same as run)
   rovecode setup                connect a model step by step (TTY only; piped stdin prints the recipe and exits 2)
@@ -80,15 +83,18 @@ const ADVANCED = `advanced — the full command reference
   rovecode plugin remove|enable|disable|untrust|show <name>   (docs/plugins.md; restart to load — read once per process, like hooks)
   rovecode mcp search [query]   MCP servers to install: the curated shelf, then the official registry (cached a day)
   rovecode mcp info <name>      publisher, version, the exact command or URL, the keys it asks for
-  rovecode mcp add <name> [--project] [--pick N] [--yes]  show the plan, ask for keys masked, write ~/.rovecode/mcp.json (or .rovecode/mcp.json)
+  rovecode mcp add <name> [--project] [--pick N] [--as <name>] [--yes] [--force]  show the plan, ask for keys
+                            masked, write ~/.rovecode/mcp.json (or .rovecode/mcp.json); --as renames it, --force replaces an entry
   rovecode mcp remove <name> [--project] · rovecode mcp list   (docs/mcp-market.md; /mcp does the same inside the TUI)
-  rovecode mcp show --project   this repo's .rovecode/mcp.json + .mcp.json: exact commands/URLs, env names, trusted or not
-  rovecode mcp trust            approve those files as they are now — until then nothing in them loads; your own add --project is trusted as you approve it
+  rovecode mcp show             this repo's .rovecode/mcp.json + .mcp.json: exact commands/URLs, env names, trusted or not
+  rovecode mcp trust [--yes] · rovecode mcp untrust   approve those files as they are now, or withdraw that
+                            approval — until trusted nothing in them loads; your own add --project is trusted as you approve it
   rovecode auth set <provider> [--key <name>]  store an API key (prompts on stdin; ~/.rovecode/credentials.json)
   rovecode auth list            stored providers + key names (values redacted)
   rovecode auth remove <provider>  delete a stored credential
   rovecode provider list [--all]  providers with a key + every providers.json entry, and the default provider/model
-  rovecode provider add <id> <baseUrl> [--protocol openai|anthropic] [--key-env NAME] [--model <id>] [--no-key] [--project] [--key]
+  rovecode provider add <id> <baseUrl> [--protocol openai|anthropic] [--key-env NAME] [--model <id>] [--no-key]
+                              [--project | --user | --scope user|project] [--key]
                               register any OpenAI-compatible or Anthropic endpoint in ~/.rovecode/providers.json
                               (--project: ./.rovecode/providers.json); --key prompts for the secret (never echoed);
                               running TUIs/servers pick the change up live — no restart
@@ -99,7 +105,9 @@ const ADVANCED = `advanced — the full command reference
   rovecode model              no arguments on a terminal: every configured provider's models in one
                             numbered menu, the current one first; a pipe gets the usage line instead
   rovecode model use <provider/model> [--project]  persist the default (in the TUI: /model <provider/model> --save)
-  rovecode trace <session-id>   print session tree events (JSONL)
+  rovecode model show [provider/model]  the model, its protocol, and the exact thinking field each /effort
+                            level puts on the wire (docs/thinking.md)
+  rovecode trace <session-id>   the session's messages, one line each (role · first 120 chars · tool-call count)
   rovecode export <session>     write a session as markdown (--json: raw JSONL copy; --out <path>; --force)
   rovecode eval                 alias for gauntlet
   rovecode acp                  Agent Client Protocol v1 endpoint over stdio (Zed/JetBrains)
@@ -112,7 +120,8 @@ const ENV = `env — every ROVECODE_* setting
   ROVECODE_MODEL_<ROLE>  role fallback chain, comma-separated provider/model list; on 429/5xx
                   the next candidate serves. Roles: DEFAULT SMOL PLAN COMMIT TASK
                   (e.g. ROVECODE_MODEL_DEFAULT=kaesra/zai-org/glm-5.3-flash,openai/gpt-4o-mini)
-  ROVECODE_STREAM     streaming is on by default (both protocols); =off|json uses the one-shot JSON adapters
+  ROVECODE_STREAM     streaming is on by default (both protocols); off|json|0|false|none use the one-shot JSON
+                    adapters; sse forces the raw SSE adapter, without the tool-call middleware, for one-shot runs
   ROVECODE_EFFORT     auto|off|low|medium|high thinking before the answer (default auto: the provider's
                     own default stands). Anthropic gets output_config.effort or a thinking budget,
                     whichever the model takes (learned from its own 400, then remembered); OpenAI gets
@@ -125,7 +134,7 @@ const ENV = `env — every ROVECODE_* setting
                     max, medium rounds up to high, high means max — and tool_stream when streaming). The text
                     comes from .rovecode/profiles/<id>.md (project) or ~/.rovecode/profiles/<id>.md when present.
   ROVECODE_DESIGN     off drops the interface-design section from the system prompt (for runs with no UI in
-                    them). Otherwise every run carries it: propose two or three directions before the first
+                    them). Otherwise every run carries it: propose three distinct directions before the first
                     UI in a project, let the human choose, record it with design_direction, then build to it.
                     The section prescribes NO palette, typeface or layout -- there is no default look, on
                     purpose -- and names the patterns to climb out of (amber accents, the reflex full-viewport
@@ -151,6 +160,17 @@ const ENV = `env — every ROVECODE_* setting
   ROVECODE_OTEL_ENDPOINT  OTLP/HTTP collector, e.g. http://host:4318 — one trace per run (run ⊃ turn ⊃ tool); unset = off
   ROVECODE_OTEL_HEADERS  extra OTLP headers as k=v,k2=v2 (e.g. authorization=Bearer …)
   ROVECODE_REFLECTION=0  disable reflection nudges after failed edits; ROVECODE_REFLECTION_MAX caps them per run (default 2)
+  ROVECODE_PORT       port for rovecode serve (default 4100; loopback-only)
+  ROVECODE_IMAGE_MAX_BYTES  per-image cap in bytes for pasted and attached images (default 5 MB;
+                    at most 8 images per message). Over it, the image is refused by name, not silently dropped.
+  ROVECODE_REPOMAP_TOKENS  repo-map budget in tokens (default 1024); ROVECODE_NO_REPOMAP=1 drops the map entirely
+  ROVECODE_HOOK_TIMEOUT_MS  per-hook-call budget in ms (default 5000); ROVECODE_NO_HOOKS=1 skips hook files
+  ROVECODE_PLUGIN_TIMEOUT_MS  per-plugin import + tools() budget in ms (default 5000);
+                    ROVECODE_NO_PLUGINS=1 skips plugin discovery
+  ROVECODE_NO_CHECKPOINTS=1  turn off the shadow-git checkpoints taken after mutating tools
+  ROVECODE_TOOL_MIDDLEWARE=1  force the text tool-call protocol (a prompt block + a parser) even for a model
+                    the catalog says has native tool calling; ROVECODE_NO_TOOL_MIDDLEWARE=1 forces native only
+  ROVECODE_EVAL_CELL=1  register the persistent eval cell tool (a REPL that keeps state between calls)
   ROVECODE_HOME       credentials + user-scope providers/commands dir (default ~/.rovecode)
 providers: built in — kaesra openai anthropic deepseek groq openrouter ollama lmstudio
             together mistral cerebras fireworks perplexity xai moondream vllm

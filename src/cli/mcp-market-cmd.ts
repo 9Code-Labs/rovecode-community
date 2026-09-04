@@ -166,7 +166,7 @@ export async function cmdMcp(args: string[], deps: McpCliDeps = {}): Promise<num
         trusted = writeServer(plan.file, plan.name, fillPlan(plan, answers), { replace: flag(rest, "--force"), ...(scope === "project" ? { trustHome: home } : {}) }).trusted;
       } catch (e) { err(e instanceof Error ? e.message : String(e)); return 1; }
       out(`added "${plan.name}" → ${plan.file}${trusted === true ? "  (trusted on this machine as written)" : ""}`);
-      if (trusted === false) out(`NOT trusted yet: that file already held servers you have not approved — rovecode mcp show --project, then rovecode mcp trust`);
+      if (trusted === false) out(`NOT trusted yet: that file already held servers you have not approved — rovecode mcp show, then rovecode mcp trust`);
       if (plan.pending.length) out(`fill in before use: ${plan.pending.join(", ")} (edit the args in that file)`);
       if (plan.scope === "project" && plan.asks.some((a) => a.secret)) out(`set ${plan.asks.filter((a) => a.secret).map((a) => a.name).join(", ")} in your environment — the project file only names them`);
       out("restart rovecode to connect (servers are read once per process)");

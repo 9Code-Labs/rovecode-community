@@ -12,7 +12,7 @@ Every contribution lands on a seam that exists already and is governed the same 
 | hooks | `entry` → `hooks` | `HookRunner.add()` | timeout-bounded, isolated; can only deny, never un-deny (core/hooks.ts) |
 | commands | `commands` | `tui/commands.ts` loader | same `*.md` format as `.rovecode/commands`; built-in names win |
 | skills | `skills` | `skills/index.ts` store | same `SKILL.md` format; project scope wins on a name clash |
-| MCP servers | `mcp` | `loadMcpConfig` | same entry shape as `.rovecode/mcp.json`; lazy connect |
+| MCP servers | `mcp` | `loadMcpConfig` | same entry shape as `.rovecode/mcp.json`; lazy connect. On a name clash the first plugin to declare it wins, and an `mcp.json` entry of that name overrides the plugin's — both are warned |
 
 ## Layout
 
@@ -40,8 +40,10 @@ my-plugin/
 ```
 
 - `api` is a hard gate: anything but `1` skips the plugin with a warning naming the version (the
-  hooks.ts rule). `name` is `[a-z0-9-]`, ≤ 64, and is the plugin's identity — it should equal the
-  folder name. Paths are relative and may not leave the folder.
+  hooks.ts rule). `name` is `[a-z0-9-]`, ≤ 64, must start alphanumeric, and is the plugin's identity —
+  it should equal the folder name. A non-empty `version` (trimmed, capped at 40 chars) is a hard
+  requirement too: a manifest missing either is `broken` and contributes nothing, the same class of
+  failure as a wrong `api`. Paths are relative and may not leave the folder.
 - Unknown fields are warned about and ignored; a bad `skills` path costs the skills, not the plugin.
 
 The entry module:
@@ -76,6 +78,9 @@ Mirror the shapes (they are small); `api` versions them.
   Any later change to any file in it (a `git pull`) puts it back to `untrusted` and asks again. The
   record lives in your home, never in the repository — a repo cannot trust itself.
   `rovecode plugin add <folder> --project` installs *and* trusts, because you ran it.
+- **The same name in both scopes**: the *project* copy shadows the user copy (the commands loader's
+  rule), and discovery warns `plugin "<name>" shadows <user dir> (project over user)`. The user copy
+  does not load.
 - `rovecode plugin disable <name>` / `enable` switch a plugin off/on in every scope.
 - `ROVECODE_NO_PLUGINS=1` skips discovery entirely (the `ROVECODE_NO_HOOKS` idiom).
 - Plugins are read **once per process**, like hooks: restart rovecode after `add`, `trust`, `enable`.
@@ -94,8 +99,16 @@ rovecode plugin trust|untrust <name>
 rovecode plugin show <name>
 ```
 
-Boot transcript line: `plugins: 2 active (safety-net, notes) · 1 untrusted (acme)`; loader warnings
-are echoed the way hook warnings are.
+Aliases: `ls` = `list` (also what bare `rovecode plugin` does), `rm` = `remove`, `info` = `show`;
+`rovecode plugin help` prints the usage. A usage error exits 2, a failed operation exits 1.
+
+`add` copies the folder **without** `node_modules` and `.git` — a plugin's entry module has to run on
+rovecode's own runtime with no installed dependencies of its own. One that works from its source folder
+and then fails with `Cannot find module` after `plugin add` is hitting this.
+
+Loader warnings are echoed at boot the way hook warnings are (`plugins: <warning>`). There is no summary
+line today: `summarizePlugins()` in `src/plugins/index.ts` renders
+`plugins: 2 active (safety-net, notes) · 1 untrusted (acme)`, but nothing in `src/` calls it yet.
 
 ## Failure model
 

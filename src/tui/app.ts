@@ -66,7 +66,7 @@ export const TUI_COMMANDS: SlashCommand[] = [
   { name: "help", description: "This list, by topic", group: "start here" },
   CONNECT_COMMAND, // providers-cmd.ts: /connect — bare it is /setup; with an id it takes the answers on the line
   SETUP_COMMAND, // providers-cmd.ts: /setup — pick a provider, name the model, hand over the key, one test call
-  { name: "exit", description: "Quit (Ctrl+C does the same)", group: "start here" },
+  { name: "exit", description: "Quit (alias /quit; Ctrl+C does the same)", group: "start here" },
   { name: "new", description: "Start over in this session (branch back to the beginning)", group: "session" },
   { name: "sessions", description: "Pick an earlier session to continue", group: "session" },
   { name: "resume", description: "Continue a session by id: /resume <id>", group: "session" },

@@ -16,6 +16,10 @@ Three files, most local wins on a name clash (`src/mcp/config.ts loadMcpConfig`)
 
 Format is the claude-code map: `{ "mcpServers": { "<name>": { "command", "args", "env" } | { "type": "http", "url", "headers" } } }`.
 Any value in `args`, `env`, `headers` or `url` may say `${NAME}`; the loader fills it from the environment at launch.
+Rovecode also reads its own array form `{ "servers": [{ "name", … }] }` in the same file (array entries are
+appended after the map entries), accepts `transport` as a synonym for `type` (`stdio` · `http` ·
+`streamable-http`; an `sse` entry is skipped with a warning), and honours `"enabled": false` to keep an entry
+in the file but out of the run — `mcp list` shows it as `(disabled)`.
 An unset `${NAME}` **skips that server with a warning** instead of starting it with an empty key.
 
 Servers are read once per process — restart rovecode after `add`/`remove`.
@@ -41,15 +45,19 @@ server: { name "io.github.owner/repo", description, title?, version, repository?
 _meta["io.modelcontextprotocol.registry/official"]: { status active|deprecated|deleted, isLatest, publishedAt, … }
 ```
 
-Note `search=` matches the **server name** only, not the description — `rovecode mcp search postgres` finds
+A query shorter than two characters (and the empty query) is answered from the curated shelf only — the
+registry is never asked, and nothing says so. Note `search=` matches the **server name** only, not the description — `rovecode mcp search postgres` finds
 `io.github.x/postgres-mcp` but not a server described as "PostgreSQL access" under another name.
 
 Registry answers are **untrusted data**. `market.ts` re-types every field, cuts strings (300 chars, descriptions
 500), caps lists (32 args/env, 8 packages, 100 servers a page, 2 MB a body), refuses a `runtimeHint` that is not
 a bare command name, drops `deleted` listings and keeps `deprecated` ones *with* the status shown, and never
 evaluates anything. Package → launch line: npm → `npx -y <id>@<version>`, pypi → `uvx <id>==<version>`,
-oci → `docker run -i --rm -e NAME… <id>:<version>` (variables ride the environment, never argv); nuget/mcpb and
-`sse` remotes are refused with a note. A required argument the registry cannot fill (a directory, a database
+oci → `docker run -i --rm -e NAME… <id>:<version>` (variables ride the environment, never argv) — the version
+is appended only when the registry gives one that is not `latest`, otherwise the bare identifier is launched,
+and a `runtimeHint` that is a bare command name replaces `npx`/`uvx`/`docker`. nuget/mcpb packages are refused
+with a note; an `sse` remote is dropped **silently** (that path has no notes channel) and only shows up as
+`<name> lists nothing rovecode can launch or connect to`. A required argument the registry cannot fill (a directory, a database
 URL) is listed as `needs …` in the plan and left for you to add in the file.
 
 Responses are cached under `~/.rovecode/cache/mcp-market.json` for a day (40 most recent queries). With the
@@ -63,7 +71,11 @@ rovecode mcp search [query]        curated rows first, then the registry's name 
 rovecode mcp info <name>           publisher, version, status, every launch form, the env names it asks for
 rovecode mcp add <name> [--project] [--pick N] [--as <name>] [--yes] [--force]
 rovecode mcp remove <name> [--project]
-rovecode mcp list                  every configured server with its file
+rovecode mcp list                  every configured server with its scope (user · harvest · project), and for
+                                   project files whether they are trusted
+rovecode mcp show                  each project file, its trust, its servers (env NAMES only)
+rovecode mcp trust [--yes]         approve this repo's .rovecode/mcp.json and .mcp.json as they are now
+rovecode mcp untrust               withdraw that approval
 ```
 
 `add` in order: (1) prints the **plan** — title, version, status, source, publisher, repo, the exact `runs …`
@@ -87,8 +99,9 @@ titled `mcp market · <query>` over the curated shelf plus the registry's matche
 forms gets one more pick (`<title> · how`); then the **approval card** (`Renderer.askApproval`) with the one line
 that runs as the preview and the whole plan as the detail. Any yes writes; deny or Esc writes nothing.
 
-The TUI has **no masked input, so it never asks for a secret**: every asked value is written as `${NAME}` and the
-closing note lists the names to set before the restart — or says to run `rovecode mcp add <name>` on a shell,
+The TUI has **no masked input, so it never asks for a secret**: every **required** asked value is written as
+`${NAME}` — optional ones are left out of the written entry altogether, so if you want one you must add it to
+the file by hand. The closing note lists every name it asked about (including those optional ones) to set before the restart — or says to run `rovecode mcp add <name>` on a shell,
 where the prompt is masked. Nothing typed into the TUI's prompt ever becomes a key.
 
 ## Trust: project files pass the same gate as project plugins
@@ -99,7 +112,7 @@ on this machine; until then they contribute **nothing** — no server, no `mcp_l
 carries one warning per file:
 
 ```
-mcp: /path/.rovecode/mcp.json: not trusted on this machine — its 2 MCP servers stay off (they would run commands from this repo). Review: rovecode mcp show --project · approve: rovecode mcp trust
+mcp: /path/.rovecode/mcp.json: not trusted on this machine — its 2 MCP servers stay off (they would run commands from this repo). Review: rovecode mcp show · approve: rovecode mcp trust
 ```
 
 - **Store**: the plugin trust store, `~/.rovecode/plugins.json` → `trusted`, keyed by the file's absolute path,
@@ -111,7 +124,7 @@ mcp: /path/.rovecode/mcp.json: not trusted on this machine — its 2 MCP servers
   when the file was already trusted or held no other server. Adding into a cloned file that still holds
   unapproved strangers writes the entry and says `NOT trusted yet`, pointing at `show`/`trust`; it never blesses
   what you did not see. `remove --project` keeps a trusted file trusted.
-- **Manual path**: `rovecode mcp show --project` prints each project file, its trust, and every server with the
+- **Manual path**: `rovecode mcp show` prints each project file, its trust, and every server with the
   exact command/URL and the env/header **names** (never values); `rovecode mcp trust [--yes]` approves both
   files as they are now after showing them (no TTY + no `--yes` → nothing); `rovecode mcp untrust` undoes.
   In the TUI `/mcp trust` raises one approval card per file (the file as the preview, its servers as the detail).

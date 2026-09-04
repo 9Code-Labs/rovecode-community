@@ -4,6 +4,11 @@
 
 # Past the Ban List: How rovecode Can Say What Good Looks Like
 
+> **Status: historical.** Measured against `src/design/{rules,audit,direction}.ts` at commit f661b70.
+> `audit.ts` has since been reworked along these lines — 13 rules, the slop/deviation split, OKLCH hue
+> families, page and project scoping — so the counts and the worked failures below describe the code
+> *before* the rework, not what ships. For shipped behaviour see [design.md](design.md).
+
 Rovecode's design system today is a negation. `src/design/rules.ts` names eleven things not to do and `src/design/audit.ts` greps for eight of them. The evidence says this is aimed at the wrong layer and fights the model's weakest capability. The single top recommendation: stop widening the ban list and widen what `.rovecode/design.json` RECORDS, then derive the whole visual system deterministically from the one or two values the human actually chose. An unspecified requirement is inferred correctly only 41.1% of the time ([Yang et al.](https://arxiv.org/abs/2505.13360)), so every axis the direction file leaves blank (section order, hero pattern, type scale, density, motion, copy register, contrast pairs) regresses to the training mode on every single call. Fill those axes with human-picked values, derive tokens from the human's seed hex, emit them as a Tailwind v4 `@theme` block so that off-direction utilities do not resolve at all, and collapse every SLOP check in the audit into a DEVIATION check conditional on that record. That respects the hard constraint by construction: rovecode ships budgets, role contracts and derivation functions, never a colour or a face.
 
 ## 1. Why models produce slop design

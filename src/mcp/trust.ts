@@ -42,7 +42,7 @@ export function untrustMcpFile(home: string, file: string): boolean {
   return had;
 }
 
-/** the project files that exist in this checkout — what `mcp trust` / `mcp show --project` act on */
+/** the project files that exist in this checkout — what `mcp trust` / `mcp show` act on */
 export function projectMcpFiles(cwd: string): string[] {
   const f = mcpConfigFiles(cwd);
   return [f.harvest, f.project].filter((p) => existsSync(p));

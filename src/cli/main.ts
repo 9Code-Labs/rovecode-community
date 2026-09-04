@@ -437,7 +437,8 @@ const rIx = process.argv.indexOf("--resume");
 const rArg = rIx !== -1 ? process.argv[rIx + 1] : undefined;
 const resumeId = rArg !== undefined && !rArg.startsWith("-") ? rArg : undefined;
 if (cmd === "" || cmd === "chat" || cmd === "repl") {
-  // default surface (port #44): the sextant renderer on a truecolor TTY of ≥ 100×30 (ROVECODE_TUI / --classic
+  // default surface (port #44): the sextant renderer on a colour TTY of ≥ 100×30 — truecolor, or 256 through
+  // the quantizer (ROVECODE_TUI / --classic
   // override — sextant-io.ts chooseSurface), else the pi-tui chat (port #1); --plain keeps the readline REPL
   if (cli.plain) await runRepl({ yolo: cli.yolo });
   else await runTui({ yolo: cli.yolo, acceptEdits: cli.acceptEdits, ...(cli.effort !== undefined ? { effort: cli.effort } : {}), sessionId: resumeId, renderer: pickRenderer(cli, process.env, process.stdout), ...(cli.pet !== undefined ? { pet: cli.pet } : {}) });

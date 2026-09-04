@@ -1,5 +1,9 @@
 # design_audit calibration — does it tell slop from design?
 
+> **Status: historical.** These are the measurements that motivated the rework, taken against commit
+> f661b70. The thresholds they argued for now ship; for what the checker actually does see
+> [design.md](design.md).
+
 Measured 2026-09-04 against `src/design/audit.ts` as it sat on disk at ~15:00 (commit f661b70 plus the
 uncommitted "system stacks count only when they lead the list" change to `cliche-font`). Every number
 below comes from running the real `auditSource` — nothing was re-implemented except the three density

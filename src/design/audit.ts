@@ -453,7 +453,7 @@ export function auditSource(text: string, opts: AuditOptions = {}): Finding[] {
   // Exact-hex membership called the chosen brand's own ramp off-palette (nimbus-ed's probe 1: six of the
   // six "off-palette" colours WERE the recorded brand's tints). Families let a tint, a shade and a hover
   // state belong to the colour they came from. Budget of 1: semantic states (a red, a green) are not a
-  // second brand (calibration §6.3).
+  // second brand (design-slop-research §6.2).
   if (direction?.palette !== undefined) {
     const chosen = new Set<number>();
     for (const v of Object.values(direction.palette)) {
