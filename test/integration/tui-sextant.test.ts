@@ -82,8 +82,25 @@ async function quit(io: MemoryIO, renderer: SextantRenderer, app: Promise<void>,
   expect(io.listeners).toBe(0);                 // input + resize unsubscribed
   expect(io.raw).toBe(false);                   // raw mode left
   for (const seq of LEAVE) expect(tail).toContain(seq);
-  rmSync(cwd, { recursive: true, force: true });
+  await renderer.drain();  // the repo watcher's git children are gone — only then may the cwd go
+  await rmTemp(cwd);
   return tail;
+}
+
+/** Remove the scratch repo. On Windows a child `git status` from the repo watcher can still hold the
+ *  directory for a few ms after the surface stopped, and rmSync then throws EBUSY — that was THE
+ *  "tui-sextant flake": every test in this file exits through quit(), so a different test failed each
+ *  run. The renderer now waits for its git children (sextant-renderer stop → repo drain); this retry is
+ *  the belt to that brace, because handle release on Windows lags the process exit itself. */
+async function rmTemp(cwd: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try { rmSync(cwd, { recursive: true, force: true }); return; }
+    catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if ((code !== "EBUSY" && code !== "EPERM" && code !== "ENOTEMPTY") || attempt >= 20) throw e;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  }
 }
 
 // ---------- approval card: deny / allow ----------

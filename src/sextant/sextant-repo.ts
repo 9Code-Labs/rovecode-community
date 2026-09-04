@@ -33,6 +33,10 @@ export class RepoWatcher {
   private lastScanAt = -Infinity;
   private hasGit = false;
   private stopped = false;
+  /** aborts the git children of a scan in flight when stop() is called (git-status.ts runner signal) */
+  private readonly ac = new AbortController();
+  /** the scan in flight, so stop() can wait for its children to be GONE, not merely killed */
+  private live: Promise<void> | null = null;
 
   /** `scan` false disables the repo scan entirely (pure unit tests) */
   constructor(private readonly d: RepoWatcherDeps, scan: boolean) { this.wanted = scan ? "full" : null; }
@@ -48,7 +52,7 @@ export class RepoWatcher {
   /** from the frame loop's tick: arm the idle poll, then schedule whatever is wanted (once) */
   onTick(now: number, running: boolean): void {
     if (this.wanted === null && this.hasGit && !running && now - this.lastScanAt >= IDLE_SCAN_MS) this.wanted = "status";
-    if (this.wanted !== null && !this.inFlight && !this.timer && !this.stopped) this.timer = setTimeout(() => { this.timer = null; void this.scan(); }, 0);
+    if (this.wanted !== null && !this.inFlight && !this.timer && !this.stopped) this.timer = setTimeout(() => { this.timer = null; this.live = this.scan(); }, 0);
   }
 
   /** only reached through onTick's timer, which is armed when no scan is in flight */
@@ -56,13 +60,16 @@ export class RepoWatcher {
     if (this.stopped || this.wanted === null) return;
     const kind = this.wanted, s = this.d.state;
     this.wanted = null; this.lastScanAt = this.d.clock(); this.inFlight = true;
+    // every git child of this scan is bound to the watcher's abort signal: stop() kills them and the
+    // runner settles only when they are gone, so `live` resolving means "no child holds the cwd"
+    const git: GitRunnerAsync = (a, c) => this.d.git(a, c, this.ac.signal);
     try {
       if (kind === "full") {
-        const snap = await scanRepoAsync(s.cwd, this.d.git);
+        const snap = await scanRepoAsync(s.cwd, git);
         if (this.stopped) return;
         setFiles(s, snap.paths, snap.statuses); s.repo.branch = snap.branch; this.hasGit = snap.git;
       } else {
-        const st = await statusOnlyAsync(s.cwd, this.d.git);
+        const st = await statusOnlyAsync(s.cwd, git);
         if (this.stopped) return;
         if (st) setFiles(s, s.files.paths, st);
       }
@@ -108,11 +115,17 @@ export class RepoWatcher {
     this.deferred.add(t);
   }
 
-  /** clear every pending timer; results of work already in flight are dropped */
-  stop(): void {
+  /** clear every pending timer, KILL the git children of a scan in flight (their results are dropped),
+   *  and resolve once those children are gone — the caller can then remove the cwd. Idempotent: a second
+   *  stop() returns the same settled promise. Before this, stop() only dropped results and left the child
+   *  running; on Windows a live `git status` holds the directory and every tui-sextant test's quit()
+   *  failed at rmSync with EBUSY, a different test each run. */
+  stop(): Promise<void> {
     this.stopped = true;
     if (this.timer) { clearTimeout(this.timer); this.timer = null; }
     for (const t of this.deferred) clearTimeout(t);
     this.deferred.clear();
+    this.ac.abort();
+    return this.live ?? Promise.resolve();
   }
 }

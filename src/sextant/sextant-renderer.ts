@@ -150,11 +150,16 @@ export class SextantRenderer implements Renderer {
   }
 
   /** clear the interval, settle every open card/picker (deny / null), restore the terminal */
+  /** settled once stop() has run AND the repo watcher's git children are gone (sextant-repo.ts stop) */
+  private drained: Promise<void> | null = null;
+  /** wait for the git children a stop() killed to be gone — call after stop(); a caller that removes
+   *  the cwd (a test's scratch repo) must await this first, or Windows answers EBUSY */
+  drain(): Promise<void> { return this.drained ?? this.repo.stop(); }
   stop(): void {
     if (this.stopped) return;
     this.stopped = true;
     this.loop.stop();
-    this.repo.stop();
+    this.drained = this.repo.stop(); // kills the git children in flight; drain() awaits them
     this.unsubTasks?.(); this.unsubTasks = null;
     this.cards.settleAll();
     if (this.started) { this.io.write(leaveSequence()); this.io.leaveRaw(); }

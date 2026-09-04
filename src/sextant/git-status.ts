@@ -14,7 +14,10 @@ export interface GitResult { status: number | null; stdout: string }
 /** `git -C <cwd> <args…>`; null when git cannot run at all (the injectable seam for tests) */
 export type GitRunner = (args: readonly string[], cwd: string) => GitResult | null;
 /** the async twin: resolves (never rejects) with the same result, off the caller's stack */
-export type GitRunnerAsync = (args: readonly string[], cwd: string) => Promise<GitResult | null>;
+/** `signal` (optional): abort kills the child and the promise settles null only once the process is
+ *  GONE (its `close`), so a caller awaiting it can safely remove the cwd afterwards — on Windows a live
+ *  `git status` holds the directory, and that was the tui-sextant "flake" (EBUSY at rmSync). */
+export type GitRunnerAsync = (args: readonly string[], cwd: string, signal?: AbortSignal) => Promise<GitResult | null>;
 
 const TIMEOUT_MS = 5000;
 const MAX_BUFFER = 64 * 1024 * 1024;
@@ -44,19 +47,23 @@ export interface AsyncRunnerOptions {
 export function gitRunnerAsync(o: AsyncRunnerOptions = {}): GitRunnerAsync {
   const timeout = o.timeoutMs ?? TIMEOUT_MS;
   const argv = o.argv ?? ((args: readonly string[], cwd: string): string[] => ["git", "-C", cwd, ...args]);
-  return (args, cwd) => new Promise<GitResult | null>((resolve) => {
+  return (args, cwd, signal) => new Promise<GitResult | null>((resolve) => {
+    if (signal?.aborted) { resolve(null); return; } // already stopping: never spawn
     let done = false;
-    const finish = (r: GitResult | null): void => { if (!done) { done = true; resolve(r); } };
+    const finish = (r: GitResult | null): void => { if (!done) { done = true; signal?.removeEventListener("abort", onAbort); resolve(r); } };
     let child: ChildProcess;
+    // abort = kill, but settle from `close` below: the promise resolves only once the process is gone
+    const onAbort = (): void => { child?.kill("SIGKILL"); };
     try {
       const [exe, ...rest] = argv(args, cwd);
       child = spawn(exe ?? "git", rest, { timeout, killSignal: "SIGKILL", windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
     } catch { finish(null); return; }
+    signal?.addEventListener("abort", onAbort, { once: true });
     const chunks: Buffer[] = [];
     let size = 0;
-    child.stdout?.on("data", (b: Buffer) => { size += b.length; if (size > MAX_BUFFER) { child.kill("SIGKILL"); finish(null); } else chunks.push(b); });
+    child.stdout?.on("data", (b: Buffer) => { size += b.length; if (size > MAX_BUFFER) { child.kill("SIGKILL"); } else chunks.push(b); });
     child.on("error", () => finish(null));
-    child.on("close", (code, signal) => finish(code === null || signal !== null ? null : { status: code, stdout: Buffer.concat(chunks).toString("utf8") }));
+    child.on("close", (code, sig) => finish(code === null || sig !== null || size > MAX_BUFFER ? null : { status: code, stdout: Buffer.concat(chunks).toString("utf8") }));
   });
 }
 export const spawnGitAsync: GitRunnerAsync = gitRunnerAsync();
