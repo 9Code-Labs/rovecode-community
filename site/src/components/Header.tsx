@@ -32,7 +32,7 @@ export function Header({ home = "" }: { home?: string } = {}) {
   ] as const;
 
   return (
-    <header className={cn("fixed inset-x-0 top-0 z-40 border-b transition-[background-color,border-color] duration-300", scrolled ? "border-border bg-[#f9fafd]/95" : "border-transparent bg-transparent")}>
+    <header className={cn("fixed inset-x-0 top-0 z-40 border-b transition-[background-color,border-color] duration-300", scrolled ? "border-border bg-mist-mid/95" : "border-transparent bg-transparent")}>
       <div className="mx-auto flex h-[var(--header-h)] w-full max-w-[1200px] items-center justify-between gap-6 px-6 md:px-10">
         <a href={home ? home : "#top"} className="flex shrink-0 items-center gap-2.5 rounded-full" title={t.ui.backToTop}>
           <img src="/brand/mark-sky-96.png" alt="" width={20} height={20} className="size-5" />

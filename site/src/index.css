@@ -26,13 +26,15 @@
   /* mist: decorative only — pill backgrounds, thin dividers, the hero wash */
   --color-mist: #9fb8e8;
   --color-mist-soft: #e3eaf8;
+  /* the two lightest stops of the mist gradient; the header bar rests on the second once the page scrolls */
+  --color-mist-top: #fdfdfe;
+  --color-mist-mid: #f9fafd;
   /* the inside of a terminal frame: the sextant "night" colours, the one dark area on the page */
   --color-ink: #161819;
   --color-ink-2: #1f2224;
   --color-ink-border: #2c3033;
   --color-ink-text: #e6e6e2;
   --color-ink-muted: #a6a6a0;
-  --color-ink-faint: #6f6f69;
   --color-ink-accent: #9fc5d4;
   --color-front: #2f6ac0;
   --color-front-soft: #3b7dd8;
@@ -86,6 +88,8 @@
   --color-on-brand: var(--color-on-brand);
   --color-mist: var(--color-mist);
   --color-mist-soft: var(--color-mist-soft);
+  --color-mist-top: var(--color-mist-top);
+  --color-mist-mid: var(--color-mist-mid);
   --color-front: var(--color-front);
   --color-front-soft: var(--color-front-soft);
   --color-ring: var(--color-ring);
@@ -95,7 +99,6 @@
   --color-ink-border: var(--color-ink-border);
   --color-ink-text: var(--color-ink-text);
   --color-ink-muted: var(--color-ink-muted);
-  --color-ink-faint: var(--color-ink-faint);
   --color-ink-accent: var(--color-ink-accent);
 
   --color-background: var(--background);
@@ -211,7 +214,7 @@
   border-radius: var(--radius-md);
 }
 @utility panel-hover {
-  transition: border-color 200ms var(--ease-out-soft), box-shadow 200ms var(--ease-out-soft);
+  transition: border-color 200ms var(--ease-out-soft);
   &:hover { border-color: var(--color-border-strong); }
 }
 /* the mist: near-white at the top thinning into the ground, with a faint blue wash — static CSS, used twice
@@ -219,7 +222,7 @@
 @utility mist {
   background:
     radial-gradient(90% 60% at 50% 0%, rgba(159, 184, 232, 0.22) 0%, rgba(159, 184, 232, 0) 70%),
-    linear-gradient(180deg, #fdfdfe 0%, #f9fafd 40%, var(--color-bg) 100%);
+    linear-gradient(180deg, var(--color-mist-top) 0%, var(--color-mist-mid) 40%, var(--color-bg) 100%);
 }
 /* a pill: full round, a tint of mist behind small text */
 @utility chip {
@@ -269,9 +272,12 @@
   color: var(--color-ink-text);
   border-radius: var(--radius-md);
   --t-muted: #a6a6a0;
-  --t-faint: #8b8b85;              /* 5.0:1 on the terminal ink */
+  --t-faint: #8b8b85;              /* hints: 5.2:1 on the ink, 4.67:1 on the card — re-measure if either darkens */
   --t-accent: #9fc5d4;
+  --t-on-accent: #0e1a26;          /* the selected choice's label on the accent chip */
+  --t-file: #e6edf5;               /* file names in tool rows */
   --t-plus: #7fc48f;
+  --t-minus: #f0605d;
   --t-card: #1f2224;
   --t-line: #2c3033;
 }

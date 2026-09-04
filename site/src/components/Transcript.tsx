@@ -106,11 +106,11 @@ export function Transcript({ className }: { className?: string }) {
               <li key={r.verb} className={cn("flex items-center gap-3 text-(--t-muted) transition-[opacity,transform] duration-400 ease-(--ease-out-soft) motion-reduce:transition-none", on ? "opacity-100 translate-y-0" : "opacity-0 translate-y-1.5")}>
                 <span aria-hidden className="w-3 text-center text-(--t-faint)">{r.glyph}</span>
                 <span className="w-10">{r.verb}</span>
-                <span className="text-[#e6edf5]">{r.file}</span>
+                <span className="text-(--t-file)">{r.file}</span>
                 <span className={cn("ml-auto whitespace-nowrap transition-opacity duration-300", right ? "opacity-100" : "opacity-0")}>
                   {"plus" in r ? (
                     <>
-                      <span className="text-(--t-plus)">+{r.plus}</span> <span className="text-[#f0605d]">−{r.minus}</span>
+                      <span className="text-(--t-plus)">+{r.plus}</span> <span className="text-(--t-minus)">−{r.minus}</span>
                     </>
                   ) : (
                     r.right
@@ -130,7 +130,7 @@ export function Transcript({ className }: { className?: string }) {
           </p>
           <p className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
             {t.approval.choices.map((c, i) => (
-              <span key={c} className={i === 0 ? "rounded-sm bg-(--t-accent) px-1.5 py-0.5 text-[#0e1a26]" : "text-(--t-muted)"}>
+              <span key={c} className={i === 0 ? "rounded-sm bg-(--t-accent) px-1.5 py-0.5 text-(--t-on-accent)" : "text-(--t-muted)"}>
                 {c}
               </span>
             ))}
