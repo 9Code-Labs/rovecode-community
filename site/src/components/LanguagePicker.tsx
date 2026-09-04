@@ -49,7 +49,7 @@ export function LanguagePicker({ align = "end" }: { tone?: "light" | "dark"; ali
         aria-expanded={open}
         aria-controls="language-list"
         aria-label={`${t.ui.language}: ${current.name}`}
-        className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-[13.5px] text-text-muted transition-colors duration-150 hover:text-text"
+        className="inline-flex h-8 items-center gap-1.5 rounded-full px-2 text-[13.5px] font-medium text-text-muted transition-colors duration-150 hover:text-text"
       >
         <Globe className="size-4" aria-hidden />
         <span className="max-w-[7rem] truncate">{current.name}</span>
@@ -61,7 +61,7 @@ export function LanguagePicker({ align = "end" }: { tone?: "light" | "dark"; ali
           aria-label={t.ui.language}
           aria-activedescendant={`lang-${locale}`}
           onKeyDown={onListKey}
-          className={cn("panel absolute top-[calc(100%+6px)] z-50 max-h-[62vh] w-[13rem] overflow-y-auto p-1", align === "end" ? "right-0" : "left-0")}
+          className={cn("panel absolute top-[calc(100%+6px)] z-50 max-h-[62vh] w-[13rem] overflow-y-auto !rounded-[var(--radius-md)] p-1.5", align === "end" ? "right-0" : "left-0")}
         >
           {LOCALES.map((l) => (
             <li key={l.code}>
@@ -75,7 +75,7 @@ export function LanguagePicker({ align = "end" }: { tone?: "light" | "dark"; ali
                 onClick={() => pick(l.code)}
                 lang={l.code}
                 className={cn(
-                  "flex w-full items-center justify-between gap-2 rounded-sm px-3 py-1.5 text-left text-sm transition-colors duration-150 focus-visible:bg-surface-2",
+                  "flex w-full items-center justify-between gap-2 rounded-[10px] px-3 py-1.5 text-left text-sm transition-colors duration-150 focus-visible:bg-surface-2",
                   l.code === locale ? "text-text" : "text-text-muted hover:bg-surface-2 hover:text-text",
                 )}
               >

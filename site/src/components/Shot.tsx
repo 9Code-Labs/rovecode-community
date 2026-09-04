@@ -67,14 +67,14 @@ export function Shot({ file, alt, title, lead, callouts, flip }: Props) {
   return (
     <article ref={root} className="relative grid items-center gap-6 lg:grid-cols-12 lg:gap-10">
       <div className={cn("lg:col-span-8", flip && "lg:order-2")}>
-        <div className="panel panel-hover relative overflow-visible">
-          <div className="flex items-center justify-between rounded-t-[calc(var(--radius-lg)-1px)] bg-surface-2 px-4 py-2">
+        <div className="panel panel-hover relative overflow-visible p-2 md:p-3">
+          <div className="flex items-center justify-between gap-3 px-3 py-2.5 md:px-4">
             <span className="mono text-xs text-text-muted">rovecode · atlas · feature/auth · 160×44</span>
-            <span className={cn("mono text-xs transition-colors duration-200", focus ? "text-brand" : "text-text-faint")}>{focus ? `${ZOOM}× · ${focus.short}` : "real frame"}</span>
+            <span className={cn("chip px-2.5 py-1 text-[11px] transition-colors duration-200", focus ? "text-brand" : "text-text-muted")}>{focus ? `${ZOOM}× · ${focus.short}` : "real frame"}</span>
           </div>
-          <div className="p-1.5 md:p-2">
+          <div>
             <div className="relative">
-              <div className="overflow-hidden rounded-md">
+              <div className="overflow-hidden rounded-[var(--radius-md)]">
                 <Pic
                   src={file}
                   widths={FRAME_WIDTHS}
@@ -97,12 +97,12 @@ export function Shot({ file, alt, title, lead, callouts, flip }: Props) {
                   {...hotProps(c.n)}
                   style={{ left: `${((c.x + 0.5) / COLS) * 100}%`, top: `${((c.y + 0.5) / ROWS) * 100}%` }}
                   className={cn(
-                    "mono absolute flex -translate-x-1/2 -translate-y-1/2 cursor-default select-none items-center gap-1.5 rounded-sm px-1.5 py-0.5 text-[11px] leading-[18px] shadow-[var(--shadow-sm)] transition-[background-color,opacity] duration-300 md:text-xs md:leading-5",
+                    "mono absolute flex -translate-x-1/2 -translate-y-1/2 cursor-default select-none items-center gap-1.5 rounded-full py-0.5 pe-2.5 ps-0.5 text-[11px] leading-[18px] shadow-[var(--shadow-card)] transition-[background-color,opacity] duration-300 md:text-xs md:leading-5",
                     hot === c.n ? "bg-brand text-on-brand" : "bg-surface",
                     hot !== null && hot !== c.n && "pointer-events-none opacity-0",
                   )}
                 >
-                  <span className="inline-flex size-4 items-center justify-center rounded-sm bg-brand text-[10px] font-bold text-on-brand">{c.n}</span>
+                  <span className="inline-flex size-[18px] items-center justify-center rounded-full bg-brand text-[10px] font-bold text-on-brand">{c.n}</span>
                   <span className="hidden text-text md:inline">{c.short}</span>
                 </span>
               ))}
@@ -123,9 +123,9 @@ export function Shot({ file, alt, title, lead, callouts, flip }: Props) {
               onFocus={() => setHot(c.n)}
               onBlur={() => setHot(null)}
               tabIndex={0}
-              className={cn("flex cursor-default items-baseline gap-3 rounded-md px-3 py-2.5 text-[15px] leading-6 transition-colors duration-150 focus-visible:outline-none", hot === c.n ? "bg-surface-2 text-text" : "text-text-muted")}
+              className={cn("flex cursor-default items-baseline gap-3 rounded-[var(--radius-md)] px-3 py-2.5 text-[15px] leading-6 transition-colors duration-150 focus-visible:outline-none", hot === c.n ? "bg-surface text-text" : "text-text-muted")}
             >
-              <span className={cn("mono inline-flex size-5 shrink-0 translate-y-0.5 items-center justify-center rounded-sm text-[10px] font-bold transition-colors duration-150", hot === c.n ? "bg-brand text-on-brand" : "bg-surface-2 text-text-muted")}>{c.n}</span>
+              <span className={cn("mono inline-flex size-5 shrink-0 translate-y-0.5 items-center justify-center rounded-full text-[10px] font-bold transition-colors duration-150", hot === c.n ? "bg-brand text-on-brand" : "bg-mist-soft text-text-muted")}>{c.n}</span>
               {c.text}
             </li>
           ))}
@@ -136,8 +136,8 @@ export function Shot({ file, alt, title, lead, callouts, flip }: Props) {
         <svg aria-hidden className="pointer-events-none absolute inset-0 hidden h-full w-full overflow-visible lg:block">
           {lines.map((l, i) => (
             <g key={i} className="transition-opacity duration-300" style={{ opacity: hot === null ? 1 : hot === callouts[i]?.n ? 1 : 0 }}>
-              <path d={`M ${l.x1} ${l.y1} L ${l.xm} ${l.y1} L ${l.xm} ${l.y2} L ${l.x2} ${l.y2}`} fill="none" stroke="rgba(22,105,178,0.55)" strokeWidth="1" />
-              <circle cx={l.x2} cy={l.y2} r="2" fill="#1669b2" />
+              <path d={`M ${l.x1} ${l.y1} L ${l.xm} ${l.y1} L ${l.xm} ${l.y2} L ${l.x2} ${l.y2}`} fill="none" stroke="rgba(59,125,216,0.6)" strokeWidth="1" />
+              <circle cx={l.x2} cy={l.y2} r="2" fill="#3b7dd8" />
             </g>
           ))}
         </svg>

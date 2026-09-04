@@ -23,24 +23,26 @@ function Strip({ v, alt }: { v: Visual; alt: string }) {
   );
 }
 
-/** four problem → answer pairs as plain text in two columns, each with its crop above; no cards */
+/** four problem → answer pairs, each in a white card with its crop on top */
 export function Problems({ n }: { n: string }) {
   const t = useT();
   return (
     <Section id="problems" n={n} eyebrow={t.problems.eyebrow} title={t.problems.title} lead={t.problems.lead}>
-      <Stagger as="ol" className="grid gap-x-16 gap-y-20 md:grid-cols-2">
+      <Stagger as="ol" className="grid gap-6 md:grid-cols-2">
         {PROBLEMS.map((p, i) => (
-          <Item as="li" key={p.n} className={i % 2 === 1 ? "md:mt-24" : ""}>
+          <Item as="li" key={p.n} className="panel panel-hover p-3 md:p-4">
             <Strip v={p.visual} alt={p.visual.kind === "crop" ? p.visual.alt : ""} />
-            <p className="label mt-8">
-              <span className="text-text-muted">{p.n}</span>
-              <span className="mx-3 text-border-strong">/</span>
-              {t.problems.problemLabel}
-            </p>
-            <p className="mt-4 text-[1.15rem] leading-snug text-text">{t.problems.items[i]!.problem}</p>
-            <p className="label mt-8">{t.problems.solutionLabel}</p>
-            <p className="mt-3 text-[15px] leading-7 text-text-muted">{t.problems.items[i]!.solution}</p>
-            <code className="mono mt-5 block truncate text-[12px] text-text-faint" dir="ltr">{p.snippet}</code>
+            <div className="px-3 pb-4 pt-6 md:px-4">
+              <p className="chip label px-3 py-1.5 !tracking-[0.1em]">
+                <span className="text-text">{p.n}</span>
+                <span aria-hidden className="size-1 rounded-full bg-mist" />
+                {t.problems.problemLabel}
+              </p>
+              <p className="mt-5 text-[1.15rem] leading-snug font-semibold text-text">{t.problems.items[i]!.problem}</p>
+              <p className="label mt-7">{t.problems.solutionLabel}</p>
+              <p className="mt-3 text-[15px] leading-7 text-text-muted">{t.problems.items[i]!.solution}</p>
+              <code className="mono mt-5 block truncate text-[12px] text-text-faint" dir="ltr">{p.snippet}</code>
+            </div>
           </Item>
         ))}
       </Stagger>

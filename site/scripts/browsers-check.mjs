@@ -25,7 +25,7 @@ for (const [name, type] of [["chromium", chromium], ["firefox", firefox], ["webk
       await page.evaluate(() => document.fonts.ready);
       await page.waitForTimeout(600);
       const fonts = await page.evaluate(() => ({
-        body: document.fonts.check('16px "Hanken Grotesk"'), mono: document.fonts.check('14px "IBM Plex Mono"'),
+        body: document.fonts.check('16px "Manrope"'), mono: document.fonts.check('14px "JetBrains Mono"'),
         loaded: [...document.fonts].filter((f) => f.status === "loaded").map((f) => f.family).filter((v, i, a) => a.indexOf(v) === i),
         bodyComputed: getComputedStyle(document.body).fontFamily.split(",")[0],
       }));

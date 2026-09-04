@@ -1,27 +1,32 @@
 @import "tailwindcss";
 
-/* Quiet — the page says very little and leaves the room to the one thing that is real: the 160×44 frame.
-   Warm off-white paper, one near-black ink at three strengths, a single deep accent that almost never appears,
-   no decoration, no rules, and a lot of air. Cards are not outlined; the few surfaces that exist are lifted by
-   one soft, wide shadow. Type is small, light and spaced — the page is read, not announced.
-   Type: Hanken Grotesk (everything) · IBM Plex Mono (commands, code — the product's own register). */
+/* Y3 · Sabah sisi (morning mist). A light periwinkle ground with a mist that thins to white at the top of the page,
+   white cards with a hairline border and one soft shadow, one ink for text at three strengths, one blue accent for
+   the few things you can press, and a paler mist blue that only ever decorates. Round corners everywhere: 24 on
+   cards, 16 on small things, pills for buttons and chips. No glass, no blur, no dark panels — the only dark area is
+   the inside of a terminal frame. Type: Manrope (display 600 / body 400) · JetBrains Mono (commands, code). */
 :root {
-  --color-bg: #f6f6f4;
+  --color-bg: #f4f6fb;
   --color-surface: #ffffff;
-  --color-surface-2: #efefec;
-  --color-border: #e5e5e1;
-  --color-border-strong: #d2d2cc;
-  --color-text: #141414;
-  --color-text-muted: #5c5c57;     /* 6.4:1 on the paper */
-  --color-text-faint: #66665f;     /* 5.5:1 on the paper, 5.0:1 on surface-2 — captions pass AA everywhere */
+  --color-surface-2: #eef2f9;
+  --color-border: #e6eaf3;
+  --color-border-strong: #d5dcec;
+  --color-text: #1b2230;
+  --color-text-muted: #4a5568;     /* 7.0:1 on the ground, 7.5:1 on white */
+  --color-text-faint: #5e6880;     /* 5.2:1 on the ground, 5.6:1 on white, 5.0:1 on surface-2 — captions pass AA */
 
-  /* the one accent: a deep sea-ink, for links, focus and the single mark per section */
-  --color-brand: #1e3d4c;
-  --color-brand-hover: #142b36;
-  --color-brand-text: #1e3d4c;
-  --color-on-brand: #f6f6f4;
-  --color-ring: rgba(30, 61, 76, 0.35);
-  /* kept for the transcript's terminal palette and the one dark panel */
+  /* the one accent: for filled buttons, links and the marked word. #3b7dd8 was asked for; white on it is 4.1:1, so
+     the pressable tone is #2f6ac0 — 4.9:1 on the ground, 5.3:1 on white and with white text on it — and #3b7dd8 decorates. */
+  --color-brand: #2f6ac0;
+  --color-brand-hover: #27599f;
+  --color-brand-text: #2f6ac0;
+  --color-brand-soft: #3b7dd8;
+  --color-on-brand: #ffffff;
+  --color-ring: rgba(47, 106, 192, 0.35);
+  /* mist: decorative only — pill backgrounds, thin dividers, the hero wash */
+  --color-mist: #9fb8e8;
+  --color-mist-soft: #e3eaf8;
+  /* the inside of a terminal frame: the sextant "night" colours, the one dark area on the page */
   --color-ink: #161819;
   --color-ink-2: #1f2224;
   --color-ink-border: #2c3033;
@@ -29,17 +34,18 @@
   --color-ink-muted: #a6a6a0;
   --color-ink-faint: #6f6f69;
   --color-ink-accent: #9fc5d4;
-  --color-front: #1e3d4c;
-  --color-front-soft: #3a6c82;
-  --color-sky: #1e3d4c;
+  --color-front: #2f6ac0;
+  --color-front-soft: #3b7dd8;
+  --color-sky: #3b7dd8;
 
-  --radius-sm: 4px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 16px;
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 24px;
+  --radius-xl: 32px;
 
-  /* one soft, wide lift: the only depth on the page */
-  --shadow-sm: 0 1px 2px rgba(20, 20, 20, 0.04), 0 24px 60px -20px rgba(20, 20, 20, 0.12);
+  /* the one shadow, and only on cards */
+  --shadow-card: 0 12px 40px -20px rgba(27, 34, 48, 0.18);
+  --shadow-sm: var(--shadow-card);
 
   --header-h: 64px;
 
@@ -57,7 +63,7 @@
   --muted-foreground: var(--color-text-muted);
   --accent: var(--color-surface-2);
   --accent-foreground: var(--color-text);
-  --destructive: #9b3b2e;
+  --destructive: #b3402f;
   --border: var(--color-border);
   --input: var(--color-border);
   --ring: var(--color-ring);
@@ -76,7 +82,10 @@
   --color-brand: var(--color-brand);
   --color-brand-hover: var(--color-brand-hover);
   --color-brand-text: var(--color-brand-text);
+  --color-brand-soft: var(--color-brand-soft);
   --color-on-brand: var(--color-on-brand);
+  --color-mist: var(--color-mist);
+  --color-mist-soft: var(--color-mist-soft);
   --color-front: var(--color-front);
   --color-front-soft: var(--color-front-soft);
   --color-ring: var(--color-ring);
@@ -111,63 +120,49 @@
   --radius-lg: var(--radius-lg);
   --radius-xl: var(--radius-xl);
 
-  --font-sans: "Hanken Grotesk", ui-sans-serif, sans-serif;
-  --font-display: "Hanken Grotesk", ui-sans-serif, sans-serif;
-  --font-label: "Hanken Grotesk", ui-sans-serif, sans-serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+  --shadow-card: var(--shadow-card);
+
+  --font-sans: "Manrope", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Manrope", ui-sans-serif, system-ui, sans-serif;
+  --font-label: "Manrope", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
 
   --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* ---------- fonts: self-hosted latin + latin-ext subsets (public/fonts), the two latin files preloaded in index.html.
-   Body face swaps (text must show at once, in the fallback if need be); the mono face is `optional` — a command in
-   Consolas for one visit is better than a late reflow of every code block. ---------- */
+/* ---------- fonts: self-hosted variable latin + latin-ext subsets (public/fonts); the latin body file is preloaded
+   in index.html. The body face swaps (text shows at once, in the fallback if need be); the mono face is `optional`
+   — a command in Consolas for one visit beats a late reflow of every code block. ---------- */
 @font-face {
-  font-family: "Hanken Grotesk";
+  font-family: "Manrope";
   font-style: normal;
-  font-weight: 100 900;
+  font-weight: 200 800;
   font-display: swap;
-  src: url("/fonts/hanken-grotesk-latin-wght-normal.woff2") format("woff2-variations");
+  src: url("/fonts/manrope-latin-wght-normal.woff2") format("woff2-variations");
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 @font-face {
-  font-family: "Hanken Grotesk";
+  font-family: "Manrope";
   font-style: normal;
-  font-weight: 100 900;
+  font-weight: 200 800;
   font-display: swap;
-  src: url("/fonts/hanken-grotesk-latin-ext-wght-normal.woff2") format("woff2-variations");
+  src: url("/fonts/manrope-latin-ext-wght-normal.woff2") format("woff2-variations");
   unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 @font-face {
-  font-family: "IBM Plex Mono";
+  font-family: "JetBrains Mono";
   font-style: normal;
-  font-weight: 400;
+  font-weight: 100 800;
   font-display: optional;
-  src: url("/fonts/ibm-plex-mono-latin-400-normal.woff2") format("woff2");
+  src: url("/fonts/jetbrains-mono-latin-wght-normal.woff2") format("woff2-variations");
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 @font-face {
-  font-family: "IBM Plex Mono";
+  font-family: "JetBrains Mono";
   font-style: normal;
-  font-weight: 500;
+  font-weight: 100 800;
   font-display: optional;
-  src: url("/fonts/ibm-plex-mono-latin-500-normal.woff2") format("woff2");
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
-}
-@font-face {
-  font-family: "IBM Plex Mono";
-  font-style: normal;
-  font-weight: 400;
-  font-display: optional;
-  src: url("/fonts/ibm-plex-mono-latin-ext-400-normal.woff2") format("woff2");
-  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
-}
-@font-face {
-  font-family: "IBM Plex Mono";
-  font-style: normal;
-  font-weight: 500;
-  font-display: optional;
-  src: url("/fonts/ibm-plex-mono-latin-ext-500-normal.woff2") format("woff2");
+  src: url("/fonts/jetbrains-mono-latin-ext-wght-normal.woff2") format("woff2-variations");
   unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
@@ -186,45 +181,82 @@
   }
   h1, h2 {
     font-family: var(--font-display);
-    font-weight: 300;
-    letter-spacing: -0.015em;
+    font-weight: 600;
+    letter-spacing: -0.02em;
     text-wrap: balance;
   }
-  h3 { font-weight: 500; letter-spacing: -0.005em; text-wrap: balance; }
+  h3 { font-weight: 600; letter-spacing: -0.01em; text-wrap: balance; }
   code, kbd, pre, .mono { font-family: var(--font-mono); }
-  ::selection { background: var(--color-border-strong); color: var(--color-text); }
-  :focus-visible { outline: 1.5px solid var(--color-brand); outline-offset: 3px; border-radius: var(--radius-sm); }
+  ::selection { background: var(--color-mist-soft); color: var(--color-text); }
+  :focus-visible { outline: 2px solid var(--color-brand); outline-offset: 3px; border-radius: var(--radius-sm); }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
   }
 }
 
-/* ---------- surfaces: only what has to exist ---------- */
+/* ---------- surfaces ---------- */
 
-/* the frame's bezel and the very few cards: white, lifted once, never outlined */
+/* the card: white, a hairline, 24 px corners, the one shadow */
 @utility panel {
   position: relative;
   background: var(--color-surface);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
+  box-shadow: var(--shadow-card);
 }
-/* a shade of the paper for nested blocks (commands, code, crops) */
+/* a nested block inside a card (commands, code, crops): a tint of the ground, 16 px corners, no shadow */
 @utility panel-2 {
   position: relative;
   background: var(--color-surface-2);
   border-radius: var(--radius-md);
 }
 @utility panel-hover {
-  transition: transform 300ms var(--ease-out-soft);
+  transition: border-color 200ms var(--ease-out-soft), box-shadow 200ms var(--ease-out-soft);
+  &:hover { border-color: var(--color-border-strong); }
 }
-/* a small quiet tag: step numbers, the version */
+/* the mist: near-white at the top thinning into the ground, with a faint blue wash — static CSS, used twice
+   (opening and close) */
+@utility mist {
+  background:
+    radial-gradient(90% 60% at 50% 0%, rgba(159, 184, 232, 0.22) 0%, rgba(159, 184, 232, 0) 70%),
+    linear-gradient(180deg, #fdfdfe 0%, #f9fafd 40%, var(--color-bg) 100%);
+}
+/* a pill: full round, a tint of mist behind small text */
 @utility chip {
   display: inline-flex;
   align-items: center;
-  gap: 0.375rem;
-  border-radius: var(--radius-sm);
-  background: var(--color-surface-2);
+  gap: 0.5rem;
+  border-radius: 9999px;
+  background: var(--color-mist-soft);
+  color: var(--color-text);
   font-family: var(--font-mono);
+}
+/* the filled button */
+@utility button-fill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 9999px;
+  background: var(--color-brand);
+  color: var(--color-on-brand);
+  font-weight: 600;
+  transition: background-color 150ms var(--ease-out-soft);
+  &:hover { background: var(--color-brand-hover); }
+}
+/* the quiet button: a hairline pill */
+@utility button-line {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 9999px;
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-weight: 600;
+  transition: border-color 150ms var(--ease-out-soft), background-color 150ms var(--ease-out-soft);
+  &:hover { border-color: var(--color-mist); background: var(--color-mist-soft); }
 }
 @utility ink {
   position: relative;
@@ -235,7 +267,7 @@
   position: relative;
   background: var(--color-ink);
   color: var(--color-ink-text);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-md);
   --t-muted: #a6a6a0;
   --t-faint: #8b8b85;              /* 5.0:1 on the terminal ink */
   --t-accent: #9fc5d4;
@@ -247,34 +279,34 @@
 /* ---------- type ---------- */
 @utility display {
   font-family: var(--font-display);
-  font-weight: 300;
-  letter-spacing: -0.02em;
-  line-height: 1.1;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.08;
   text-wrap: balance;
 }
-/* a small caption: 11 px, spaced, muted — the only "label" style on the page */
+/* a small caption: 11 px, spaced, faint — the label style */
 @utility label {
   font-family: var(--font-label);
   font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.16em;
+  font-weight: 600;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--color-text-faint);
 }
 @utility eyebrow {
   font-family: var(--font-label);
   font-size: 11px;
-  font-weight: 500;
-  letter-spacing: 0.16em;
+  font-weight: 600;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--color-text-faint);
 }
 @utility h2 {
   font-family: var(--font-display);
   font-size: 1.75rem;
-  line-height: 1.2;
-  font-weight: 300;
-  letter-spacing: -0.015em;
+  line-height: 1.15;
+  font-weight: 600;
+  letter-spacing: -0.02em;
   @media (width >= 48rem) { font-size: 2.25rem; }
 }
 @utility lead {
@@ -283,12 +315,12 @@
   color: var(--color-text-muted);
 }
 @utility section-pad {
-  padding-block: 6rem;
-  @media (width >= 48rem) { padding-block: 9rem; }
+  padding-block: 5rem;
+  @media (width >= 48rem) { padding-block: 7rem; }
 }
 @utility reading {
   font-family: var(--font-display);
-  font-weight: 300;
+  font-weight: 600;
   font-variant-numeric: tabular-nums lining-nums;
   letter-spacing: -0.02em;
   line-height: 1;
@@ -300,31 +332,31 @@
   line-height: 1.7;
   color: var(--color-text);
   & > * + * { margin-top: 1.1em; }
-  & h2 { font-size: 1.45rem; line-height: 1.25; font-weight: 400; letter-spacing: -0.01em; margin-top: 3rem; }
-  & h3 { font-size: 1.1rem; font-weight: 500; margin-top: 2.2rem; }
-  & h4 { font-size: 1rem; font-weight: 500; margin-top: 1.8rem; }
+  & h2 { font-size: 1.45rem; line-height: 1.25; font-weight: 600; letter-spacing: -0.015em; margin-top: 3rem; }
+  & h3 { font-size: 1.1rem; font-weight: 600; margin-top: 2.2rem; }
+  & h4 { font-size: 1rem; font-weight: 600; margin-top: 1.8rem; }
   & h2 a, & h3 a, & h4 a { color: inherit; text-decoration: none; }
   & h2 a:hover::after, & h3 a:hover::after { content: " #"; color: var(--color-text-faint); font-weight: 400; }
   & p, & li { color: var(--color-text-muted); }
   & li::marker { color: var(--color-text-faint); }
-  & strong { color: var(--color-text); font-weight: 500; }
-  & a { color: var(--color-brand); text-decoration: underline; text-decoration-color: var(--color-border-strong); text-underline-offset: 3px; }
+  & strong { color: var(--color-text); font-weight: 600; }
+  & a { color: var(--color-brand); text-decoration: underline; text-decoration-color: var(--color-mist); text-underline-offset: 3px; }
   & a:hover { text-decoration-color: var(--color-brand); }
   & ul, & ol { padding-inline-start: 1.4em; }
   & ul { list-style: disc; }
   & ol { list-style: decimal; }
   & li + li { margin-top: 0.35em; }
-  & code { font-family: var(--font-mono); font-size: 0.88em; background: var(--color-surface-2); border-radius: var(--radius-sm); padding: 0.1em 0.4em; color: var(--color-text); }
-  & pre { background: var(--color-ink); color: var(--color-ink-text); border-radius: var(--radius-md); padding: 1rem 1.25rem; overflow-x: auto; font-size: 13px; line-height: 1.6; direction: ltr; text-align: left; }
+  & code { font-family: var(--font-mono); font-size: 0.88em; background: var(--color-surface-2); border-radius: 6px; padding: 0.1em 0.4em; color: var(--color-text); }
+  & pre { background: var(--color-surface-2); color: var(--color-text); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 1rem 1.25rem; overflow-x: auto; font-size: 13px; line-height: 1.6; direction: ltr; text-align: left; }
   & pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
-  & blockquote { border-inline-start: 2px solid var(--color-border-strong); padding-inline-start: 1rem; color: var(--color-text-muted); }
+  & blockquote { border-inline-start: 2px solid var(--color-mist); padding-inline-start: 1rem; color: var(--color-text-muted); }
   & hr { border: 0; height: 1px; background: var(--color-border); margin-block: 3rem; }
   & table { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 1.5; display: block; overflow-x: auto; }
-  & th { text-align: start; font-weight: 500; color: var(--color-text); padding: 0.6rem 0.75rem 0.6rem 0; border-bottom: 1px solid var(--color-border-strong); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; }
+  & th { text-align: start; font-weight: 600; color: var(--color-text); padding: 0.6rem 0.75rem 0.6rem 0; border-bottom: 1px solid var(--color-border-strong); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; }
   & td { padding: 0.6rem 0.75rem 0.6rem 0; border-bottom: 1px solid var(--color-border); vertical-align: top; color: var(--color-text-muted); }
   & img { max-width: 100%; border-radius: var(--radius-md); }
 }
 
-/* ---------- motion ---------- */
+/* ---------- motion: the transcript's caret only ---------- */
 @keyframes caret { 50% { opacity: 0; } }
 @utility caret-blink { animation: caret 1s steps(1, end) infinite; }

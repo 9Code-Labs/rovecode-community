@@ -52,6 +52,7 @@ landing-only build.
 - Routes are only the 15 locale directories (served as directory indexes); every other path should 404 (`public/404.html`), not fall back to index.html.
 - Languages: 15, one prerendered page each — `/` (English; auto-detects the browser language on the client and swaps in one frame), `/tr/`, `/de/`, … Each page carries its own title/description, `<html lang dir>`, canonical, `og:locale` and the full hreflang set (15 + x-default); `dist/sitemap.xml` lists them. The language picker navigates to the language's URL and remembers the choice for `/`. English is in the main bundle; each other dictionary is its own chunk.
 - Design direction is recorded in `.rovecode/design.json` (read by rovecode's `design_audit`).
+- Fonts: Manrope (variable, 200–800) and JetBrains Mono (variable) are self-hosted — the latin and latin-ext woff2 subsets under `public/fonts` are copied from `@fontsource-variable/manrope` and `@fontsource-variable/jetbrains-mono`; `@font-face` lives in `src/index.css`, the latin body file is preloaded in `index.html`.
 - Social card: `public/brand/og.png` (1200×630) is rendered from the page's own fonts and tokens by `node scripts/og.mjs`; `og:image` points at it.
 - No animation library: the page arrives prerendered and holds still; the transcript replay and the count-up (dev only) use `src/lib/motion.ts`.
 - `media-src/` (raw and encoded video, ~120 MB) and `screenshots/` are working files, git-ignored.

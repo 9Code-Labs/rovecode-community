@@ -2,9 +2,9 @@
  *
  *    node scripts/og.mjs
  *
- *  An HTML string set in Hanken Grotesk / IBM Plex Mono on the paper, screenshotted at 1200×630 with the same
- *  Chromium scripts/shoot.ts uses. Nothing here that is not on the page: paper #f6f6f4, ink #141414, muted
- *  #5c5c57, caption #6f6f69, the mark, one command in mono. */
+ *  An HTML string set in Manrope / JetBrains Mono on the mist, screenshotted at 1200×630 with the same Chromium
+ *  scripts/shoot.ts uses. Nothing here that is not on the page (Y3 · Sabah sisi): ground #f4f6fb under the mist
+ *  gradient, text #1b2230, muted #4a5568, faint #5e6880, accent-text #2f6ac0, a white card, the mark, one command. */
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
@@ -25,25 +25,26 @@ function findChromium() {
 }
 
 const b64 = (p, mime) => `data:${mime};base64,${readFileSync(p).toString("base64")}`;
-const hanken = b64(join(PUB, "fonts", "hanken-grotesk-latin-wght-normal.woff2"), "font/woff2");
-const mono = b64(join(PUB, "fonts", "ibm-plex-mono-latin-400-normal.woff2"), "font/woff2");
+const sans = b64(join(PUB, "fonts", "manrope-latin-wght-normal.woff2"), "font/woff2");
+const mono = b64(join(PUB, "fonts", "jetbrains-mono-latin-wght-normal.woff2"), "font/woff2");
 const mark = b64(join(PUB, "brand", "mark-sky-96.png"), "image/png");
 
 const html = `<!doctype html><html><head><meta charset="utf-8">
 <style>
-  @font-face { font-family: H; src: url(${hanken}) format("woff2-variations"); font-weight: 100 900; }
-  @font-face { font-family: M; src: url(${mono}) format("woff2"); }
+  @font-face { font-family: H; src: url(${sans}) format("woff2-variations"); font-weight: 200 800; }
+  @font-face { font-family: M; src: url(${mono}) format("woff2-variations"); font-weight: 100 800; }
   html, body { margin: 0; }
-  body { width: 1200px; height: 630px; background: #f6f6f4; color: #141414; font-family: H, sans-serif; -webkit-font-smoothing: antialiased; position: relative; overflow: hidden; }
-  .mark { position: absolute; left: 88px; top: 80px; display: flex; align-items: center; gap: 14px; font-size: 22px; font-weight: 500; letter-spacing: -0.01em; }
-  .mark img { width: 30px; height: 30px; opacity: .85; filter: grayscale(1); }
-  .mark small { font-size: 13px; font-weight: 500; letter-spacing: .16em; text-transform: uppercase; color: #6f6f69; margin-left: 10px; }
-  h1 { position: absolute; left: 88px; top: 188px; margin: 0; width: 900px; font-size: 64px; line-height: 1.08; font-weight: 300; letter-spacing: -0.02em; }
-  h1 b { font-weight: 400; }
-  p { position: absolute; left: 88px; top: 388px; margin: 0; width: 760px; font-size: 24px; line-height: 1.5; color: #5c5c57; font-weight: 400; }
-  code { position: absolute; left: 88px; bottom: 80px; font-family: M, monospace; font-size: 22px; color: #141414; background: #efefec; padding: 16px 22px; border-radius: 8px; }
-  code span { color: #6f6f69; }
-  .cap { position: absolute; right: 88px; bottom: 96px; font-size: 13px; font-weight: 500; letter-spacing: .16em; text-transform: uppercase; color: #6f6f69; }
+  body { width: 1200px; height: 630px; color: #1b2230; font-family: H, sans-serif; -webkit-font-smoothing: antialiased; position: relative; overflow: hidden;
+         background: radial-gradient(90% 60% at 50% 0%, rgba(159,184,232,.22) 0%, rgba(159,184,232,0) 70%), linear-gradient(180deg, #fdfdfe 0%, #f9fafd 40%, #f4f6fb 100%); }
+  .mark { position: absolute; left: 88px; top: 80px; display: flex; align-items: center; gap: 14px; font-size: 23px; font-weight: 600; letter-spacing: -0.01em; }
+  .mark img { width: 30px; height: 30px; }
+  .mark small { font-size: 12px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: #5e6880; margin-left: 10px; background: #e3eaf8; border-radius: 999px; padding: 6px 12px; }
+  h1 { position: absolute; left: 88px; top: 180px; margin: 0; width: 940px; font-size: 64px; line-height: 1.08; font-weight: 600; letter-spacing: -0.025em; }
+  h1 b { font-weight: 600; color: #2f6ac0; }
+  p { position: absolute; left: 88px; top: 388px; margin: 0; width: 760px; font-size: 24px; line-height: 1.5; color: #4a5568; font-weight: 400; }
+  code { position: absolute; left: 88px; bottom: 80px; font-family: M, monospace; font-size: 22px; color: #1b2230; background: #ffffff; border: 1px solid #e6eaf3; padding: 16px 22px; border-radius: 16px; box-shadow: 0 12px 40px -20px rgba(27,34,48,.18); }
+  code span { color: #2f6ac0; }
+  .cap { position: absolute; right: 88px; bottom: 96px; font-size: 12px; font-weight: 600; letter-spacing: .12em; text-transform: uppercase; color: #5e6880; }
 </style></head><body>
   <div class="mark"><img src="${mark}" alt="">rovecode<small>open source · AGPL-3.0</small></div>
   <h1>A terminal coding agent with a <b>cockpit</b>, not a chat log.</h1>
