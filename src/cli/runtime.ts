@@ -33,7 +33,7 @@ import { rovecodeHome } from "../providers/auth.ts";
 import { readTool, editTool, writeTool, bashTool } from "../coding/hashline.ts";
 import { globTool, grepTool, lsTool } from "../coding/files.ts";
 import { withLspGate, lspGateNote } from "../coding/lsp.ts";
-import { buildRepoMapChunk } from "../coding/repomap.ts";
+import type { buildRepoMapChunk as BuildRepoMapChunkFn } from "../coding/repomap.ts";
 import { anchorEntryId, Checkpoints, MUTATING_KINDS } from "../coding/checkpoints.ts";
 import { createRouter, roleTableFromEnv, type Router } from "../providers/router.ts";
 import { describeGiveUp, describeRetry, retryOptionsFromEnv, withRetry } from "../providers/retry.ts";
@@ -440,7 +440,11 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     let repoMapChunk: ContextChunk | null = null;
     if (process.env.ROVECODE_NO_REPOMAP !== "1") {
       const budget = Number(process.env.ROVECODE_REPOMAP_TOKENS ?? "") || 1024;
-      try { repoMapChunk = buildRepoMapChunk(cwd, budget); } catch { repoMapChunk = null; }
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const { buildRepoMapChunk } = require("../coding/repomap.ts") as { buildRepoMapChunk: typeof BuildRepoMapChunkFn };
+        repoMapChunk = buildRepoMapChunk(cwd, budget);
+      } catch { repoMapChunk = null; }
     }
     extraChunksMemo = [configChunk, repoMapChunk].filter((c): c is ContextChunk => c !== null);
     return extraChunksMemo;
