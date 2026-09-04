@@ -23,13 +23,27 @@ export function CopyCommand({ command, display, prompt = "$", className, size = 
   const [copied, setCopied] = useState(false);
   const timer = useRef<number | null>(null);
   useEffect(() => () => { if (timer.current) window.clearTimeout(timer.current); }, []);
+  const code = useRef<HTMLElement | null>(null);
+  /** copy through the async clipboard when the origin allows it (https, localhost); otherwise the legacy
+   *  execCommand path, which Firefox and Safari still honour on a click. If neither works — plain http on a
+   *  browser that refuses both — the command text is selected instead and the label stays "copy": the visitor
+   *  presses ⌘/Ctrl+C, and the button never claims a copy that did not happen. */
   const copy = useCallback(async () => {
+    let ok = false;
     try {
-      await navigator.clipboard.writeText(command);
-    } catch {
+      if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(command); ok = true; }
+    } catch { /* insecure origin or permission denied: fall through */ }
+    if (!ok) {
       const ta = document.createElement("textarea");
       ta.value = command; ta.setAttribute("readonly", ""); ta.style.position = "fixed"; ta.style.opacity = "0";
-      document.body.appendChild(ta); ta.select(); document.execCommand("copy"); ta.remove();
+      document.body.appendChild(ta); ta.select();
+      try { ok = document.execCommand("copy"); } catch { ok = false; }
+      ta.remove();
+    }
+    if (!ok) {
+      const el = code.current;
+      if (el) { const r = document.createRange(); r.selectNodeContents(el); const sel = window.getSelection(); sel?.removeAllRanges(); sel?.addRange(r); }
+      return;
     }
     setCopied(true);
     if (timer.current) window.clearTimeout(timer.current);
@@ -48,6 +62,7 @@ export function CopyCommand({ command, display, prompt = "$", className, size = 
       )}
     >
       <code
+        ref={code}
         dir="ltr"
         className={cn(
           "mono min-w-0 flex-1 self-center",
