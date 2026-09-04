@@ -465,6 +465,9 @@ if (cmd === "" || cmd === "chat" || cmd === "repl") {
       const { startServer } = await import("../server/http.ts");
       const port = Number(process.env.ROVECODE_PORT ?? "") || undefined;
       const srv = startServer({ ...(port !== undefined ? { port } : {}), yolo: cli.yolo });
+      // an orderly stop on SIGTERM/SIGINT (systemd, Ctrl-C on a POSIX host): session_close hooks, MCP close and
+      // task cancelAll run instead of the default kill. On Windows a signal is TerminateProcess — no handler runs.
+      for (const sig of ["SIGTERM", "SIGINT"] as const) process.once(sig, () => { void Promise.resolve(srv.stop()).then(() => process.exit(0), () => process.exit(1)); });
       console.log(`rovecode server listening on ${srv.url} — POST /session · POST /session/:id/prompt (SSE) · DELETE /session/:id/prompt · GET /session/:id/tasks · GET /sessions · GET /doc`);
       break;
     }
