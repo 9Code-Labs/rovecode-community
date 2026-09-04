@@ -14,16 +14,28 @@ repository for now).
 
 - **All 20 BLUEPRINT §3 ports landed** (P1 8/8 · P2 6/6 · P3 4/4 · P4 2/2) **+ all 19 Wave-3 parity ports (#21–#39)** landed
   through the gauntlet-loop (builder → fresh-context critic → fix wave → re-verify; ledger: `PORTS.md`)
-- **Tests**: 1901 pass / 0 fail / 1 skip (146 files, unit + integration; run in ≤4-file chunks)
+- **Tests**: 1953 pass / 0 fail / 1 skip (156 files, unit + integration; run in ≤4-file chunks). CI runs the
+  same suite on `ubuntu-latest` (`.github/workflows/ci.yml`), so POSIX paths are gated, not just exercised
 - **Gauntlet**: 10/10 (basic, coding, failure-recovery, adversarial: loop-guard, huge-output, permission-bypass)
 - **Typecheck**: 0 errors · TUI render smoke: PASS
 - **Wave 4**: the sextant surface (`src/sextant/*`, the new default TUI ported from the user's prototype) is merged —
   core, model/panels, code/messages, input, pet, crew board and the renderer integration; external agentic-CLI
   lanes (#47) are not implemented in this repository; the pi-tui chat stays available as `--classic`
-- **After wave 4**, five surfaces landed that the ports ledger does not cover: the plugin format (`src/plugins`),
-  the MCP market and its project trust gate (`src/mcp`), the interface-design protocol (`src/design`,
-  `docs/design.md`), three permission tiers (ask first · accept edits · auto) and model profiles
-  (`src/providers/profiles.ts`)
+- **After wave 4**, the ports ledger stops covering what shipped. Also landed:
+  - the **interface-design protocol** (`src/design`, `docs/design.md`): no default look, `design_direction`
+    records the direction the human chose, `design_audit` checks later screens against it, and a headless run
+    records a *provisional* direction instead of passing its own taste off as a decision
+  - **three permission tiers** (ask first · accept edits · auto) with `.rovecode/settings.json` to persist one
+  - the **plugin format** (`src/plugins`) and the **MCP market with its project trust gate** (`src/mcp`)
+  - **model profiles** (`src/providers/profiles.ts`) and one **thinking dial** across every provider dialect
+    (`docs/thinking.md`; `rovecode model show` prints what your model receives per level)
+  - **run budgets** — `--max-turns` / `--max-seconds`, so a spiral ends in a result instead of an outside kill
+  - a decided **wire-failure policy** (`docs/wire-failures.md`): what is retried, what is never retried after
+    text has arrived, and the wait announced while it happens
+  - the **site** (`site/`, 15 languages, prerendered, [live](http://64.177.43.110/)) and the CI/CD workflows
+    that build and ship it
+  - **sextant** gained mouse and scrollbar dragging, the page tab strip, the notices history and prompt suggestions
+  - **startup** is lazy: `rovecode --help` no longer boots the TUI, the loop, the runtime or the plugin scanner
 
 ## Install
 
@@ -530,8 +542,10 @@ tokens, cache hits, and catalog-priced spend.
   `defaultMode`.
 - **Server sessions are in-memory.** `rovecode serve` loses its session routing table on restart
   (JSONL trees persist on disk).
-- **Windows-first.** Developed and gated on Windows 11 + Git Bash; POSIX paths exercised in tests
-  but Linux/macOS are not CI-verified.
+- **Windows-first, Linux-checked.** Developed on Windows 11 + Git Bash, where the suite, the gauntlet and
+  the render smoke are run by hand before anything lands. CI (`.github/workflows/ci.yml`) runs `tsc` and the
+  full suite on `ubuntu-latest` for every push and pull request, so POSIX paths are gated rather than merely
+  exercised. **macOS is not verified anywhere** — nothing runs there, by CI or by hand.
 - **Packaging**: not published to npm; compiled binary is ~110 MB (bun runtime).
 
 ## Extending
