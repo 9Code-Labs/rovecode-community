@@ -6,13 +6,21 @@
 #   scripts/deploy-site.sh                 build (with /docs/, the production build) + deploy
 #   scripts/deploy-site.sh --no-docs       build the landing page only (bun run build) + deploy
 #   scripts/deploy-site.sh --no-build      deploy the existing site/dist
+#   scripts/deploy-site.sh --check         after the flip, walk every URL in the live sitemap (live-check, ~3 min);
+#                                          a failing page rolls the release back
 #   scripts/deploy-site.sh --rollback      previous release becomes current
 #   DEPLOY_HOST=root@1.2.3.4 scripts/deploy-site.sh   another host
 set -euo pipefail
 
 # /docs/ ships with the site since 2026-09-04 (Berkay's call); --docs is accepted for old habits
-BUILD_SCRIPT="build:docs"
-for a in "$@"; do [[ "$a" == "--no-docs" ]] && BUILD_SCRIPT="build"; done
+BUILD_SCRIPT="build:docs"; CHECK=0; NO_BUILD=0
+for a in "$@"; do
+  case "$a" in
+    --no-docs) BUILD_SCRIPT="build" ;;
+    --check) CHECK=1 ;;
+    --no-build) NO_BUILD=1 ;;
+  esac
+done
 
 HOST="${DEPLOY_HOST:-root@64.177.43.110}"
 ROOT="${DEPLOY_ROOT:-/var/www/rovecode}"
@@ -29,7 +37,7 @@ if [[ "${1:-}" == "--rollback" ]]; then
   exit 0
 fi
 
-if [[ "${1:-}" != "--no-build" ]]; then
+if [[ "$NO_BUILD" == 0 ]]; then
   echo "== build ($BUILD_SCRIPT)"
   (cd "$SITE" && bun install --frozen-lockfile > /dev/null && bun run "$BUILD_SCRIPT" 2>&1 | tail -3)
 fi
@@ -48,3 +56,12 @@ code="$(curl -s -o /dev/null -w '%{http_code}' "$URL")"
 title="$(curl -s "$URL" | grep -o '<title>[^<]*</title>' | head -1)"
 echo "$code $title"
 [[ "$code" == "200" ]] || { echo "deploy verify failed"; exit 1; }
+
+if [[ "$CHECK" == 1 ]]; then
+  echo "== live-check $URL (every sitemap URL: status, meta, console, axe)"
+  if ! (cd "$SITE" && node scripts/live-check.mjs "$URL" | tail -1); then
+    echo "live-check failed — rolling back"
+    "$0" --rollback
+    exit 1
+  fi
+fi

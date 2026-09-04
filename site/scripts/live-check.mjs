@@ -46,5 +46,8 @@ for (const { expected, url } of urls) {
   await page.close();
 }
 console.table(rows.map(r => ({ url: r.url || "/", st: r.status, lang: r.lang, dir: r.dir, title: r.title, desc: r.desc, hreflang: r.hreflang, ogLocale: r.ogLocale, h1: r.h1, con: r.console, x4: r.http4xx, crit: r.axe.critical, ser: r.axe.serious, mod: r.axe.moderate, min: r.axe.minor, ok: r.ok })));
-console.log("TOTALS", JSON.stringify(totals), "all ok:", rows.every(r => r.ok));
+const allOk = rows.every(r => r.ok) && totals.axe.critical === 0 && totals.axe.serious === 0;
+console.log("TOTALS", JSON.stringify(totals), "all ok:", allOk);
+// a gate, not just a report: deploy-site.sh --check and CI read the exit code
+process.exitCode = allOk ? 0 : 1;
 await browser.close();
