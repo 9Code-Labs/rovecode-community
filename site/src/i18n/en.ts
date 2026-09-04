@@ -4,8 +4,7 @@
 export const en = {
   meta: {
     title: "Rovecode — a coding agent for the terminal",
-    description:
-      "Rovecode is an open-source coding agent for the terminal: a panelled TUI cockpit, 16 built-in providers or any OpenAI-compatible endpoint, deny-default tool policy, session tree with rewind. TypeScript on Bun, AGPL-3.0.",
+    description: "Open-source coding agent for the terminal: a panelled TUI cockpit, 16 providers or any OpenAI-compatible endpoint, deny-default tool policy. Bun, AGPL-3.0.",
   },
 
   nav: {

@@ -3,8 +3,7 @@ import type { PartialDict } from "../en";
 export const fr: PartialDict = {
   meta: {
     title: "Rovecode — un agent de code pour le terminal",
-    description:
-      "Rovecode est un agent de code open source pour le terminal : un cockpit TUI à panneaux, 16 fournisseurs intégrés ou n'importe quel point d'accès compatible OpenAI, une politique d'outils qui refuse par défaut, un arbre de session avec retour en arrière. TypeScript sur Bun, AGPL-3.0.",
+    description: "Agent de programmation open source pour le terminal : cockpit TUI à panneaux, 16 fournisseurs ou tout endpoint compatible OpenAI, politique deny-default. Bun, AGPL-3.0.",
   },
   nav: { cockpit: "Cockpit", capabilities: "Capacités", terminal: "Terminal", quickstart: "Démarrage", providers: "Fournisseurs", faq: "FAQ" },
   ui: {
@@ -39,8 +38,15 @@ export const fr: PartialDict = {
     chips: ["+4 −1 appliqué", "demander d'abord · carte d'autorisation", "contexte 13 % de 200k"],
   },
   proof: {
-    eyebrow: "depuis le dépôt",
-    ariaLabel: "Chiffres tirés du dépôt",
+    eyebrow: "depuis le dépôt, au moment du build",
+    ariaLabel: "Chiffres issus du dépôt",
+    stats: [
+      { label: "tests", note: "appels test() sous test/, comptés au build" },
+      { label: "fournisseurs intégrés", note: "plus toute URL compatible OpenAI" },
+      { label: "couches de politique", note: "rules · execpolicy · approval · runtime" },
+      { label: "langues sur cette page", note: "choisie par le navigateur, modifiable" },
+      { label: "licence", note: "logiciel libre, copyleft étendu à l'usage réseau" },
+    ],
   },
   cockpit: {
     eyebrow: "le cockpit",

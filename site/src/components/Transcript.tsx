@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { animate, useInView, useReducedMotion } from "motion/react";
 import { STATIC } from "@/lib/boot";
+import { tween, useInViewOnce, usePrefersReducedMotion } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { TRANSCRIPT } from "@/content";
 
@@ -30,8 +30,7 @@ function useTyped(text: string, active: boolean, msPerChar: number, instant: boo
   useEffect(() => {
     if (instant) { setN(text.length); return; }
     if (!active) return;
-    const c = animate(0, text.length, { duration: (text.length * msPerChar) / 1000, ease: "linear", onUpdate: (v) => setN(Math.round(v)) });
-    return () => c.stop();
+    return tween(0, text.length, text.length * msPerChar, (v) => setN(Math.round(v)), (t) => t);
   }, [active, instant, text, msPerChar]);
   return { shown: text.slice(0, n), done: n >= text.length };
 }
@@ -47,9 +46,9 @@ function Row({ on, className, children }: { on: boolean; className?: string; chi
 
 export function Transcript({ className }: { className?: string }) {
   const t = TRANSCRIPT;
-  const reduce = (useReducedMotion() ?? false) || STATIC;
+  const reduce = usePrefersReducedMotion() || STATIC;
   const root = useRef<HTMLDivElement | null>(null);
-  const inView = useInView(root, { once: true, amount: 0.45 });
+  const inView = useInViewOnce(root, 0.45);
   const [step, setStep] = useState(reduce ? DONE : -1);
 
   useEffect(() => {

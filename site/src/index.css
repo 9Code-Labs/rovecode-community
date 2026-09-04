@@ -13,7 +13,7 @@
   --color-border-strong: #d2d2cc;
   --color-text: #141414;
   --color-text-muted: #5c5c57;     /* 6.4:1 on the paper */
-  --color-text-faint: #6f6f69;     /* 4.7:1 on the paper — the small captions still pass AA */
+  --color-text-faint: #66665f;     /* 5.5:1 on the paper, 5.0:1 on surface-2 — captions pass AA everywhere */
 
   /* the one accent: a deep sea-ink, for links, focus and the single mark per section */
   --color-brand: #1e3d4c;
@@ -237,7 +237,7 @@
   color: var(--color-ink-text);
   border-radius: var(--radius-lg);
   --t-muted: #a6a6a0;
-  --t-faint: #6f6f69;
+  --t-faint: #8b8b85;              /* 5.0:1 on the terminal ink */
   --t-accent: #9fc5d4;
   --t-plus: #7fc48f;
   --t-card: #1f2224;

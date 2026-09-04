@@ -3,8 +3,7 @@ import type { PartialDict } from "../en";
 export const ja: PartialDict = {
   meta: {
     title: "Rovecode — ターミナルのためのコーディングエージェント",
-    description:
-      "Rovecode はターミナル向けのオープンソースのコーディングエージェントです。パネル式の TUI コックピット、16 の組み込みプロバイダまたは OpenAI 互換の任意のエンドポイント、既定で拒否するツールポリシー、巻き戻せるセッションツリー。Bun 上の TypeScript、AGPL-3.0。",
+    description: "ターミナル向けオープンソースのコーディングエージェント。パネル式 TUI コックピット、16 のプロバイダーまたは OpenAI 互換エンドポイント、既定拒否のツールポリシー。Bun、AGPL-3.0。",
   },
   nav: { cockpit: "コックピット", capabilities: "機能", terminal: "ターミナル", quickstart: "クイックスタート", providers: "プロバイダ", faq: "よくある質問" },
   ui: {
@@ -39,8 +38,15 @@ export const ja: PartialDict = {
     chips: ["+4 −1 が着地", "まず尋ねる · 承認カード", "コンテキストは 200k の 13 %"],
   },
   proof: {
-    eyebrow: "リポジトリより",
-    ariaLabel: "リポジトリからの数字",
+    eyebrow: "リポジトリから、ビルド時に",
+    ariaLabel: "リポジトリの数値",
+    stats: [
+      { label: "テスト", note: "test/ 配下の test() 呼び出し、ビルド時に集計" },
+      { label: "組み込みプロバイダー", note: "加えて OpenAI 互換の任意の URL" },
+      { label: "ポリシー層", note: "rules · execpolicy · approval · runtime" },
+      { label: "このページの言語", note: "ブラウザから選択、切り替え可" },
+      { label: "ライセンス", note: "自由ソフトウェア、ネットワーク利用にも及ぶコピーレフト" },
+    ],
   },
   cockpit: {
     eyebrow: "コックピット",

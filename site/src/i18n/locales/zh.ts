@@ -3,8 +3,7 @@ import type { PartialDict } from "../en";
 export const zh: PartialDict = {
   meta: {
     title: "Rovecode — 为终端而生的编码智能体",
-    description:
-      "Rovecode 是一个面向终端的开源编码智能体：分面板的 TUI 驾驶舱、16 个内置提供方或任意 OpenAI 兼容端点、默认拒绝的工具策略，以及可回退的会话树。基于 Bun 的 TypeScript，AGPL-3.0。",
+    description: "面向终端的开源编码代理：分栏 TUI 驾驶舱、16 个提供商或任意 OpenAI 兼容端点、默认拒绝的工具策略。Bun，AGPL-3.0。",
   },
   nav: { cockpit: "驾驶舱", capabilities: "能力", terminal: "终端", quickstart: "快速开始", providers: "提供方", faq: "常见问题" },
   ui: {
@@ -39,8 +38,15 @@ export const zh: PartialDict = {
     chips: ["+4 −1 已落地", "先询问 · 批准卡片", "上下文占 200k 的 13 %"],
   },
   proof: {
-    eyebrow: "来自仓库",
+    eyebrow: "来自仓库，构建时统计",
     ariaLabel: "来自仓库的数字",
+    stats: [
+      { label: "测试", note: "test/ 下的 test() 调用，构建时计数" },
+      { label: "内置提供商", note: "外加任意 OpenAI 兼容地址" },
+      { label: "策略层", note: "rules · execpolicy · approval · runtime" },
+      { label: "本页语言", note: "由浏览器选定，可切换" },
+      { label: "许可证", note: "自由软件，copyleft 同样覆盖网络使用" },
+    ],
   },
   cockpit: {
     eyebrow: "驾驶舱",

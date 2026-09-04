@@ -26,6 +26,6 @@ export function Pic({ src, widths, sizes, ...img }: Props) {
 }
 
 /** the widths scripts/images.mjs renders for the 160×44 frames (2497 px native) */
-export const FRAME_WIDTHS = [960, 1400, 2400] as const;
+export const FRAME_WIDTHS = [640, 960, 1400, 2400] as const;
 /** the frame is at most 1136 px wide on the page (1200 container − padding); phones get the viewport width */
 export const FRAME_SIZES = "(min-width: 1200px) 1136px, calc(100vw - 48px)";

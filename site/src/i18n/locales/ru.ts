@@ -3,8 +3,7 @@ import type { PartialDict } from "../en";
 export const ru: PartialDict = {
   meta: {
     title: "Rovecode — кодовый агент для терминала",
-    description:
-      "Rovecode — кодовый агент с открытым исходным кодом для терминала: панельная кабина TUI, 16 встроенных провайдеров или любая точка доступа, совместимая с OpenAI, политика инструментов, запрещающая по умолчанию, и дерево сессии с откатом. TypeScript на Bun, AGPL-3.0.",
+    description: "Открытый агент для программирования в терминале: TUI-кокпит с панелями, 16 провайдеров или любой OpenAI-совместимый endpoint, политика deny-default. Bun, AGPL-3.0.",
   },
   nav: { cockpit: "Кабина", capabilities: "Возможности", terminal: "Терминал", quickstart: "Быстрый старт", providers: "Провайдеры", faq: "Вопросы" },
   ui: {
@@ -39,8 +38,15 @@ export const ru: PartialDict = {
     chips: ["+4 −1 применено", "сначала спросить · карточка подтверждения", "контекст 13 % от 200k"],
   },
   proof: {
-    eyebrow: "из репозитория",
-    ariaLabel: "Числа из репозитория",
+    eyebrow: "из репозитория, при сборке",
+    ariaLabel: "Цифры из репозитория",
+    stats: [
+      { label: "тестов", note: "вызовы test() в test/, подсчитаны при сборке" },
+      { label: "встроенных провайдеров", note: "плюс любой OpenAI-совместимый URL" },
+      { label: "уровня политики", note: "rules · execpolicy · approval · runtime" },
+      { label: "языков на этой странице", note: "выбирается браузером, можно сменить" },
+      { label: "лицензия", note: "свободное ПО, copyleft распространяется и на сетевое использование" },
+    ],
   },
   cockpit: {
     eyebrow: "кабина",

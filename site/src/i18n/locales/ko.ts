@@ -3,8 +3,7 @@ import type { PartialDict } from "../en";
 export const ko: PartialDict = {
   meta: {
     title: "Rovecode — 터미널을 위한 코딩 에이전트",
-    description:
-      "Rovecode는 터미널을 위한 오픈 소스 코딩 에이전트입니다. 패널로 나뉜 TUI 콕핏, 16개의 기본 제공자 또는 OpenAI 호환 엔드포인트, 기본이 거부인 도구 정책, 되감기가 되는 세션 트리. Bun 위의 TypeScript, AGPL-3.0.",
+    description: "터미널용 오픈소스 코딩 에이전트. 패널형 TUI 콕핏, 16개 프로바이더 또는 OpenAI 호환 엔드포인트, 기본 거부 도구 정책. Bun, AGPL-3.0.",
   },
   nav: { cockpit: "콕핏", capabilities: "기능", terminal: "터미널", quickstart: "빠른 시작", providers: "제공자", faq: "자주 묻는 질문" },
   ui: {
@@ -39,8 +38,15 @@ export const ko: PartialDict = {
     chips: ["+4 −1 반영됨", "먼저 묻기 · 승인 카드", "컨텍스트 200k의 13 %"],
   },
   proof: {
-    eyebrow: "저장소에서",
-    ariaLabel: "저장소에서 가져온 숫자",
+    eyebrow: "저장소에서, 빌드 시점에",
+    ariaLabel: "저장소에서 가져온 수치",
+    stats: [
+      { label: "테스트", note: "test/ 아래 test() 호출, 빌드 시 집계" },
+      { label: "내장 프로바이더", note: "OpenAI 호환 URL은 무엇이든 추가" },
+      { label: "정책 계층", note: "rules · execpolicy · approval · runtime" },
+      { label: "이 페이지의 언어", note: "브라우저에서 선택, 전환 가능" },
+      { label: "라이선스", note: "자유 소프트웨어, 네트워크 사용에도 미치는 카피레프트" },
+    ],
   },
   cockpit: {
     eyebrow: "콕핏",

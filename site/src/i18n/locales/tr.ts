@@ -3,8 +3,7 @@ import type { PartialDict } from "../en";
 export const tr: PartialDict = {
   meta: {
     title: "Rovecode — terminal için bir kodlama ajanı",
-    description:
-      "Rovecode, terminal için açık kaynak bir kodlama ajanı: panelli bir TUI kokpiti, 16 hazır sağlayıcı ya da OpenAI uyumlu herhangi bir uç nokta, varsayılanı reddet olan araç politikası, geri sarmalı oturum ağacı. Bun üzerinde TypeScript, AGPL-3.0.",
+    description: "Terminal için açık kaynak kodlama ajanı: panelli TUI kokpit, 16 sağlayıcı ya da OpenAI uyumlu her uç nokta, varsayılanı reddet araç politikası. Bun, AGPL-3.0.",
   },
   nav: { cockpit: "Kokpit", capabilities: "Yetenekler", terminal: "Terminal", quickstart: "Hızlı başlangıç", providers: "Sağlayıcılar", security: "Güvenlik", faq: "SSS" },
   ui: {

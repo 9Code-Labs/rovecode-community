@@ -3,8 +3,7 @@ import type { PartialDict } from "../en";
 export const ar: PartialDict = {
   meta: {
     title: "Rovecode — وكيل برمجة للطرفية",
-    description:
-      "‏Rovecode وكيل برمجة مفتوح المصدر للطرفية: قمرة قيادة نصية مقسّمة إلى لوحات، و16 مزوّدًا مدمجًا أو أي نقطة وصول متوافقة مع OpenAI، وسياسة أدوات ترفض افتراضيًا، وشجرة جلسة قابلة للإرجاع. TypeScript فوق Bun، برخصة AGPL-3.0.",
+    description: "وكيل برمجة مفتوح المصدر للطرفية: قمرة قيادة TUI بلوحات، 16 مزوّدًا أو أي نقطة نهاية متوافقة مع OpenAI، سياسة أدوات ترفض افتراضيًا. Bun، AGPL-3.0.",
   },
   nav: { cockpit: "القمرة", capabilities: "القدرات", terminal: "الطرفية", quickstart: "البدء السريع", providers: "المزوّدون", faq: "أسئلة شائعة" },
   ui: {
@@ -39,8 +38,15 @@ export const ar: PartialDict = {
     chips: ["‎+4 −1‎ حطّ", "اسأل أولًا · بطاقة موافقة", "السياق 13 ٪ من 200k"],
   },
   proof: {
-    eyebrow: "من المستودع،",
+    eyebrow: "من المستودع، عند البناء",
     ariaLabel: "أرقام من المستودع",
+    stats: [
+      { label: "اختبارات", note: "استدعاءات test()‎ تحت test/‏، تُحصى عند البناء" },
+      { label: "مزوّدون مضمّنون", note: "إضافة إلى أي عنوان متوافق مع OpenAI" },
+      { label: "طبقات السياسة", note: "rules · execpolicy · approval · runtime" },
+      { label: "لغات هذه الصفحة", note: "يختارها المتصفح، ويمكن تغييرها" },
+      { label: "الرخصة", note: "برمجيات حرة، وحقوق متروكة تشمل الاستخدام عبر الشبكة" },
+    ],
   },
   cockpit: {
     eyebrow: "القمرة",
