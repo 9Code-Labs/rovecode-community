@@ -22,8 +22,19 @@
  *  NOT do is reconcile the OpenAI inclusive-input asymmetry above — that part is hand-mapped here.
  */
 
-import { countTokens as o200kCountTokens } from "gpt-tokenizer/encoding/o200k_base";
+import type { countTokens as CountTokensFn } from "gpt-tokenizer/encoding/o200k_base";
 import { breakdownTokens } from "tokenlens/helpers";
+
+// lazy loader — the 2.3 MB BPE rank table is deferred until the first countTokens() call
+type GptTokenizerMod = { countTokens: typeof CountTokensFn };
+let _gptMod: GptTokenizerMod | null = null;
+function lazyTokenizer(): GptTokenizerMod {
+  if (_gptMod === null) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    _gptMod = require("gpt-tokenizer/encoding/o200k_base") as GptTokenizerMod;
+  }
+  return _gptMod;
+}
 
 // ---------- pricing ----------
 
@@ -48,7 +59,7 @@ export interface NormalizedUsage {
  *  An ESTIMATE for non-OpenAI models (Anthropic's tokenizer is not public); good enough for
  *  context-budget arithmetic, not for billing reconciliation — use provider usage for that. */
 export function countTokens(text: string): number {
-  return o200kCountTokens(text);
+  return lazyTokenizer().countTokens(text);
 }
 
 // ---------- usage normalization ----------
