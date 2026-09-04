@@ -81,6 +81,7 @@ test("registry JSON is re-typed and capped: npm/pypi/oci become exact launch lin
   expect(dotnet.description.length).toBe(LIMITS.desc);
   expect(dotnet.description.endsWith("…")).toBe(true);
   expect(notes).toContain('Acme.Mcp: package type "nuget" is not something rovecode can launch');
+  expect(notes).toContain("https://r.example/sse: sse remote (legacy transport) is not something rovecode can connect to"); // the human learns why, not just that nothing was written
   // caps: a page of 500 servers keeps LIMITS.servers
   const big = { servers: Array.from({ length: 500 }, (_, i) => ({ server: { name: `io.github.a/s${i}`, description: "d" }, _meta: official() })) };
   expect(parseRegistryPage(big, []).length).toBe(LIMITS.servers);

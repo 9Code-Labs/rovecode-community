@@ -10,7 +10,7 @@
 import { readSecret } from "../providers/auth.ts";
 import { rovecodeHome } from "../providers/auth.ts";
 import { installLabel, marketInfo, searchMarket, type MarketDeps, type MarketEntry } from "../mcp/market.ts";
-import { configuredServers, describePlan, fillPlan, planInstall, removeServer, serverLine, writeServer, type InstallPlan, type McpScope } from "../mcp/market-install.ts";
+import { configuredServers, describePlan, fillPlan, namesWritten, planInstall, removeServer, serverLine, writeServer, type InstallPlan, type McpScope } from "../mcp/market-install.ts";
 import { mcpConfigFiles, parseConfigFile } from "../mcp/config.ts";
 import { mcpTrustStatus, projectMcpFiles, trustMcpFile, untrustMcpFile } from "../mcp/trust.ts";
 import { createInterface } from "node:readline";
@@ -120,10 +120,27 @@ export async function cmdMcp(args: string[], deps: McpCliDeps = {}): Promise<num
   const secret = deps.secret ?? ((p: string) => readSecret(p));
   const plain = deps.plain ?? readLine;
   const [cmd, ...rest] = args;
+  // every flag a subcommand takes; anything else is a usage error (exit 2), not a silently ignored word —
+  // `mcp show --project` used to pass only because unknown flags were filtered out
+  const KNOWN_FLAGS: Record<string, readonly string[]> = {
+    search: [], info: [], add: ["--project", "--pick", "--as", "--yes", "--force"], remove: ["--project"], list: [],
+    show: ["--project"], trust: ["--yes", "--project"], untrust: [], help: [],
+  };
+  if (cmd !== undefined && cmd in KNOWN_FLAGS) {
+    const valued = new Set(["--pick", "--as"]);
+    let skip = false;
+    for (const a of rest) {
+      if (skip) { skip = false; continue; }
+      if (a.startsWith("--")) {
+        if (!KNOWN_FLAGS[cmd]!.includes(a)) { err(`unknown flag ${a} for "rovecode mcp ${cmd}" — see: rovecode mcp help`); return 2; }
+        if (valued.has(a)) skip = true;
+      }
+    }
+  }
   const names = words(rest);
   const scope: McpScope = flag(rest, "--project") ? "project" : "user";
   switch (cmd) {
-    case undefined: case "help": case "--help": case "-h": for (const l of MCP_USAGE) out(l); return cmd === undefined ? 1 : 0;
+    case undefined: case "help": case "--help": case "-h": for (const l of MCP_USAGE) out(l); return cmd === undefined ? 2 : 0;
     case "search": {
       const r = await searchMarket(names.join(" "), market);
       for (const n of r.notes) err(`note: ${n}`);
@@ -133,7 +150,7 @@ export async function cmdMcp(args: string[], deps: McpCliDeps = {}): Promise<num
       return 0;
     }
     case "info": {
-      if (!names[0]) { err("usage: rovecode mcp info <name>"); return 1; }
+      if (!names[0]) { err("usage: rovecode mcp info <name>"); return 2; }
       const r = await marketInfo(names[0], market);
       for (const n of r.notes) err(`note: ${n}`);
       if (!r.entry) return 1;
@@ -141,13 +158,13 @@ export async function cmdMcp(args: string[], deps: McpCliDeps = {}): Promise<num
       return 0;
     }
     case "add": {
-      if (!names[0]) { err("usage: rovecode mcp add <name> [--project] [--pick N] [--as <name>] [--yes] [--force]"); return 1; }
+      if (!names[0]) { err("usage: rovecode mcp add <name> [--project] [--pick N] [--as <name>] [--yes] [--force]"); return 2; }
       const r = await marketInfo(names[0], market);
       for (const n of r.notes) err(`note: ${n}`);
       if (!r.entry) return 1;
       const pickRaw = value(rest, "--pick");
       const pick = pickRaw === undefined ? undefined : Number(pickRaw);
-      if (pick !== undefined && (!Number.isInteger(pick) || pick < 0)) { err(`--pick wants a whole number, not "${pickRaw}"`); return 1; }
+      if (pick !== undefined && (!Number.isInteger(pick) || pick < 0)) { err(`--pick wants a whole number, not "${pickRaw}"`); return 2; }
       const as = value(rest, "--as");
       const plan = planInstall(r.entry, { scope, cwd, home, ...(pick !== undefined ? { pick } : {}), ...(as !== undefined ? { name: as } : {}) });
       if ("error" in plan) { err(plan.error); return 1; }
@@ -161,19 +178,21 @@ export async function cmdMcp(args: string[], deps: McpCliDeps = {}): Promise<num
       const answers = await askPlan(plan, { secret, plain, tty, err });
       if (answers === null) { out("nothing written"); return 1; }
       let trusted: boolean | undefined;
+      const raw = fillPlan(plan, answers);
       try {
         // a project file the human just approved is trusted as written (mcp/trust.ts); the user file is never gated
-        trusted = writeServer(plan.file, plan.name, fillPlan(plan, answers), { replace: flag(rest, "--force"), ...(scope === "project" ? { trustHome: home } : {}) }).trusted;
+        trusted = writeServer(plan.file, plan.name, raw, { replace: flag(rest, "--force"), ...(scope === "project" ? { trustHome: home } : {}) }).trusted;
       } catch (e) { err(e instanceof Error ? e.message : String(e)); return 1; }
       out(`added "${plan.name}" → ${plan.file}${trusted === true ? "  (trusted on this machine as written)" : ""}`);
       if (trusted === false) out(`NOT trusted yet: that file already held servers you have not approved — rovecode mcp show, then rovecode mcp trust`);
       if (plan.pending.length) out(`fill in before use: ${plan.pending.join(", ")} (edit the args in that file)`);
-      if (plan.scope === "project" && plan.asks.some((a) => a.secret)) out(`set ${plan.asks.filter((a) => a.secret).map((a) => a.name).join(", ")} in your environment — the project file only names them`);
+      const named = namesWritten(plan, raw); // only what the file now refers to (a project file's secrets, an unanswered required value)
+      if (named.length) out(`set ${named.join(", ")} in your environment — the file only names them`);
       out("restart rovecode to connect (servers are read once per process)");
       return 0;
     }
     case "remove": {
-      if (!names[0]) { err("usage: rovecode mcp remove <name> [--project]"); return 1; }
+      if (!names[0]) { err("usage: rovecode mcp remove <name> [--project]"); return 2; }
       const files = mcpConfigFiles(cwd, home);
       const file = scope === "project" ? files.project : files.user!;
       try {
@@ -211,6 +230,6 @@ export async function cmdMcp(args: string[], deps: McpCliDeps = {}): Promise<num
       out(had.length ? `untrusted ${had.join(", ")}` : "nothing was trusted here");
       return 0;
     }
-    default: err(`unknown mcp command "${cmd}"`); for (const l of MCP_USAGE) err(l); return 1;
+    default: err(`unknown mcp command "${cmd}"`); for (const l of MCP_USAGE) err(l); return 2;
   }
 }

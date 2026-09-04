@@ -106,9 +106,10 @@ Aliases: `ls` = `list` (also what bare `rovecode plugin` does), `rm` = `remove`,
 rovecode's own runtime with no installed dependencies of its own. One that works from its source folder
 and then fails with `Cannot find module` after `plugin add` is hitting this.
 
-Loader warnings are echoed at boot the way hook warnings are (`plugins: <warning>`). There is no summary
-line today: `summarizePlugins()` in `src/plugins/index.ts` renders
-`plugins: 2 active (safety-net, notes) · 1 untrusted (acme)`, but nothing in `src/` calls it yet.
+Loader warnings are echoed at boot the way hook warnings are (`plugins: <warning>`), followed by one summary
+line whenever at least one plugin was found — `summarizePlugins()` in `src/plugins/index.ts`, e.g.
+`plugins: 2 active (safety-net, notes) · 1 untrusted (acme)` — on stderr for `rovecode run` and as a system note
+in the TUI, so what loaded and what stayed off is visible without `rovecode plugin list`.
 
 ## Failure model
 

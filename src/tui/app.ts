@@ -20,6 +20,7 @@ import { cmdHelp, cmdStatus, cmdCost, cmdSkills, cmdMemory, cmdExport, cmdTodos,
 import { cmdAttach, cmdPasteImage, carryOverAttachments, queuedAttachNote, userTurnLine, ATTACH_COMMAND, PASTE_COMMAND, type AttachCtx } from "./attach.ts";
 import { cmdConnect, cmdModel as cmdModelSwitch, cmdModels, cmdProvider, cmdSetup, watchProviders, CONNECT_COMMAND, MODEL_COMMAND, PROVIDER_COMMANDS, SETUP_COMMAND, type ProviderCmdCtx } from "./providers-cmd.ts";
 import { cmdMcp, MCP_COMMAND } from "./mcp-cmd.ts";
+import { summarizePlugins } from "../plugins/index.ts";
 import { acceptEditsNote, effortNote, modeSwitchNote, noModelHint, resumedLine, welcomeCard } from "../core/voice.ts";
 import { compactionNote } from "./replay-marker.ts";
 import { previewDiff } from "../coding/diff.ts";
@@ -485,6 +486,8 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   for (const w of rt.providers.warnings()) renderer.addSystemNote(`providers: ${w}`, "warn"); // malformed providers.json entries
   rt.hooks.onWarning((w) => renderer.addSystemNote(`hooks: ${w}`, "warn")); // port #29: hook load/runtime notes (buffered ones replay first)
   rt.plugins.onWarning((w) => renderer.addSystemNote(`plugins: ${w}`, "warn")); // plugin discovery/activation notes, the same way
+  const pluginLine = summarizePlugins(rt.plugins.found); // one line when there is at least one plugin: what loaded, what stayed off
+  if (pluginLine !== null) renderer.addSystemNote(pluginLine);
   pushStatus();
   watchProviders(provCtx()); // follow a default-model change made elsewhere; announce the first provider
   // port #27: an unavailable configured rung (probe failed) is a clean one-line startup

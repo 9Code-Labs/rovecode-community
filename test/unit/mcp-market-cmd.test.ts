@@ -69,12 +69,21 @@ test("cli: search lists curated then registry rows; info names publisher, the ex
   expect(await h.run("add io.github.acme/widgets --yes --project --as wid")).toBe(0);
   const proj = JSON.parse(readFileSync(join(cwd, ".rovecode", "mcp.json"), "utf8")) as { mcpServers: Record<string, unknown> };
   expect(proj.mcpServers.wid).toEqual({ command: "npx", args: ["-y", "widgets-mcp@1.2.0", "--mode", "fast"], env: { WIDGET_TOKEN: "${WIDGET_TOKEN}" } });
-  expect(h.out).toContain("set WIDGET_TOKEN in your environment — the project file only names them");
+  expect(h.out).toContain("set WIDGET_TOKEN in your environment — the file only names them");
   expect(h.out).toContain("fill in before use: --root (edit the args in that file)");
   expect(h.prompts).toEqual([]); // no terminal: nothing was asked
-  expect(await h.run("nonsense")).toBe(1);
-  expect(await h.run("")).toBe(1);
+  // usage errors are exit 2, one line: an unknown subcommand, no subcommand, a missing name, a flag the subcommand does not take
+  expect(await h.run("nonsense")).toBe(2);
+  expect(await h.run("")).toBe(2);
   expect(h.out.at(-1)).toMatch(/restart rovecode after add\/remove/);
+  expect(await h.run("info")).toBe(2);
+  expect(await h.run("show --project --yes")).toBe(2);
+  expect(h.err.at(-1)).toBe('unknown flag --yes for "rovecode mcp show" — see: rovecode mcp help');
+  expect(await h.run("add memory --yes --bogus")).toBe(2);
+  expect(h.err.at(-1)).toBe('unknown flag --bogus for "rovecode mcp add" — see: rovecode mcp help');
+  expect(await h.run("add memory --pick 0 --yes --as mem2")).toBe(0); // valued flags' values are not flags
+  expect(await h.run("show --project")).toBe(0);
+  expect(await h.run("list --project")).toBe(2);
 });
 
 test("cli: on a terminal add shows the plan, asks y/N, asks the secret MASKED by name, writes the value into the user file and never echoes it; a second add refuses without --force; list and remove round-trip", async () => {
@@ -148,6 +157,12 @@ test("tui /mcp: the palette lists the market under a title, a second pick choose
   expect(esc.pickCalls[0]!.title).toBe("mcp market");
   expect(esc.approvals).toEqual([]);
   expect(esc.notes).toEqual([]);
+  // an OPTIONAL secret nobody answered is left out of the file and out of the closing note — the file works as written
+  const opt = fakeRenderer(["context7", "0"], "once");
+  await tuiMcp({ renderer: opt.renderer, cwd, home: home2, market: { offline: true } }, "context7");
+  const c7 = (JSON.parse(readFileSync(join(home2, "mcp.json"), "utf8")) as { mcpServers: Record<string, unknown> }).mcpServers.context7;
+  expect(c7).toEqual({ type: "http", url: "https://mcp.context7.com/mcp" });
+  expect(opt.notes.some((n) => n.includes("in your environment"))).toBe(false);
   // --project lands in the repo file
   const pr = fakeRenderer(["memory"], "once");
   await tuiMcp({ renderer: pr.renderer, cwd, home: home2, market: { offline: true } }, "memory --project");

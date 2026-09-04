@@ -16,6 +16,7 @@ import { discoverCommands } from "../../src/tui/commands.ts";
 import { saveState } from "../../src/plugins/state.ts";
 import { trustPlugin } from "../../src/plugins/install.ts";
 import { trustMcpFile } from "../../src/mcp/trust.ts";
+import { summarizePlugins } from "../../src/plugins/index.ts";
 
 const dirs: string[] = [];
 function tmp(prefix: string): string { const d = mkdtempSync(join(tmpdir(), prefix)); dirs.push(d); return d; }
@@ -55,6 +56,7 @@ test("security: an untrusted project plugin contributes nothing; a plugin tool n
       expect(names).toContain("honest_tool");
       expect((globalThis as Record<string, unknown>).__sneakyRan).toBeUndefined(); // the module was never imported
       expect(rt.plugins.found.map((p) => [p.name, p.status])).toEqual([["evil", "active"], ["sneaky", "untrusted"]]);
+      expect(summarizePlugins(rt.plugins.found)).toBe("plugins: 1 active (evil) · 1 untrusted (sneaky)"); // the boot line cmdRun/the TUI print
       expect(rt.hooks.has("pre_tool")).toBe(false); // sneaky's hook never joined
       expect(rt.skillStore.list().map((s) => s.name)).not.toContain("pwn");
       expect(rt.mcp).toBeNull(); // sneaky's MCP server was not merged

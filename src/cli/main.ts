@@ -17,7 +17,7 @@ import { ProviderRegistry, formatProviderList, parseAddArgs, ADD_USAGE } from ".
 import { isConfigured, providersPathFor } from "../providers/provider-config.ts";
 import { providerEditTool, providerListTool } from "../tools/provider.ts";
 import { designAuditTool, designDirectionTool } from "../tools/design.ts";
-import { loadPlugins } from "../plugins/index.ts";
+import { loadPlugins, summarizePlugins } from "../plugins/index.ts";
 import { runGauntlet, reportResults, providerPreflight, basicTasks, codingTasks, failureTasks, adversarialTasks } from "../eval/gauntlet.ts";
 import { liveGauntletTasks, runTask, runTaskLive } from "../eval/gauntlet-runner.ts";
 import { profileFor, profileHint } from "../providers/profiles.ts";
@@ -121,6 +121,8 @@ async function cmdRun(prompt: string): Promise<void> {
     : mockStream({ turns: [textTurn(MOCK_PROVIDER_TEXT)] });
   rt.hooks.onWarning((w) => console.error(`hooks: ${w}`)); // port #29: load + runtime hook notes → stderr (stdout stays the transcript)
   rt.plugins.onWarning((w) => console.error(`plugins: ${w}`)); // plugin discovery/activation notes, the same channel
+  const pluginLine = summarizePlugins(rt.plugins.found); // one line when there is at least one plugin: what loaded, what stayed off
+  if (pluginLine !== null) console.error(pluginLine);
   const exit = async (code: number): Promise<never> => {
     // port #26 (fix-wave MED-1): a one-shot run does not outlive its process — cancel the children
     // still running (their in-flight fetch + subprocess trees die through the run signal) and wait,

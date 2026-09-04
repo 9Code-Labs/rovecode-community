@@ -11,7 +11,7 @@
 
 import type { Renderer, PickItem } from "./renderer.ts";
 import { installLabel, searchMarket, type MarketDeps, type MarketEntry } from "../mcp/market.ts";
-import { describePlan, fillPlan, planInstall, serverLine, writeServer, type McpScope } from "../mcp/market-install.ts";
+import { describePlan, fillPlan, namesWritten, planInstall, serverLine, writeServer, type McpScope } from "../mcp/market-install.ts";
 import { parseConfigFile } from "../mcp/config.ts";
 import { mcpTrustStatus, projectMcpFiles, trustMcpFile } from "../mcp/trust.ts";
 import { rovecodeHome } from "../providers/auth.ts";
@@ -77,12 +77,15 @@ export async function cmdMcp(ctx: McpCmdCtx, arg: string): Promise<void> {
   const answer = await renderer.askApproval("mcp add", `${plan.name} ← ${installLabel(plan.install)}`, describePlan(plan, "env").join("\n"));
   if (answer === "deny") { renderer.addSystemNote("mcp: nothing written"); return; }
   let trusted: boolean | undefined;
+  const raw = fillPlan(plan, {}); // no answers: required asks become ${NAME}, optional ones are left out — the file works without them
   try {
     // the card just approved this exact content: a project file is trusted as written (mcp/trust.ts)
-    trusted = writeServer(plan.file, plan.name, fillPlan(plan, {}), scope === "project" ? { trustHome: home } : {}).trusted;
+    trusted = writeServer(plan.file, plan.name, raw, scope === "project" ? { trustHome: home } : {}).trusted;
   } catch (e) { renderer.addSystemNote(`mcp: ${e instanceof Error ? e.message : String(e)}`, "error"); return; }
   renderer.addSystemNote(`mcp: added "${plan.name}" → ${plan.file}${trusted === true ? " (trusted as written)" : ""} — restart me to connect (servers are read once per process)`);
   if (trusted === false) renderer.addSystemNote("mcp: that file already held servers you have not approved, so it is NOT trusted yet — /mcp trust shows them", "warn");
-  if (plan.asks.length) renderer.addSystemNote(`mcp: set ${plan.asks.map((a) => a.name).join(", ")} in your environment before the restart — or run \`rovecode mcp add ${entry.key}\` on a shell, which asks for them masked`, "warn");
+  // only the names the FILE now refers to: an optional ask that was left out is not something to go and set
+  const named = namesWritten(plan, raw);
+  if (named.length) renderer.addSystemNote(`mcp: set ${named.join(", ")} in your environment before the restart — or run \`rovecode mcp add ${entry.key}\` on a shell, which asks for them masked`, "warn");
   if (plan.pending.length) renderer.addSystemNote(`mcp: fill in ${plan.pending.join(", ")} in that file's args before use`, "warn");
 }

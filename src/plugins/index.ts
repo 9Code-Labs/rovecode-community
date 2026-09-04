@@ -9,7 +9,7 @@
  *  verbs) · cli.ts (`rovecode plugin …`). `loadPlugins` is the one call the runtime makes. */
 
 import { rovecodeHome } from "../providers/auth.ts";
-import { discoverPlugins } from "./discover.ts";
+import { discoverPlugins, type DiscoveredPlugin } from "./discover.ts";
 import { activatePlugins, type LoadedPlugin } from "./load.ts";
 import { loadState } from "./state.ts";
 
@@ -41,9 +41,9 @@ export async function loadPlugins(cwd: string, opts: LoadPluginsOptions = {}): P
 }
 
 /** one line per plugin the boot transcript can echo: `plugins: 2 active (safety-net, notes) · 1 untrusted (acme)` */
-export function summarizePlugins(p: readonly LoadedPlugin[]): string | null {
+export function summarizePlugins(p: readonly Pick<DiscoveredPlugin, "name" | "status">[]): string | null {
   if (p.length === 0) return null;
-  const by = (s: LoadedPlugin["status"]): string[] => p.filter((x) => x.status === s).map((x) => x.name);
+  const by = (s: DiscoveredPlugin["status"]): string[] => p.filter((x) => x.status === s).map((x) => x.name);
   const parts: string[] = [];
   for (const s of ["active", "untrusted", "disabled", "broken"] as const) { const n = by(s); if (n.length) parts.push(`${n.length} ${s} (${n.join(", ")})`); }
   return `plugins: ${parts.join(" · ")}`;

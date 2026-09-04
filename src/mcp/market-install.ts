@@ -113,6 +113,14 @@ export function fillPlan(plan: InstallPlan, answers: Record<string, string>): Re
   return { type: "http", url: install.url, ...(Object.keys(headers).length ? { headers } : {}) };
 }
 
+/** the asks whose `${NAME}` the filled entry actually carries — what the closing note tells the human to set.
+ *  An optional ask nobody answered is left out of the entry (fillPlan), so naming it would send them to set a
+ *  variable nothing reads. */
+export function namesWritten(plan: InstallPlan, raw: Record<string, unknown>): string[] {
+  const text = JSON.stringify(raw);
+  return plan.asks.filter((a) => text.includes(`\${${a.name}}`)).map((a) => a.name);
+}
+
 /** the confirmation text — everything the human must see before anything is written. `asking` says how
  *  the plan's questions get answered: "prompt" (the CLI asks, secrets masked) or "env" (the TUI has no
  *  masked input, so every asked value is written as `${NAME}` and read from the environment at launch) */

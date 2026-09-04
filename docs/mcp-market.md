@@ -56,7 +56,8 @@ evaluates anything. Package → launch line: npm → `npx -y <id>@<version>`, py
 oci → `docker run -i --rm -e NAME… <id>:<version>` (variables ride the environment, never argv) — the version
 is appended only when the registry gives one that is not `latest`, otherwise the bare identifier is launched,
 and a `runtimeHint` that is a bare command name replaces `npx`/`uvx`/`docker`. nuget/mcpb packages are refused
-with a note; an `sse` remote is dropped **silently** (that path has no notes channel) and only shows up as
+with a note; an `sse` remote is refused with a note too (`<url>: sse remote (legacy transport) is not something
+rovecode can connect to`), so when an entry ends up with no launch form `mcp info`/`mcp add` say why before
 `<name> lists nothing rovecode can launch or connect to`. A required argument the registry cannot fill (a directory, a database
 URL) is listed as `needs …` in the plan and left for you to add in the file.
 
@@ -100,9 +101,14 @@ forms gets one more pick (`<title> · how`); then the **approval card** (`Render
 that runs as the preview and the whole plan as the detail. Any yes writes; deny or Esc writes nothing.
 
 The TUI has **no masked input, so it never asks for a secret**: every **required** asked value is written as
-`${NAME}` — optional ones are left out of the written entry altogether, so if you want one you must add it to
-the file by hand. The closing note lists every name it asked about (including those optional ones) to set before the restart — or says to run `rovecode mcp add <name>` on a shell,
-where the prompt is masked. Nothing typed into the TUI's prompt ever becomes a key.
+`${NAME}` — optional ones are left out of the written entry altogether (the file works without them; add one by
+hand if you want it). The closing note lists only the names the file now refers to, to set before the restart —
+or says to run `rovecode mcp add <name>` on a shell, where the prompt is masked. Nothing typed into the TUI's
+prompt ever becomes a key. The CLI's closing line follows the same rule: it names what the written entry refers to.
+
+Flags: each `rovecode mcp` subcommand accepts only its own (`add`: `--project --pick --as --yes --force`; `remove`,
+`show`: `--project`; `trust`: `--yes --project`); any other `--flag`, a missing name, or an unknown subcommand is a
+one-line usage error with exit 2, like the rest of the CLI.
 
 ## Trust: project files pass the same gate as project plugins
 
