@@ -48,7 +48,7 @@ for (const { code } of LOCALES) {
   bytes += page.length;
 }
 
-// ---- /docs/ (a proposal behind VITE_DOCS=1; scripts/docs-build.mjs leaves the list empty otherwise) ----
+// ---- /docs/ (ships with the site; `bun run build:docs` sets VITE_DOCS=1, scripts/docs-build.mjs leaves the list empty otherwise) ----
 const docsFile = join(SITE, "src", "generated", "docs.json");
 const docsJson = existsSync(docsFile) ? JSON.parse(readFileSync(docsFile, "utf8")) : { enabled: false, docs: [] };
 const docPaths = []; // [path-without-locale] e.g. "docs/", "docs/design/"

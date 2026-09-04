@@ -3,15 +3,16 @@
 # symlink → verify over HTTP. Atomic (the symlink flips last) and reversible (`--rollback` points
 # `current` at the previous release). Needs key-based SSH to the host; nothing else on the client.
 #
-#   scripts/deploy-site.sh                 build + deploy
-#   scripts/deploy-site.sh --docs          build with the /docs/ section (bun run build:docs) + deploy
+#   scripts/deploy-site.sh                 build (with /docs/, the production build) + deploy
+#   scripts/deploy-site.sh --no-docs       build the landing page only (bun run build) + deploy
 #   scripts/deploy-site.sh --no-build      deploy the existing site/dist
 #   scripts/deploy-site.sh --rollback      previous release becomes current
 #   DEPLOY_HOST=root@1.2.3.4 scripts/deploy-site.sh   another host
 set -euo pipefail
 
-BUILD_SCRIPT="build"
-for a in "$@"; do [[ "$a" == "--docs" ]] && BUILD_SCRIPT="build:docs"; done
+# /docs/ ships with the site since 2026-09-04 (Berkay's call); --docs is accepted for old habits
+BUILD_SCRIPT="build:docs"
+for a in "$@"; do [[ "$a" == "--no-docs" ]] && BUILD_SCRIPT="build"; done
 
 HOST="${DEPLOY_HOST:-root@64.177.43.110}"
 ROOT="${DEPLOY_ROOT:-/var/www/rovecode}"

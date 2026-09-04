@@ -28,7 +28,8 @@ jobs:
         env:
           VITE_SITE_URL: ${{ vars.SITE_URL }}
         run: |
-          if [ -n "$VITE_SITE_URL" ]; then bun run build; else unset VITE_SITE_URL; bun run build; fi
+          # /docs/ ships with the site (Berkay, 2026-09-04) — build:docs is the production build
+          if [ -n "$VITE_SITE_URL" ]; then bun run build:docs; else unset VITE_SITE_URL; bun run build:docs; fi
           test -f dist/index.html
       - name: ship
         env:

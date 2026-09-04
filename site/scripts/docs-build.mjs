@@ -1,6 +1,6 @@
 /** docs/*.md and the README's command reference → src/generated/docs.json, for the /docs/ pages.
  *
- *  Only when VITE_DOCS=1 (the docs section is a proposal behind a build flag); otherwise writes an empty list so
+ *  Only when VITE_DOCS=1 (`bun run build:docs`, the production build since 2026-09-04); otherwise writes an empty list so
  *  the default build is unchanged. Markdown → HTML with marked; heading ids for the in-page index; relative links
  *  to other docs become /docs/<slug>/, other relative links point at the repository on GitHub. The docs body stays
  *  English — it is documentation, not copy. Everything outside site/ is read only. */

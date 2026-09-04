@@ -3,7 +3,8 @@
 The site (`site/`) is static: Vite builds it, nginx serves it, and nothing on the server runs Node. This
 page is the reference for that setup — what the host holds, how a release lands, and how to roll one back.
 Every step described here is idempotent, so re-running any of it on a fresh host reproduces the same state.
-The current host was provisioned on 2026-09-04.
+The current host was provisioned on 2026-09-04 and last rebooted the same evening (kernel 7.0.0-30);
+everything came back on its own — nginx, fail2ban, docker with the webtop container — in about 30 s.
 
 ## The server
 
@@ -20,8 +21,8 @@ Web root layout — atomic releases:
 
 ```
 /var/www/rovecode/
-  current  → releases/20260904-173814      (symlink; nginx root)
-  releases/20260904-164848/ … 20260904-173814/   (five kept)
+  current  → releases/20260904-191403      (symlink; nginx root)
+  releases/20260904-173814/ … 20260904-191403/   (five kept)
 ```
 
 nginx serves `current` with `try_files $uri $uri/ $uri.html =404`, a real `404.html`, gzip,
@@ -32,14 +33,16 @@ them fails `nginx -t` with "directive is duplicate" (this cost the first bootstr
 ## Deploying
 
 ```
-bun run deploy:site            # build site/ → tar over ssh → new release → flip current → curl 200
-scripts/deploy-site.sh --docs       # build with the /docs/ section (bun run build:docs) and ship it
+bun run deploy:site            # build site/ with /docs/ → tar over ssh → new release → flip current → curl 200
+scripts/deploy-site.sh --no-docs    # landing page only (bun run build), no /docs/ section
 scripts/deploy-site.sh --no-build   # ship the existing site/dist
 scripts/deploy-site.sh --rollback   # the previous release becomes current
 DEPLOY_HOST=root@1.2.3.4 scripts/deploy-site.sh   # another host
 ```
 
-The flip is the last step, so a half-uploaded release is never served. Verification is a GET
+`/docs/` (7 pages × 15 locales, `bun run build:docs`) has shipped with the site since release
+20260904-191403; the GitHub workflow builds the same target. The flip is the last step, so a
+half-uploaded release is never served. Verification is a GET
 on the page with a 200 check; `site/scripts/live-check.mjs` (`bun run live-check`) walks every
 URL in the live sitemap for the full per-page check (lang, canonical, hreflang, 0 console).
 
@@ -63,6 +66,5 @@ organisation's GitHub billing, not the workflow — deploy by hand with the scri
 
 - No domain → HTTP only. When one points at the IP: `certbot --nginx -d <domain>`, then set
   `SITE_URL` and rebuild so canonical / og:url carry the domain.
-- A kernel upgrade is staged (`/var/run/reboot-required`) — reboot when the webtop outage is fine.
 - Root password login is still enabled; with the key in place `PermitRootLogin prohibit-password`
   in `/etc/ssh/sshd_config` closes it.
