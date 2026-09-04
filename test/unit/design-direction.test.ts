@@ -207,7 +207,8 @@ test("a human's direction records neither provisional nor an agent author", asyn
     expect(out.output).not.toContain("PROVISIONAL");
     const back = loadDirection(dir);
     expect(back?.provisional).toBeUndefined();
-    expect(back?.chosenBy).toBeUndefined();
+    // derived, not taken from the call: every write says who chose, so the field can be believed
+    expect(back?.chosenBy).toBe("human");
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -226,6 +227,13 @@ test("get and the prompt section both say a provisional direction is not the hum
     expect(section).toContain("PROVISIONAL: build to this, and ask once before more UI");
     expect(section).not.toContain("build to this, do not re-ask");
   } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a record from before the field existed carries no author, and is not treated as the agent's", () => {
+  const d = parseDirection({ name: "ink band", corners: "sharp" });
+  expect(d?.chosenBy).toBeUndefined();
+  expect(d?.provisional).toBeUndefined();
+  expect(renderDirection(d)).toContain("Chosen direction: ink band");
 });
 
 test("parseDirection drops a malformed provisional record rather than trusting half of it", () => {

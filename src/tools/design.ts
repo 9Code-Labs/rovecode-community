@@ -126,9 +126,11 @@ export function designDirectionTool(): Tool {
       if (parsed === null) {
         return { ok: false, output: "design_direction set needs at least `name` — the short name of the direction the human chose." };
       }
-      // `provisional` implies the agent chose: the two cannot disagree, so the record derives one from
-      // the other rather than trusting a call that sets only one of them.
-      if (parsed.provisional === true) parsed.chosenBy = "agent";
+      // Who chose is DERIVED, never taken from the call: `provisional` means the agent picked, its
+      // absence means a human did. Trusting the model with both fields lets one contradict the other,
+      // and the whole point of the field is that it can be believed. Stamped on every write, so a
+      // record always says who — absent is only ever a file written before the field existed.
+      parsed.chosenBy = parsed.provisional === true ? "agent" : "human";
       const path = saveDirection(ctx.cwd, parsed);
       if (parsed.provisional === true) {
         const alts = parsed.alternatives === undefined ? "" : ` The alternatives (${parsed.alternatives.join(", ")}) are recorded with it.`;
