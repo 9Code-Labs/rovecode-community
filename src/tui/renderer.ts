@@ -51,6 +51,9 @@ export interface SlashCommand {
   description: string;
   /** /help topic the command is listed under (info-cmd.ts); the palette ignores it */
   group?: string;
+  /** a fixed set of argument values (`/effort` levels, `/theme` names): the sextant lists them as
+   *  suggestions once the command is typed, and completes the one picked */
+  choices?: readonly string[];
 }
 
 export interface PickItem { value: string; label: string; description?: string }

@@ -397,7 +397,9 @@ export interface SextantState {
   /** boot clock for the staggered panel reveal (90 ms steps) */
   bootAt: number;
   /** slash commands known to the prompt/palette (built-ins + custom) */
-  commands: { name: string; description: string }[];
+  /** the app's slash commands for the palette and the suggestions; `choices` = a fixed argument set
+   *  offered once the command is typed (tui/renderer.ts SlashCommand.choices) */
+  commands: { name: string; description: string; choices?: readonly string[] }[];
   version: string;
 }
 

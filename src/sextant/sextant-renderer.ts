@@ -224,7 +224,10 @@ export class SextantRenderer implements Renderer {
   }
 
   // ------------------------------------------------------------------ Renderer → state
-  setCommands(cmds: SlashCommand[]): void { this.state.commands = cmds.map((c) => ({ name: c.name, description: c.description })); this.loop.markDirty(); }
+  setCommands(cmds: SlashCommand[]): void {
+    this.state.commands = cmds.map((c) => ({ name: c.name, description: c.description, ...(c.choices ? { choices: c.choices } : {}) }));
+    this.loop.markDirty();
+  }
 
   addUser(text: string): void { this.push(userRow(text, this.clock())); }
 

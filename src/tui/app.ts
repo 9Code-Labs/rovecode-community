@@ -78,7 +78,7 @@ export const TUI_COMMANDS: SlashCommand[] = [
   ...PROVIDER_COMMANDS, // /models · /provider — providers-cmd.ts (live registry: no restart after add/key/use)
   { name: "yolo", description: "Toggle ask first / auto (never asks)", group: "modes & safety" },
   { name: "accept-edits", description: "Stop asking for writes inside this folder; shell, subagents and writes outside it still ask", group: "modes & safety" },
-  { name: "effort", description: "How hard I think before answering: /effort auto | off | low | medium | high — the note says what the current model actually receives", group: "model & provider" },
+  { name: "effort", description: "How hard I think before answering: /effort auto | off | low | medium | high — the note says what the current model actually receives", group: "model & provider", choices: THINKING_EFFORTS },
   { name: "plan", description: "Plan mode: I only read and plan, nothing changes", group: "modes & safety" },
   { name: "act", description: "Act mode: I can edit and run again", group: "modes & safety" },
   { name: "checkpoints", description: "Snapshots I took before each change (shadow git)", group: "files & history" },

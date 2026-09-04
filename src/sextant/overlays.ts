@@ -84,7 +84,7 @@ function rank<T>(q: string, items: readonly T[], fz: Fuzzy, key: (t: T) => strin
 
 // ------------------------------------------------------------------ commands
 
-export interface CommandInfo { name: string; description: string; arg?: string; local?: boolean }
+export interface CommandInfo { name: string; description: string; arg?: string; local?: boolean; choices?: readonly string[] }
 interface Option { label: string; hint: string }
 
 /** app.js:940-965 SLASH minus the mock rows; `options` feeds the argument suggestions */
@@ -110,7 +110,8 @@ const MODE_KBD: Partial<Record<CodeMode, string>> = { code: "⌃s", diff: "⌃d"
 export function allCommands(s: SextantState): CommandInfo[] {
   const local = new Set(LOCAL_COMMANDS.map((c) => c.name));
   return [...LOCAL_COMMANDS.map(({ name, description, arg, local: l }) => ({ name, description, arg, local: l })),
-    ...s.commands.filter((c) => !local.has(c.name)).map((c) => ({ name: c.name, description: c.description }))];
+    // an app command with a fixed argument set shows it the way a local one does ("auto·off·low·medium·high")
+    ...s.commands.filter((c) => !local.has(c.name)).map((c) => ({ name: c.name, description: c.description, ...(c.choices?.length ? { arg: c.choices.join("·"), choices: c.choices } : {}) }))];
 }
 
 /** app.js:966-970 — top 6 fuzzy-ranked files with their git status as the hint */
@@ -163,10 +164,18 @@ function suggestionRows(s: SextantState, files: readonly string[], fz: Fuzzy): S
     });
   }
   const c = LOCAL_COMMANDS.find((x) => x.name === p.cmd);
-  if (!c?.options) return [];
-  return c.options(s, p.arg, fz).map((o) => {
-    const t = "/" + c.name + " " + o.label;
-    return { kind: "arg", label: o.label, hint: o.hint, apply: { text: t, cur: t.length }, enter: "submit" };
+  if (c?.options) {
+    return c.options(s, p.arg, fz).map((o) => {
+      const t = "/" + c.name + " " + o.label;
+      return { kind: "arg", label: o.label, hint: o.hint, apply: { text: t, cur: t.length }, enter: "submit" };
+    });
+  }
+  // an app command with a fixed argument set (/effort auto|off|low|medium|high): the same rows, ranked by what is typed
+  const app = allCommands(s).find((x) => x.name === p.cmd && x.choices?.length);
+  if (!app?.choices) return [];
+  return rank(p.arg, app.choices, fz).map((label) => {
+    const t = "/" + app.name + " " + label;
+    return { kind: "arg", label, hint: "", apply: { text: t, cur: t.length }, enter: "submit" };
   });
 }
 
@@ -181,7 +190,7 @@ export function drawSuggest(scr: ScreenLike, rect: Rect, s: SextantState, sugs: 
   const selected = Math.min(s.input.sgSel, sugs.length - 1);
   const kind = sugs[0]!.kind, cmd = parseInput(s.input.text).cmd;
   const title = kind === "mention" ? "mention a file" : kind === "slash" ? "commands"
-    : `/${cmd} · ${LOCAL_COMMANDS.find((c) => c.name === cmd)?.arg ?? ""}`;
+    : `/${cmd} · ${allCommands(s).find((c) => c.name === cmd)?.arg ?? ""}`;
   const w = Math.min(rect.w - 4, 76), x = rect.x + 2, h = sugs.length + 3, y0 = Math.max(rect.y + 1, rect.y + rect.h - 3 - h);
   scr.box(x, y0, w, h, st(C.rule2), C.bg2);
   scr.text(x + 2, y0 + 1, [[title, st(C.dim, C.bg2)]]);
