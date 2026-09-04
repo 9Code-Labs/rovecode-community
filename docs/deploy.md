@@ -33,6 +33,7 @@ them fails `nginx -t` with "directive is duplicate" (this cost the first bootstr
 
 ```
 bun run deploy:site            # build site/ → tar over ssh → new release → flip current → curl 200
+scripts/deploy-site.sh --docs       # build with the /docs/ section (bun run build:docs) and ship it
 scripts/deploy-site.sh --no-build   # ship the existing site/dist
 scripts/deploy-site.sh --rollback   # the previous release becomes current
 DEPLOY_HOST=root@1.2.3.4 scripts/deploy-site.sh   # another host
