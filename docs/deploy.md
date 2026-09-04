@@ -4,7 +4,9 @@ The site (`site/`) is static: Vite builds it, nginx serves it, and nothing on th
 page is the reference for that setup — what the host holds, how a release lands, and how to roll one back.
 Every step described here is idempotent, so re-running any of it on a fresh host reproduces the same state.
 The current host was provisioned on 2026-09-04 and last rebooted the same evening (kernel 7.0.0-30);
-everything came back on its own — nginx, fail2ban, docker with the webtop container — in about 30 s.
+everything came back on its own — nginx, fail2ban, docker — in about 30 s. The `webtop` desktop container
+that came with the box was removed on Berkay's word that evening (its data stays in `/opt/webtop/config` and
+`/srv/workspace`, the compose file in `/opt/webtop`); port 3001 is closed again.
 
 ## The server
 
@@ -12,8 +14,7 @@ everything came back on its own — nginx, fail2ban, docker with the webtop cont
 from GitHub can do nothing else (see below).
 
 Installed: nginx 1.28 (site config in `/etc/nginx/sites-available/rovecode`, the default server
-on :80), fail2ban (sshd jail, 1 h ban after 5 failures in 10 min), ufw (22, 80, 443, plus 3001
-which was already there for a `webtop` container that is not ours to touch), unattended-upgrades,
+on :80), fail2ban (sshd jail, 1 h ban after 5 failures in 10 min), ufw (22, 80, 443 — nothing else), unattended-upgrades,
 certbot + python3-certbot-nginx (unused until there is a domain), bun and node for builds.
 Time zone Europe/Istanbul.
 
