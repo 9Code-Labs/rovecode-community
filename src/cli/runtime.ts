@@ -24,9 +24,7 @@ import { parseCompactionStrategy } from "../core/compaction.ts";
 import { ToolGuard } from "../core/guardrails.ts";
 import { HookRunner } from "../core/hooks.ts";
 import { createReflectionHooks, reflectionEnabled } from "../core/reflection.ts";
-import { createOtelHooks, otelOptionsFromEnv } from "../telemetry/otel.ts";
-import { loadMcpConfig, McpManager } from "../mcp/client.ts";
-import { createMcpTools } from "../mcp/tools.ts";
+import type { McpManager } from "../mcp/client.ts";
 import { activatePlugins, discoverPlugins, loadState as loadPluginState, type DiscoveredPlugin, type LoadedPlugin } from "../plugins/index.ts";
 import type { McpServerConfig } from "../mcp/config.ts";
 import { trustedPredicate } from "../mcp/trust.ts";
@@ -51,7 +49,7 @@ import { SteeringQueue } from "../core/loop.ts";
 import { TaskManager } from "../core/tasks.ts";
 import { createTaskTool, createTaskStatusTool } from "../tools/task.ts";
 import type { ChildContext, ChildRunnerDeps } from "../core/orchestrator.ts";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { sep, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { noModelHint } from "../core/voice.ts";
@@ -182,6 +180,32 @@ export interface RuntimePlugins {
   /** discovery + activation notes; a listener gets the buffered ones first (hooks.onWarning idiom) */
   readonly warnings: readonly string[];
   onWarning(fn: (note: string) => void): void;
+}
+
+// lazy module helpers — loaded on first use so boot pays nothing for features that are not configured
+type OtelMod = typeof import("../telemetry/otel.ts");
+let _otelMod: OtelMod | null = null;
+function lazyOtel(): OtelMod | null {
+  if (!process.env.ROVECODE_OTEL_ENDPOINT) return null;
+  if (_otelMod === null) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    _otelMod = require("../telemetry/otel.ts") as OtelMod;
+  }
+  return _otelMod;
+}
+
+type McpClientMod = typeof import("../mcp/client.ts");
+type McpToolsMod = typeof import("../mcp/tools.ts");
+let _mcpMod: { client: McpClientMod; tools: McpToolsMod } | null = null;
+function lazyMcp(): { client: McpClientMod; tools: McpToolsMod } {
+  if (_mcpMod === null) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    _mcpMod = {
+      client: require("../mcp/client.ts") as McpClientMod,
+      tools: require("../mcp/tools.ts") as McpToolsMod,
+    };
+  }
+  return _mcpMod;
 }
 
 export function createRuntime(opts: RuntimeOptions = {}): Runtime {
@@ -329,15 +353,21 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   // Project files (.rovecode/mcp.json, .mcp.json) pass the same trust gate as project plugins (mcp/trust.ts):
   // unapproved on this machine → nothing of theirs loads, one `mcp: …` note names the file and the command.
   const mcpWarnings: string[] = [];
-  for (const c of loadMcpConfig(cwd, mcpWarnings, { home: pluginHome, trusted: trustedPredicate(pluginState) })) { if (mcpByName.has(c.name)) pluginWarn(`mcp.json server "${c.name}" overrides a plugin's entry of the same name`); mcpByName.set(c.name, c); }
+  const hasMcpFiles = existsSync(join(pluginHome, "mcp.json"))
+    || existsSync(join(cwd, ".rovecode", "mcp.json"))
+    || existsSync(join(cwd, ".mcp.json"));
+  if (hasMcpFiles) {
+    for (const c of lazyMcp().client.loadMcpConfig(cwd, mcpWarnings, { home: pluginHome, trusted: trustedPredicate(pluginState) })) { if (mcpByName.has(c.name)) pluginWarn(`mcp.json server "${c.name}" overrides a plugin's entry of the same name`); mcpByName.set(c.name, c); }
+  }
   for (const w of mcpWarnings) pluginWarn(`mcp: ${w}`);
   const mcpConfigs = [...mcpByName.values()];
   let mcp: McpManager | null = null;
   if (mcpConfigs.length > 0) {
-    const manager = new McpManager(mcpConfigs);
+    const mcpMod = lazyMcp();
+    const manager = new mcpMod.client.McpManager(mcpConfigs);
     mcp = manager;
     const ready = manager.connect().then(() => undefined, () => undefined);
-    for (const t of createMcpTools(manager)) {
+    for (const t of mcpMod.tools.createMcpTools(manager)) {
       registry.register({ ...t, execute: async (a, c) => { await ready; return t.execute(a, c); } });
     }
   }
@@ -380,8 +410,11 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   const catalog = new ModelCatalog(); // offline models.dev snapshot (port #6)
   // port #39: OTel span export rides the hook seam — attached ONLY when ROVECODE_OTEL_ENDPOINT is set (off:
   // nothing constructed, no on_event tap → zero cost); export failures surface through hooks.warnings
-  const otel = otelOptionsFromEnv();
-  if (otel) hooks.add(createOtelHooks({ ...otel, pricing: catalog, messages: () => activeStore.messages() }), "otel");
+  const otelMod = lazyOtel();
+  if (otelMod) {
+    const otel = otelMod.otelOptionsFromEnv();
+    if (otel) hooks.add(otelMod.createOtelHooks({ ...otel, pricing: catalog, messages: () => activeStore.messages() }), "otel");
+  }
 
   // port #8: harvest AGENTS.md / CLAUDE.md / .cursor / copilot instructions
   // cwd-UPWARD (OMP ancestor-walk pattern) ONCE per runtime — a snapshot, like
