@@ -102,6 +102,26 @@ export const CLICHE_FONTS: readonly string[] = [
   "Segoe UI", "Open Sans", "Lato", "Montserrat", "Poppins", "Nunito", "Source Sans Pro", "Raleway",
 ];
 
+/** The system stacks. Naming one of these FIRST is the non-decision; naming it LAST is just a fallback
+ *  — `"Geist", ui-sans-serif, system-ui, sans-serif` chose Geist, and the checker used to scold it for
+ *  the tail (nimbus-f9's site pass, the first real false positive this checker produced). A named
+ *  webfont (Inter, Poppins…) is different: writing it anywhere in a stack means loading it, so it
+ *  counts wherever it appears. */
+const SYSTEM_STACK_FONTS: ReadonlySet<string> = new Set(["system-ui", "-apple-system", "Segoe UI", "Arial", "Helvetica", "Helvetica Neue"]);
+
+/** does a match at `index` lead its font list? The list starts at the nearest preceding `:` `[` `(` `=`
+ *  or line break; a comma between that start and the match means another family came first. */
+function leadsList(text: string, index: number): boolean {
+  let i = index - 1;
+  while (i >= 0) {
+    const c = text[i]!;
+    if (c === ":" || c === "[" || c === "(" || c === "=" || c === "\n") return true;
+    if (c === ",") return false;
+    i--;
+  }
+  return true;
+}
+
 function fontsPresent(text: string): string[] {
   const hits: string[] = [];
   for (const f of CLICHE_FONTS) {
@@ -109,7 +129,12 @@ function fontsPresent(text: string): string[] {
     // word-ish boundaries rather than a quote/space list: a font name arrives quoted in CSS, bare in a
     // tailwind config, and after `family=` in a Google Fonts URL. `_` only (not `-`), so `-apple-system`
     // still matches after a space or comma.
-    if (new RegExp("(?:^|[^A-Za-z0-9_])" + esc + "(?![A-Za-z0-9_])", "i").test(text)) hits.push(f);
+    const re = new RegExp("(?:^|[^A-Za-z0-9_])(" + esc + ")(?![A-Za-z0-9_])", "gi");
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      const at = m.index + m[0].length - m[1]!.length;
+      if (!SYSTEM_STACK_FONTS.has(f) || leadsList(text, at)) { hits.push(f); break; }
+    }
   }
   // "Helvetica Neue" also matches "Helvetica"; keep only the more specific one
   return hits.filter((f) => !(f === "Helvetica" && hits.includes("Helvetica Neue")));
@@ -141,13 +166,19 @@ export function auditSource(text: string, opts: AuditOptions = {}): Finding[] {
   };
   const els = elementCount(text);
 
-  // 1. amber/orange accent — the single most requested thing to stop doing
+  // 1. amber/orange accent — the single most requested thing to stop doing.
+  // Direction-aware (nimbus-ed's probe 1): a project that CHOSE a warm brand and recorded it followed
+  // the protocol exactly, and scolding it for its own palette is the checker being unable to hear
+  // "this was deliberate" — the failure its own header calls fatal. So a palette holding an amberish
+  // colour switches this check off; off-palette (check 8) still catches a warm colour that is NOT the
+  // chosen one.
   const twAmber = text.match(/\b(?:amber|orange|yellow)-(?:[3-9]00)\b/g) ?? [];
   const hexes = text.match(HEX_RE) ?? [];
   const hexAmber = hexes.filter(isAmberish);
   const amberTotal = twAmber.length + hexAmber.length;
+  const warmChosen = Object.values(direction?.palette ?? {}).some(isAmberish);
   // a budget of 2: a warning state or one highlight is legitimate; a THEME is not
-  if (amberTotal > 2) {
+  if (!warmChosen && amberTotal > 2) {
     const shown = [...new Set([...twAmber, ...hexAmber])].slice(0, 5).join(", ");
     add("cliche-accent-amber", amberTotal > 5 ? "high" : "med",
       "Amber/orange is doing accent duty. It is the default accent of AI-generated sites; pick an accent that belongs to this product.",
@@ -157,9 +188,8 @@ export function auditSource(text: string, opts: AuditOptions = {}): Finding[] {
   // 2. fonts nobody chose
   const fonts = fontsPresent(text);
   if (fonts.length > 0) {
-    const chosen = [direction?.typeface?.display, direction?.typeface?.text]
-      .filter((f): f is string => typeof f === "string")
-      .map((f) => f.toLowerCase());
+    // every face the direction names, whatever its role (display, text, label, mono…), is a choice
+    const chosen = Object.values(direction?.typeface ?? {}).map((f) => f.toLowerCase());
     const offenders = fonts.filter((f) => !chosen.includes(f.toLowerCase()));
     if (offenders.length > 0) {
       add("cliche-font", "high",

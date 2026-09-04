@@ -29,8 +29,10 @@ export interface DesignDirection {
   rationale?: string;
   /** the palette as chosen — free-form keys so a direction is not forced into a fixed slot set */
   palette?: Record<string, string>;
-  /** typefaces as chosen; `display` may equal `text` */
-  typeface?: { display?: string; text?: string };
+  /** typefaces as chosen, by ROLE: `display`, `text`, and any role the direction needs (`label`,
+   *  `mono`, …). Free-form keys on purpose: a chart-style direction has condensed map labels as a
+   *  first-class role, and every face named here is exempt from the cliché-font check. */
+  typeface?: Record<string, string>;
   corners?: Corners;
   layout?: Layout;
   /** anything the audit cannot infer: motion, density, imagery, what to avoid in THIS project */
@@ -72,11 +74,10 @@ export function parseDirection(raw: unknown): DesignDirection | null {
     if (Object.keys(pal).length > 0) out.palette = pal;
   }
   if (typeof r["typeface"] === "object" && r["typeface"] !== null) {
-    const t = r["typeface"] as Record<string, unknown>;
-    const display = str(t["display"]); const text = str(t["text"]);
-    const tf: { display?: string; text?: string } = {};
-    if (display !== undefined) tf.display = display;
-    if (text !== undefined) tf.text = text;
+    const tf: Record<string, string> = {};
+    for (const [k, v] of Object.entries(r["typeface"] as Record<string, unknown>)) {
+      const s = str(v); if (s !== undefined) tf[k] = s;
+    }
     if (Object.keys(tf).length > 0) out.typeface = tf;
   }
   return out;
@@ -105,8 +106,10 @@ export function renderDirection(d: DesignDirection | null): string {
   if (d.rationale !== undefined) lines.push(`Why: ${d.rationale}`);
   if (d.palette !== undefined) lines.push(`Palette: ${Object.entries(d.palette).map(([k, v]) => `${k} ${v}`).join(", ")}`);
   if (d.typeface !== undefined) {
-    const { display, text } = d.typeface;
-    lines.push(`Typefaces: ${display === text || text === undefined ? display : `${display} for display, ${text} for text`}`);
+    const roles = Object.entries(d.typeface);
+    const faces = new Set(roles.map(([, f]) => f));
+    // one face everywhere reads as one name; otherwise each role names its face
+    lines.push(`Typefaces: ${faces.size === 1 ? roles[0]![1] : roles.map(([role, f]) => `${f} for ${role}`).join(", ")}`);
   }
   if (d.corners !== undefined) lines.push(`Corners: ${d.corners}`);
   if (d.layout !== undefined) lines.push(`Composition: ${d.layout}`);

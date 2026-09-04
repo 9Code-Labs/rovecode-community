@@ -58,6 +58,16 @@ test("amber is caught as raw hex too, and severity rises with how much of it the
   expect(many.find((f) => f.rule === "cliche-accent-amber")?.severity).toBe("high");
 });
 
+test("a project that CHOSE a warm brand and recorded it is not scolded for its own palette", () => {
+  // nimbus-ed's probe 1: brand #D4A017 (h 43.5, s 80, l 46) sits inside the amber band on purpose
+  const d: DesignDirection = { name: "harvest", palette: { paper: "#faf7f0", brand: "#d4a017" } };
+  const themed = "#d4a017 #d4a017 #b8860b #e0b030 #c9971a";
+  expect(rules(themed, d)).not.toContain("cliche-accent-amber");
+  // the same code with no direction, or with a cool direction, is still the reflex accent
+  expect(rules(themed)).toContain("cliche-accent-amber");
+  expect(rules(themed, { name: "ink", palette: { ink: "#0b1a2e" } })).toContain("cliche-accent-amber");
+});
+
 test("an amber finding carries the evidence that justifies it", () => {
   const f = auditSource('<a class="bg-amber-500 border-amber-600 text-amber-700">x</a>')
     .find((x) => x.rule === "cliche-accent-amber");
@@ -78,6 +88,28 @@ test("a font is not a finding when the project CHOSE it", () => {
   expect(rules('font-family: "Inter";', d)).not.toContain("cliche-font");
   // ...but a second, unchosen default still is
   expect(rules('font-family: "Inter"; --alt: "Poppins";', d)).toContain("cliche-font");
+});
+
+test("a system stack as a trailing FALLBACK is not a finding; leading the list it is", () => {
+  // the first real false positive the checker produced (nimbus-f9's site pass): Geist chosen, scolded for the tail
+  expect(rules('font-family: "Geist Variable", "Geist", ui-sans-serif, system-ui, sans-serif;')).not.toContain("cliche-font");
+  expect(rules('sans: ["Geist", "Segoe UI", "Arial", sans-serif]')).not.toContain("cliche-font");
+  // the same names LEADING the list are the non-decision
+  expect(rules("font-family: system-ui, sans-serif;")).toContain("cliche-font");
+  expect(rules('sans: ["Segoe UI", "Geist"]')).toContain("cliche-font");
+  // a second declaration on its own line starts a new list
+  expect(rules('font-family: "Geist";\nfont-family: Arial;')).toContain("cliche-font");
+});
+
+test("a named webfont counts wherever it sits in the stack — naming it means loading it", () => {
+  expect(rules('font-family: "Geist", "Inter", sans-serif;')).toContain("cliche-font");
+  expect(rules('sans: ["Redaction", "Poppins"]')).toContain("cliche-font");
+});
+
+test("a face named under ANY typeface role is exempt — label and mono are roles too", () => {
+  // nimbus-f9's chart direction: condensed map labels and mono are first-class, not afterthoughts
+  const d: DesignDirection = { name: "chart", typeface: { display: "IBM Plex Sans", label: "Roboto", mono: "Inter" } };
+  expect(rules('font-family: "Roboto"; --mono: "Inter";', d)).not.toContain("cliche-font");
 });
 
 test("a typeface nobody on the list uses is left alone", () => {
