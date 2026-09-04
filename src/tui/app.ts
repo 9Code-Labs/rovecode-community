@@ -8,15 +8,16 @@ import { resetTurnFailureCount } from "../memory/tools.ts";
 import { createRuntime } from "../cli/runtime.ts";
 import { SandboxConfigError } from "../core/sandbox-config.ts";
 import type { SpawnRunner } from "../core/executor.ts";
-import { SessionStore } from "../core/session.ts";
+import { SessionStore, listSessions } from "../core/session.ts";
 import { BlockStore } from "../memory/blocks.ts";
 import { ModelCatalog } from "../providers/catalog.ts";
 import { ModeManager, loadModesConfig, modeFromEntries, type AgentMode } from "../core/modes.ts";
 import { isTerminal, taskNote } from "../core/tasks.ts";
 import { togglePlanAct, applyModeToRun, flushModeSwitch } from "./modes-cmd.ts";
 import { cmdCheckpoints, cmdRestore, type CheckpointCmdCtx } from "./checkpoints-cmd.ts";
-import { cmdRewind, cmdSessions, cmdNew, replayTranscript, usageOf, resolveBootSession, type SessionCmdCtx } from "./session-cmd.ts";
-import { cmdHelp, cmdStatus, cmdCost, cmdSkills, cmdMemory, cmdExport, cmdTodos, cmdTasks, todoLabel, type InfoCmdCtx } from "./info-cmd.ts";
+import type { SessionCmdCtx } from "./session-cmd.ts";
+import type { InfoCmdCtx } from "./info-cmd.ts";
+import { todoLabel } from "./todo-label.ts";
 import { cmdAttach, cmdPasteImage, carryOverAttachments, queuedAttachNote, userTurnLine, ATTACH_COMMAND, PASTE_COMMAND, type AttachCtx } from "./attach.ts";
 import { cmdConnect, cmdModel as cmdModelSwitch, cmdModels, cmdProvider, cmdSetup, listModelIds, watchProviders, CONNECT_COMMAND, MODEL_COMMAND, PROVIDER_COMMANDS, SETUP_COMMAND, type ProviderCmdCtx } from "./providers-cmd.ts";
 import { cmdMcp, MCP_COMMAND } from "./mcp-cmd.ts";
@@ -37,6 +38,40 @@ import type { ThinkingEffort } from "../core/types.ts";
 import { join } from "node:path";
 
 export { buildCostNote } from "./cost.ts"; // moved for the ADR-002 cap; re-exported for tests
+
+// lazy loaders — info-cmd and session-cmd are deferred until the first slash command
+type InfoCmdMod = typeof import("./info-cmd.ts");
+let _infoCmdMod: InfoCmdMod | null = null;
+function lazyInfoCmd(): InfoCmdMod {
+  if (_infoCmdMod === null) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    _infoCmdMod = require("./info-cmd.ts") as InfoCmdMod;
+  }
+  return _infoCmdMod;
+}
+
+type SessionCmdMod = typeof import("./session-cmd.ts");
+let _sessionCmdMod: SessionCmdMod | null = null;
+function lazySessionCmd(): SessionCmdMod {
+  if (_sessionCmdMod === null) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    _sessionCmdMod = require("./session-cmd.ts") as SessionCmdMod;
+  }
+  return _sessionCmdMod;
+}
+
+/** resolveBootSession inlined from session-cmd.ts so the module loads lazily.
+ *  `rovecode --resume <id>` boot resolution: exact/new ids pass, unique prefix resolves,
+ *  ambiguous prefix starts fresh and warns. */
+function resolveBootSession(sessionsDir: string, id: string | undefined): { id: string | undefined; warn?: string } {
+  if (id === undefined) return { id };
+  const known = listSessions(sessionsDir);
+  if (known.some((s) => s.id === id)) return { id };
+  const pre = known.filter((s) => s.id.startsWith(id));
+  if (pre.length === 1) return { id: pre[0]!.id };
+  if (pre.length > 1) return { id: undefined, warn: `"${id}" matches ${pre.length} sessions — started fresh; use /resume to pick one` };
+  return { id };
+}
 
 export interface TuiAppOptions {
   yolo?: boolean;
@@ -216,8 +251,8 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   };
 
   // both read the ACTIVE store live — /sessions and a root /rewind swap it (session-cmd.ts helpers)
-  const refreshUsage = () => { const u = usageOf(store); state.tokensIn = u.tokensIn; state.tokensOut = u.tokensOut; };
-  const replayHistory = () => replayTranscript(renderer, store);
+  const refreshUsage = () => { const u = lazySessionCmd().usageOf(store); state.tokensIn = u.tokensIn; state.tokensOut = u.tokensOut; };
+  const replayHistory = () => lazySessionCmd().replayTranscript(renderer, store);
   // port #34: /attach context — the stage lives on the ACTIVE store (read live); the vision check uses the current mode's model
   const attachCtx: AttachCtx = { renderer, cwd: rt.cwd, store: () => store, modelRef: () => modes.modelFor() };
 
@@ -305,7 +340,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     const arg = rest.join(" ").trim();
     switch (cmd) {
       case "exit": case "quit": close(); return true;
-      case "help": cmdHelp(infoCtx); return true;
+      case "help": lazyInfoCmd().cmdHelp(infoCtx); return true;
       case "effort": {
         const want = arg.trim();
         if (want.length === 0) { renderer.addSystemNote(effortNote(rt.effort, receives(rt.effort))); return true; }
@@ -341,19 +376,19 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
         return true;
       case "checkpoints": void cmdCheckpoints(cpCtx); return true;
       case "restore": void cmdRestore(cpCtx, arg); return true;
-      case "status": cmdStatus(infoCtx); return true;
-      case "cost": cmdCost(infoCtx, arg); return true;
-      case "skills": cmdSkills(infoCtx); return true;
-      case "memory": cmdMemory(infoCtx); return true;
-      case "todos": cmdTodos(infoCtx); return true; // port #32
-      case "tasks": cmdTasks(infoCtx, arg); return true; // port #26
-      case "new": cmdNew(sessCtx); return true;
-      case "rewind": case "tree": void cmdRewind(sessCtx); return true;
-      case "sessions": void cmdSessions(sessCtx); return true;
+      case "status": lazyInfoCmd().cmdStatus(infoCtx); return true;
+      case "cost": lazyInfoCmd().cmdCost(infoCtx, arg); return true;
+      case "skills": lazyInfoCmd().cmdSkills(infoCtx); return true;
+      case "memory": lazyInfoCmd().cmdMemory(infoCtx); return true;
+      case "todos": lazyInfoCmd().cmdTodos(infoCtx); return true; // port #32
+      case "tasks": lazyInfoCmd().cmdTasks(infoCtx, arg); return true; // port #26
+      case "new": lazySessionCmd().cmdNew(sessCtx); return true;
+      case "rewind": case "tree": void lazySessionCmd().cmdRewind(sessCtx); return true;
+      case "sessions": void lazySessionCmd().cmdSessions(sessCtx); return true;
       case "resume":
-        if (arg) void cmdSessions(sessCtx, arg); else void cmdSessions(sessCtx);
+        if (arg) void lazySessionCmd().cmdSessions(sessCtx, arg); else void lazySessionCmd().cmdSessions(sessCtx);
         return true;
-      case "export": cmdExport(infoCtx, arg); return true;
+      case "export": lazyInfoCmd().cmdExport(infoCtx, arg); return true;
       case "attach": cmdAttach(attachCtx, arg); return true; // port #34
       case "paste": cmdPasteImage(attachCtx); return true;    // clipboard image → attachment (⌃v)
       case "mcp": void cmdMcp({ renderer, cwd: rt.cwd }, arg); return true; // the MCP market (mcp-cmd.ts): palette → approval card → mcp.json
