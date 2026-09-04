@@ -23,7 +23,7 @@
   "scripts": {
     "build": "bun run scripts/build.ts",
     "test": "bun test",
-    "gauntlet": "bun run src/eval/gauntlet.ts",
+    "gauntlet": "bun src/cli/main.ts gauntlet",
     "typecheck": "tsc --noEmit",
     "check": "tsc --noEmit && bun test",
     "smoke": "bun src/cli/main.ts smoke-tui --sextant",
