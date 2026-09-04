@@ -272,7 +272,7 @@ Defaults < project config chunks (harvested, capped) < env < CLI flags.
 
 - `~/.rovecode/providers.json` (user) and `.rovecode/providers.json` (project) — model providers and the
   default model; see Providers below
-- `.rovecode/mcp.json` (+ harvested `.mcp.json`) — MCP servers
+- `.rovecode/mcp.json` (+ harvested `.mcp.json`, + `~/.rovecode/mcp.json` for you) — MCP servers; `rovecode mcp add` writes them
 - `.rovecode/modes.json` — per-mode model config (TUI-scoped; see limitations)
 - `.rovecode/sandbox.json` — `{"rung": "direct"|"wsl"|"docker", "dockerImage"?: "…"}` selects where `bash` runs (#27);
   `ROVECODE_SANDBOX=<rung>` / `ROVECODE_SANDBOX_IMAGE=<image>` override it; default `direct`
@@ -496,7 +496,11 @@ tokens, cache hits, and catalog-priced spend.
   `.rovecode/mcp.json`); loaded once per process, restart to pick up edits; `ROVECODE_NO_HOOKS=1` skips the files.
   The programmatic `ExtensionHooks.reviseToolArgs` still rewrites args before policy + approval (approval
   sees revised args).
-- **MCP**: add servers to `.rovecode/mcp.json`; tools arrive lazily through `mcp_list`/`mcp_call` under the same policy pipeline.
+- **MCP** (`src/mcp`, `docs/mcp-market.md`): `rovecode mcp search|info|add|remove|list` and `/mcp` in the TUI install servers
+  from a curated shelf and the official registry — the exact command/URL, publisher and version are shown before a yes,
+  keys are asked masked by name and written as values only to `~/.rovecode/mcp.json` (a `--project` file gets `${NAME}`).
+  Servers live in `~/.rovecode/mcp.json` < `.mcp.json` < `.rovecode/mcp.json`; tools arrive lazily through
+  `mcp_list`/`mcp_call` under the same policy pipeline.
 
 ## License & notices
 

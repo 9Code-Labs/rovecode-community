@@ -415,7 +415,7 @@ async function cmdTrace(sessionId: string): Promise<void> {
   }
 }
 
-const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "plugin", "auth", "provider", "model", "models", "setup", "connect", "trace", "help", "chat", "repl", "smoke-tui", "acp", "serve", "export"]);
+const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "plugin", "mcp", "auth", "provider", "model", "models", "setup", "connect", "trace", "help", "chat", "repl", "smoke-tui", "acp", "serve", "export"]);
 // --resume <id>: TUI-only value flag, parsed here (parseCli skips its value when locating the
 // command but returns no flag values); its value must not be mistaken for a one-shot prompt
 const rIx = process.argv.indexOf("--resume");
@@ -435,6 +435,8 @@ if (cmd === "" || cmd === "chat" || cmd === "repl") {
     case "tools": await cmdTools(); break;
     // plugins (src/plugins, docs/plugins.md): list/add/remove/enable/disable/trust/untrust/show — filesystem + plugins.json only, never imports a plugin
     case "plugin": process.exitCode = await (await import("../plugins/cli.ts")).cmdPlugin(argvAfter("plugin")); break;
+    // the MCP market (src/mcp/market*.ts, docs/mcp-market.md): search/info/add/remove/list over ~/.rovecode/mcp.json and .rovecode/mcp.json
+    case "mcp": process.exitCode = await (await import("./mcp-market-cmd.ts")).cmdMcp(argvAfter("mcp")); break;
     case "setup": process.exitCode = await runSetup({ registry: new ProviderRegistry(process.cwd()) }); break; // connect a model step by step (cli/setup.ts)
     // `connect` is the one-line form of setup: bare it IS the wizard, with an id it takes the answers
     // from argv (cli/connect.ts) so a README or a CI step can do it without a terminal

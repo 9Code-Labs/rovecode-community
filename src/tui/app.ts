@@ -17,8 +17,9 @@ import { togglePlanAct, applyModeToRun, flushModeSwitch } from "./modes-cmd.ts";
 import { cmdCheckpoints, cmdRestore, type CheckpointCmdCtx } from "./checkpoints-cmd.ts";
 import { cmdRewind, cmdSessions, cmdNew, replayTranscript, usageOf, resolveBootSession, type SessionCmdCtx } from "./session-cmd.ts";
 import { cmdHelp, cmdStatus, cmdCost, cmdSkills, cmdMemory, cmdExport, cmdTodos, cmdTasks, todoLabel, type InfoCmdCtx } from "./info-cmd.ts";
-import { cmdAttach, carryOverAttachments, queuedAttachNote, userTurnLine, ATTACH_COMMAND, type AttachCtx } from "./attach.ts";
+import { cmdAttach, cmdPasteImage, carryOverAttachments, queuedAttachNote, userTurnLine, ATTACH_COMMAND, PASTE_COMMAND, type AttachCtx } from "./attach.ts";
 import { cmdConnect, cmdModel as cmdModelSwitch, cmdModels, cmdProvider, cmdSetup, watchProviders, CONNECT_COMMAND, MODEL_COMMAND, PROVIDER_COMMANDS, SETUP_COMMAND, type ProviderCmdCtx } from "./providers-cmd.ts";
+import { cmdMcp, MCP_COMMAND } from "./mcp-cmd.ts";
 import { acceptEditsNote, effortNote, modeSwitchNote, noModelHint, resumedLine, welcomeCard } from "../core/voice.ts";
 import { compactionNote } from "./replay-marker.ts";
 import { previewDiff } from "../coding/diff.ts";
@@ -80,6 +81,8 @@ export const TUI_COMMANDS: SlashCommand[] = [
   { name: "checkpoints", description: "Snapshots I took before each change (shadow git)", group: "files & history" },
   { name: "restore", description: "Go back to a snapshot: /restore <ref> [files|conversation|both]", group: "files & history" },
   { ...ATTACH_COMMAND, group: "files & history" }, // port #34: /attach <path> · /attach (list) · /attach clear — attach.ts
+  { ...PASTE_COMMAND, group: "files & history" },  // /paste: the clipboard image as an attachment (⌃v in sextant) — attach.ts
+  MCP_COMMAND, // mcp-cmd.ts: /mcp [query] — pick a server in the palette, approve the exact plan on the card, it lands in mcp.json
   { name: "status", description: "Provider, model, turns, tokens, sandbox", group: "info" },
   { name: "cost", description: "Tokens, cache hits and the USD estimate (/cost refresh updates prices)", group: "info" },
   { name: "todos", description: "My step list for the current task", group: "info" },
@@ -332,6 +335,8 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
         return true;
       case "export": cmdExport(infoCtx, arg); return true;
       case "attach": cmdAttach(attachCtx, arg); return true; // port #34
+      case "paste": cmdPasteImage(attachCtx); return true;    // clipboard image → attachment (⌃v)
+      case "mcp": void cmdMcp({ renderer, cwd: rt.cwd }, arg); return true; // the MCP market (mcp-cmd.ts): palette → approval card → mcp.json
       default:
         // port #30: a discovered custom command renders its template and submits it as a user turn.
         // MED-2: it gets the RAW remainder of the line (whitespace runs and pasted newlines intact —

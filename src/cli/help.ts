@@ -78,6 +78,10 @@ const ADVANCED = `advanced — the full command reference
   rovecode plugin add <folder|git-url> [--project] [--force]  install a plugin folder (tools, hooks, commands, skills, MCP in one manifest)
   rovecode plugin trust <name>  approve a PROJECT plugin's current files on this machine (show <name> lists them first)
   rovecode plugin remove|enable|disable|untrust|show <name>   (docs/plugins.md; restart to load — read once per process, like hooks)
+  rovecode mcp search [query]   MCP servers to install: the curated shelf, then the official registry (cached a day)
+  rovecode mcp info <name>      publisher, version, the exact command or URL, the keys it asks for
+  rovecode mcp add <name> [--project] [--pick N] [--yes]  show the plan, ask for keys masked, write ~/.rovecode/mcp.json (or .rovecode/mcp.json)
+  rovecode mcp remove <name> [--project] · rovecode mcp list   (docs/mcp-market.md; /mcp does the same inside the TUI)
   rovecode auth set <provider> [--key <name>]  store an API key (prompts on stdin; ~/.rovecode/credentials.json)
   rovecode auth list            stored providers + key names (values redacted)
   rovecode auth remove <provider>  delete a stored credential
