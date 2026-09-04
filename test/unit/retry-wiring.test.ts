@@ -135,9 +135,10 @@ test("real wiring: 429, 429, 200 on the chain head → the head serves after two
   // retries are not advances: no "router:" note — but every retry surfaces as a "retry:" note (wiring pass)
   const notes = rt.drainRouterNotes();
   expect(notes.filter((n) => n.startsWith("router:"))).toEqual([]);
-  expect(notes.filter((n) => n.startsWith("retry:"))).toHaveLength(2);
-  expect(notes[0]).toMatch(/^retry: custom\/alpha attempt 1 in \d+ms \(.*429.*\)$/);
-  expect(notes[1]).toMatch(/^retry: custom\/alpha attempt 2 in \d+ms \(.*429.*\)$/);
+  // the human's words (retry.ts describeRetry): provider, what happened, the wait, attempt/attempts (RETRY_MAX=2 → 3 attempts)
+  expect(notes).toHaveLength(2);
+  expect(notes[0]).toMatch(/^custom: rate limited — retrying in [\d.]+ s \(2\/3\)$/);
+  expect(notes[1]).toMatch(/^custom: rate limited — retrying in [\d.]+ s \(3\/3\)$/);
   expect(rt.drainRouterNotes()).toEqual([]); // drained
   const assistant = rt.store.messages().find((m) => m.role === "assistant");
   expect(assistant?.origin).toEqual({ provider: "custom", model: "alpha" });
@@ -163,8 +164,11 @@ test("real wiring: 429 forever on the head → retries EXHAUST (1 + ROVECODE_RET
   expect(advances[0]).toContain("custom/alpha");
   expect(advances[0]).toContain("custom/beta");
   expect(advances[0]).toContain("429");
-  // the two exhausted retries precede the advance in the same drain (wiring pass)
-  expect(notes.map((n) => n.split(" ")[0])).toEqual(["retry:", "retry:", "router:"]);
+  // the two retries, then the give-up line naming the status, then the advance — in that order, one drain (wiring pass)
+  expect(notes).toHaveLength(4);
+  expect(notes.slice(0, 2).every((n) => /^custom: rate limited — retrying in /.test(n))).toBe(true);
+  expect(notes[2]).toMatch(/^custom: rate limited \(HTTP 429\) — gave up after 3 attempts/);
+  expect(notes[3]!.startsWith("router:")).toBe(true);
   expect(rt.drainRouterNotes()).toHaveLength(0);
 });
 
@@ -175,8 +179,7 @@ test("wiring pass: a 429-then-200 run leaves exactly ONE retry note in drainRout
   expect(runEnd(events).summary).toBe("alpha says hi");
   const notes = rt.drainRouterNotes();
   expect(notes).toHaveLength(1); // mutation: drop onRetry from the withRetry options in createRuntime → []
-  expect(notes[0]).toMatch(/^retry: custom\/alpha attempt 1 in \d+ms \(/);
-  expect(notes[0]).toContain("429");
+  expect(notes[0]).toMatch(/^custom: rate limited — retrying in [\d.]+ s \(2\/3\)$/);
   expect(notes[0]).not.toContain("router:");
 });
 
@@ -201,7 +204,7 @@ test("real wiring: abort mid-backoff → the sleep wakes, no further request, no
     const notes = rt.drainRouterNotes();
     expect(notes.filter((n) => n.startsWith("router:"))).toEqual([]); // no advance
     // the retry was ANNOUNCED (onRetry fires before the backoff sleep) with the 30s server floor, then aborted
-    expect(notes.filter((n) => n.startsWith("retry:"))).toEqual([expect.stringMatching(/^retry: custom\/alpha attempt 1 in 30000ms \(/)]);
+    expect(notes.filter((n) => n.includes("— retrying in"))).toEqual([expect.stringMatching(/^custom: rate limited — retrying in 30 s \(2\/3\)$/)]);
     expect(performance.now() - started).toBeLessThan(3_000); // woke on the abort, not after 30s
   } finally {
     onRequest = null;

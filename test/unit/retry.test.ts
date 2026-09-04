@@ -351,7 +351,7 @@ test("a throwing inner stream is folded into an error turn — never retried, ne
   expect(calls2).toBe(1);
 });
 
-test("non-turn events pass through live from every attempt; the terminal turn is the retried success", async () => {
+test("idempotency: an attempt that already streamed a delta is NOT retried — the delta stands once, the turn keeps it as its parts, the error says why (2026-09-04; before this a retry re-streamed the answer)", async () => {
   let n = 0;
   const inner: StreamFn = async function* (): AsyncGenerator<StreamEvent> {
     n++;
@@ -360,8 +360,24 @@ test("non-turn events pass through live from every attempt; the terminal turn is
   };
   const f = fakeSleep();
   const { events, turn } = await run(withRetry(inner, { sleep: f.sleep, random: () => 0 }));
-  expect(events.map((e) => (e.type === "text_delta" ? e.text : e.type))).toEqual(["d1", "d2", "turn"]);
-  expect(turn).toBe(ok);
+  expect(events.map((e) => (e.type === "text_delta" ? e.text : e.type))).toEqual(["d1", "turn"]);
+  expect(n).toBe(1);
+  expect(f.delays).toEqual([]);
+  expect(turn.stopReason).toBe("error");
+  expect(turn.parts).toEqual([{ kind: "text", text: "d1" }]);
+  expect(turn.error).toBe("HTTP 503: overloaded — the connection dropped after part of the answer had arrived; not retried, a retry would repeat it");
+  // nothing streamed before the failure → the retry goes ahead and the deltas of the success are the only ones
+  let m = 0;
+  const quiet: StreamFn = async function* (): AsyncGenerator<StreamEvent> {
+    m++;
+    if (m === 1) { yield { type: "turn", turn: err("HTTP 503: overloaded") }; return; }
+    yield { type: "text_delta", text: "d2" };
+    yield { type: "turn", turn: ok };
+  };
+  const g = fakeSleep();
+  const r2 = await run(withRetry(quiet, { sleep: g.sleep, random: () => 0 }));
+  expect(r2.events.map((e) => (e.type === "text_delta" ? e.text : e.type))).toEqual(["d2", "turn"]);
+  expect(r2.turn).toBe(ok);
 });
 
 // ---------- env knobs ----------
@@ -373,7 +389,7 @@ test("retryOptionsFromEnv: defaults, parsing, 0 honored (off), invalid/blank →
   expect(retryOptionsFromEnv({ ROVECODE_RETRY_MAX: "abc", ROVECODE_RETRY_BASE_MS: "0" })).toEqual({ maxRetries: DEFAULT_MAX_RETRIES, baseMs: DEFAULT_BASE_MS });
   expect(retryOptionsFromEnv({ ROVECODE_RETRY_MAX: "-1", ROVECODE_RETRY_BASE_MS: "" })).toEqual({ maxRetries: DEFAULT_MAX_RETRIES, baseMs: DEFAULT_BASE_MS });
   expect(DEFAULT_MAX_RETRIES).toBe(3);
-  expect(DEFAULT_BASE_MS).toBe(2000);
+  expect(DEFAULT_BASE_MS).toBe(1000); // 2026-09-04: ~1 s base, 20 s cap (docs/wire-failures.md)
 });
 
 // ---------- stream-errors: adapters record status + Retry-After; abort semantics unchanged ----------

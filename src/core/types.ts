@@ -56,6 +56,9 @@ export interface AssistantTurn {
 
 export interface StreamOptions {
   signal?: AbortSignal;
+  /** the run's wall-clock deadline (epoch ms, RunConfig.maxSeconds) — a retry backoff that would end past it
+   *  is not taken (providers/retry.ts); unset = no clock */
+  deadlineAt?: number;
   /** tool schemas advertised to the provider for native function calling */
   tools?: ToolSchema[];
 }

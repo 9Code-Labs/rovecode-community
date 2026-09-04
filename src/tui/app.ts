@@ -499,6 +499,9 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     await rt.mcp?.close().catch(() => {});
     if (e instanceof SandboxConfigError && opts.exitOnClose !== false) { console.error(`error: ${e.message}`); process.exit(2); }
     throw e;
+  // a retry notice while the backoff waits ("anthropic: overloaded — retrying in 4 s (2/4)"), not after the run: the
+  // drain in the run's finally still runs and finds nothing once this listener exists
+  rt.onRouterNote((n) => renderer.addSystemNote(n, "warn"));
   });
   await closedP;
 }

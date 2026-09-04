@@ -243,7 +243,8 @@ async function* runLoop(
       // whole turn and flushed the buffered message_updates afterwards — a generator cannot yield
       // from a callback — so a 15 s reasoning phase (claude-opus-5 at --effort high, measured) put
       // nothing on screen and read as a hang. Order is unchanged: every delta still precedes turn_end.
-      const live = collectTurn(deps.stream, model, systemKept ? [sysMsg, ...withReminder] : withReminder, deps.tools, runAc.signal);
+      // the run's deadline rides into the provider call so a retry backoff cannot overshoot the clock the turn boundary enforces
+      const live = collectTurn(deps.stream, model, systemKept ? [sysMsg, ...withReminder] : withReminder, deps.tools, runAc.signal, cfg.maxSeconds !== undefined ? startedAt + cfg.maxSeconds * 1000 : undefined);
       let reasoning = ""; // the reasoning text stays here: only its estimated size leaves the loop
       for (;;) {
         const step = await live.next();
@@ -386,9 +387,9 @@ export interface TurnOutcome {
 
 /** Drive one provider turn: yields the text and reasoning deltas as they arrive (the caller turns
  *  them into RunEvents), returns the terminal turn as the outcome. tool_call_delta is not surfaced. */
-async function* collectTurn(stream: StreamFn, model: ModelRef, messages: Message[], tools?: ToolSchema[], signal?: AbortSignal): AsyncGenerator<Extract<StreamEvent, { type: "text_delta" | "reasoning_delta" }>, TurnOutcome> {
+async function* collectTurn(stream: StreamFn, model: ModelRef, messages: Message[], tools?: ToolSchema[], signal?: AbortSignal, deadlineAt?: number): AsyncGenerator<Extract<StreamEvent, { type: "text_delta" | "reasoning_delta" }>, TurnOutcome> {
   let outcome: TurnOutcome = { parts: [], stopReason: "end_turn", usage: { input: 0, output: 0 } };
-  for await (const ev of stream(model, messages, { tools, signal })) {
+  for await (const ev of stream(model, messages, { tools, signal, ...(deadlineAt !== undefined ? { deadlineAt } : {}) })) {
     if (ev.type === "text_delta" || ev.type === "reasoning_delta") yield ev;
     else if (ev.type === "turn") { outcome = { parts: ev.turn.parts, stopReason: ev.turn.stopReason, usage: ev.turn.usage, error: ev.turn.error, origin: servedBy(ev.turn) }; }
   }

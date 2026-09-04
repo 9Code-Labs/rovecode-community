@@ -38,7 +38,7 @@ import { withLspGate, lspGateNote } from "../coding/lsp.ts";
 import { buildRepoMapChunk } from "../coding/repomap.ts";
 import { anchorEntryId, Checkpoints, MUTATING_KINDS } from "../coding/checkpoints.ts";
 import { createRouter, roleTableFromEnv, type Router } from "../providers/router.ts";
-import { retryOptionsFromEnv, withRetry } from "../providers/retry.ts";
+import { describeGiveUp, describeRetry, retryOptionsFromEnv, withRetry } from "../providers/retry.ts";
 import { createEvalCellTool } from "../tools/evalcell.ts";
 import { webFetchTool } from "../tools/webfetch.ts";
 import { askUserTool, type AskFn } from "../tools/ask-user.ts";
@@ -135,6 +135,10 @@ export interface Runtime {
   router: Router;
   /** port #14: fallback-advance notes accumulated since the last drain. */
   drainRouterNotes(): string[];
+  /** live delivery of the same notes (retry "retrying in 4 s (2/4)", give-up, chain advance): buffered ones replay
+   *  first, then each new note arrives as it happens — the TUI shows a notice while the backoff waits, cmdRun prints a
+   *  stderr line. With a listener registered, drainRouterNotes has nothing left to drain. */
+  onRouterNote(fn: (note: string) => void): void;
   /** port #11: shadow-git checkpoints for a session (lazy; null when git is absent
    *  or ROVECODE_NO_CHECKPOINTS=1). Snapshots land automatically after mutating tools. */
   checkpointsFor(sessionId: string): Promise<Checkpoints | null>;
@@ -345,6 +349,10 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   // comma-separated provider/model chains). The registry's dispatcher routes every candidate to
   // ITS OWN provider's endpoint, so a cross-provider chain really fails over.
   const routerNotes: string[] = [];
+  const routerListeners: ((note: string) => void)[] = [];
+  /** a note goes to every live listener at once (the TUI's notice, cmdRun's stderr line); with no listener it
+   *  waits in the buffer for drainRouterNotes — so a retry is visible WHILE it waits, not after the run */
+  const pushRouterNote = (note: string): void => { if (routerListeners.length === 0) routerNotes.push(note); else for (const fn of routerListeners) fn(note); };
   const fallbackRef: ModelRef = { provider: bootDefault?.provider ?? "mock", model: bootDefault?.model || "default" };
   const router = createRouter({
     roles: roleTableFromEnv(fallbackRef),
@@ -352,7 +360,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     // outside it (requested model prepended as primary); the synthesized single-model
     // default (env unset) must NOT capture loose models — hence the env gate.
     looseFallback: (process.env.ROVECODE_MODEL_DEFAULT ?? "").trim().length > 0,
-    onNote: (n) => routerNotes.push(
+    onNote: (n) => pushRouterNote(
       `router: ${n.chain} ${n.from.provider}/${n.from.model} → ${n.to ? `${n.to.provider}/${n.to.model}` : "chain exhausted"} (${n.reason})`),
   });
   // port #7: provider streams get the non-native tool-call parser (strict-gated passthrough
@@ -366,7 +374,9 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   // noProviderReason() first and cmdRun keeps its mock fallback.
   const rawStream = providers.stream();
   const middlewared = process.env.ROVECODE_NO_TOOL_MIDDLEWARE !== "1" ? withToolCallParsing(rawStream) : rawStream;
-  const stream = opts.stream !== undefined ? opts.stream : router.wrap(withRetry(middlewared, { ...retryOptionsFromEnv(), onRetry: (n) => routerNotes.push(`retry: ${n.model.provider}/${n.model.model} attempt ${n.attempt} in ${n.delayMs}ms (${n.reason})`) })); // retries surface as router-style notes (drainRouterNotes)
+  // retries and give-ups surface as notes in the human's words (providers/retry.ts describeRetry/describeGiveUp):
+  // "anthropic: overloaded — retrying in 4 s (2/4)" — live to onRouterNote listeners, else buffered for drainRouterNotes
+  const stream = opts.stream !== undefined ? opts.stream : router.wrap(withRetry(middlewared, { ...retryOptionsFromEnv(), onRetry: (n) => pushRouterNote(describeRetry(n)), onGiveUp: (n) => pushRouterNote(describeGiveUp(n)) }));
   const catalog = new ModelCatalog(); // offline models.dev snapshot (port #6)
   // port #39: OTel span export rides the hook seam — attached ONLY when ROVECODE_OTEL_ENDPOINT is set (off:
   // nothing constructed, no on_event tap → zero cost); export failures surface through hooks.warnings
@@ -552,6 +562,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     setAskUser(fn: AskFn | undefined) { askUser = fn; },
     hooks,
     plugins,
+    onRouterNote(fn) { for (const n of routerNotes.splice(0)) fn(n); routerListeners.push(fn); },
     providers,
     get provider() { return providers.defaultConfig(); },
     stream,

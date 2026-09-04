@@ -19,7 +19,8 @@
  *    `Math.max(currentDelay, retryDelayMs)`); a suggestion beyond the cap is terminal — no wait,
  *    immediate fallback (googleQuotaErrors.ts:120 MAX_RETRYABLE_DELAY_SECONDS, :286-289). Here
  *    the suggestion is the HTTP Retry-After header (RFC 9110 §10.2.3: delay-seconds or
- *    HTTP-date) recorded by stream-errors.ts, and the cap is the per-invocation total budget.
+ *    HTTP-date), OpenAI's retry-after-ms, or Anthropic's ratelimit-reset timestamps, all recorded
+ *    by stream-errors.ts; the cap is the per-invocation total budget and the run's own deadline.
  *  - Deviations: FULL jitter — delay = U[0,1) × min(max, base·2ⁿ) (AWS "Exponential Backoff And
  *    Jitter") instead of gemini-cli's ±30% around the current delay (retry.ts:494-495) or +20%
  *    over the server floor (:478): fewer synchronized retries, and the schedule is pinnable with
@@ -30,35 +31,47 @@
  *    retried: a seam-contract violation is a harness bug, not a provider outcome.
  *  - Per-invocation state only: attempt counter and deadline live inside one generator run;
  *    nothing is remembered across calls (unlike the router's sticky switch).
- *  - Deltas from a failed attempt pass through live, exactly as the router forwards them
- *    (router.ts header, mid-stream failure note): canonical content is the terminal turn only.
+ *  - IDEMPOTENCY (2026-09-04): a retry is taken only while NOTHING has been streamed to the consumer.
+ *    Once a text or reasoning delta has gone out, a failure ends the turn — with the partial text kept as
+ *    the turn's parts and an error that says so — because a re-drive would print a second answer under
+ *    the first (the router applies the same rule to its chain advance). Deltas from a failed attempt that
+ *    streamed nothing cannot exist, so the "pass through live" rule and this one never meet.
  *
  *  Env (retryOptionsFromEnv, read once by cli/runtime.ts):
  *  - ROVECODE_RETRY_MAX      retries after the first attempt; 0 disables. Default 3 (→ 4 attempts;
  *                        upstream 10 attempts — a fallback chain multiplies attempts per candidate).
- *  - ROVECODE_RETRY_BASE_MS  cap of the first backoff in ms. Default 2000 (upstream 5000; full jitter
- *                        halves the expected wait, so 2s ≈ a 1s expected first pause).
- *  Fixed: max backoff 30s (upstream verbatim), total budget 60s per invocation. */
+ *  - ROVECODE_RETRY_BASE_MS  cap of the first backoff in ms. Default 1000 (upstream 5000; full jitter
+ *                        halves the expected wait — ~0.5 s, 1 s, 2 s, 4 s expected).
+ *  Fixed: max backoff 20 s, total budget 60 s per invocation, and never past StreamOptions.deadlineAt
+ *  (the run's --max-seconds clock). */
 
 import type { AssistantTurn, ModelRef, StreamEvent, StreamFn } from "../core/types.ts";
 import { classifyStreamError } from "./router.ts";
-import { httpErrorMeta } from "./stream-errors.ts";
+import { httpErrorMeta, providerMessage } from "./stream-errors.ts";
 
 export const DEFAULT_MAX_RETRIES = 3;
-export const DEFAULT_BASE_MS = 2_000;
-export const DEFAULT_MAX_DELAY_MS = 30_000; // retry.ts:45
+export const DEFAULT_BASE_MS = 1_000;
+export const DEFAULT_MAX_DELAY_MS = 20_000;
 export const DEFAULT_TOTAL_MS = 60_000;
 
 export interface RetryNote {
   model: ModelRef;
   /** Attempts made so far (the one that just failed); the retry about to happen is attempt+1. */
   attempt: number;
+  /** attempts the policy allows in total (maxRetries + 1) — for "(2/4)" */
+  maxAttempts: number;
   delayMs: number;
   /** The failed turn's error text, e.g. "HTTP 429: ...". */
   reason: string;
-  /** Parsed Retry-After when the error turn carried one. */
+  /** the HTTP status when the failure was a response; undefined for a transport failure */
+  status?: number;
+  /** Parsed server wait hint (Retry-After / retry-after-ms / anthropic-ratelimit-*-reset) when the error turn carried one. */
   retryAfterMs?: number;
 }
+
+/** why the wrapper stopped retrying a retryable failure */
+export type GiveUpWhy = "attempts" | "budget" | "deadline";
+export interface GiveUpNote extends Omit<RetryNote, "delayMs"> { why: GiveUpWhy; delayMs?: number }
 
 export interface RetryOptions {
   /** Retries after the first attempt (ROVECODE_RETRY_MAX). 0 = never retry. */
@@ -71,6 +84,8 @@ export interface RetryOptions {
   totalMs?: number;
   /** Retry visibility — a note-style callback, not a StreamEvent (grammar is shared/untouchable). */
   onRetry?: (note: RetryNote) => void;
+  /** the last word: a retryable failure that will not be retried (attempts, budget or the run's deadline) */
+  onGiveUp?: (note: GiveUpNote) => void;
   /** Test seams: abortable sleep, jitter source, clock (epoch ms — also anchors HTTP-date). */
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   random?: () => number;
@@ -100,6 +115,20 @@ export function parseRetryAfter(value: string | undefined, now: number): number 
   return Number.isNaN(at) ? undefined : Math.max(0, at - now);
 }
 
+/** the server's wait hint for a failed turn, whichever header it used: the largest of Retry-After,
+ *  retry-after-ms and the Anthropic ratelimit reset timestamps (RFC 3339) — the longest wait is the
+ *  one that will actually clear the limit */
+export function serverWaitMs(turn: AssistantTurn, now: number): number | undefined {
+  const meta = httpErrorMeta(turn);
+  if (!meta) return undefined;
+  const hints: number[] = [];
+  const ra = parseRetryAfter(meta.retryAfter, now);
+  if (ra !== undefined) hints.push(ra);
+  if (meta.retryAfterMs !== undefined && /^\d+(?:\.\d+)?$/.test(meta.retryAfterMs.trim())) hints.push(Math.round(Number(meta.retryAfterMs)));
+  if (meta.resetAt !== undefined) { const at = Date.parse(meta.resetAt); if (!Number.isNaN(at)) hints.push(Math.max(0, at - now)); }
+  return hints.length ? Math.max(...hints) : undefined;
+}
+
 /** Env knobs (header). Blank/invalid/out-of-range values fall back to the defaults;
  *  ROVECODE_RETRY_MAX=0 is honored (retry off). */
 export function retryOptionsFromEnv(env: Record<string, string | undefined> = process.env): RetryOptions {
@@ -114,11 +143,40 @@ function envInt(raw: string | undefined, dflt: number, min: number): number {
 
 const errorTurn = (error: string): AssistantTurn => ({ parts: [], stopReason: "error", usage: { input: 0, output: 0 }, error });
 
-/** Wrap a StreamFn: a retryable failed turn (429 / 5xx / transport, never 400, never abort) is
- *  re-driven against the SAME model with the same args after an abortable full-jitter backoff,
- *  until it succeeds, a non-retryable outcome lands, or a cap (attempts / total budget) stops
- *  it — then the LAST turn is yielded untouched so the router sees the genuine provider error.
- *  Never throws (ADR-003). */
+// ---------- the human's words ----------
+
+/** one noun phrase per failure class — what the notice and the give-up line lead with */
+export function failureWord(status: number | undefined, error: string): string {
+  if (status === 429) return "rate limited";
+  if (status === 529 || status === 503) return "overloaded";
+  if (status !== undefined && status >= 500) return `server error (HTTP ${status})`;
+  if (status !== undefined) return `HTTP ${status}`;
+  if (/^no response from /.test(error)) return "no response";
+  return "connection failed";
+}
+
+const fmtSeconds = (ms: number): string => { const s = ms / 1000; return `${s >= 10 ? Math.round(s) : Math.round(s * 10) / 10} s`; };
+
+/** "anthropic: overloaded — retrying in 4 s (2/4)" */
+export function describeRetry(n: RetryNote): string {
+  return `${n.model.provider}: ${failureWord(n.status, n.reason)} — retrying in ${fmtSeconds(n.delayMs)} (${n.attempt + 1}/${n.maxAttempts})`;
+}
+
+/** "anthropic: overloaded (HTTP 529) — gave up after 4 attempts: Overloaded" */
+export function describeGiveUp(n: GiveUpNote): string {
+  const why = n.why === "attempts" ? `gave up after ${n.attempt} attempt${n.attempt === 1 ? "" : "s"}`
+    : n.why === "deadline" ? `not retried: the run's time limit is closer than the ${fmtSeconds(n.delayMs ?? 0)} wait`
+    : `not retried: the ${fmtSeconds(n.delayMs ?? 0)} wait would pass the retry budget`;
+  const status = n.status !== undefined && !/HTTP/.test(failureWord(n.status, n.reason)) ? ` (HTTP ${n.status})` : "";
+  const msg = providerMessage(n.reason);
+  return `${n.model.provider}: ${failureWord(n.status, n.reason)}${status} — ${why}${msg ? `: ${msg}` : ""}`;
+}
+
+/** Wrap a StreamFn: a retryable failed turn (429 / 5xx / transport, never 400, never abort, never after
+ *  a delta went out) is re-driven against the SAME model with the same args after an abortable
+ *  full-jitter backoff, until it succeeds, a non-retryable outcome lands, or a cap (attempts / total
+ *  budget / the run's deadline) stops it — then the LAST turn is yielded untouched so the router sees
+ *  the genuine provider error. Never throws (ADR-003). */
 export function withRetry(inner: StreamFn, opts: RetryOptions = {}): StreamFn {
   const maxRetries = opts.maxRetries ?? DEFAULT_MAX_RETRIES;
   const baseMs = opts.baseMs ?? DEFAULT_BASE_MS;
@@ -131,28 +189,44 @@ export function withRetry(inner: StreamFn, opts: RetryOptions = {}): StreamFn {
     const startedAt = now();
     for (let attempt = 1; ; attempt++) {
       let turn: AssistantTurn | null = null;
+      let streamed = ""; // every text delta this attempt let through — the answer the consumer has already seen
       try {
         for await (const ev of inner(model, messages, options)) {
           if (ev.type === "turn") turn = ev.turn;
-          else yield ev; // deltas pass through live (header)
+          else { if (ev.type === "text_delta") streamed += ev.text; else if (ev.type === "reasoning_delta") streamed ||= " "; yield ev; } // deltas pass through live (header)
         }
       } catch (e) {
         yield { type: "turn", turn: errorTurn(e instanceof Error ? e.message : String(e)) }; // folded, not retried (header)
         return;
       }
       if (turn === null) { yield { type: "turn", turn: errorTurn("stream ended without a terminal turn") }; return; }
+      const meta = httpErrorMeta(turn);
+      const status = meta?.status ?? classifyStreamError(turn.error).status;
       // retry.ts:337-340: aborts never retry; 400/4xx-non-429 and non-error turns stand as they are
-      if (turn.stopReason !== "error" || options?.signal?.aborted === true || !classifyStreamError(turn.error).retryable || attempt > maxRetries) {
+      if (turn.stopReason !== "error" || options?.signal?.aborted === true || !classifyStreamError(turn.error).retryable) {
         yield { type: "turn", turn };
         return;
       }
-      const retryAfterMs = parseRetryAfter(httpErrorMeta(turn)?.retryAfter, now());
+      if (streamed.length > 0) {
+        // idempotency (header): part of the answer is on the screen — end the turn, keep that text as the
+        // turn's parts (the loop stores it and the summary shows it above the error), say why no retry
+        const kept = streamed.trim().length > 0 && turn.parts.length === 0 ? [{ kind: "text" as const, text: streamed }] : turn.parts;
+        yield { type: "turn", turn: { ...turn, parts: kept, error: `${turn.error ?? "provider stream failed"} — the connection dropped after part of the answer had arrived; not retried, a retry would repeat it` } };
+        return;
+      }
+      const note = { model, attempt, maxAttempts: maxRetries + 1, reason: turn.error ?? "error", ...(status !== undefined ? { status } : {}) };
+      // retries off (ROVECODE_RETRY_MAX=0): nothing was ever going to be retried, so there is no giving up to announce
+      if (attempt > maxRetries) { if (maxRetries > 0) opts.onGiveUp?.({ ...note, why: "attempts" }); yield { type: "turn", turn }; return; }
+      const retryAfterMs = serverWaitMs(turn, now());
       const cap = Math.min(maxDelayMs, baseMs * 2 ** (attempt - 1));
       const delayMs = Math.max(Math.round(random() * cap), retryAfterMs ?? 0); // full jitter, server floor (retry.ts:476)
+      const withHint = retryAfterMs !== undefined ? { retryAfterMs } : {};
       // budget: a wait that would end past the deadline is not taken — the failure surfaces now
       // and the router may advance at once (googleQuotaErrors.ts:286-289 shape)
-      if (now() - startedAt + delayMs > totalMs) { yield { type: "turn", turn }; return; }
-      opts.onRetry?.({ model, attempt, delayMs, reason: turn.error ?? "error", ...(retryAfterMs !== undefined ? { retryAfterMs } : {}) });
+      if (now() - startedAt + delayMs > totalMs) { opts.onGiveUp?.({ ...note, ...withHint, delayMs, why: "budget" }); yield { type: "turn", turn }; return; }
+      // the run's own clock (--max-seconds): a wait that ends past it would only be cut off at the turn boundary
+      if (options?.deadlineAt !== undefined && now() + delayMs > options.deadlineAt) { opts.onGiveUp?.({ ...note, ...withHint, delayMs, why: "deadline" }); yield { type: "turn", turn }; return; }
+      opts.onRetry?.({ ...note, delayMs, ...withHint });
       await sleep(delayMs, options?.signal);
       if (options?.signal?.aborted) { yield { type: "turn", turn }; return; } // abort landed during backoff: last turn stands
     }

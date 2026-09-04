@@ -13,7 +13,7 @@ import { partsText } from "../core/loop.ts";
 import { applyAnthropicCacheBoundaries } from "./cache.ts";
 import { normalizeUsage } from "../core/usage.ts";
 import { BUILTIN_PROVIDERS, buildSnapshot, pickDefault } from "./provider-config.ts";
-import { failedTurn, httpErrorTurn } from "./stream-errors.ts";
+import { failedTurn, fetchFirstByte, httpErrorTurn } from "./stream-errors.ts";
 import { supportsImages } from "./catalog.ts";
 import { profileWire } from "./profiles.ts";
 import { anthropicThinking, thinkingBudget, thinkingPlan, type AnthropicThinkingShape } from "./thinking.ts";
@@ -177,7 +177,7 @@ async function anthropicPost(url: string, headers: Record<string, string>, model
   const wanted = model.effort;
   const key = shapeKey(model);
   let shape: AnthropicThinkingShape = shapeByModel.get(key) ?? "effort";
-  const send = (): Promise<Response> => fetch(url, { method: "POST", headers, body: JSON.stringify(build(anthropicThinking(wanted, shape))), signal });
+  const send = (): Promise<Response> => fetchFirstByte(url, { method: "POST", headers, body: JSON.stringify(build(anthropicThinking(wanted, shape))), ...(signal ? { signal } : {}) });
   const res = await send();
   // nothing to learn when the request carried no level (auto/off/unset use one shape-free field), or when it worked
   if (res.ok || wanted === undefined || wanted === "auto" || wanted === "off" || res.status !== 400) return res;
@@ -200,7 +200,7 @@ export function openaiCompatStream(opts: AdapterOptions): StreamFn {
   return async function* (model: ModelRef, messages: Message[], options?: { signal?: AbortSignal; tools?: unknown[] }): AsyncGenerator<StreamEvent> {
     let turn: AssistantTurn;
     try {
-      const res = await fetch(opts.baseUrl.replace(/\/$/, "") + "/chat/completions", {
+      const res = await fetchFirstByte(opts.baseUrl.replace(/\/$/, "") + "/chat/completions", {
         method: "POST",
         headers: { ...(opts.headers ?? {}), "content-type": "application/json", authorization: `Bearer ${opts.apiKey}` },
         body: JSON.stringify({
@@ -233,7 +233,7 @@ export function openaiCompatStreaming(opts: AdapterOptions): StreamFn {
     let buffer = "";
     const toolArgs = new Map<number, { id: string; name: string; args: string }>();
     try {
-      const res = await fetch(opts.baseUrl.replace(/\/$/, "") + "/chat/completions", {
+      const res = await fetchFirstByte(opts.baseUrl.replace(/\/$/, "") + "/chat/completions", {
         method: "POST",
         headers: { ...(opts.headers ?? {}), ...SSE_HEADERS, "content-type": "application/json", authorization: `Bearer ${opts.apiKey}` },
         body: JSON.stringify({

@@ -254,10 +254,11 @@ export function createRouter(config: RouterConfig): Router {
         for (let i = start; i < chain.length; i++) {
           const candidate = chain[i]!;
           let turn: AssistantTurn | null = null;
+          let streamed = false; // any delta reached the consumer from THIS candidate
           try {
             for await (const ev of stream(candidate, messages, options)) {
               if (ev.type === "turn") turn = ev.turn;
-              else yield ev; // deltas pass through live (header: mid-stream failure note)
+              else { if (ev.type === "text_delta" || ev.type === "reasoning_delta") streamed = true; yield ev; } // deltas pass through live (header: mid-stream failure note)
             }
           } catch (e) {
             // Defensive: the seam contract says streams never throw; if one does, keep the
@@ -267,8 +268,10 @@ export function createRouter(config: RouterConfig): Router {
           const t: AssistantTurn = turn ?? errorTurn("stream ended without a terminal turn");
           const aborted = options?.signal?.aborted === true; // retry.ts:337-339: aborts never advance
           // chain.length === 1: nothing to advance to — surface the provider error untouched,
-          // no exhausted-rewrite, no note (header: LOW/MED-4)
-          if (t.stopReason !== "error" || aborted || !classifyStreamError(t.error).retryable || chain.length === 1) {
+          // no exhausted-rewrite, no note (header: LOW/MED-4).
+          // streamed: part of an answer already reached the screen — a re-drive on the next candidate would
+          // print a second answer under the first; the failure stands (retry.ts applies the same rule)
+          if (t.stopReason !== "error" || aborted || streamed || !classifyStreamError(t.error).retryable || chain.length === 1) {
             SERVED.set(t, candidate); // header: HIGH-2 — this candidate produced the turn
             yield { type: "turn", turn: t }; // success or non-retryable: NO advance
             return;
