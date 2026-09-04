@@ -136,8 +136,7 @@ export function drawFiles(scr: ScreenLike, R: Rect, s: SextantState, theme: Them
     return;
   }
   // draw scrollbar before the row loop; status glyphs (M/A/D) are written after and overlay it
-  const filesSbGeom = scrollbar(scr, theme, B.x + B.w - 1, B.y, B.h, rows.length, B.h, f.scroll);
-  void filesSbGeom; // geometry exported for nimbus-6d's hit-zone (drag-to-scroll)
+  scrollbar(scr, theme, B.x + B.w - 1, B.y, B.h, rows.length, B.h, f.scroll); // scroll-hits.ts rebuilds this geometry for the drag zone
   for (let i = 0; i < B.h; i++) {
     const idx = f.scroll + i, r = rows[idx];
     if (!r) break;

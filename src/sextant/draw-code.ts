@@ -382,8 +382,7 @@ export function drawCode(scr: ScreenLike, rect: Rect, s: SextantState, theme: Th
   if (B.w >= RAIL_W + 2 && body.h >= 2 &&
       (s.code.mode === "code" || s.code.mode === "diff" || s.code.mode === "search")) {
     const total = rowCount(s, body.w);
-    const sbGeom = scrollbar(scr, theme, B.x + B.w - RAIL_W - 1, B.y, body.h, total, body.h, top);
-    void sbGeom; // geometry exported for nimbus-6d's hit-zone (drag-to-scroll)
+    scrollbar(scr, theme, B.x + B.w - RAIL_W - 1, B.y, body.h, total, body.h, top); // scroll-hits.ts rebuilds this geometry for the drag zone
   }
   if (rail.h >= 2 && B.w >= RAIL_W) drawRail(scr, rail, s, theme, top, body.h);
 }

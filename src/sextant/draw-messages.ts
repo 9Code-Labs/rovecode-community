@@ -349,8 +349,7 @@ export function drawMessages(scr: ScreenLike, rect: Rect, s: SextantState, theme
     const rows = cachedBuildRows(s, B.w, theme, now);
     const max = Math.max(0, rows.length - msgH);
     const offset = s.stick ? max : Math.max(0, Math.min(s.msgScroll, max));
-    const sbGeom = scrollbar(scr, theme, B.x + B.w - 1, B.y, msgH, rows.length, msgH, offset);
-    void sbGeom; // geometry exported for nimbus-6d's hit-zone (drag-to-scroll)
+    scrollbar(scr, theme, B.x + B.w - 1, B.y, msgH, rows.length, msgH, offset); // scroll-hits.ts rebuilds this geometry for the drag zone
     for (let i = 0; i < msgH; i++) {
       const r = rows[offset + i];
       if (!r) break;
