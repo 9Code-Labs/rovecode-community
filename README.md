@@ -186,7 +186,7 @@ view (every uncommitted change) only when neither is possible. Git runs beside t
 complete/cycle focus · `esc esc` stop the run · `⌃c` quit (interrupts first) · `⌃k`/`⌃p` palette · `⌃s` code
 (and focus it) · `⌃d` diff (press again to go back to code) · `⌃r` run output · `⌃a` agents board · `⌃e` files · `⌃o` cycle the page tabs (code/files/plan, narrow terminals) · `⌃b`
 notifications · `⌃v` paste a clipboard image · `⌃t` theme · `⌃n` new session · `⌃u` clear the prompt ·
-`⌃←`/`⌃→` word jump · mouse clicks, wheel and scrollbar drag. `rovecode smoke-tui --sextant` renders a
+`⌃←`/`⌃→` word jump · mouse: clicks everywhere (tabs, file rows, cards, a tool row opens its file, the header's unread badge, the footer's theme and effort words), wheel over any panel, scrollbar drag. `rovecode smoke-tui --sextant` renders a
 160×44 frame through the real pipeline and prints PASS.
 
 ## Features beyond the 20 ports (wave 3, verified per port in `PORTS.md`)
