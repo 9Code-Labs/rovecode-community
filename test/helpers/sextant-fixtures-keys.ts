@@ -43,7 +43,7 @@ export function spyCtx(layout: Layout = makeLayout(160, 44)): Spy {
     layout,
     hooks: { onSubmit: (t) => { spy.submits.push(t); }, onInterrupt: () => { spy.n.interrupts++; }, onExit: () => { spy.n.exits++; } },
     local: { setTheme: (n) => { spy.themes.push(n); }, setMode: (m) => { spy.modes.push(m); }, openFile: (p) => { spy.opened.push(p); }, toast: (t) => { spy.toasts.push(t); } },
-    hits: [], rows: [],
+    hits: [], rows: [], drag: { zone: null, y0: 0 },
   };
   return spy;
 }

@@ -21,6 +21,7 @@ import { petEnabled, type Pet } from "./pet.ts";
 import { Screen } from "./screen.ts";
 import { cardHits } from "./card-hits.ts";
 import { fileRowHits } from "./panel-hits.ts";
+import { scrollThumbHits } from "./scroll-hits.ts";
 import { drawTabs, mainPage } from "./draw-tabs.ts";
 import type { HitZone, InputEvent, Layout, SextantState, TerminalIO, Theme, TreeRow } from "./types.ts";
 
@@ -67,6 +68,8 @@ export class FrameLoop {
   private lastRender = -Infinity;
   private L: Layout;
   private hits: HitZone[] = [];
+  /** the grabbed zone (a scrollbar thumb) and the row it was pressed on; outlives the per-frame hits */
+  private readonly drag = { zone: null as HitZone | null, y0: 0 };
   private rows: TreeRow[] = [];
   /** frames painted (tests: "a render happened") */
   frames = 0;
@@ -136,7 +139,7 @@ export class FrameLoop {
     this.dirty = true;
     if (this.d.beforeInput?.(ev, now)) return;
     const kc = this.d.keyCtx();
-    const ctx: KeyCtx = { layout: this.L, hooks: kc.hooks, local: kc.local, hits: this.hits, rows: this.rows, fuzzy };
+    const ctx: KeyCtx = { layout: this.L, hooks: kc.hooks, local: kc.local, hits: this.hits, rows: this.rows, fuzzy, drag: this.drag };
     handleInput(this.d.state, ev, ctx, now);
     this.d.afterInput?.(ev, now);
   }
@@ -194,6 +197,8 @@ export class FrameLoop {
         key: { type: "key", name: "enter" },
       });
     }
+    // scrollbar thumbs (scroll-hits.ts): grab + drag scrolls; after the row zones so the thumb column wins
+    for (const hit of scrollThumbHits(L, main, s, theme, now, this.rows)) hits.push(hit);
     // the modal card's buttons (card-hits.ts). Registered BEFORE the palette/help so those overlays,
     // which draw over the card, still win the last-registered-wins walk in keys.ts.
     for (const hit of cardHits(L.messages, s, theme)) {

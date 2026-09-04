@@ -21,7 +21,7 @@ export type TokenizeFn = (line: string, lang: string) => readonly Token[];
 export interface CodeDeps { tokenize?: TokenizeFn }
 export type Painter = (scr: ScreenLike, rect: Rect, s: SextantState, theme: Theme, now: number) => void;
 
-const RAIL_W = 3;
+export const RAIL_W = 3;
 const MODES: readonly (readonly [string, string])[] = [["code", "▤"], ["diff", "±"], ["run", "$"], ["agents", "∷"]];
 const plainTokens: TokenizeFn = (line) => [[line, "plain"]];
 
@@ -124,7 +124,7 @@ const marksFor = (s: SextantState): Map<number, "added" | "changed"> =>
   s.code.diff && s.code.diff.file === s.code.file ? hunkMarks(s.code.diff.hunks) : new Map();
 
 /** the rows the current mode would draw (for scroll clamping); split diff depends on the body width */
-function rowCount(s: SextantState, bodyW: number): number {
+export function rowCount(s: SextantState, bodyW: number): number {
   const c = s.code;
   if (c.mode === "code") return c.content === null ? 0 : splitLines(c.content).length;
   if (c.mode === "diff") return c.diff ? diffRows(c.diff.hunks, bodyW > 110).length : 0;

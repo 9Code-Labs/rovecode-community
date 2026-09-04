@@ -100,6 +100,11 @@ export interface HitZone {
   onClick: () => void;
   /** a key replayed through handleInput after onClick (e.g. Enter to run the row just selected) */
   key?: KeyEvent;
+  /** a zone that can be GRABBED: a click inside it makes it the active drag target and every following
+   *  left-button drag event (until the release) calls this with the pointer's row and the rows moved
+   *  since the press — the scrollbar thumbs use `dy` to slide proportionally, so the thumb stays under
+   *  the finger wherever it was grabbed. The closure captures the frame's geometry at grab time. */
+  onDrag?: (y: number, dy: number) => void;
 }
 
 /** The terminal the renderer drives (#44): the ONE place raw stdin/stdout live. tui/sextant-io.ts

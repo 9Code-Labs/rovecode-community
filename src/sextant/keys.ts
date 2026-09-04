@@ -52,6 +52,9 @@ export interface KeyCtx {
   local: { setTheme(name: ThemeName): void; setMode(mode: CodeMode): void; openFile(path: string): void; toast(text: string): void };
   /** click zones the drawers registered while painting the current frame */
   hits: readonly HitZone[];
+  /** the zone grabbed by the last click that had an onDrag (a scrollbar thumb); owned by the frame loop
+   *  so it outlives the per-frame `hits` list — drag events go to it until the button is released */
+  drag: { zone: HitZone | null; y0: number };
   /** the flattened files tree as drawn this frame (cursor / Enter / ←→ act on these rows) */
   rows: readonly TreeRow[];
   /** #40 engine.fuzzy when wired; defaults to the ported scorer in overlays.ts */
@@ -381,10 +384,15 @@ function onMouse(s: SextantState, ev: MouseEvent, ctx: KeyCtx, now: number): Key
   const kind = mouseKind(ev);
   const L = ctx.layout;
   if (kind === "wheel-up" || kind === "wheel-down") return onWheel(s, ev, L, kind === "wheel-up" ? -1 : 1);
+  // a grabbed zone (a scrollbar thumb) follows the pointer until the button is released
+  if (kind === "release") { const had = ctx.drag.zone !== null; ctx.drag.zone = null; return had ? R() : NONE(); }
+  if (kind === "drag") { const z = ctx.drag.zone; if (z?.onDrag) { z.onDrag(ev.y, ev.y - ctx.drag.y0); return R(); } return NONE(); }
   if (kind !== "click") return NONE();
   for (let i = ctx.hits.length - 1; i >= 0; i--) {
     const z = ctx.hits[i]!;
     if (!inRect(ev.x, ev.y, z.rect)) continue;
+    ctx.drag.zone = z.onDrag ? z : null;
+    ctx.drag.y0 = ev.y;
     z.onClick();
     if (z.key) handleInput(s, z.key, ctx, now);
     return R();
