@@ -15,7 +15,7 @@ Rules (Berkay, 2026-09-04):
 - **low / medium / high** map onto the endpoint's own vocabulary. Where it has fewer steps, **medium rounds up**
   (a rovecode "medium" asks for more than "low").
 - A model that **always reasons** or has **no reasoning mode** receives nothing — sending a dial such a model
-  rejects is a hard 400, not a downgrade (grok-4; gpt-4-class on OpenAI proper).
+  rejects is a hard 400, not a downgrade (a grok `-non-reasoning` variant; gpt-4-class on OpenAI proper).
 - The **catalog's word is stronger than any regex**: a model that models.dev lists without a reasoning mode
   (`ModelRef.reasoning === false`, stamped by `cli/runtime.ts buildDef`) receives nothing on every dialect.
 - Dialects are matched by **model id, provider-agnostic** (the same GLM under kaesra, zai or openrouter is one
@@ -46,8 +46,9 @@ dialect in `thinking.ts`, not the caller.
 | OpenAI-compat · **Kimi K2 Thinking** | — | — (always thinks) | — | doc |
 | OpenAI-compat · **Kimi K2 instruct** | — | — (no thinking mode) | — | doc |
 | OpenAI-compat · **Gemini** via Google's OpenAI layer (`gemini`) | — | Flash: `extra_body.google.thinking_config.thinking_budget: 0` · Pro: — (minimum budget) | `reasoning_effort: "low"/"medium"/"high"` (Google maps to a budget) | doc |
-| OpenAI-compat · **grok-3-mini** (`grok`) | — | — | `reasoning_effort: "low" / "high" / "high"` | doc |
-| OpenAI-compat · **grok-4** and later, and any `-non-reasoning` variant | — | — (always reasons and rejects the field; the non-reasoning variants have no mode) | — | doc |
+| OpenAI-compat · **grok-3-mini** (`grok`) | — | — | `reasoning_effort: "low" / "high" / "high"` | doc (no longer on docs.x.ai 2026-09-04) |
+| OpenAI-compat · **grok-4.3 / 4.5 / 4.6 / 4.20**, and the retired grok-4-0709 / grok-4-fast slugs (served by grok-4.3 since 2026-05-15) | — | `reasoning_effort: "none"` | `reasoning_effort: "low"/"medium"/"high"` | fetched 2026-09-04 (docs.x.ai/docs/models/grok-4.3) |
+| OpenAI-compat · any grok `-non-reasoning` variant | — | — (no reasoning mode) | — | fetched 2026-09-04 |
 | OpenAI-compat · **gpt-oss** (`gpt-oss`) | — | — (low is the floor) | `reasoning_effort: "low"/"medium"/"high"` | doc |
 | OpenAI-compat · **o1 / o3 / o4** (`openai o-series`) | — | — (cannot be disabled) | `reasoning_effort: "low"/"medium"/"high"` | doc |
 | OpenAI-compat · **gpt-5.1** and later (`openai gpt-5`) | — | `reasoning_effort: "none"` | `reasoning_effort: "low"/"medium"/"high"` | doc |

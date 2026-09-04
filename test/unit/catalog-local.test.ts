@@ -23,8 +23,13 @@ test("every local entry resolves with its own numbers, source 'local' and the pa
   // the two gaps the audit found are closed with the right shape
   expect(c.lookup("deepseek", "deepseek-chat")).toMatchObject({ source: "local", pricing: { inputPerMTok: 0.28, outputPerMTok: 0.42, cacheReadPerMTok: 0.028 }, contextWindow: 128_000, maxOutput: 8_000, supportsReasoning: true });
   expect(c.lookup("deepseek", "deepseek-reasoner")!.maxOutput).toBe(64_000);
-  expect(c.lookup("xai", "grok-4")).toMatchObject({ source: "local", pricing: { inputPerMTok: 3, outputPerMTok: 15, cacheReadPerMTok: 0.75 }, supportsReasoning: true });
-  expect(c.lookup("xai", "grok-4-fast-non-reasoning")!.supportsReasoning).toBe(false); // thinking.ts sends nothing to it
+  // xAI retired the grok-4 slugs on 2026-05-15 and serves them as grok-4.3 at grok-4.3 rates (docs.x.ai, fetched 2026-09-04)
+  expect(c.lookup("xai", "grok-4")).toMatchObject({ source: "local", contextWindow: 1_000_000, pricing: { inputPerMTok: 1.25, outputPerMTok: 2.5, cacheReadPerMTok: 0.2 }, supportsReasoning: true });
+  expect(c.lookup("xai", "grok-4")!.sourceNote).toContain("served by grok-4.3, billed at grok-4.3 rates");
+  expect(c.lookup("xai", "grok-4")!.sourceNote).toContain("2026-09-04 (fetched)");
+  expect(c.lookup("xai", "grok-4-fast-non-reasoning")!.supportsReasoning).toBe(false); // served at none: thinking.ts sends nothing to it
+  expect(c.lookup("xai", "grok-3-mini")).toBeUndefined(); // neither documented nor in the retirement list: stays unpriced on purpose
+  expect(c.lookup("deepseek", "deepseek-chat")!.sourceNote).toContain("unverified: the alias is no longer on the pricing page");
   expect(c.lookup("xai", "GROK-4")!.source).toBe("local"); // the snapshot's case-insensitive match applies to the table too
   expect(c.lookup("anthropic", "claude-opus-5")).toMatchObject({ source: "models.dev" });
   expect(c.lookup("anthropic", "claude-opus-5")!.sourceNote).toBeUndefined();

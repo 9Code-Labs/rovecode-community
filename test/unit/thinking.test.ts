@@ -16,7 +16,7 @@ const fields = (model: string, effort: ThinkingEffort, extra: Partial<ModelRef> 
 const says = (model: string, effort: ThinkingEffort, extra: Partial<ModelRef> = {}): string => thinkingPlan(ref(model, effort, extra), "openai").says;
 
 test("auto sends nothing on every wire and every dialect; unset is auto", () => {
-  for (const m of ["gpt-5.2", "o3", "glm-5.3", "deepseek-chat", "qwen3-235b", "kimi-k2.5", "gemini-2.5-pro", "grok-4", "gpt-oss-120b", "whatever-7b", "claude-opus-5"]) {
+  for (const m of ["gpt-5.2", "o3", "glm-5.3", "deepseek-chat", "qwen3-235b", "kimi-k2.5", "gemini-2.5-pro", "grok-4.3", "gpt-oss-120b", "whatever-7b", "claude-opus-5"]) {
     expect(fields(m, "auto")).toEqual({});
     expect(thinkingPlan(ref(m), "openai").fields).toEqual({});
     expect(thinkingPlan(ref(m, "auto"), "anthropic").fields).toEqual({});
@@ -70,12 +70,14 @@ test("the matrix, OpenAI-compatible wire: each family's vocabulary, medium round
   expect(fields("gemini-2.5-flash", "off")).toEqual({ extra_body: { google: { thinking_config: { thinking_budget: 0 } } } });
   expect(fields("gemini-2.5-pro", "off")).toEqual({});
   expect(says("gemini-3-pro", "off")).toMatch(/cannot switch thinking off/);
-  // xAI
+  // xAI (docs.x.ai fetched 2026-09-04): the 4.x line takes none | low | medium | high; retired grok-4 slugs are served by grok-4.3
   expect(fields("grok-3-mini", "low")).toEqual({ reasoning_effort: "low" });
   expect(fields("grok-3-mini", "medium")).toEqual({ reasoning_effort: "high" });
   expect(fields("grok-3-mini", "off")).toEqual({});
-  expect(fields("grok-4", "high")).toEqual({});
-  expect(says("grok-4-0709", "high")).toMatch(/always reasons and rejects reasoning_effort/);
+  expect(fields("grok-4.3", "high")).toEqual({ reasoning_effort: "high" });
+  expect(fields("grok-4.6", "off")).toEqual({ reasoning_effort: "none" });
+  expect(fields("grok-4", "medium")).toEqual({ reasoning_effort: "medium" });
+  expect(says("grok-4-0709", "off")).toMatch(/retired grok-4 slugs are served by grok-4.3/);
   expect(fields("grok-4-fast-non-reasoning", "high")).toEqual({});
   // always-on families
   expect(fields("magistral-medium-latest", "off")).toEqual({});
@@ -162,7 +164,7 @@ test("the OpenAI-compatible adapters put the dialect's fields in the body (strea
     expect(s.sent[1]!.body.reasoning).toEqual({ effort: "low" });
     await drive(fn, { provider: "dashscope", model: "qwen3-235b-a22b", effort: "high" });
     expect(s.sent[2]!.body).toMatchObject({ enable_thinking: true, thinking_budget: 24576 });
-    await drive(fn, { provider: "xai", model: "grok-4", effort: "high" });
+    await drive(fn, { provider: "xai", model: "grok-4-fast-non-reasoning", effort: "high" });
     expect(s.sent[3]!.body.reasoning_effort).toBeUndefined();
     await drive(fn, { provider: "openai", model: "gpt-4o", effort: "high", reasoning: false });
     expect(Object.keys(s.sent[4]!.body)).not.toContain("reasoning_effort");

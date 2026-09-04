@@ -127,10 +127,12 @@ const DIALECTS: readonly Dialect[] = [
     plan: (l, m) => l !== "off" ? word(l, "Google's OpenAI-compatible layer maps low | medium | high to a thinking budget")
       : /flash/i.test(m.model) ? { fields: { extra_body: { google: { thinking_config: { thinking_budget: 0 } } } }, says: "extra_body.google.thinking_config.thinking_budget: 0 (Flash can switch thinking off; Pro cannot)" }
       : nothing(`${m.model} cannot switch thinking off (Gemini Pro keeps a minimum budget)`) },
+  // xAI (docs.x.ai, fetched 2026-09-04): grok-4.3 / 4.5 / 4.6 / 4.20 take reasoning_effort none | low | medium | high;
+  // the retired grok-4-0709 / grok-4-fast slugs are served by grok-4.3 since 2026-05-15, so they take the same words
   { id: "grok", matches: id(/grok/i),
     plan: (l, m) => /non-reasoning/i.test(m.model) ? nothing(`${m.model} has no reasoning mode`)
-      : /grok-3-mini/i.test(m.model) ? (l === "off" ? nothing("grok-3-mini cannot switch reasoning off") : word(l === "low" ? "low" : "high", "xAI's words are low | high; medium rounds up"))
-      : nothing(`${m.model} always reasons and rejects reasoning_effort`) },
+      : /grok-3-mini/i.test(m.model) ? (l === "off" ? nothing("grok-3-mini cannot switch reasoning off") : word(l === "low" ? "low" : "high", "xAI's words for grok-3-mini are low | high; medium rounds up"))
+      : l === "off" ? word("none", "xAI's explicit off (grok-4.3 and later; retired grok-4 slugs are served by grok-4.3)") : word(l, "xAI's words are none | low | medium | high") },
   { id: "gpt-oss", matches: id(/gpt-oss/i), plan: (l) => l === "off" ? nothing("gpt-oss cannot switch reasoning off (low is the floor)") : word(l) },
   { id: "openai o-series", matches: id(/(^|[/:])o[134](-|$)/i), plan: (l, m) => l === "off" ? nothing(`${m.model} cannot switch reasoning off`) : word(l) },
   { id: "openai gpt-5", matches: id(/(^|[/:])gpt-5/i),
