@@ -11,6 +11,10 @@ import { helpText } from "./help.ts";
 import { join } from "node:path";
 import pkg from "../../package.json";
 
+// ROVECODE_TRACE_BOOT=1: process-start timestamp stored here (before any dynamic imports) so
+// the runTui trace can compute the full module-load gap.
+if (process.env.ROVECODE_TRACE_BOOT === "1") process.env._ROVECODE_BOOT_T0 = String(Date.now());
+
 const cli = parseCli(process.argv);
 const cmd = cli.cmd;
 

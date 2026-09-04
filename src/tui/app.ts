@@ -107,6 +107,9 @@ interface TuiState {
 }
 
 export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
+  const _t0 = process.env.ROVECODE_TRACE_BOOT === "1" ? (Number(process.env._ROVECODE_BOOT_T0) || Date.now()) : -1;
+  const _trace = _t0 >= 0 ? (label: string) => process.stderr.write(`[boot] +${Date.now() - _t0}ms ${label}\n`) : (_: string) => {};
+  _trace("runTui entered");
   // opts.sessionId may be a unique id prefix (rovecode --resume <id>): resolved by the /resume rule
   // (session-cmd.ts) — exact/new ids pass, a unique prefix resolves, an ambiguous one starts fresh + warns
   const boot = resolveBootSession(join(opts.cwd ?? process.cwd(), ".rovecode", "sessions"), opts.sessionId);
@@ -118,13 +121,19 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   // synchronous until the renderer's input handlers are wired (tests/smoke send input right
   // after calling runTui), so no await may sit above that point.
   const rt = (() => {
-    try { return createRuntime({ cwd: opts.cwd, stream: opts.stream, sessionId: boot.id, spawnRunner: opts.spawnRunner, platform: opts.platform }); }
+    try {
+      _trace("createRuntime start");
+      const r = createRuntime({ cwd: opts.cwd, stream: opts.stream, sessionId: boot.id, spawnRunner: opts.spawnRunner, platform: opts.platform });
+      _trace("createRuntime done");
+      return r;
+    }
     catch (e) {
       if (e instanceof SandboxConfigError && opts.exitOnClose !== false) { console.error(`error: ${e.message}`); process.exit(2); }
       throw e;
     }
   })();
   const renderer: Renderer = opts.renderer ?? new PiTuiRenderer({ cwd: rt.cwd });
+  _trace("renderer created");
   rt.setAskUser((q, signal) => renderer.askQuestion(q, signal)); // port #33: ask_user → the question overlay (Esc/abort dismisses it via signal)
   const sessionsDir = join(rt.cwd, ".rovecode", "sessions");
   // /cost pricing + context window. Boots from the offline snapshot; the live models.dev
@@ -466,6 +475,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     return startRun(text);
   };
   // port #44: a renderer with panels (sextant) reads the runtime through this handle — once, before start()
+  _trace("renderer.attach");
   renderer.attach?.(buildSextantAttach({ cwd: rt.cwd, sessionsDir, store: () => store, tasks: rt.tasks, model: () => modes.modelFor(), catalog, petName: opts.pet }));
   // /model suggestions: the ids of every configured provider's models, fetched off the boot path and again
   // whenever the registry changes; the sextant reads the list at suggestion time (SlashCommand.choices)
@@ -494,6 +504,9 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   rt.plugins.onWarning((w) => renderer.addSystemNote(`plugins: ${w}`, "warn")); // plugin discovery/activation notes, the same way
   const pluginLine = summarizePlugins(rt.plugins.found); // one line when there is at least one plugin: what loaded, what stayed off
   if (pluginLine !== null) renderer.addSystemNote(pluginLine);
+  // a retry notice while the backoff waits ("anthropic: overloaded — retrying in 4 s (2/4)"), not after the run: the
+  // drain in the run's finally still runs and finds nothing once this listener exists
+  rt.onRouterNote((n) => renderer.addSystemNote(n, "warn"));
   pushStatus();
   watchProviders(provCtx()); // follow a default-model change made elsewhere; announce the first provider
   // port #27: an unavailable configured rung (probe failed) is a clean one-line startup
@@ -505,9 +518,6 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     await rt.mcp?.close().catch(() => {});
     if (e instanceof SandboxConfigError && opts.exitOnClose !== false) { console.error(`error: ${e.message}`); process.exit(2); }
     throw e;
-  // a retry notice while the backoff waits ("anthropic: overloaded — retrying in 4 s (2/4)"), not after the run: the
-  // drain in the run's finally still runs and finds nothing once this listener exists
-  rt.onRouterNote((n) => renderer.addSystemNote(n, "warn"));
   });
   await closedP;
 }
