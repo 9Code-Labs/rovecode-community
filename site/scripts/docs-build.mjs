@@ -30,6 +30,7 @@ const slugOf = (mdPath) => mdPath.replace(/^.*\//, "").replace(/\.md$/, "");
 
 function build(src) {
   let md = readFileSync(join(REPO, src.file), "utf8");
+  md = md.replace(/\r\n?/g, "\n"); // Windows checkouts: CRLF hides the h1 from the strip below and reaches marked
   if (src.from) {
     const a = md.indexOf(src.from), b = md.indexOf(src.to, a + 1);
     md = md.slice(a, b < 0 ? undefined : b);
@@ -61,11 +62,13 @@ function build(src) {
     const ext = /^https?:/.test(h);
     return `<a href="${h}"${t ? ` title="${t}"` : ""}${ext ? ' target="_blank" rel="noreferrer"' : ""}>${inner}</a>`;
   };
-  const html = marked.parse(md, { renderer, gfm: true, breaks: false });
+  let html = marked.parse(md, { renderer, gfm: true, breaks: false });
   // the first prose paragraph (the source hard-wraps at ~100 columns, so join its lines) as plain text, links → their label, cut at a sentence end
   const block = md.split(/\n\s*\n/).map((b) => b.trim()).find((b) => b.length >= 40 && !/^(#|\||```|- |\d+\. |<)/.test(b) && !b.includes("\n```")) ?? "";
   const para = block.replace(/\s*\n\s*/g, " ").replace(/\[([^\]]+)\]\([^)]+\)/g, "$1").replace(/[`*]/g, "");
   const summary = para.length <= 200 ? para : (para.slice(0, 200).match(/^[\s\S]*[.!?](?=\s|$)/)?.[0] ?? para.slice(0, 197).trimEnd() + "\u2026");
+  // overflow-x regions must be keyboard-scrollable (axe scrollable-region-focusable); the global :focus-visible ring covers them
+  html = html.replace(/<pre>/g, '<pre tabindex="0">').replace(/<table>/g, '<table tabindex="0">');
   return { slug: src.slug, title, source: src.file, summary, toc, html, words: md.split(/\s+/).length };
 }
 
