@@ -174,7 +174,7 @@ const approval: Builder = () => {
   const { s, pet } = sc;
   ev(s, { type: "turn_start", turn: 3 }, NOW - 150);
   s.code.mode = "code";
-  s.card = { kind: "approval", tool: "bash", argsPreview: "bun test tests/auth.test.ts", selected: 0, resolve: () => {} };
+  s.card = { kind: "approval", tool: "bash", argsPreview: "bun test tests/auth.test.ts", verdicts: ["once", "always", "deny"], selected: 0, resolve: () => {} };
   s.activity = { ...s.activity, state: "WAITING", label: "waiting for you" };
   pet.event("permission", undefined, NOW - 100);
   return sc;
@@ -237,7 +237,7 @@ const rmrf: Builder = () => {
   const { s, pet } = sc;
   ev(s, { type: "turn_start", turn: 3 }, NOW - 150);
   s.code.mode = "code";
-  s.card = { kind: "approval", tool: "bash", argsPreview: "rm -rf node_modules && git checkout -- .", selected: 2, resolve: () => {} };
+  s.card = { kind: "approval", tool: "bash", argsPreview: "rm -rf node_modules && git checkout -- .", verdicts: ["once", "always", "deny"], selected: 2, resolve: () => {} };
   s.activity = { ...s.activity, state: "WAITING", label: "waiting for you" };
   pet.event("permission", undefined, NOW - 100);
   return sc;
