@@ -39,14 +39,14 @@ One page, no client routes: unknown paths return `404.html`. Hashed assets under
 - Root-absolute asset URLs (`/assets`, `/brand`, `/shots`). To host under a sub-path, set `base` in `vite.config.ts`.
 - Canonical, `og:url` and `og:image` are absolute, built from `VITE_SITE_URL`: `.env` holds the current fallback
   (`http://64.177.43.110`); set the variable in the deploy environment to override (`VITE_SITE_URL=https://… bun run build`).
-- Single page, no client-side routes: unknown paths should 404 (`public/404.html`), not fall back to index.html.
-- Locale: 15 languages, picked from `navigator.language`, persisted in `localStorage` (`rovecode.locale`). English is in the main bundle; each other language is its own chunk, fetched on first use.
+- Routes are only the 15 locale directories (served as directory indexes); every other path should 404 (`public/404.html`), not fall back to index.html.
+- Languages: 15, one prerendered page each — `/` (English; auto-detects the browser language on the client and swaps in one frame), `/tr/`, `/de/`, … Each page carries its own title/description, `<html lang dir>`, canonical, `og:locale` and the full hreflang set (15 + x-default); `dist/sitemap.xml` lists them. The language picker navigates to the language's URL and remembers the choice for `/`. English is in the main bundle; each other dictionary is its own chunk.
 - Design direction is recorded in `.rovecode/design.json` (read by rovecode's `design_audit`).
 - Social card: `public/brand/og.png` (1200×630) is rendered from the page's own fonts and tokens by `node scripts/og.mjs`; `og:image` points at it.
 - No animation library: the page arrives prerendered and holds still; the transcript replay and the count-up (dev only) use `src/lib/motion.ts`.
 - `media-src/` (raw and encoded video, ~120 MB) and `screenshots/` are working files, git-ignored.
 - Regenerate the terminal frames after a copy change in `scripts/out/*.html`: `node scripts/shoot.ts frames`.
-- `bun run lighthouse [url]` runs Lighthouse (mobile + desktop) against the live site by default, or any URL, on the local Playwright Chromium. `bun run og` re-renders the social card, `bun run images` the image variants.
+- `bun run lighthouse [url]` runs Lighthouse (mobile + desktop) against the live site by default, or any URL, on the local Playwright Chromium; Lighthouse itself is installed on first use into `scripts/.lh/` (git-ignored), not a dependency of the site. `bun run og` re-renders the social card, `bun run images` the image variants.
 - `scripts/prerender.mjs` also inlines the single stylesheet into `dist/index.html` (one fewer render-blocking request on slow links).
 - Dev server: `bun run dev` → http://localhost:5173/. In dev the root is empty, so entrances animate; in production the page arrives prerendered and components render their finished state (see `src/lib/boot.ts`).
 - Fonts are self-hosted under `public/fonts` (latin + latin-ext subsets); the two latin files are preloaded.

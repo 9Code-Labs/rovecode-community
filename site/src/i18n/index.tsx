@@ -3,7 +3,10 @@ import { en, type Dict, type PartialDict } from "./en";
 
 /** `code` is what goes in <html lang>, `name` is the language written in itself — never in English, a picker
  *  that says "Turkish" is useless to the person looking for "Türkçe". English ships in the main bundle; every
- *  other dictionary is its own chunk, fetched the first time that language is shown. */
+ *  other dictionary is its own chunk, fetched the first time that language is shown.
+ *
+ *  Every language also has a URL: `/` is English (and auto-detects on the client), `/tr/`, `/de/`, … are prerendered
+ *  in that language with their own title, description and hreflang set — a page per language, not a dict swap. */
 export const LOCALES = [
   { code: "en", name: "English", load: async () => en as PartialDict },
   { code: "tr", name: "Türkçe", load: () => import("./locales/tr").then((m) => m.tr) },
@@ -25,7 +28,16 @@ export const LOCALES = [
 export type LocaleCode = (typeof LOCALES)[number]["code"];
 
 const KEY = "rovecode.locale";
-const isCode = (v: string | null): v is LocaleCode => !!v && LOCALES.some((l) => l.code === v);
+export const isCode = (v: string | null | undefined): v is LocaleCode => !!v && LOCALES.some((l) => l.code === v);
+
+/** the URL of a language's page: English at the root, everything else in its own directory */
+export const localePath = (code: LocaleCode): string => (code === "en" ? "/" : `/${code}/`);
+
+/** the language a path names, if it is one of ours: "/tr/" → "tr", "/" → undefined */
+export function localeFromPath(pathname: string): LocaleCode | undefined {
+  const m = /^\/([a-z]{2})\/?$/.exec(pathname);
+  return m && isCode(m[1]) ? m[1] : undefined;
+}
 
 /** navigator.languages in order, matched on the primary subtag: "pt-BR" and "pt" both pick pt */
 function detect(): LocaleCode {
@@ -37,9 +49,11 @@ function detect(): LocaleCode {
   return "en";
 }
 
-/** the locale the page should open in: the saved choice, else the browser's */
+/** the locale the page should open in: the one in the URL, else (at the root) the saved choice, else the browser's */
 export function initialLocale(): LocaleCode {
   if (typeof window === "undefined") return "en";
+  const fromPath = localeFromPath(window.location.pathname);
+  if (fromPath) return fromPath;
   const saved = window.localStorage.getItem(KEY);
   return isCode(saved) ? saved : detect();
 }
@@ -75,27 +89,24 @@ export async function loadDict(code: LocaleCode): Promise<Dict> {
   return dict;
 }
 
+export const isRtl = (code: LocaleCode): boolean => { const e = LOCALES.find((l) => l.code === code); return !!e && "rtl" in e && e.rtl === true; };
+
 interface Ctx {
   locale: LocaleCode;
+  /** remember the choice and go to that language's page */
   setLocale: (c: LocaleCode) => void;
   t: Dict;
   rtl: boolean;
 }
 const I18nContext = createContext<Ctx | null>(null);
 
-/** `initial` should be the locale main.tsx already awaited with loadDict(), so the first paint is in the right
- *  language; later switches show the previous language until the new chunk lands (tens of ms). */
+/** `initial` must be a locale whose dictionary main.tsx already awaited with loadDict(), so the first paint is
+ *  in the right language. Changing language navigates to that language's URL — the page there is prerendered
+ *  in it, so search engines and the visitor see the same thing. */
 export function I18nProvider({ children, initial }: { children: ReactNode; initial: LocaleCode }) {
-  const [locale, setLocaleState] = useState<LocaleCode>(initial);
-  const [t, setT] = useState<Dict>(() => cache.get(initial) ?? en);
-
-  useEffect(() => {
-    let live = true;
-    loadDict(locale).then((d) => { if (live) setT(d); });
-    return () => { live = false; };
-  }, [locale]);
-
-  const rtl = useMemo(() => { const e = LOCALES.find((l) => l.code === locale); return !!e && "rtl" in e && e.rtl === true; }, [locale]);
+  const [locale] = useState<LocaleCode>(initial);
+  const t = useMemo(() => cache.get(locale) ?? en, [locale]);
+  const rtl = isRtl(locale);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -106,9 +117,9 @@ export function I18nProvider({ children, initial }: { children: ReactNode; initi
   }, [locale, rtl, t]);
 
   const setLocale = useCallback((c: LocaleCode) => {
-    setLocaleState(c);
     try { window.localStorage.setItem(KEY, c); } catch { /* private mode: the choice just does not persist */ }
-  }, []);
+    if (c !== locale) window.location.assign(localePath(c));
+  }, [locale]);
 
   return <I18nContext.Provider value={{ locale, setLocale, t, rtl }}>{children}</I18nContext.Provider>;
 }
