@@ -110,8 +110,8 @@ test.if(haveGit)("real repo: branch, M/A/D incl. staged rename and untracked fil
     expect(gitHeadContent(dir, "a.ts")).toBe("const a = 1;\n");
     expect(gitHeadContent(dir, "sub/c.ts")).toBe("const c = 3;\n");
     expect(gitHeadContent(dir, "new.ts")).toBeNull();
-    // cwd given with backslashes still works on Windows
-    expect(gitBranch(dir.replace(/\//g, "\\"))).toBe("main");
+    // cwd given with backslashes still works on Windows (on POSIX a backslash is a name byte, not a separator)
+    if (process.platform === "win32") expect(gitBranch(dir.replace(/\//g, "\\"))).toBe("main");
     git(dir, "checkout", "-q", "--detach");
     expect(gitBranch(dir)).toMatch(/^[0-9a-f]{7,}$/);
   } finally {
