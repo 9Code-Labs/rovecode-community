@@ -1,6 +1,6 @@
 {
   "name": "KB · Sessiz lüks",
-  "rationale": "The owner asked for a corporate page that does not look like every other corporate page. This one says almost nothing: warm off-white paper, one near-black ink at three strengths, a single deep accent that is almost never used, no decoration, no box rules, and a lot of air. The one image is the real 160×44 frame, large and alone. Read, not announced.",
+  "rationale": "The owner asked for a corporate page that does not look like every other corporate page. This one says almost nothing: warm off-white paper, one near-black ink at three strengths, a single deep accent that is almost never used, no decoration, no box rules, and a lot of air. Every picture is the real product — actual sextant frames and crops of them, never an illustration. Read, not announced.",
   "palette": {
     "paper": "#f6f6f4",
     "surface": "#ffffff",
@@ -8,8 +8,8 @@
     "border": "#e5e5e1",
     "border-strong": "#d2d2cc",
     "text": "#141414",
-    "text-muted": "#6b6b66",
-    "text-faint": "#a1a19a",
+    "text-muted": "#5c5c57",
+    "text-faint": "#66665f",
     "brand-sea-ink": "#1e3d4c",
     "brand-hover": "#142b36",
     "on-brand": "#f6f6f4",
@@ -19,14 +19,16 @@
     "ink-text": "#e6e6e2",
     "ink-muted": "#a6a6a0",
     "ink-faint": "#6f6f69",
+    "terminal-faint": "#8b8b85",
     "ink-accent": "#9fc5d4",
     "terminal-plus": "#7fc48f",
     "terminal-minus": "#f0605d",
     "destructive": "#9b3b2e"
   },
-  "typeface": { "display": "Hanken Grotesk Variable", "text": "Hanken Grotesk Variable", "label": "Hanken Grotesk Variable", "mono": "IBM Plex Mono" },
+  "typeface": { "display": "Hanken Grotesk", "text": "Hanken Grotesk", "label": "Hanken Grotesk", "mono": "IBM Plex Mono" },
   "corners": "soft",
-  "layout": "centered",
-  "notes": "Hero and CTA are centred in a 40–44rem measure with 6–9rem of vertical air; section headings alternate left/right (Section `shift`). Type is small and light: display 300, h2 28–36px, body 16px, captions 11px spaced uppercase in text-faint. No cards except the frame bezel and code blocks (surface lift by one wide soft shadow, never an outline). No colour accent word in the headline. Motion: entrances only (0.9s), transcript replays once, frame lens-zoom on hover; mascot holds still and appears exactly twice (statement line, close) — owner insisted it stays. No video, no isobars, no chart marks. rejected: navy+glass (r1), storm-red/Schibsted (r2), light-sky/Fraunces/full-bleed video (r3-4), C canlı motion pass (r5), K2 lacivert band + beyaz gövde/Geist (r6, 'too classic'), R3 hava haritası/IBM Plex/chart-red (r7, 'not corporate'). Owner's tells to avoid: amber, hero for its own sake, unrelated typefaces, too many lines, too angular, everything stacked down the middle (accepted here only for the hero/CTA measure, by the owner's own pick).",
-  "chosenAt": "2026-09-04"
+  "layout": "left",
+  "notes": "Composition: a left-aligned 1200px grid — section eyebrow, heading and lead sit on the left column, content below. The exception is the owner's own pick: the hero and the closing CTA are centred in a 40–44rem measure with 6–9rem of vertical air, and only those two. Headings sit left in 6 of 8 sections and shift to the right column in 2 (Capabilities, Providers via Section `shift`); no strict alternation is claimed. Contrast: text-muted 6.4:1 and text-faint 5.35:1 on the paper, 5.0:1 on surface-2; terminal faint 5.0:1 on ink — every caption and every 11–12px mono command string a reader would copy passes AA. Type is small and light: display 300, h2 28–36px, body 16px, captions 11px spaced uppercase in text-faint. No cards except the frame bezel and code blocks (surface lift by one wide soft shadow, never an outline). No colour accent word in the headline. Images, all real: two full sextant frames (hero Device, Terminal Shot) and five crops of frames (cockpit, messages, rmrf, rewind, tests), the weather-cloud mascot exactly twice (statement line, close — owner insisted it stays), the mark twice (header, footer). Motion: none on entrance — the built page is static (STATIC) and every component renders its finished state, the transcript included; the one motion is the Terminal frame's 2× lens on a hovered callout (500ms, off under reduced motion); copy buttons and the accordion have plain 150–300ms transitions. No video, no isobars, no chart marks. rejected: navy+glass (r1), storm-red/Schibsted (r2), light-sky/Fraunces/full-bleed video (r3-4), C canlı motion pass (r5), K2 lacivert band + beyaz gövde/Geist (r6, 'too classic'), R3 hava haritası/IBM Plex/chart-red (r7, 'not corporate'). Owner's tells to avoid: amber, hero for its own sake, unrelated typefaces, too many lines, too angular, everything stacked down the middle (accepted only for the hero/CTA measure, by the owner's own pick).",
+  "chosenAt": "2026-09-04",
+  "recordUpdated": "2026-09-04"
 }
