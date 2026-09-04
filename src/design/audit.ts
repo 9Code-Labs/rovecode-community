@@ -1,40 +1,60 @@
 /** design_audit's engine: the checks that read generated markup and styles and count the things a
  *  prompt rule forgets by turn six.
  *
- *  Every check here came from a concrete complaint Berkay made about what AI-generated sites look
- *  like: amber accents, a full-viewport hero nobody needed, fonts with no relationship to the
- *  product, rules and hairlines everywhere, nothing but square corners, and every last element
- *  stacked down the middle of the page. Those are all countable, which is the whole point — the
- *  system prompt can ASK for restraint, but only a counter notices that the fourth section also
- *  centred everything.
+ *  REWORKED against docs/design-audit-calibration.md, which measured the previous version over 1,502
+ *  files in 20 repos and 43 live sites. The headline result: the old slop checks did not separate good
+ *  design from template slop. `cliche-font` fired on 86% of GOOD repos, `cliche-accent-amber` inverted
+ *  (80% of sober good sites vs 35% slop), `rule-line-density` was within noise of itself at every
+ *  threshold and every element floor (2% good vs 3% slop), and `all-square` fired on 330 files in repos
+ *  that all use rounded corners somewhere. Meanwhile the four template repos the checker called CLEAN
+ *  were textbook slop. Every threshold below cites the number that set it.
  *
- *  Two kinds of finding:
- *    - SLOP: the pattern is a cliche whatever the project is (amber accent, Inter, purple gradient).
- *    - DEVIATION: the pattern contradicts the direction THIS project chose (design.json) — an
- *      off-palette colour, a font that is not the chosen one. Deviation only exists once a direction
- *      is recorded, and it is the half a machine judges best.
+ *  Two structural changes carry most of the improvement:
  *
- *  Direction-aware on purpose: "no rounded corners anywhere" is slop by default and CORRECT when the
- *  project chose sharp corners. A checker that cannot be told "this was deliberate" gets ignored,
- *  and an ignored checker is worse than none.
+ *  1. SCOPE. Density and centring are properties of a PAGE, not of a component file. A bezel drawn with
+ *     six borders is one figure on a page of 300 elements (0.02), not a 0.60 violation; the same
+ *     vendored `components/ui/scroll-area.tsx` fired identically in three different repos. So those
+ *     checks now sum a route file with the components it imports, and `all-square` is project-level:
+ *     "no radius anywhere in the audited set", never per file.
  *
- *  Deliberately textual — it greps source, it does not parse a DOM or run a browser. It therefore
- *  reports what is WRITTEN, misses what is computed at runtime, and can be fooled by indirection.
- *  It is a smoke alarm, not a fire marshal; every finding names its evidence so a human can overrule. */
+ *  2. KIND. Kent C. Dodds' yellow, Paco Coursey's Inter and Aristide Benoist's square corners are the
+ *     SAME TOKENS as a template's yellow, Inter and squares. No count tells them apart; only the record
+ *     does. So every check is either SLOP — meaning "no decision was made", which can only be asserted
+ *     when .rovecode/design.json is absent — or DEVIATION, meaning "this contradicts what the human
+ *     chose". A check that keeps firing after the human has decided is the failure this file's previous
+ *     header called fatal, and it was committing it.
+ *
+ *  What the calibration found actually discriminates, now checked here: `(md|lg):grid-cols-3` (12/13
+ *  slop repos, 0/7 good — the strongest single number in the study), font LOAD sites rather than font
+ *  mentions (`next/font/google` 6/13 slop, 0/7 good), and `lucide-react` (6/13 slop, 0/7 good). All
+ *  three detect the ABSENCE of a decision and go silent the moment one is recorded. None of them names
+ *  a colour, a face or a layout, so none of them is a default in disguise.
+ *
+ *  Deliberately textual — it greps source, it does not parse a DOM or run a browser. It reports what is
+ *  WRITTEN, misses what is computed at runtime, and can be fooled by indirection. Run it on a source
+ *  tree; a fetched page measures the framework's build output, not the design (calibration §5: 7 of 43
+ *  live sites arrived as SPA shells with under 60 elements). It is a smoke alarm, not a fire marshal;
+ *  every finding names its evidence so a human can overrule. */
 
 import { readFileSync } from "node:fs";
 import type { DesignDirection } from "./direction.ts";
 
 export type Severity = "high" | "med" | "low";
 
+/** SLOP = "nobody decided this", assertable only with no direction recorded. DEVIATION = "this
+ *  contradicts the recorded direction". The distinction is the whole rework: see the header. */
+export type FindingKind = "slop" | "deviation";
+
 export interface Finding {
   /** stable kebab-case id, so a project can silence one check by name */
   rule: string;
+  kind: FindingKind;
   severity: Severity;
   /** what is wrong, in one sentence */
   message: string;
   /** what was actually counted or matched — the reason a human can disagree */
   evidence: string;
+  /** the file, the page (for page-scoped checks), or absent for project-scoped ones */
   file?: string;
 }
 
@@ -43,6 +63,12 @@ export interface AuditOptions {
   direction?: DesignDirection | null;
   /** rule ids to skip (the project decided the check does not apply) */
   ignore?: readonly string[];
+}
+
+/** One source file for the project-scoped pass. */
+export interface SourceFile {
+  path: string;
+  text: string;
 }
 
 // ---------- colour ----------
@@ -69,6 +95,53 @@ export function hexToHsl(hex: string): { h: number; s: number; l: number } | nul
   return { h, s: s * 100, l: l * 100 };
 }
 
+const srgbToLinear = (c: number): number => (c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4));
+
+/** #rgb / #rrggbb -> OKLCH {l 0-1, c, h degrees}, or null. Perceptual, so a "hue family" means what the
+ *  eye means by it: calibration §6.3 asks for palette membership in OKLCH precisely because exact-hex
+ *  membership calls the chosen brand's own ramp off-palette. */
+export function hexToOklch(hex: string): { l: number; c: number; h: number } | null {
+  const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(hex.trim());
+  if (m === null) return null;
+  let h6 = m[1] as string;
+  if (h6.length === 3) h6 = h6.split("").map((ch) => ch + ch).join("");
+  const r = srgbToLinear(parseInt(h6.slice(0, 2), 16) / 255);
+  const g = srgbToLinear(parseInt(h6.slice(2, 4), 16) / 255);
+  const b = srgbToLinear(parseInt(h6.slice(4, 6), 16) / 255);
+  const l_ = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m_ = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s_ = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  const L = 0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_;
+  const a = 1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_;
+  const bb = 0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_;
+  const c = Math.sqrt(a * a + bb * bb);
+  let h = (Math.atan2(bb, a) * 180) / Math.PI;
+  if (h < 0) h += 360;
+  return { l: L, c, h };
+}
+
+/** Below this OKLCH chroma a colour is doing neutral duty whatever its hue: greys, inks, papers and
+ *  every tinted neutral ramp. Calibration §6.8: exact-saturation neutrality misfiled Tailwind's
+ *  `gray-700 #374151` (HSL s 19) as a chromatic off-palette colour on every page that sets body text.
+ *
+ *  Measured before choosing the number. Tinted neutrals: zinc-800 0.006, gray-500 0.023, gray-700 0.031,
+ *  gray-900 0.032, slate-800 0.037, slate-600 0.037. Real colours: muted plum 0.043, navy #0b1a2e 0.045,
+ *  brown 0.074, teal 0.096, green-800 0.108. The two bands genuinely OVERLAP between 0.037 and 0.045, so
+ *  this is a judgement inside a grey zone, not a discovered boundary: 0.042 keeps Tailwind's slate ramp
+ *  neutral while leaving site/'s own navy ink chromatic. Being wrong is cheap either way — a misfiled
+ *  neutral contributes no hue family, and a misfiled colour contributes one the budget of 1 absorbs. */
+export const NEUTRAL_CHROMA = 0.042;
+
+/** 30-degree bins. Twelve families across the wheel: wide enough that a brand's tints, shades and
+ *  hover state land in one family, narrow enough that a second brand colour lands in another. */
+export function hueFamily(hex: string): number | null {
+  const c = hexToOklch(hex);
+  if (c === null || c.c < NEUTRAL_CHROMA) return null;
+  return Math.floor(c.h / 30) % 12;
+}
+
+const familyLabel = (f: number): string => `${f * 30}-${f * 30 + 30} deg`;
+
 /** The amber/orange/gold band AI-generated sites reach for by reflex. Saturated and mid-light: a
  *  dark brown or a pale cream in the same hue range is not the cliche and is not flagged. */
 export function isAmberish(hex: string): boolean {
@@ -79,14 +152,14 @@ export function isAmberish(hex: string): boolean {
 
 /** A colour that is doing neutral duty — grey, ink, paper. Never counted as an accent.
  *
- *  Not just "unsaturated": the standard neutral ramps are deliberately tinted (tailwind's gray-900 is
- *  #111827, a blue-leaning near-black at 39% saturation). Treating those as accents would report the
- *  body text colour of every page as off-palette, which is the fastest way to get a check ignored. So
- *  a very dark or very light colour is neutral at a much looser chroma bar than a mid-tone one. */
+ *  The mid-tone bar is s < 20, widened from s < 12 on calibration §3.8: at 12, every Tailwind body-text
+ *  colour between l 20 and l 92 (gray-700 #374151 is l 27 s 19) read as a chromatic off-palette colour.
+ *  Very dark and very light colours keep the looser chroma bar they always had, because the standard
+ *  neutral ramps are deliberately tinted (gray-900 #111827 is a blue-leaning near-black at s 39). */
 export function isNeutral(hex: string): boolean {
   const c = hexToHsl(hex);
   if (c === null) return false;
-  if (c.s < 12 || c.l < 8 || c.l > 95) return true;
+  if (c.s < 20 || c.l < 8 || c.l > 95) return true;
   if (c.l < 20 && c.s < 45) return true;   // tinted ink
   return c.l > 92 && c.s < 30;             // tinted paper
 }
@@ -95,49 +168,55 @@ const HEX_RE = /#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})\b/g;
 
 // ---------- typefaces ----------
 
-/** The fonts that show up when nobody chose a font. The system stacks are included because
- *  "whatever the OS has" is the same non-decision. */
+/** Named webfonts that arrive when nobody chose a face. System stacks are NOT here: calibration §3.1
+ *  found 100% of the good-site false positives involved one of `system-ui, -apple-system, Segoe UI,
+ *  Arial, Helvetica, Helvetica Neue`, because every reset (Tailwind preflight, normalize) puts one in a
+ *  fallback position or on a form control. They survive only as DEVIATION evidence, where a direction
+ *  names a face and a file overrides it. */
 export const CLICHE_FONTS: readonly string[] = [
-  "Inter", "Roboto", "Arial", "Helvetica Neue", "Helvetica", "system-ui", "-apple-system",
-  "Segoe UI", "Open Sans", "Lato", "Montserrat", "Poppins", "Nunito", "Source Sans Pro", "Raleway",
+  "Inter", "Roboto", "Open Sans", "Lato", "Montserrat", "Poppins", "Nunito", "Source Sans Pro", "Raleway",
 ];
 
-/** The system stacks. Naming one of these FIRST is the non-decision; naming it LAST is just a fallback
- *  — `"Geist", ui-sans-serif, system-ui, sans-serif` chose Geist, and the checker used to scold it for
- *  the tail (nimbus-f9's site pass, the first real false positive this checker produced). A named
- *  webfont (Inter, Poppins…) is different: writing it anywhere in a stack means loading it, so it
- *  counts wherever it appears. */
-const SYSTEM_STACK_FONTS: ReadonlySet<string> = new Set(["system-ui", "-apple-system", "Segoe UI", "Arial", "Helvetica", "Helvetica Neue"]);
+/** The stacks that are fallbacks, not decisions. Deviation-only (see CLICHE_FONTS). */
+export const SYSTEM_STACK_FONTS: readonly string[] = [
+  "system-ui", "-apple-system", "Segoe UI", "Arial", "Helvetica Neue", "Helvetica",
+];
 
-/** does a match at `index` lead its font list? The list starts at the nearest preceding `:` `[` `(` `=`
- *  or line break; a comma between that start and the match means another family came first. */
-function leadsList(text: string, index: number): boolean {
-  let i = index - 1;
-  while (i >= 0) {
-    const c = text[i]!;
-    if (c === ":" || c === "[" || c === "(" || c === "=" || c === "\n") return true;
-    if (c === ",") return false;
-    i--;
-  }
-  return true;
-}
+const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&");
 
-function fontsPresent(text: string): string[] {
-  const hits: string[] = [];
+/** Where a face is LOADED, not merely mentioned. Calibration §3.1: kentcdodds fired because a blog post
+ *  mentions Inter in prose, shud.in because the OG-image renderer loads it for a social card, 11ty
+ *  because of a fallback in `code.css`. A mention, a fallback position and a stack behind a webfont are
+ *  all "not a decision"; an import or an @font-face is one. */
+export function fontLoadSites(text: string): string[] {
+  const hits = new Set<string>();
   for (const f of CLICHE_FONTS) {
-    const esc = f.replace(/[.*+?^${}()|[\]\\-]/g, "\\$&");
-    // word-ish boundaries rather than a quote/space list: a font name arrives quoted in CSS, bare in a
-    // tailwind config, and after `family=` in a Google Fonts URL. `_` only (not `-`), so `-apple-system`
-    // still matches after a space or comma.
-    const re = new RegExp("(?:^|[^A-Za-z0-9_])(" + esc + ")(?![A-Za-z0-9_])", "gi");
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(text)) !== null) {
-      const at = m.index + m[0].length - m[1]!.length;
-      if (!SYSTEM_STACK_FONTS.has(f) || leadsList(text, at)) { hits.push(f); break; }
+    const name = esc(f);
+    const spaced = name.replace(/\\?\s/g, "[\\s_+-]");
+    // 1. next/font/google: `import { Inter } from "next/font/google"` — 6/13 slop repos, 0/7 good
+    if (new RegExp("\\{[^}]*\\b" + name.replace(/\s/g, "_") + "\\b[^}]*\\}\\s*from\\s*[\"']next/font/google", "i").test(text)) hits.add(f);
+    // 2. @fontsource/inter, @fontsource-variable/inter
+    if (new RegExp("@fontsource(?:-variable)?/" + spaced.toLowerCase().replace(/\\s/g, "-"), "i").test(text)) hits.add(f);
+    // 3. a Google Fonts URL that asks for the family
+    if (new RegExp("family=" + spaced, "i").test(text)) hits.add(f);
+    // 4. @font-face { ... font-family: "X" ... } — the file itself defines the face
+    for (const block of text.match(/@font-face\s*\{[^}]*\}/gi) ?? []) {
+      if (new RegExp("font-family\\s*:\\s*[\"']?" + spaced, "i").test(block)) hits.add(f);
     }
   }
-  // "Helvetica Neue" also matches "Helvetica"; keep only the more specific one
-  return hits.filter((f) => !(f === "Helvetica" && hits.includes("Helvetica Neue")));
+  return [...hits];
+}
+
+/** The leading family of every `font-family:` declaration, plus Tailwind `font-\[...\]` arbitrary
+ *  values. Used for the DEVIATION check only: with a face recorded, a file that sets a different
+ *  leading family on its own text is contradicting the record. */
+export function leadingFamilies(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(/font-family\s*:\s*([^;}\n]+)/gi)) {
+    const first = (m[1] ?? "").split(",")[0]?.trim().replace(/^["']|["']$/g, "");
+    if (first !== undefined && first.length > 0) out.push(first);
+  }
+  return out;
 }
 
 // ---------- counting helpers ----------
@@ -153,105 +232,362 @@ const RULE_LINE_RE = /\bborder(?:-[trbl])?(?:-\d+)?\b(?!-(?:none|0|transparent))
 const RADIUS_RE = /\brounded(?:-(?:sm|md|lg|xl|2xl|3xl|full|t|b|l|r|tl|tr|bl|br))?\b|border-radius\s*:\s*(?!0)/g;
 const CENTER_RE = /\btext-center\b|\bitems-center\b|\bjustify-center\b|\bmx-auto\b|\bplace-items-center\b|text-align\s*:\s*center|margin\s*:\s*0\s+auto/g;
 const VIEWPORT_RE = /\bmin-h-screen\b|\bh-screen\b|(?:min-)?height\s*:\s*100[dsl]?vh/;
+/** The three-up feature grid, only at a breakpoint — a plain `grid-cols-3` is a layout primitive, the
+ *  responsive form is the template idiom. 12/13 slop repos, 0/7 good (calibration §2). */
+const TEMPLATE_GRID_RE = /\b(?:md|lg):grid-cols-3\b/;
+const DECOR_RE = /\b(?:linear|radial|conic)-gradient\b|\bbg-gradient-to\b|background-image\s*:|\bbg-\[url\(|\btransition-(?:all|colors|transform|opacity)\b|\banimate-[a-z]|@keyframes\b|\banimation\s*:|\bbefore:|\bafter:|::(?:before|after)|\bbackdrop-blur\b|\bdrop-shadow\b/g;
 
-// ---------- the checks ----------
+// ---------- file kinds ----------
 
-/** Audit one source file's text. Pure: no disk, no network. */
+const norm = (p: string): string => p.replace(/\\/g, "/").toLowerCase();
+
+/** Route files: a page is what a reader loads. Next app/pages routers, Astro/Nuxt/SvelteKit pages,
+ *  plain HTML. These are the units density and centring are scored over (calibration §3.4, §3.6). */
+export function isRouteFile(path: string): boolean {
+  const p = norm(path);
+  return /(?:^|\/)app\/.*\/page\.[jt]sx?$/.test(p)
+    || /(?:^|\/)app\/page\.[jt]sx?$/.test(p)
+    || /(?:^|\/)pages\/(?!api\/)/.test(p)
+    || /(?:^|\/)routes\/.*\+page\.svelte$/.test(p)
+    || /\.html?$/.test(p);
+}
+
+/** Sections are the page's own blocks — the other place the template grid shows up. */
+export function isPageOrSection(path: string): boolean {
+  const p = norm(path);
+  return isRouteFile(path) || /(?:^|\/)(?:sections?|blocks?)\//.test(p) || /(?:hero|features?|pricing|testimonial|cta|footer|header)[^/]*\.(?:[jt]sx|astro|vue|svelte)$/.test(p);
+}
+
+/** Vendored primitives. Calibration §3.4.2: 4 of 12 slop density hits were `components/ui/**` and none
+ *  of them was a design decision — the identical shadcn `scroll-area.tsx` fired in three repos. */
+export function isUiPrimitive(path: string): boolean {
+  return /(?:^|\/)components\/ui\//.test(norm(path));
+}
+
+/** Page types where centring and a full-height wrapper are CORRECT. Calibration §3.6.1: exempting these
+ *  removes 17 of 24 centring fires, 14 of them in the slop corpus, i.e. it costs recall the rule never
+ *  had. §3.7: 9 of 10 `reflex-hero` fires were the sticky-footer wrapper on exactly these files. */
+export function isCentringExempt(path: string): boolean {
+  // ANY segment, not just the last: the exempt name is `login` in `app/login/page.tsx`, where the final
+  // segment is the router's own `page`. Matching only the tail missed every Next app-router auth route.
+  const segments = norm(path).replace(/\.[a-z]+$/, "").split("/");
+  return segments.some((s) => /(?:^|-|_)(?:login|register|signin|signup|auth|404|not-found|error|loading|empty|placeholder|tooltip|dialog|modal|toast|announcement|layout)(?:$|-|_)/.test(s));
+}
+
+/** Prose and generated-image files: a face named here is not the site's face. Calibration §3.1.3 —
+ *  3 of 9 good-repo font hits were exactly an .mdx post and an opengraph-image renderer. */
+export function isProseOrGenerated(path: string): boolean {
+  const p = norm(path);
+  return /\.mdx?$/.test(p) || /opengraph-image|twitter-image|(?:^|\/)og\/route\./.test(p);
+}
+
+// ---------- accent positions ----------
+
+/** Strip the places a colour is not an accent: SVG payloads (Stripe's Google logo), data URIs, and
+ *  syntax-highlight scopes. Calibration §3.2.3, §3.3. */
+function stripNonAccent(text: string): string {
+  return text
+    .replace(/<svg[\s\S]*?<\/svg>/gi, " ")
+    .replace(/data:image\/[^"')\s]+/gi, " ")
+    .replace(/(?:\.hljs|\.shiki|\.token|pre|code)\s*[^{]*\{[^}]*\}/gi, " ");
+}
+
+const WARNING_CTX = /warn|warning|caution|alert|danger|error|status|badge|pending|highlight|mark|star|rating/i;
+
+/** Amber in a position that MEANS accent: a brand/accent token, a button or link background, a heading
+ *  colour, a hero gradient stop. Calibration §3.2: the old absolute count over a whole document made the
+ *  rule measure stylesheet size, inverting it to 80% of sober good sites vs 35% of slop. */
+export function amberAccentPositions(text: string): string[] {
+  const src = stripNonAccent(text);
+  const hits: string[] = [];
+  const near = (i: number): string => src.slice(Math.max(0, i - 90), i + 90);
+  // ROLE tokens only: `--accent`, `--brand`, `--color-primary`. A token named after the colour itself
+  // (`--color-team-yellow`) is a palette entry, not an accent assignment — kentcdodds.com declares
+  // exactly that for a brand yellow he has kept for years (calibration §3.2), and reading it as "the
+  // accent" is the checker guessing at intent it cannot see.
+  for (const m of src.matchAll(/--(?:color-)?(?:primary|accent|brand)\b\s*:\s*([^;}\n]+)/gi)) {
+    const val = m[1] ?? "";
+    const hex = (val.match(HEX_RE) ?? []).find(isAmberish);
+    if (hex !== undefined && !WARNING_CTX.test(m[0])) hits.push(`${m[0].split(":")[0]?.trim()}: ${hex}`);
+  }
+  // Tailwind utilities in accent positions. The 300-700 band is the same window isAmberish applies to a
+  // hex (l 35-80): amber-800/900 are dark browns, and counting a class the hex path would reject made
+  // the two halves of this rule disagree — sindresorhus's `bg-amber-900` warning box was the case.
+  for (const m of src.matchAll(/\b(?:bg|text|from|border)-(?:amber|orange|yellow)-(?:[3-7]00)\b/gi)) {
+    const ctx = near(m.index);
+    if (WARNING_CTX.test(ctx)) continue;
+    if (/\b(?:button|btn|<a\b|link|cta|hero|h1|h2)\b/i.test(ctx) || /^(?:bg|from)-/i.test(m[0])) hits.push(m[0]);
+  }
+  return [...new Set(hits)];
+}
+
+/** How many distinct saturated hue families the document declares. Calibration §3.2.2: a document that
+ *  ships a whole palette (Vercel, tailwindcss.com's colour page, Sentry, fly.io) has amber as one swatch
+ *  among many, not as the accent. */
+export function saturatedFamilies(text: string): number {
+  const fams = new Set<number>();
+  for (const h of stripNonAccent(text).match(HEX_RE) ?? []) {
+    const f = hueFamily(h);
+    if (f !== null) fams.add(f);
+  }
+  return fams.size;
+}
+
+// ---------- file-scope checks ----------
+
+/** Audit one source file's text. Pure: no disk, no network.
+ *
+ *  FILE SCOPE ONLY. Density, centring and all-square are page- and project-scoped after the calibration
+ *  (see the header) and live in auditProject; calling this on one file will not produce them. */
 export function auditSource(text: string, opts: AuditOptions = {}): Finding[] {
   const { direction = null, ignore = [], file } = opts;
   const out: Finding[] = [];
-  const add = (rule: string, severity: Severity, message: string, evidence: string): void => {
+  const path = file ?? "";
+  const add = (rule: string, kind: FindingKind, severity: Severity, message: string, evidence: string): void => {
     if (ignore.includes(rule)) return;
-    out.push({ rule, severity, message, evidence, ...(file !== undefined ? { file } : {}) });
+    out.push({ rule, kind, severity, message, evidence, ...(file !== undefined ? { file } : {}) });
   };
-  const els = elementCount(text);
+  const decided = direction !== null;
 
-  // 1. amber/orange accent — the single most requested thing to stop doing.
-  // Direction-aware (nimbus-ed's probe 1): a project that CHOSE a warm brand and recorded it followed
-  // the protocol exactly, and scolding it for its own palette is the checker being unable to hear
-  // "this was deliberate" — the failure its own header calls fatal. So a palette holding an amberish
-  // colour switches this check off; off-palette (check 8) still catches a warm colour that is NOT the
-  // chosen one.
-  const twAmber = text.match(/\b(?:amber|orange|yellow)-(?:[3-9]00)\b/g) ?? [];
-  const hexes = text.match(HEX_RE) ?? [];
-  const hexAmber = hexes.filter(isAmberish);
-  const amberTotal = twAmber.length + hexAmber.length;
-  const warmChosen = Object.values(direction?.palette ?? {}).some(isAmberish);
-  // a budget of 2: a warning state or one highlight is legitimate; a THEME is not
-  if (!warmChosen && amberTotal > 2) {
-    const shown = [...new Set([...twAmber, ...hexAmber])].slice(0, 5).join(", ");
-    add("cliche-accent-amber", amberTotal > 5 ? "high" : "med",
-      "Amber/orange is doing accent duty. It is the default accent of AI-generated sites; pick an accent that belongs to this product.",
-      `${amberTotal} occurrences (${shown})`);
-  }
-
-  // 2. fonts nobody chose
-  const fonts = fontsPresent(text);
-  if (fonts.length > 0) {
-    // every face the direction names, whatever its role (display, text, label, mono…), is a choice
+  // ---- f1 fonts: a face that was LOADED without being chosen ----
+  if (!isProseOrGenerated(path)) {
+    const loaded = fontLoadSites(text);
     const chosen = Object.values(direction?.typeface ?? {}).map((f) => f.toLowerCase());
-    const offenders = fonts.filter((f) => !chosen.includes(f.toLowerCase()));
-    if (offenders.length > 0) {
-      add("cliche-font", "high",
-        "A default typeface is in use. The typeface is half the personality of a page, and these are the ones that get picked when nobody picked.",
-        offenders.join(", "));
+    const unchosen = loaded.filter((f) => !chosen.includes(f.toLowerCase()));
+    if (unchosen.length > 0) {
+      if (!decided) {
+        // med, not high: 6 of 7 good repos would otherwise open with a high (calibration §3.1.4)
+        add("cliche-font", "slop", "med",
+          "A default webfont is loaded and nothing records that anyone chose it. The typeface is half the personality of a page; pick one for a reason you can state, then record it.",
+          `loaded at a font import or @font-face: ${unchosen.join(", ")}`);
+      } else if (direction?.typeface !== undefined) {
+        add("font-deviation", "deviation", "med",
+          "A typeface is loaded that is not the one this project recorded.",
+          `loaded: ${unchosen.join(", ")}; recorded: ${Object.values(direction.typeface).join(", ")}`);
+      }
+    }
+    // system stacks are deviation-only: they are fallbacks everywhere, and a decision nowhere
+    if (direction?.typeface !== undefined) {
+      const sys = leadingFamilies(text).filter((f) => SYSTEM_STACK_FONTS.some((s) => s.toLowerCase() === f.toLowerCase()));
+      if (sys.length > 0 && !chosen.some((c) => sys.some((s) => s.toLowerCase() === c))) {
+        add("font-deviation", "deviation", "low",
+          "A font-family declaration leads with a system stack while this project records a chosen face.",
+          `${[...new Set(sys)].join(", ")} leads a font-family here; recorded: ${Object.values(direction.typeface).join(", ")}`);
+      }
     }
   }
 
-  // 3. the reflex hero: a full-viewport first screen with a headline in it
-  const vp = VIEWPORT_RE.exec(text);
-  if (vp !== null && /<h1\b/i.test(text.slice(vp.index, vp.index + 1500))) {
-    add("reflex-hero", "med",
-      "A full-viewport hero. It spends a whole screen before any substance; keep the height only when an image or an idea earns it.",
-      `${vp[0]} with an <h1> within 1500 characters`);
-  }
-
-  // 4. hairlines everywhere — boxes drawn with borders instead of spacing, weight or colour
-  const lines = count(text, RULE_LINE_RE);
-  if (els >= 10 && lines / els > 0.4) {
-    add("rule-line-density", "med",
-      "Almost everything is separated by a drawn line. Separation reads better from spacing, weight and background than from hairlines.",
-      `${lines} border/divider declarations across ~${els} elements (${(lines / els).toFixed(2)} per element)`);
-  }
-
-  // 5. all square — slop by default, CORRECT when the project chose sharp corners
-  if (els >= 10 && direction?.corners !== "sharp" && count(text, RADIUS_RE) === 0) {
-    add("all-square", "low",
-      "Not one rounded corner. Square everything is a legitimate choice; if it was chosen, record corners \"sharp\" in design.json so this stops being a finding.",
-      `0 radius declarations across ~${els} elements`);
-  }
-
-  // 6. everything down the middle
-  if (els >= 8 && direction?.layout !== "centered") {
-    const centered = count(text, CENTER_RE);
-    if (centered / els > 0.45) {
-      add("everything-centered", "med",
-        "Nearly every block is centred. Centring everything removes the alignment edge the eye follows and flattens the hierarchy.",
-        `${centered} centring declarations across ~${els} elements (${(centered / els).toFixed(2)} per element)`);
+  // ---- f2 amber in accent positions ----
+  const warmChosen = Object.values(direction?.palette ?? {}).some(isAmberish);
+  if (!warmChosen) {
+    const positions = amberAccentPositions(text);
+    // a full palette makes amber one swatch among many, not the accent (calibration §3.2.2)
+    if (positions.length > 0 && saturatedFamilies(text) < 5) {
+      const shown = positions.slice(0, 5).join(", ");
+      if (!decided) {
+        add("cliche-accent-amber", "slop", "med",
+          "Amber/orange is doing accent duty and nothing records that it was chosen. It is the reflex accent of generated interfaces; pick one that belongs to this product.",
+          `${positions.length} accent position${positions.length === 1 ? "" : "s"} (${shown})`);
+      } else {
+        add("accent-deviation", "deviation", "med",
+          "Amber/orange is used as an accent and it is not in this project's recorded palette.",
+          `${positions.length} accent position${positions.length === 1 ? "" : "s"} (${shown})`);
+      }
     }
   }
 
-  // 7. the purple-to-blue gradient
-  const gradTw = /from-(?:purple|violet|indigo|fuchsia)-\d00[\s\S]{0,80}?to-(?:blue|pink|cyan|indigo|purple)-\d00/.test(text);
-  const gradCss = (text.match(/linear-gradient\([^)]*\)/g) ?? []).some((g) =>
-    (g.match(HEX_RE) ?? []).some((h) => {
-      const c = hexToHsl(h);
-      return c !== null && c.h >= 250 && c.h <= 290 && c.s >= 40;
-    }));
+  // ---- f3 the template grid: three equal cards ----
+  // 12/13 slop repos, 0/7 good — the strongest single signal in the calibration (§2). Silent the moment
+  // a layout is recorded, because then the grid is a choice and off-layout work is a deviation question.
+  if (direction?.layout === undefined && isPageOrSection(path) && TEMPLATE_GRID_RE.test(text)) {
+    add("template-grid", "slop", "low",
+      "Three equal cards at a breakpoint is the feature grid every template ships. Is this the layout the content wants, or the one the starter had?",
+      "md|lg:grid-cols-3 in a page/section file");
+  }
+
+  // ---- f4 the icon-per-card template marker ----
+  // 6/13 slop repos, 0/7 good (calibration §2). A marker, not a fault: lowest severity, and silent once
+  // anything is recorded, because a project that decided its look may legitimately use an icon set.
+  if (!decided && /from\s*["']lucide-react["']/.test(text)) {
+    add("template-icons", "slop", "low",
+      "lucide-react is imported and nothing records a design direction. It is the icon set of the shadcn landing-page template; it is fine as a choice and a tell as a default.",
+      "import from \"lucide-react\" with no design.json");
+  }
+
+  // ---- f5 the reflex hero ----
+  // KEPT rather than deleted (calibration §3.7 offered either), but only in its specific form: 9 of its
+  // 10 fires were a sticky-footer wrapper on a login/404 page, and all three added conditions —
+  // centring in the same element's class list, an h1 in the window, a page/section file that is not an
+  // exempt name — are exactly what separated those from the one true hero.
+  if (isPageOrSection(path) && !isCentringExempt(path)) {
+    const vp = VIEWPORT_RE.exec(text);
+    if (vp !== null) {
+      // a fresh non-global copy: CENTER_RE carries /g, and .test() on a /g regex advances lastIndex, so
+      // sharing it here made the answer depend on whatever the previous call happened to match
+      const attr = text.slice(Math.max(0, vp.index - 200), vp.index + 200);
+      const centredHere = new RegExp(CENTER_RE.source, "i").test(attr);
+      if (centredHere && /<h1\b/i.test(text.slice(vp.index, vp.index + 1500))) {
+        add("reflex-hero", direction?.heroPattern === undefined ? "slop" : "deviation", "low",
+          "A full-viewport centred first screen with a headline in it. A hero costs the reader a whole screen; keep the height only when an image or an idea earns it.",
+          `${vp[0]} centred in the same element, with an <h1> within 1500 characters`);
+      }
+    }
+  }
+
+  // ---- f6 the purple-to-blue gradient ----
+  // The SIGNATURE is the pair, not a violet stop somewhere: the old hex form fired on 53% of sober good
+  // sites (syntax themes, a dark-mode glow, a progress bar) vs 12% of slop (calibration §3.3).
+  const clean = stripNonAccent(text);
+  const gradTw = /from-(?:purple|violet|indigo|fuchsia)-\d00[\s\S]{0,80}?to-(?:blue|pink|cyan|indigo|purple)-\d00/.test(clean);
+  const gradCss = (clean.match(/linear-gradient\([^)]*\)/g) ?? []).some((g) => {
+    const stops = (g.match(HEX_RE) ?? []).map(hexToHsl).filter((c): c is { h: number; s: number; l: number } => c !== null && c.s >= 40);
+    return stops.some((a) => a.h >= 250 && a.h <= 290) && stops.some((b) => b.h >= 180 && b.h <= 330) && stops.length >= 2;
+  });
   if (gradTw || gradCss) {
-    add("cliche-gradient", "low",
-      "A purple/violet gradient. It is the most recognisable AI-template signature there is.",
-      gradTw ? "tailwind from-*/to-* gradient in the violet band" : "linear-gradient with a violet stop");
+    add("cliche-gradient", decided ? "deviation" : "slop", "low",
+      "A violet-to-blue gradient pair. It is the most recognisable generated-template signature there is.",
+      gradTw ? "tailwind from-violet/to-blue pair" : "linear-gradient with a violet stop and a second saturated stop");
   }
 
-  // 8. deviation from the recorded direction — only meaningful once one exists
+  // ---- f7 off-palette, in OKLCH hue families ----
+  // Exact-hex membership called the chosen brand's own ramp off-palette (nimbus-ed's probe 1: six of the
+  // six "off-palette" colours WERE the recorded brand's tints). Families let a tint, a shade and a hover
+  // state belong to the colour they came from. Budget of 1: semantic states (a red, a green) are not a
+  // second brand (calibration §6.3).
   if (direction?.palette !== undefined) {
-    const allowed = new Set(Object.values(direction.palette).map((v) => v.trim().toLowerCase()));
-    const off = [...new Set(hexes.map((h) => h.toLowerCase()))].filter((h) => !allowed.has(h) && !isNeutral(h));
-    if (off.length > 2) {
-      add("off-palette", "med",
-        "Colours outside the project's chosen palette. Holding one palette across screens is the part of a design system that actually has to hold.",
-        `${off.length} off-palette colours: ${off.slice(0, 6).join(", ")}`);
+    const chosen = new Set<number>();
+    for (const v of Object.values(direction.palette)) {
+      const f = hueFamily(v);
+      if (f !== null) chosen.add(f);
+    }
+    const seen = new Map<number, string[]>();
+    for (const h of new Set((stripNonAccent(text).match(HEX_RE) ?? []).map((x) => x.toLowerCase()))) {
+      const f = hueFamily(h);
+      if (f === null || chosen.has(f)) continue;
+      seen.set(f, [...(seen.get(f) ?? []), h]);
+    }
+    if (seen.size > 1) {
+      const shown = [...seen.entries()].map(([f, hs]) => `${familyLabel(f)} (${hs.slice(0, 3).join(", ")})`).join("; ");
+      add("off-palette", "deviation", "med",
+        "Colours from hue families outside the recorded palette. One extra family is a semantic state; more than one is a second palette.",
+        `${seen.size} extra hue families: ${shown}`);
+    }
+  }
+
+  // ---- f9 decoration density against a record that asked for restraint ----
+  // The one rule here with NO corpus number behind it: it comes from eight rounds of rejections, not
+  // from the calibration sweep. It is therefore gated twice — it needs a recorded direction AND that
+  // record must ask for restraint in its own words — so it cannot fire on a project that did not ask.
+  if (direction !== null && wantsRestraint(direction)) {
+    const els = elementCount(text);
+    const decor = count(text, DECOR_RE);
+    if (els >= 10 && decor / els > 0.6) {
+      add("decoration-density", "deviation", "low",
+        "More decoration than the recorded direction asks for: gradients, background images, ornament and motion, counted against the elements that carry them.",
+        `${decor} decorative declarations across ~${els} elements (${(decor / els).toFixed(2)} per element); the record asks for restraint`);
+    }
+  }
+
+  return out;
+}
+
+/** Does the recorded direction ask for restraint, in its own words? Read from `notes` and `rationale`
+ *  because those are where a human says it; English and Turkish, since this project is written in both. */
+export function wantsRestraint(d: DesignDirection): boolean {
+  const said = `${d.notes ?? ""} ${d.rationale ?? ""}`.toLowerCase();
+  return /restrain|minimal|sober|quiet|austere|understated|plain|calm|spare|no decoration|sade|yal[ıi]n|sakin|az\b|g[öo]sterissiz/.test(said);
+}
+
+// ---------- page and project scope ----------
+
+/** Which audited files a page pulls in. Relative specifiers are resolved against the importer; alias
+ *  forms (`@/x`, `~/x`, `src/x`) are matched by path suffix. One level deep, which is what the
+ *  calibration's page-scoping recommendation needs (§3.4.1) and keeps this from walking a whole graph. */
+function importsOf(file: SourceFile, byPath: ReadonlyMap<string, SourceFile>): SourceFile[] {
+  const dir = norm(file.path).replace(/\/[^/]*$/, "");
+  const out: SourceFile[] = [];
+  for (const m of file.text.matchAll(/\bfrom\s*["']([^"']+)["']|\bimport\s*["']([^"']+)["']/g)) {
+    const spec = (m[1] ?? m[2] ?? "").trim();
+    if (spec === "" || /^[a-z@][^/]*$/i.test(spec)) continue; // bare package
+    let base = spec.replace(/^[@~]\//, "").replace(/^\.\//, dir === "" ? "" : dir + "/");
+    if (spec.startsWith("../")) {
+      const up = spec.match(/^(?:\.\.\/)+/)?.[0] ?? "";
+      const levels = up.split("../").length - 1;
+      base = dir.split("/").slice(0, Math.max(0, dir.split("/").length - levels)).concat(spec.slice(up.length)).join("/");
+    }
+    const want = norm(base).replace(/\.[a-z]+$/, "");
+    for (const [p, f] of byPath) {
+      const stem = p.replace(/\.[a-z]+$/, "").replace(/\/index$/, "");
+      if (stem === want || stem.endsWith("/" + want) || p.replace(/\.[a-z]+$/, "").endsWith("/" + want)) { out.push(f); break; }
+    }
+  }
+  return out;
+}
+
+/** Audit a whole set of files: file-scope checks per file, density and centring per PAGE, all-square
+ *  once for the project. This is what design_audit runs; auditSource alone cannot produce the scoped
+ *  findings, by design (see the header). */
+export function auditProject(files: readonly SourceFile[], opts: Omit<AuditOptions, "file"> = {}): Finding[] {
+  const { direction = null, ignore = [] } = opts;
+  const out: Finding[] = [];
+  const add = (rule: string, kind: FindingKind, severity: Severity, message: string, evidence: string, file?: string): void => {
+    if (ignore.includes(rule)) return;
+    out.push({ rule, kind, severity, message, evidence, ...(file !== undefined ? { file } : {}) });
+  };
+
+  for (const f of files) out.push(...auditSource(f.text, { ...opts, file: f.path }));
+
+  const byPath = new Map(files.map((f) => [norm(f.path), f]));
+  // A single PATHLESS input (design_audit's `source` mode passes the synthetic name "source") is one
+  // page, so pasted markup still gets the page-scoped checks. A lone file WITH a directory in its path
+  // is a component and is not promoted to a page: that promotion is exactly the per-file scoring the
+  // calibration removed (§3.4 — a bezel scored 0.60 alone and 0.02 inside the page it belongs to).
+  const pages = files.filter((f) => isRouteFile(f.path));
+  const asPages = pages.length > 0 ? pages
+    : files.length === 1 && !norm(files[0]!.path).includes("/") ? files
+    : [];
+
+  for (const page of asPages) {
+    if (isCentringExempt(page.path)) continue;
+    const parts = [page, ...importsOf(page, byPath)].filter((f) => !isUiPrimitive(f.path));
+    const text = parts.map((f) => f.text).join("\n");
+    const els = elementCount(text);
+    if (els < 10) continue;
+    const scope = parts.length > 1 ? `${page.path} + ${parts.length - 1} imported component${parts.length === 2 ? "" : "s"}` : page.path;
+
+    // Threshold stays 0.4. The calibration swept it per FILE and found good and slop within noise at
+    // every value (2% vs 3%, §3.4) — the fix was scope, not the number, and at page scope a framed
+    // component is diluted by the page around it instead of scored on its own.
+    const lines = count(text, RULE_LINE_RE);
+    if (lines / els > 0.4) {
+      add("rule-line-density", direction === null ? "slop" : "deviation", "med",
+        "Across this page almost everything is separated by a drawn line. Separation reads better from spacing, weight and background than from hairlines.",
+        `${lines} border/divider declarations across ~${els} elements (${(lines / els).toFixed(2)} per element) over ${scope}`, page.path);
+    }
+
+    // 0.45 as before, now over a page and with the exempt names removed: on the corpus those two changes
+    // took the rule from 24 fires (17 of them correct centring) to the 4 marketing pages that are the
+    // actual complaint (calibration §3.6).
+    if (direction?.layout === undefined) {
+      const centred = count(text, CENTER_RE);
+      if (centred / els > 0.45) {
+        add("everything-centered", "slop", "med",
+          "Nearly every block on this page is centred. Centring everything removes the alignment edge the eye follows down the page and flattens the hierarchy.",
+          `${centred} centring declarations across ~${els} elements (${(centred / els).toFixed(2)} per element) over ${scope}`, page.path);
+      }
+    }
+  }
+
+  // Project scope. Per file this fired on 330 files across repos that ALL use rounded corners somewhere
+  // (calibration §3.5) — a component with no radius is not a design statement, a whole project with none
+  // is. Recording corners "sharp" silences it, which is the point.
+  if (direction?.corners !== "sharp" && files.length > 0) {
+    const totalEls = files.reduce((n, f) => n + elementCount(f.text), 0);
+    const anyRadius = files.some((f) => count(f.text, RADIUS_RE) > 0);
+    if (totalEls >= 40 && !anyRadius) {
+      add("all-square", "slop", "low",
+        "Not one rounded corner anywhere in the audited set. Square everything is a legitimate choice; if it was chosen, record corners \"sharp\" so this stops being a finding.",
+        `0 radius declarations across ${files.length} files (~${totalEls} elements)`);
     }
   }
 
@@ -262,15 +598,14 @@ export function auditSource(text: string, opts: AuditOptions = {}): Finding[] {
  *  path never costs the caller the other results. */
 export function auditFiles(paths: readonly string[], opts: Omit<AuditOptions, "file"> = {}): Finding[] {
   const out: Finding[] = [];
+  const files: SourceFile[] = [];
   for (const p of paths) {
-    let text: string;
-    try { text = readFileSync(p, "utf8"); }
+    try { files.push({ path: p, text: readFileSync(p, "utf8") }); }
     catch (e) {
-      out.push({ rule: "unreadable", severity: "low", message: "could not read the file", evidence: (e as Error).message, file: p });
-      continue;
+      out.push({ rule: "unreadable", kind: "slop", severity: "low", message: "could not read the file", evidence: (e as Error).message, file: p });
     }
-    out.push(...auditSource(text, { ...opts, file: p }));
   }
+  out.push(...auditProject(files, opts));
   return out;
 }
 
@@ -280,11 +615,11 @@ const ORDER: Record<Severity, number> = { high: 0, med: 1, low: 2 };
 export function formatFindings(findings: readonly Finding[], direction: DesignDirection | null): string {
   if (findings.length === 0) {
     return direction === null
-      ? "No design findings. Note: this project has recorded no design direction, so only the slop checks ran — once the human has chosen a direction, record it with design_direction and later screens get consistency checks too."
+      ? "No design findings. Note: this project has recorded no design direction, so only the \"nobody decided\" checks ran — once the human has chosen a direction, record it with design_direction and later screens get consistency checks too."
       : `No design findings; consistent with the recorded direction "${direction.name}".`;
   }
   const sorted = [...findings].sort((a, b) => ORDER[a.severity] - ORDER[b.severity]);
-  const head = `${findings.length} design finding${findings.length === 1 ? "" : "s"}${direction === null ? " (no direction recorded — slop checks only, no consistency checks)" : ` against "${direction.name}"`}:`;
-  const body = sorted.map((f) => `- [${f.severity}] ${f.rule}${f.file !== undefined ? ` (${f.file})` : ""}: ${f.message}\n  evidence: ${f.evidence}`);
+  const head = `${findings.length} design finding${findings.length === 1 ? "" : "s"}${direction === null ? " (no direction recorded — \"nobody decided\" checks only, no consistency checks)" : ` against "${direction.name}"`}:`;
+  const body = sorted.map((f) => `- [${f.severity}] ${f.rule}${f.kind === "deviation" ? " (deviation)" : ""}${f.file !== undefined ? ` (${f.file})` : ""}: ${f.message}\n  evidence: ${f.evidence}`);
   return [head, ...body].join("\n");
 }

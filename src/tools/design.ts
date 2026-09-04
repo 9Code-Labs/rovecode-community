@@ -16,7 +16,7 @@
 
 import { isAbsolute, relative, resolve } from "node:path";
 import type { Tool, ToolOutput } from "../core/types.ts";
-import { auditFiles, auditSource, formatFindings, type Finding } from "../design/audit.ts";
+import { auditFiles, auditProject, formatFindings, type Finding } from "../design/audit.ts";
 import {
   designPath, loadDirection, parseDirection, renderDirection, saveDirection,
   type DesignDirection,
@@ -35,7 +35,7 @@ export function designAuditTool(): Tool {
     schema: {
       name: "design_audit",
       description:
-        "Check interface code for the patterns generated UI falls into (amber accents, a reflex full-viewport hero, default typefaces like Inter/Roboto, hairlines around everything, no rounded corners at all, everything centred, purple gradients) and for drift from the direction this project recorded in .rovecode/design.json. Run it on the files you touched after writing or changing UI. It reports evidence, not verdicts: each finding says what it counted, so you can fix it or explain why it is wrong here. Never prompts, never writes.",
+        "Check interface code for the patterns that arrive when nobody decided (a webfont loaded without a choice, amber doing accent duty, the three-up feature grid, a centred full-viewport hero, the violet-to-blue gradient, nothing but square corners) and for drift from the direction this project recorded in .rovecode/design.json. Run it on the SOURCE TREE, not on a fetched page: a built page measures the framework's output, not the design. Pass the page files you touched along with the components they import, because density and centring are scored per page and 'no rounded corner anywhere' is scored per project. It reports evidence, not verdicts: each finding says what it counted, so you can fix it or explain why it is wrong here. Never prompts, never writes.",
       args: {
         type: "object",
         properties: {
@@ -53,8 +53,10 @@ export function designAuditTool(): Tool {
       const ignore = a.ignore ?? [];
       const findings: Finding[] = [];
 
+      // `source` is one pathless page: auditProject treats a lone file as a page so pasted markup still
+      // gets the page-scoped density and centring checks (auditSource alone is file-scope by design).
       if (typeof a.source === "string" && a.source.length > 0) {
-        findings.push(...auditSource(a.source, { direction, ignore }));
+        findings.push(...auditProject([{ path: "source", text: a.source }], { direction, ignore }));
       }
       const paths = a.files ?? [];
       if (paths.length > 0) {
@@ -95,7 +97,13 @@ export function designDirectionTool(): Tool {
           typeface: { type: "object", description: "{\"display\":\"...\",\"text\":\"...\"}" },
           corners: { type: "string", enum: ["sharp", "soft", "round"] },
           layout: { type: "string", enum: ["centered", "left", "asymmetric", "grid"] },
-          notes: { type: "string", description: "what the audit cannot infer: motion, density, imagery, what to avoid here" },
+          density: { type: "string", enum: ["tight", "regular", "airy"] },
+          sectionOrder: { type: "array", items: { type: "string" }, description: "the page's blocks in order, e.g. [\"hero\",\"proof\",\"pricing\",\"faq\"]" },
+          heroPattern: { type: "string", description: "the hero pattern by name, e.g. \"command-first\" or \"product-forward\"" },
+          typeScale: { type: "array", items: { type: "number" }, description: "the chosen type steps, e.g. [14,16,20,28,44]" },
+          motion: { type: "string", description: "the motion rule in the human's words, e.g. \"one entrance per section, no loops\"" },
+          copyRegister: { type: "string", description: "how the copy reads, e.g. \"technical, names and numbers, no marketing verbs\"" },
+          notes: { type: "string", description: "what the audit cannot infer: imagery, what to avoid here" },
         },
         required: ["action"],
       },

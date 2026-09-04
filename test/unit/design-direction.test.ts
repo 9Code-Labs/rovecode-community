@@ -139,7 +139,10 @@ test("design_audit reads source directly and honours the project's recorded dire
   const dir = tmp();
   try {
     const tool = designAuditTool();
-    const square = `<main>${"<section><p>c</p></section>".repeat(10)}</main>`;
+    // all-square is project-scoped since the calibration rework (§3.5: per file it fired on 330 files in
+    // repos that all use rounded corners somewhere), so the pasted source has to be project-sized before
+    // "not one rounded corner anywhere" means anything at all
+    const square = `<main>${"<section><p>c</p></section>".repeat(25)}</main>`;
     expect((await tool.execute({ source: square }, ctx(dir))).output).toContain("all-square");
     saveDirection(dir, { name: "brutalist", corners: "sharp" });
     const after = await tool.execute({ source: square }, ctx(dir));

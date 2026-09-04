@@ -21,6 +21,9 @@ export const DESIGN_FILE = "design.json";
 export type Corners = "sharp" | "soft" | "round";
 /** How the page is composed. Recorded because centred-everything is a finding UNLESS it was the choice. */
 export type Layout = "centered" | "left" | "asymmetric" | "grid";
+/** How tightly the page is packed. Recorded because "airy" and "tight" want opposite spacing scales,
+ *  and a model with no record of which regresses to the mode on every screen. */
+export type Density = "tight" | "regular" | "airy";
 
 export interface DesignDirection {
   /** short name of the direction, as it was presented to the human ("lacivert band + beyaz govde") */
@@ -35,7 +38,28 @@ export interface DesignDirection {
   typeface?: Record<string, string>;
   corners?: Corners;
   layout?: Layout;
-  /** anything the audit cannot infer: motion, density, imagery, what to avoid in THIS project */
+
+  /* The axes below were added on docs/design-slop-research.md §6.3. The argument for them is not that
+   * the auditor needs more fields: it is that an unspecified requirement is inferred correctly only
+   * 41.1% of the time and underspecified prompts are twice as likely to fail when conditions change
+   * (Yang et al., arXiv:2505.13360). Every axis this file leaves blank regresses to the training mode
+   * on EVERY call, which is where a second screen drifts from the first. All optional: a direction that
+   * says nothing about motion is a direction that has not decided about motion, not an invalid one. */
+
+  /** the page's blocks in order, as the human chose them ("hero, proof, problems, pricing, faq") */
+  sectionOrder?: string[];
+  /** the hero pattern by name, so "is this the hero we chose" becomes answerable */
+  heroPattern?: string;
+  /** the type scale as chosen, in px or rem steps — the count and the gaps, not a ratio */
+  typeScale?: number[];
+  /** how tightly the page is packed */
+  density?: Density;
+  /** the motion rule in the human's words ("one entrance per section, no loops") */
+  motion?: string;
+  /** the copy register ("technical, names and numbers, no marketing verbs") */
+  copyRegister?: string;
+
+  /** anything the audit cannot infer: imagery, what to avoid in THIS project */
   notes?: string;
   /** ISO date the human chose it */
   chosenAt?: string;
@@ -49,6 +73,7 @@ const str = (v: unknown): string | undefined => (typeof v === "string" && v.trim
 
 const CORNERS: readonly string[] = ["sharp", "soft", "round"];
 const LAYOUTS: readonly string[] = ["centered", "left", "asymmetric", "grid"];
+const DENSITIES: readonly string[] = ["tight", "regular", "airy"];
 
 /** Parse a raw record into a direction, dropping anything malformed rather than throwing: a
  *  hand-edited design.json with one bad field must not take the whole run down. Returns null when
@@ -79,6 +104,21 @@ export function parseDirection(raw: unknown): DesignDirection | null {
       const s = str(v); if (s !== undefined) tf[k] = s;
     }
     if (Object.keys(tf).length > 0) out.typeface = tf;
+  }
+  // the §6.3 axes. Same discipline as everything above: a malformed field is dropped, never thrown on,
+  // so one bad hand-edit costs that axis and not the run.
+  const heroPattern = str(r["heroPattern"]); if (heroPattern !== undefined) out.heroPattern = heroPattern;
+  const motion = str(r["motion"]); if (motion !== undefined) out.motion = motion;
+  const copyRegister = str(r["copyRegister"]); if (copyRegister !== undefined) out.copyRegister = copyRegister;
+  const density = str(r["density"])?.toLowerCase();
+  if (density !== undefined && DENSITIES.includes(density)) out.density = density as Density;
+  if (Array.isArray(r["sectionOrder"])) {
+    const secs = r["sectionOrder"].map(str).filter((s): s is string => s !== undefined);
+    if (secs.length > 0) out.sectionOrder = secs;
+  }
+  if (Array.isArray(r["typeScale"])) {
+    const steps = r["typeScale"].filter((n): n is number => typeof n === "number" && Number.isFinite(n) && n > 0);
+    if (steps.length > 0) out.typeScale = steps;
   }
   return out;
 }
@@ -113,6 +153,12 @@ export function renderDirection(d: DesignDirection | null): string {
   }
   if (d.corners !== undefined) lines.push(`Corners: ${d.corners}`);
   if (d.layout !== undefined) lines.push(`Composition: ${d.layout}`);
+  if (d.density !== undefined) lines.push(`Density: ${d.density}`);
+  if (d.sectionOrder !== undefined) lines.push(`Section order: ${d.sectionOrder.join(" -> ")}`);
+  if (d.heroPattern !== undefined) lines.push(`Hero: ${d.heroPattern}`);
+  if (d.typeScale !== undefined) lines.push(`Type scale: ${d.typeScale.join(", ")}`);
+  if (d.motion !== undefined) lines.push(`Motion: ${d.motion}`);
+  if (d.copyRegister !== undefined) lines.push(`Copy register: ${d.copyRegister}`);
   if (d.notes !== undefined) lines.push(`Notes: ${d.notes}`);
   return lines.join("\n");
 }
