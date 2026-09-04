@@ -26,8 +26,9 @@ test("snapshot 0.0.64: the models we default to are priced with a reasoning flag
   expect(c.lookup("alibaba", "qwen3-235b-a22b")).toBeDefined();
   const anyMinimax = Object.keys((snapshot as Record<string, { models: Record<string, unknown> }>).minimax!.models)[0]!;
   expect(c.lookup("minimax", anyMinimax)).toBeDefined();
-  // known gaps at this snapshot, so nobody is surprised by "unpriced": DeepSeek's API aliases and grok-4 are not listed
-  expect(c.lookup("deepseek", "deepseek-chat")).toBeUndefined();
-  expect(c.lookup("deepseek", "deepseek-v4-pro")).toBeDefined();
-  expect(c.lookup("xai", "grok-4")).toBeUndefined();
+  // gaps at this snapshot — DeepSeek's API aliases and grok-4 are not listed — are filled by rovecode's own table (catalog-local.ts)
+  expect(c.lookup("deepseek", "deepseek-chat")!.source).toBe("local");
+  expect(c.lookup("deepseek", "deepseek-v4-pro")!.source).toBe("models.dev");
+  expect(c.lookup("xai", "grok-4")!.source).toBe("local");
+  expect(new ModelCatalog({ local: {} }).lookup("xai", "grok-4")).toBeUndefined(); // the snapshot alone still lacks it
 });

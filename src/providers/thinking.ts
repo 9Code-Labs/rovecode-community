@@ -172,13 +172,14 @@ export function thinkingLine(model: ModelRef, protocol: WireProtocol, opts: { sh
 
 /** `rovecode model show`: the model, its protocol and dialect, then every level with what it puts on the
  *  wire — the current level marked. `model.effort` is the current level. */
-export function thinkingReport(model: ModelRef, protocol: WireProtocol, opts: { shape?: AnthropicThinkingShape; source?: string } = {}): string[] {
+export function thinkingReport(model: ModelRef, protocol: WireProtocol, opts: { shape?: AnthropicThinkingShape; source?: string; catalog?: string } = {}): string[] {
   const current = setting(model.effort);
   const dialect = protocol === "anthropic" ? `anthropic (${opts.shape ?? "effort"} shape)` : dialectFor(model);
   const lines = [
     `${model.provider}/${model.model}${opts.source ? `  (${opts.source})` : ""}`,
     `  protocol  ${protocol}`,
     `  dialect   ${dialect}${model.reasoning === false ? "  — the catalog lists no reasoning mode" : model.reasoning === true ? "  — the catalog lists a reasoning mode" : ""}`,
+    ...(opts.catalog ? [`  prices    ${opts.catalog}`] : []), // where the numbers /cost uses come from — models.dev, or rovecode's own table
     `  effort    ${current}  (ROVECODE_EFFORT / --effort / /effort)`,
   ];
   for (const row of thinkingTable(model, protocol, opts)) lines.push(`  ${row.level === current ? "*" : " "} ${row.level.padEnd(7)} ${row.says}`);

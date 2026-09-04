@@ -45,7 +45,7 @@
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "@xterm/headless": "5.5.0",
+    "@xterm/headless": "6.0.0",
     "typescript": "^5.9.3"
   }
 }

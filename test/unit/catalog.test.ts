@@ -28,6 +28,7 @@ test("offline lookup: anthropic claude-haiku-4-5 resolves full ModelInfo from th
     pricing: { inputPerMTok: 1, outputPerMTok: 5, cacheReadPerMTok: 0.1, cacheWritePerMTok: 1.25 },
     supportsTools: true,
     supportsReasoning: true,
+    source: "models.dev", // vs "local" for rovecode's own table (catalog-local.ts)
   });
 });
 
@@ -88,6 +89,7 @@ test("kaesra's default model resolves via the vendor-prefix map: zai-org/glm-5.3
     pricing: { inputPerMTok: 0.075, outputPerMTok: 0.25, cacheReadPerMTok: 0.015, cacheWritePerMTok: 0 },
     supportsTools: true,
     supportsReasoning: true,
+    source: "models.dev",
   });
 });
 

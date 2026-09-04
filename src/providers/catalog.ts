@@ -8,6 +8,7 @@
 import { readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ProviderMap, Model } from "@opencode-ai/models";
+import { LOCAL_MODELS, type LocalModel } from "./catalog-local.ts";
 
 // Snapshot is loaded lazily on the first lookup() call so that merely importing
 // catalog.ts (e.g. at module load time) does not pay the @opencode-ai/models
@@ -29,11 +30,18 @@ export interface ModelInfo {
   pricing?: { inputPerMTok?: number; outputPerMTok?: number; cacheReadPerMTok?: number; cacheWritePerMTok?: number };
   supportsTools?: boolean;
   supportsReasoning?: boolean;
+  /** where the numbers come from: models.dev (snapshot or live) or rovecode's own table (catalog-local.ts) for a
+   *  model the snapshot lacks — `rovecode model show` says which, so a local price is never mistaken for models.dev's */
+  source?: "models.dev" | "local";
+  /** local entries only: the vendor page the numbers were read from, and when */
+  sourceNote?: string;
 }
 
 export interface CatalogOptions {
   fetchFn?: typeof fetch | null; // null = offline only; default null (live fetch is OPT-IN)
   cacheDir?: string;             // when live: cache api.json to <cacheDir>/models.json, ttl 24h
+  /** the local overlay (default catalog-local.ts LOCAL_MODELS); tests inject their own */
+  local?: Readonly<Record<string, Readonly<Record<string, LocalModel>>>>;
 }
 
 const CACHE_TTL_MS = 24 * 60 * 60_000;
@@ -93,6 +101,16 @@ const VENDOR_PREFIX_MAP: Record<string, string> = {
   "moonshotai": "moonshotai",
 };
 
+/** a local overlay row in the snapshot's shape, so one toModelInfo serves both */
+function localAsModel(id: string, m: LocalModel): Model {
+  return {
+    id, name: id, description: `${m.source} — checked ${m.checked}`, attachment: false, reasoning: m.reasoning, tool_call: m.toolCall,
+    release_date: m.checked, modalities: { input: m.image ? ["text", "image"] : ["text"], output: ["text"] },
+    limit: { context: m.context, ...(m.output !== undefined ? { output: m.output } : {}) },
+    cost: { input: m.cost.input, output: m.cost.output, ...(m.cost.cacheRead !== undefined ? { cache_read: m.cost.cacheRead } : {}), ...(m.cost.cacheWrite !== undefined ? { cache_write: m.cost.cacheWrite } : {}) },
+  } as unknown as Model;
+}
+
 function isProviderMap(value: unknown): value is ProviderMap {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   for (const entry of Object.values(value as Record<string, unknown>)) {
@@ -142,12 +160,14 @@ function toModelInfo(providerId: string, modelId: string, model: Model): ModelIn
 export class ModelCatalog {
   private readonly fetchFn: typeof fetch | null;
   private readonly cacheDir: string | undefined;
+  private readonly local: Readonly<Record<string, Readonly<Record<string, LocalModel>>>>;
   private liveProviders: ProviderMap | null = null;
   private triedDiskCache = false;
 
   constructor(opts: CatalogOptions = {}) {
     this.fetchFn = opts.fetchFn ?? null;
     this.cacheDir = opts.cacheDir;
+    this.local = opts.local ?? LOCAL_MODELS;
   }
 
   /** offline snapshot first; live cache layered on top when enabled.
@@ -157,7 +177,11 @@ export class ModelCatalog {
    *  priceable. The vendor hit reports the vendor as `provider`, naming the pricing source. */
   lookup(providerId: string, modelId: string): ModelInfo | undefined {
     const hit = this.resolve(providerId, modelId);
-    return hit ? toModelInfo(hit.as, hit.key, hit.model) : undefined;
+    if (!hit) return undefined;
+    const info = toModelInfo(hit.as, hit.key, hit.model);
+    info.source = hit.local ? "local" : "models.dev";
+    if (hit.local) info.sourceNote = `${hit.local.source}, checked ${hit.local.checked}`;
+    return info;
   }
 
   /** port #34: does the model accept image input? models.dev `modalities.input` (every entry of
@@ -174,7 +198,7 @@ export class ModelCatalog {
 
   /** The catalog entry behind lookup()/supportsImages(): provider key candidates in order, live
    *  layer over snapshot. `as` = the provider name reported (the vendor for a prefix hit). */
-  private resolve(providerId: string, modelId: string): { as: string; key: string; model: Model } | undefined {
+  private resolve(providerId: string, modelId: string): { as: string; key: string; model: Model; local?: LocalModel } | undefined {
     this.loadDiskCacheOnce();
 
     const candidates: { key: string; as: string; model: string }[] = [];
@@ -193,8 +217,9 @@ export class ModelCatalog {
     return undefined;
   }
 
-  /** one provider key, live layer over snapshot. */
-  private findIn(key: string, modelId: string): { key: string; model: Model } | undefined {
+  /** one provider key: live layer, then the snapshot, then rovecode's own table (catalog-local.ts) — the
+   *  overlay never shadows a models.dev entry, so a later snapshot that adds the model wins by construction. */
+  private findIn(key: string, modelId: string): { key: string; model: Model; local?: LocalModel } | undefined {
     const live = this.liveProviders?.[key];
     if (live) {
       const found = findModelKey(live.models, modelId);
@@ -205,11 +230,20 @@ export class ModelCatalog {
     }
 
     const snap = snapshotProviders()[key];
-    if (!snap) return undefined;
-    const found = findModelKey(snap.models, modelId);
+    if (snap) {
+      const found = findModelKey(snap.models, modelId);
+      if (found !== undefined) {
+        const model = snap.models[found];
+        if (model) return { key: found, model };
+      }
+    }
+
+    const table = this.local[key];
+    if (!table) return undefined;
+    const found = findModelKey(table as unknown as Record<string, Model>, modelId);
     if (found === undefined) return undefined;
-    const model = snap.models[found];
-    return model ? { key: found, model } : undefined;
+    const local = table[found]!;
+    return { key: found, model: localAsModel(found, local), local };
   }
 
   /** live fetch https://models.dev/api.json when fetchFn set; false on failure, never throws. */

@@ -349,7 +349,9 @@ async function cmdModel(words: string[]): Promise<void> {
     const p = reg.get(ref.provider);
     const info = new ModelCatalog().lookup(ref.provider, ref.model);
     const model: ModelRef = { ...ref, effort: parseEffort(process.env.ROVECODE_EFFORT) ?? "auto", ...(info?.supportsReasoning !== undefined ? { reasoning: info.supportsReasoning } : {}) };
-    for (const l of thinkingReport(model, p?.protocol ?? "openai", { source: arg !== undefined ? "as named" : "the default" })) console.log(l);
+    const catalogLine = info === undefined ? "unpriced — not in models.dev, not in rovecode's own table (/cost shows tokens only)"
+      : info.source === "local" ? `priced from rovecode's own table, not models.dev (${info.sourceNote})` : "models.dev";
+    for (const l of thinkingReport(model, p?.protocol ?? "openai", { source: arg !== undefined ? "as named" : "the default", catalog: catalogLine })) console.log(l);
     return;
   }
   console.error("usage: rovecode model list [provider] | rovecode model use <provider/model> [--project] | rovecode model show [provider/model]");
