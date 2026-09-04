@@ -247,6 +247,13 @@ export function loadedFaceNames(text: string): string[] {
   return [...hits];
 }
 
+/** Tailwind's `font-[…]` is overloaded: `font-[Sohne]` is a family but `font-[450]`, `font-[bold]`
+ *  and `font-[italic]` are a WEIGHT or a style — Tailwind picks by data type. Measured on site/ during
+ *  the 2026-09-04 review, where `font-[450]` on an accordion trigger was reported as an unloaded face
+ *  called "450". A number, a weight keyword or a style keyword is never a family, in the shorthand or
+ *  in a declaration. */
+const NOT_A_FACE = /^(?:[\d.]+%?|bolder|lighter|bold|normal|medium|light|thin|black|heavy|semibold|extrabold|ultrabold|extralight|ultralight|book|regular|italic|oblique)$/i;
+
 /** Faces this text NAMES: the leading family of each font-family declaration, plus Tailwind's
  *  `font-[Family_Name]` arbitrary value. Generic keywords and var()/theme() indirection are dropped —
  *  a family behind a custom property is not a name this rule can check. */
@@ -257,6 +264,7 @@ export function namedFaces(text: string): string[] {
     if (name.length === 0) return;
     if (/^(?:var|theme|calc)\s*\(/i.test(name) || name.startsWith("--") || name.includes("$")) return;
     if (GENERIC_FAMILIES.includes(name.toLowerCase())) return;
+    if (NOT_A_FACE.test(name)) return;
     out.push(name);
   };
   for (const m of text.matchAll(/font-family\s*:\s*([^;}\n]+)/gi)) push((m[1] ?? "").split(",")[0] ?? "");

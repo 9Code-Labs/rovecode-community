@@ -135,6 +135,15 @@ export interface Tool {
   /** false → run concurrently with siblings in the same batch */
   sequential?: boolean;
   interruptible?: boolean;
+  /** Policy resource for a tool whose modes differ in what they are ALLOWED to do, where neither a
+   *  path, a command nor a URL says which mode this call is. Without it the resource falls back to the
+   *  tool NAME, so one rule has to cover every mode — which is how a read-only `design_direction
+   *  {"action":"get"}` came to raise an approval card (2026-09-04): it writes nothing, but it shares a
+   *  rule with `set`, and a human trained to allow the read hits allow on the write too. Return a short
+   *  stable word; a rule then targets it (`tool.design_direction get -> allow`). Never derive it from a
+   *  value the model can vary freely — the point is that a rule can name the mode, not that the model
+   *  can name its own permissions. */
+  resource?(args: unknown): string;
   execute(args: unknown, ctx: ToolContext): Promise<ToolOutput>;
 }
 

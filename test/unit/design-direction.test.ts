@@ -312,6 +312,18 @@ test("generic keywords, system stacks and var() indirection are not faces", () =
   expect(out.some((f) => f.rule === "font-named-not-loaded")).toBe(false);
 });
 
+test("a Tailwind arbitrary WEIGHT is not a face: font-[450] and font-[bold] never report", () => {
+  // found on site/ 2026-09-04: `font-[450]` on an accordion trigger was reported as a face named "450"
+  const out = auditProject([{
+    path: "src/sections/Faq.tsx",
+    text: `<h3 className="font-[450]">a</h3><p className="font-[bold]">b</p><em className="font-[italic]">c</em>`,
+  }]);
+  expect(out.some((f) => f.rule === "font-named-not-loaded")).toBe(false);
+  // and a real family in the same syntax still does report
+  const real = auditProject([{ path: "src/sections/Faq.tsx", text: `<h3 className="font-[Sohne]">a</h3>` }]);
+  expect(real.some((f) => f.rule === "font-named-not-loaded")).toBe(true);
+});
+
 test("when the RECORDED face is the one nothing loads, it is a deviation, not slop", () => {
   const out = auditProject(
     [{ path: "app/globals.css", text: "body { font-family: 'Sohne', sans-serif; }" }],

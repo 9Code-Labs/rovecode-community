@@ -112,6 +112,15 @@ export function designDirectionTool(): Tool {
     },
     kind: "custom",
     sequential: true,
+    // `get` reads .rovecode/design.json and writes nothing; `set` records the project's design
+    // identity. Only the second is worth a human's attention, so the two get their own policy
+    // resource (types.ts Tool.resource) instead of sharing one rule under the tool name. Anything
+    // that is not the literal "get" is treated as the write: an unknown action must not read as
+    // the safer of the two.
+    resource(args: unknown): string {
+      const a = args && typeof args === "object" ? (args as Record<string, unknown>) : undefined;
+      return a?.["action"] === "get" ? "get" : "set";
+    },
     async execute(args, ctx): Promise<ToolOutput> {
       const a = (args && typeof args === "object" ? args : {}) as Record<string, unknown>;
       if (a["action"] === "get") {

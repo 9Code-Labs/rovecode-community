@@ -130,13 +130,13 @@ test("ask once per project: run 1 asks through the real card and records the hum
     expect(first.system[0]).toContain("No design direction is recorded yet");
     expect(first.system[0]).toContain("propose THREE");
 
-    // CURRENT BEHAVIOUR, reported to nimbus-6d as a wart: the policy resource for a custom tool is the
-    // tool NAME (core/tools.ts describeResource), so one rule covers both actions and a read-only
-    // `get` raises an approval card too. It writes nothing. Approved here so the flow can proceed; if
-    // the resource seam lands, these three lines are the only thing that has to go.
-    const getCard = await until(s1.renderer, (f) => f.includes("needs your permission") && f.includes("design_direction"));
-    expect(getCard).toContain('"action":"get"');
-    s1.io.feed("\r");
+    // `get` reads and writes nothing, so it raises NO card: the policy resource is the tool's own
+    // mode (types.ts Tool.resource), not its name, and `tool.design_direction get` is allowed.
+    // Making the human approve the read would train them to allow the card that matters.
+
+    // the question card is the FIRST card of the run: if `get` had raised one, this would find it
+    // (the frame shows the card, and until() would match "needs your permission" before the question)
+    expect(s1.renderer.frameText()).not.toContain("needs your permission");
 
     // the question card, through the real ask_user → renderer.askQuestion seam
     const card = await until(s1.renderer, (f) => f.includes("Three directions for this landing page"));

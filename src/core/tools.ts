@@ -244,6 +244,9 @@ function actionFor(tool: Tool): string {
  *  `deny file.write ".env*"` can never match via dispatch.
  *  Command resources and the tool-name fallback are untouched. */
 function describeResource(tool: Tool, args: unknown, cwd: string): string {
+  // a tool that declares its own mode wins: a path/command/url says WHAT is touched, but a tool
+  // whose modes differ in what they may do has to be able to say WHICH mode (types.ts Tool.resource)
+  if (typeof tool.resource === "function") return tool.resource(args);
   const props = tool.schema.args["properties"];
   const declared = (key: string): boolean =>
     typeof props === "object" && props !== null && key in (props as Record<string, unknown>);

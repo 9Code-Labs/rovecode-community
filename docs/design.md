@@ -87,9 +87,17 @@ it with `provisional: true` and the other two names in `alternatives`. From then
 
 `provisional: true` always implies `chosenBy: "agent"`; the two cannot disagree.
 
-The tool prompts for approval once (it is `kind: "custom"`, action `tool.design_direction`, which the gated
-permission rules prompt on). That one prompt is the point: it is where the human sees what is being recorded
-on their behalf, and it is asked once per project rather than once per task.
+**`set` prompts for approval; `get` does not.** That one prompt is the point: it is where the human sees
+what is being recorded on their behalf, and it is asked once per project rather than once per task. `get`
+only reads `.rovecode/design.json` and writes nothing, so it is allowed outright — a card there would cost
+an interruption before every UI task, and would train the human to allow a `design_direction` card
+reflexively, which is exactly the card that matters.
+
+The two are told apart by the tool's own `resource()` (`src/core/types.ts` `Tool.resource`), which reports
+`get` or `set` instead of letting the policy fall back to the tool name; the rules are
+`tool.design_direction * -> prompt` then `tool.design_direction get -> allow` (last match wins). Anything
+that is not literally `get` is treated as the write, so an unknown action can never read as the safer of
+the two, and plan mode still denies `set` outright.
 
 ## `design_audit`
 

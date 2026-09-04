@@ -1,11 +1,11 @@
 import { test, expect } from "bun:test";
-import { evaluatePermissions } from "../../src/core/tools.ts";
+import { evaluatePermissions, ToolRegistry } from "../../src/core/tools.ts";
 import { applyModeRules } from "../../src/core/modes.ts";
 import { createRuntime } from "../../src/cli/runtime.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
-import type { PermissionRule } from "../../src/core/types.ts";
+import type { ApprovalRequest, PermissionRule, Tool } from "../../src/core/types.ts";
 
 // Ordered most-general first: last match wins (opencode permission.ts:126 semantics).
 const rules: PermissionRule[] = [
@@ -114,5 +114,73 @@ test("the accept-edits rule is appended AFTER the file.write prompt rule — ord
   expect(promptIdx).toBeGreaterThanOrEqual(0);
   expect(allowIdx).toBeGreaterThan(promptIdx); // swap them and accept-edits silently stops working
   expect(rules.some((r) => r.effect === "deny")).toBe(false); // no deny to accidentally outrank
+  rmSync(cwd, { recursive: true, force: true });
+});
+
+// ---------- Tool.resource: a tool that tells the policy WHICH mode this call is ----------
+
+/** A tool whose modes differ in what they may do cannot say so through a path, a command or a URL, so
+ *  the policy resource used to fall back to the tool NAME and one rule had to cover every mode. That is
+ *  how a read-only `design_direction {"action":"get"}` came to raise an approval card. */
+test("a tool's own resource() decides the policy resource; without one the tool NAME is still the fallback", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-perm-"));
+  const asked: string[] = [];
+  const reg = new ToolRegistry();
+  const shape = { type: "object" as const, properties: { action: { type: "string" } } };
+  const modal: Tool = {
+    schema: { name: "modal", description: "", args: shape },
+    kind: "custom",
+    resource: (args) => ((args as { action?: string } | undefined)?.action === "get" ? "get" : "set"),
+    async execute() { return { ok: true, output: "ran" }; },
+  };
+  const plain: Tool = {
+    schema: { name: "plain", description: "", args: shape },
+    kind: "custom",
+    async execute() { return { ok: true, output: "ran" }; },
+  };
+  reg.register(modal, plain);
+  const rules: PermissionRule[] = [
+    { action: "tool.modal", resource: "*", effect: "prompt" },
+    { action: "tool.modal", resource: "get", effect: "allow" },
+    { action: "tool.plain", resource: "*", effect: "prompt" },
+  ];
+  const ctx = { sessionId: "s", cwd, signal: new AbortController().signal, permissions: { effect: "allow" } } as never;
+  const approve = async (req: ApprovalRequest): Promise<"once"> => { asked.push(req.reason); return "once"; };
+  const call = (id: string, tool: string, args: unknown) =>
+    reg.dispatch({ kind: "tool_call", id, tool, args } as never, ctx, undefined, rules, approve, () => {});
+
+  const got = await call("1", "modal", { action: "get" });
+  expect(got.ok).toBe(true);
+  expect(asked).toEqual([]);                                   // the allow rule matched: nobody was asked
+
+  await call("2", "modal", { action: "set", name: "x" });
+  expect(asked).toHaveLength(1);
+  expect(asked[0]).toContain("set");                            // and the human is asked about the MODE
+  expect(asked[0]).not.toContain("modal get");
+
+  await call("3", "plain", { action: "get" });                  // no resource() → unchanged: the tool name
+  expect(asked).toHaveLength(2);
+  expect(asked[1]).toContain("plain");
+  rmSync(cwd, { recursive: true, force: true });
+});
+
+test("design_direction: `get` is allowed and `set` prompts, at every tier below auto", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-perm-"));
+  const rt = createRuntime({ cwd });
+  for (const level of ["ask", "accept-edits"] as const) {
+    const rules = rt.buildCfg(level).permissionRules;
+    // reading the project's own record costs nothing: it writes nothing, and a card here would train
+    // the human to allow the card that matters
+    expect(evaluatePermissions(rules, "tool.design_direction", "get").effect).toBe("allow");
+    // recording the project's design identity IS the one card worth spending
+    expect(evaluatePermissions(rules, "tool.design_direction", "set").effect).toBe("prompt");
+    // an unknown mode is treated as the write, never as the safer of the two
+    expect(evaluatePermissions(rules, "tool.design_direction", "whatever").effect).toBe("prompt");
+    // design_audit is kind read and never prompts
+    expect(evaluatePermissions(rules, "file.read", "design_audit").effect).toBe("allow");
+  }
+  // plan mode still denies the write: the seam turns a prompt into an allow, never a deny into one
+  const planned = applyModeRules("plan", rt.buildCfg("ask").permissionRules);
+  expect(evaluatePermissions(planned, "tool.design_direction", "set").effect).toBe("deny");
   rmSync(cwd, { recursive: true, force: true });
 });

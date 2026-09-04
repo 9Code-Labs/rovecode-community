@@ -491,8 +491,14 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
           // provider_edit (tools/provider.ts) rewrites providers.json / the default model: ask first.
           // provider_list is kind read → covered by the file.read allow above
           { action: "tool.provider_edit", resource: "*", effect: "prompt" },
-          // design_direction writes .rovecode/design.json -- the once-per-project design identity
+          // design_direction set writes .rovecode/design.json -- the once-per-project design identity,
+          // and that ONE card is the point: it is where the human sees what is recorded for them.
+          // `get` only reads that file, so it is allowed (last match wins): making the human approve
+          // the read costs an interruption before every UI task AND trains them to allow the card
+          // reflexively, which is the card that matters. The two modes are told apart by the tool's
+          // own resource() (tools/design.ts), not by the tool name.
           { action: "tool.design_direction", resource: "*", effect: "prompt" },
+          { action: "tool.design_direction", resource: "get", effect: "allow" },
           // port #31: resource = canonical host (lowercased, no trailing dot), so `allow
           // net.fetch <host>` auto-runs THAT host only; web_fetch stops at a redirect to
           // another host and reports it, so the new host gets its own decision here
@@ -556,13 +562,13 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     setEffort(e: ThinkingEffort) { effort = e; },
     setRunLimits(l: RunLimits) { runLimits = l; },
     drainRouterNotes: () => routerNotes.splice(0),
+    onRouterNote(fn) { for (const n of routerNotes.splice(0)) fn(n); routerListeners.push(fn); },
     checkpointsFor,
     setSessionStore(s: SessionStore) { activeStore = s; },
     sandbox,
     setAskUser(fn: AskFn | undefined) { askUser = fn; },
     hooks,
     plugins,
-    onRouterNote(fn) { for (const n of routerNotes.splice(0)) fn(n); routerListeners.push(fn); },
     providers,
     get provider() { return providers.defaultConfig(); },
     stream,

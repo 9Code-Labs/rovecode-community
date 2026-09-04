@@ -100,6 +100,9 @@ test("buildCfg gated: repl defaults with memory/skill allows and prompt gates", 
     { action: "tool.mcp_call", resource: "*", effect: "prompt" },  // port #3: MCP execution is gated
     { action: "tool.provider_edit", resource: "*", effect: "prompt" }, // providers.json / default-model writes ask first
     { action: "tool.design_direction", resource: "*", effect: "prompt" }, // .rovecode/design.json: the once-per-project design identity
+    // ...but `get` only READS that file: allowed, and it must come after the prompt rule (last match wins).
+    // The two modes are told apart by the tool's own resource() (tools/design.ts), not by the tool name.
+    { action: "tool.design_direction", resource: "get", effect: "allow" },
     { action: "net.fetch", resource: "*", effect: "prompt" },      // port #31: web_fetch prompts unless a host is explicitly allowed
   ]);
   // port #9: the passed approver is WRAPPED by execPolicyApprover (shell prompts
