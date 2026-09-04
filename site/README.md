@@ -56,7 +56,7 @@ landing-only build.
 - No animation library: the page arrives prerendered and holds still; the transcript replay and the count-up (dev only) use `src/lib/motion.ts`.
 - `media-src/` (raw and encoded video, ~120 MB) and `screenshots/` are working files, git-ignored.
 - Regenerate the terminal frames after a copy change in `scripts/out/*.html`: `node scripts/shoot.ts frames`.
-- `bun run live-check [site-url]` verifies every URL in the deployed sitemap (status, lang/dir, title, canonical, hreflang, og, console, axe-core).
+- `bun run live-check [site-url]` verifies every URL in the deployed sitemap (status, lang/dir, title, canonical, hreflang, og, console, axe-core). With a preview URL (`http://localhost:4173`) it fetches the same paths there, so a local build can be checked before it ships; canonical/og:url are still expected to carry the public origin.
 - `bun run browsers-check [site-url]` runs the same pages through Chromium, Firefox and WebKit (Playwright builds; `bun x playwright-core install firefox webkit` once) at 1440/390: fonts, RTL, picker keyboard flow, fixed header, copy button.
 - `bun run lighthouse [url]` runs Lighthouse (mobile + desktop) against the live site by default, or any URL, on the local Playwright Chromium; Lighthouse itself is installed on first use into `scripts/.lh/` (git-ignored), not a dependency of the site. `bun run og` re-renders the social card, `bun run images` the image variants.
 - `scripts/prerender.mjs` also inlines the single stylesheet into `dist/index.html` (one fewer render-blocking request on slow links).

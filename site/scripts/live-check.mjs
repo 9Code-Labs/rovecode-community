@@ -1,6 +1,7 @@
 /** Verify the deployed site: for every URL in sitemap.xml — 200, <html lang/dir>, title, description, canonical,
  *  hreflang count, og:url/og:locale, 0 console errors after full scroll — plus an axe-core pass (scripts/.lh).
- *    node scripts/live-check.mjs [site-url]      (default http://64.177.43.110) */
+ *    node scripts/live-check.mjs [site-url]      (default http://64.177.43.110; a preview URL such as
+ *    http://localhost:4173 walks the same paths there while still expecting the public canonical) */
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { chromium } from "playwright-core";
@@ -11,13 +12,17 @@ if (existsSync(root)) for (const b of readdirSync(root).filter(d=>/^chromium-\d+
 const axePath = join(import.meta.dirname, ".lh", "node_modules", "axe-core", "axe.min.js");
 
 const sm = await (await fetch(`${base}/sitemap.xml`)).text();
-const urls = [...sm.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]);
-console.log(`sitemap: ${urls.length} urls`);
+// The sitemap carries the public origin (canonical / og:url are compared against it); the pages themselves are
+// fetched from `base`, so a run against a local preview measures the preview, not the live release.
+const pub = [...sm.matchAll(/<loc>([^<]+)<\/loc>/g)].map((m) => m[1]);
+const origin = pub.length ? new URL(pub[0]).origin : base;
+const urls = pub.map((expected) => ({ expected, url: base + expected.slice(origin.length) }));
+console.log(`sitemap: ${urls.length} urls${origin !== base ? ` (public origin ${origin}, fetched from ${base})` : ""}`);
 const browser = await chromium.launch({ executablePath: exe, headless: true });
 const ctx = await browser.newContext({ viewport: { width: 1366, height: 900 }, locale: "en-US" });
 let totals = { pages: 0, consoleMsgs: 0, http4xx: 0, axe: { critical: 0, serious: 0, moderate: 0, minor: 0 } };
 const rows = [];
-for (const url of urls) {
+for (const { expected, url } of urls) {
   const page = await ctx.newPage(); const msgs = [], bad = [];
   page.on("console", m => { if (["error","warning"].includes(m.type())) msgs.push(m.text().slice(0,100)); });
   page.on("pageerror", e => msgs.push("pageerror " + e.message.slice(0,100)));
@@ -34,7 +39,7 @@ for (const url of urls) {
   const counts = { critical: 0, serious: 0, moderate: 0, minor: 0 }; for (const v of axe) counts[v.impact] += v.nodes;
   for (const k in counts) totals.axe[k] += counts[k];
   totals.pages++; totals.consoleMsgs += msgs.length; totals.http4xx += bad.length;
-  const ok = res.status() === 200 && meta.canonical === url && meta.ogUrl === url && meta.hreflang === 16 && meta.h1 === 1 && msgs.length === 0 && bad.length === 0;
+  const ok = res.status() === 200 && meta.canonical === expected && meta.ogUrl === expected && meta.hreflang === 16 && meta.h1 === 1 && msgs.length === 0 && bad.length === 0;
   rows.push({ url: url.replace(base, ""), status: res.status(), ...meta, console: msgs.length, http4xx: bad.length, axe: counts, ok });
   if (axe.length) console.log("  axe", url.replace(base, "") || "/", JSON.stringify(axe));
   if (msgs.length || bad.length) console.log("  msgs", url.replace(base, ""), JSON.stringify({ msgs, bad }));
