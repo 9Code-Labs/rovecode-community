@@ -294,6 +294,37 @@
   line-height: 1;
 }
 
+/* ---------- prose: documentation rendered from markdown, in the page's own type and tokens ---------- */
+@utility prose {
+  font-size: 16px;
+  line-height: 1.7;
+  color: var(--color-text);
+  & > * + * { margin-top: 1.1em; }
+  & h2 { font-size: 1.45rem; line-height: 1.25; font-weight: 400; letter-spacing: -0.01em; margin-top: 3rem; }
+  & h3 { font-size: 1.1rem; font-weight: 500; margin-top: 2.2rem; }
+  & h4 { font-size: 1rem; font-weight: 500; margin-top: 1.8rem; }
+  & h2 a, & h3 a, & h4 a { color: inherit; text-decoration: none; }
+  & h2 a:hover::after, & h3 a:hover::after { content: " #"; color: var(--color-text-faint); font-weight: 400; }
+  & p, & li { color: var(--color-text-muted); }
+  & li::marker { color: var(--color-text-faint); }
+  & strong { color: var(--color-text); font-weight: 500; }
+  & a { color: var(--color-brand); text-decoration: underline; text-decoration-color: var(--color-border-strong); text-underline-offset: 3px; }
+  & a:hover { text-decoration-color: var(--color-brand); }
+  & ul, & ol { padding-inline-start: 1.4em; }
+  & ul { list-style: disc; }
+  & ol { list-style: decimal; }
+  & li + li { margin-top: 0.35em; }
+  & code { font-family: var(--font-mono); font-size: 0.88em; background: var(--color-surface-2); border-radius: var(--radius-sm); padding: 0.1em 0.4em; color: var(--color-text); }
+  & pre { background: var(--color-ink); color: var(--color-ink-text); border-radius: var(--radius-md); padding: 1rem 1.25rem; overflow-x: auto; font-size: 13px; line-height: 1.6; direction: ltr; text-align: left; }
+  & pre code { background: none; padding: 0; color: inherit; font-size: inherit; }
+  & blockquote { border-inline-start: 2px solid var(--color-border-strong); padding-inline-start: 1rem; color: var(--color-text-muted); }
+  & hr { border: 0; height: 1px; background: var(--color-border); margin-block: 3rem; }
+  & table { width: 100%; border-collapse: collapse; font-size: 14px; line-height: 1.5; display: block; overflow-x: auto; }
+  & th { text-align: start; font-weight: 500; color: var(--color-text); padding: 0.6rem 0.75rem 0.6rem 0; border-bottom: 1px solid var(--color-border-strong); font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; }
+  & td { padding: 0.6rem 0.75rem 0.6rem 0; border-bottom: 1px solid var(--color-border); vertical-align: top; color: var(--color-text-muted); }
+  & img { max-width: 100%; border-radius: var(--radius-md); }
+}
+
 /* ---------- motion ---------- */
 @keyframes caret { 50% { opacity: 0; } }
 @utility caret-blink { animation: caret 1s steps(1, end) infinite; }

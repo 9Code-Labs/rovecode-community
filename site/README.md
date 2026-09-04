@@ -34,6 +34,15 @@ server {
 
 One page, no client routes: unknown paths return `404.html`. Hashed assets under `/assets/` are immutable.
 
+## Docs section (proposal, behind a flag)
+
+`bun run build:docs` (= `VITE_DOCS=1 bun run build`) adds `/docs/` — an index plus one page per document in the
+repository's `docs/` (design, thinking, mcp-market, plugins, deploy) and the README's Install + Quickstart as
+"Command reference" — rendered from markdown at build time by `scripts/docs-build.mjs` (marked), in the page's own
+tokens, with a left index, heading anchors and the same chrome in all 15 locales (the body stays English). Each
+docs page is prerendered and hydrates from an inline JSON block; the sitemap lists them. The default build does
+not include any of it.
+
 ## Notes
 
 - Root-absolute asset URLs (`/assets`, `/brand`, `/shots`). To host under a sub-path, set `base` in `vite.config.ts`.

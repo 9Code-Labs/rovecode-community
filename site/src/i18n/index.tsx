@@ -103,7 +103,8 @@ const I18nContext = createContext<Ctx | null>(null);
 /** `initial` must be a locale whose dictionary main.tsx already awaited with loadDict(), so the first paint is
  *  in the right language. Changing language navigates to that language's URL — the page there is prerendered
  *  in it, so search engines and the visitor see the same thing. */
-export function I18nProvider({ children, initial }: { children: ReactNode; initial: LocaleCode }) {
+/** `manageMeta` off lets a page (docs) keep its own prerendered <title> and description */
+export function I18nProvider({ children, initial, manageMeta = true }: { children: ReactNode; initial: LocaleCode; manageMeta?: boolean }) {
   const [locale] = useState<LocaleCode>(initial);
   const t = useMemo(() => cache.get(locale) ?? en, [locale]);
   const rtl = isRtl(locale);
@@ -112,9 +113,10 @@ export function I18nProvider({ children, initial }: { children: ReactNode; initi
     const root = document.documentElement;
     root.lang = locale;
     root.dir = rtl ? "rtl" : "ltr";
+    if (!manageMeta) return;
     document.title = t.meta.title;
     document.querySelector('meta[name="description"]')?.setAttribute("content", t.meta.description);
-  }, [locale, rtl, t]);
+  }, [locale, rtl, t, manageMeta]);
 
   const setLocale = useCallback((c: LocaleCode) => {
     try { window.localStorage.setItem(KEY, c); } catch { /* private mode: the choice just does not persist */ }
