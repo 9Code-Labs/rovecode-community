@@ -16,13 +16,14 @@ import { fmtElapsed, fmtK } from "./model.ts";
 import { thinkingWord } from "./pet.ts";
 import { scrollbar } from "./scrollbar.ts";
 
-export interface Row { segs: Seg[]; indent?: number }
+/** one painted line of the transcript; `path` marks a tool row that names a file (message-hits.ts opens it on click) */
+export interface Row { segs: Seg[]; indent?: number; path?: string }
 
 /** 1-slot cache: buildRows is called twice per frame (once in drawMessages, once in messagesScroll).
  *  Within a single frame now/w/theme are constant and messages is the same array, so the second call
  *  is always a cache hit. Keyed by array identity + length (cheap mutation guard) + w + theme.name + now. */
 let _rowsCache: { msgs: readonly unknown[]; len: number; w: number; name: string; now: number; rows: Row[] } | null = null;
-function cachedBuildRows(s: SextantState, w: number, theme: Theme, now: number): Row[] {
+export function cachedBuildRows(s: SextantState, w: number, theme: Theme, now: number): Row[] {
   if (_rowsCache && _rowsCache.msgs === s.messages && _rowsCache.len === s.messages.length
       && _rowsCache.w === w && _rowsCache.name === theme.name && _rowsCache.now === now) {
     return _rowsCache.rows;
@@ -177,7 +178,7 @@ export function buildRows(s: SextantState, w: number, theme: Theme, now: number)
       }
       case "tool":
         if (headerDue) { blank(); header(i); } else if (prev && prev.kind === "assistant") blank();
-        rows.push({ segs: toolRow(m, iw, theme, now), indent: 2 });
+        rows.push({ segs: toolRow(m, iw, theme, now), indent: 2, ...(m.path ? { path: m.path } : {}) });
         break;
       case "steer":
         if (headerDue) { blank(); header(i); } else blank();
