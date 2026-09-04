@@ -551,6 +551,10 @@ tokens, cache hits, and catalog-priced spend.
   `.rovecode/design.json`) and `design_audit`, which counts template patterns in source and reports them as
   *slop* only while nothing is recorded, or as *deviation* from what the project chose. `ROVECODE_DESIGN=off`
   drops the section for runs with no UI in them.
+- **Site** (`site/`, `docs/deploy.md`): the landing page — Vite + React, prerendered once per language, no
+  runtime; `cd site && bun install --frozen-lockfile && bun run build` → `site/dist`. `bun run deploy:site`
+  ships it to the VPS as a new release and flips `current`; `.github/workflows/site.yml` does the same on a
+  push to `main`. Live at http://64.177.43.110/ until there is a domain.
 
 ## License & notices
 
