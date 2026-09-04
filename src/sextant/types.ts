@@ -287,6 +287,9 @@ export type CardState =
 export interface UsageState {
   provider: string;
   model: string;
+  /** the thinking dial as the runtime holds it ("auto" | "off" | "low" | …); painted in the footer tag
+   *  next to the model so the person can see what the answer is costing them; unset = not reported */
+  effort?: string;
   turns: number;
   tokensIn: number;
   tokensOut: number;

@@ -309,6 +309,7 @@ export class SextantRenderer implements Renderer {
     const u = this.ctx?.usage?.();
     setUsage(s, {
       provider: info.provider, model: info.model, turns: info.turns, tokensIn: info.tokensIn, tokensOut: info.tokensOut,
+      ...(info.effort !== undefined ? { effort: info.effort } : {}),
       contextTokens: u?.contextTokens ?? 0, contextWindow: this.ctx?.contextWindow(), costUsd: u ? u.costUsd : null,
     });
     this.refreshPlan();

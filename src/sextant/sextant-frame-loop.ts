@@ -22,6 +22,7 @@ import { Screen } from "./screen.ts";
 import { cardHits } from "./card-hits.ts";
 import { fileRowHits } from "./panel-hits.ts";
 import { scrollThumbHits } from "./scroll-hits.ts";
+import { frameHits } from "./frame-hits.ts";
 import { drawTabs, mainPage } from "./draw-tabs.ts";
 import type { HitZone, InputEvent, Layout, SextantState, TerminalIO, Theme, TreeRow } from "./types.ts";
 
@@ -176,6 +177,8 @@ export class FrameLoop {
     });
     this.L = L;
     if (L.pet) hits.push({ rect: L.pet, onClick: () => pet.poke(this.d.clock()) });
+    // the frame's border rows (frame-hits.ts): unread badge → notices, theme name → next theme, effort → /effort
+    for (const z of frameHits(L.frame, s, theme, now)) hits.push(z);
     // paging (draw-tabs.ts): on a narrow terminal the main slot may be showing files or plan instead
     // of code; the strip is painted over the slot's top border and each tab is a click zone
     const main = mainPage(L, s);

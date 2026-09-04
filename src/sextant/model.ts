@@ -346,7 +346,7 @@ export function fmtElapsed(ms: number): string {
 }
 
 export interface UsagePatch {
-  provider?: string; model?: string; turns?: number; tokensIn?: number; tokensOut?: number;
+  provider?: string; model?: string; effort?: string; turns?: number; tokensIn?: number; tokensOut?: number;
   /** estimated tokens in the context + the model's window (undefined window → pct unknown) */
   contextTokens?: number; contextWindow?: number | undefined;
   costUsd?: number | null;
@@ -359,6 +359,7 @@ export function contextPercent(used: number, window: number | undefined): number
 export function setUsage(s: SextantState, u: UsagePatch): void {
   if (u.provider !== undefined) s.usage.provider = u.provider;
   if (u.model !== undefined) s.usage.model = u.model;
+  if (u.effort !== undefined) s.usage.effort = u.effort;
   if (u.turns !== undefined) s.usage.turns = u.turns;
   if (u.tokensIn !== undefined) s.usage.tokensIn = u.tokensIn;
   if (u.tokensOut !== undefined) s.usage.tokensOut = u.tokensOut;

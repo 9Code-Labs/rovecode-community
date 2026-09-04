@@ -49,29 +49,57 @@ export const activityLabel = (s: SextantState, now?: number): string =>
 /** Outer frame: `◆ rovecode · repo · branch · n modified` left, glyph + activity + run clock right,
  *  key hints bottom-left, mode/yolo markers + `model · theme · vX` bottom-right. Without git the
  *  header shows the cwd basename only. */
-export function drawFrame(scr: ScreenLike, L: { frame: Rect }, s: SextantState, theme: Theme, now: number): void {
-  const F = L.frame;
-  scr.box(F.x, F.y, F.w, F.h, st(theme.frameDim));
+/** the header's right-hand run: unread badge · activity glyph + label · run clock. `badge` is the
+ *  badge's [cell offset, width] inside the run (null once everything is read) — frame-hits.ts makes
+ *  it a click zone that opens the notices, the same as ⌃b. */
+export function headerRight(s: SextantState, theme: Theme, now: number): { segs: Seg[]; badge: [number, number] | null } {
   const [g, gc] = activityGlyph(s, theme, now);
   // unread notices (model.ts notify) sit left of the activity: `◆ 3` in warn, gone when read (⌃b)
   const unread = unreadNotices(s);
-  const right: Seg[] = [gap, ...(unread > 0 ? [[`◆ ${unread}`, st(theme.warn)] as Seg, ["   ", st(-1)] as Seg] : []), [g, st(gc)], [" " + activityLabel(s, now), st(activityColor(s, theme))]];
-  if (s.activity.startedAt !== null) right.push(["  " + fmtClock(elapsed(s, now)), st(theme.muted)]);
-  right.push(gap);
+  const badge = unread > 0 ? `◆ ${unread}` : null;
+  const segs: Seg[] = [gap, ...(badge ? [[badge, st(theme.warn)] as Seg, ["   ", st(-1)] as Seg] : []), [g, st(gc)], [" " + activityLabel(s, now), st(activityColor(s, theme))]];
+  if (s.activity.startedAt !== null) segs.push(["  " + fmtClock(elapsed(s, now)), st(theme.muted)]);
+  segs.push(gap);
+  return { segs, badge: badge ? [1, segWidth([[badge, undefined]])] : null };
+}
+
+const DOT = (theme: Theme): Seg => ["  ·  ", st(theme.dim)];
+
+/** the footer's right-hand run: plan-mode / permission markers, then `model · effort X · theme · vX`.
+ *  `effort` and `theme` are the [cell offset, width] of those words inside the run — frame-hits.ts
+ *  makes them click zones (effort → prefill `/effort `, theme → next theme like ⌃t). */
+export function footerRight(s: SextantState, theme: Theme): { segs: Seg[]; effort: [number, number] | null; theme: [number, number] } {
+  const dot = DOT(theme);
+  // the thinking dial rides next to the model ("effort high") — same word as the /effort command
+  const effortWord = s.usage.effort ? `effort ${s.usage.effort}` : "";
+  const parts = [s.usage.model, effortWord, s.theme, `v${s.version}`].filter(Boolean);
+  // one marker for the permission tier: auto wins over accept edits (it already covers writes)
+  const perm: Seg[] = s.yolo ? [["auto", st(theme.warn)], dot] : s.acceptEdits ? [["accept edits", st(theme.warn)], dot] : [];
+  const lead: Seg[] = [gap, ...(s.mode === "plan" ? [["plan mode", st(theme.warn)] as Seg, dot] : []), ...perm];
+  const segs: Seg[] = [...lead, [parts.join(" · "), st(theme.dim)], gap];
+  // where each part starts inside the run: the lead, then the parts with their " · " joints (3 cells)
+  const starts: number[] = [];
+  let off = segWidth(lead);
+  for (const p of parts) { starts.push(off); off += segWidth([[p, undefined]]) + 3; }
+  const at = (i: number): [number, number] => [starts[i]!, segWidth([[parts[i]!, undefined]])];
+  return { segs, effort: effortWord ? at(parts.indexOf(effortWord)) : null, theme: at(parts.length - 2) };
+}
+
+export function drawFrame(scr: ScreenLike, L: { frame: Rect }, s: SextantState, theme: Theme, now: number): void {
+  const F = L.frame;
+  scr.box(F.x, F.y, F.w, F.h, st(theme.frameDim));
+  const right = headerRight(s, theme, now).segs;
   const rw = segWidth(right);
   scr.text(F.x + F.w - 2 - rw, F.y, right);
-  const dot: Seg = ["  ·  ", st(theme.dim)];
+  const dot = DOT(theme);
   const short: Seg[] = [gap, ["◆ ", st(theme.accent)], ["rovecode", st(theme.fg, -1, ATTR.BOLD)], dot, [s.repo.name, st(theme.fg2)], gap];
   const full: Seg[] = s.repo.branch === null ? short
     : [...short.slice(0, -1), dot, [s.repo.branch, st(theme.fg2)], dot, [`${repoModified(s)} modified`, st(theme.fg2)], gap];
   const avail = F.w - 4 - rw - 2;
   scr.text(F.x + 2, F.y, segWidth(full) > avail ? short : full, avail);
-  // bottom: mode/yolo markers + `model · theme · vX` right; key hints left, whole hints dropped
-  // (theme, diff, focus first) rather than clipped mid-word when the row is narrow
-  const tag = [s.usage.model, s.theme, `v${s.version}`].filter(Boolean).join(" · ");
-  // one marker for the permission tier: auto wins over accept edits (it already covers writes)
-  const perm: Seg[] = s.yolo ? [["auto", st(theme.warn)], dot] : s.acceptEdits ? [["accept edits", st(theme.warn)], dot] : [];
-  const ver: Seg[] = [gap, ...(s.mode === "plan" ? [["plan mode", st(theme.warn)] as Seg, dot] : []), ...perm, [tag, st(theme.dim)], gap];
+  // bottom: mode/yolo markers + `model · effort · theme · vX` right (footerRight); key hints left, whole
+  // hints dropped (theme, diff, focus first) rather than clipped mid-word when the row is narrow
+  const ver = footerRight(s, theme).segs;
   const vw = segWidth(ver);
   const armed = now < s.escUntil;
   const key = (k: string, what: string, kc = theme.fg2): Seg[] => [[k, st(kc)], [what, st(theme.muted)]];
