@@ -15,6 +15,7 @@ import { bootRuntime, createRuntime } from "../../src/cli/runtime.ts";
 import { discoverCommands } from "../../src/tui/commands.ts";
 import { saveState } from "../../src/plugins/state.ts";
 import { trustPlugin } from "../../src/plugins/install.ts";
+import { trustMcpFile } from "../../src/mcp/trust.ts";
 
 const dirs: string[] = [];
 function tmp(prefix: string): string { const d = mkdtempSync(join(tmpdir(), prefix)); dirs.push(d); return d; }
@@ -82,6 +83,7 @@ test("wiring: an active plugin's tools register with their kind, its hook denies
   mkdirSync(join(cwd, ".rovecode"), { recursive: true });
   writeFileSync(join(cwd, ".rovecode", "mcp.json"), JSON.stringify({ mcpServers: { shared: { url: "http://127.0.0.1:9/from-mcp-json" } } }));
   saveState(home, { disabled: [], trusted: {} });
+  trustMcpFile(home, join(cwd, ".rovecode", "mcp.json")); // a project mcp.json passes the same gate as a project plugin (mcp-trust.test.ts pins the gate itself)
   await withHome(home, async () => {
     const rt = await bootRuntime({ cwd, stream: null });
     try {

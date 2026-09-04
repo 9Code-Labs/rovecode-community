@@ -24,6 +24,7 @@ import { mockStream, textTurn, toolTurn } from "../../src/providers/stream.ts";
 import { resetExecutor, type SpawnRunner } from "../../src/core/executor.ts";
 import { SandboxConfigError } from "../../src/core/sandbox-config.ts";
 import { McpManager } from "../../src/mcp/client.ts";
+import { writeTrustedMcpJson } from "../helpers/mcp-trust.ts";
 import type { AssistantTurn, Message, ModelRef, StreamEvent, StreamFn, StreamOptions } from "../../src/core/types.ts";
 import type { ApprovalAnswer, AssistantView, Renderer, RendererHooks, StatusInfo } from "../../src/tui/renderer.ts";
 
@@ -321,7 +322,8 @@ test("wsl rung + failing fake probe: runTui({exitOnClose:false}) rejects with Sa
   const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiwire-"));
   mkdirSync(join(cwd, ".rovecode"), { recursive: true });
   writeFileSync(join(cwd, ".rovecode", "sandbox.json"), JSON.stringify({ rung: "wsl" }));
-  writeFileSync(join(cwd, ".mcp.json"), JSON.stringify({ mcpServers: { toy: { command: "rovecode-not-a-real-binary-tui" } } }));
+  const { restore: restoreHome } = scopedHome(); // the project .mcp.json spawns only once trusted (mcp/trust.ts) — approve it in the scoped home
+  writeTrustedMcpJson(cwd, { toy: { command: "rovecode-not-a-real-binary-tui" } });
   const savedSandbox = process.env.ROVECODE_SANDBOX;
   delete process.env.ROVECODE_SANDBOX;                          // a host ROVECODE_SANDBOX would override the file under test
   const closed: McpManager[] = [];
@@ -341,6 +343,7 @@ test("wsl rung + failing fake probe: runTui({exitOnClose:false}) rejects with Sa
     expect(closed).toHaveLength(1);                          // LOW-3: MCP children reaped before the rejection (mutation: drop rt.mcp?.close() → 0)
   } finally {
     McpManager.prototype.close = origClose;
+    restoreHome();
     if (savedSandbox !== undefined) process.env.ROVECODE_SANDBOX = savedSandbox;
     rmSync(cwd, { recursive: true, force: true });
   }

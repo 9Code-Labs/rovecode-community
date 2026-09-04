@@ -11,6 +11,7 @@ import type { Message, ModelRef, RunEvent, StreamEvent, StreamFn, StreamOptions 
 import type { SessionSummary } from "../../src/core/session.ts";
 import { McpManager } from "../../src/mcp/client.ts";
 import { basename } from "node:path";
+import { scratchHome, writeTrustedMcpJson } from "../helpers/mcp-trust.ts";
 
 // ---------- scripted stream (goal-keyed, order-independent across tests) ----------
 
@@ -368,7 +369,8 @@ test("stop() with an in-flight SSE run: resolves promptly, sockets close (runs f
 
 test("MED-F3: stop() closes every session runtime's MCP manager", async () => {
   const dir = mkdtempSync(join(tmpdir(), "rovecode-srv-mcp-"));
-  writeFileSync(join(dir, ".mcp.json"), JSON.stringify({ mcpServers: { toy: { command: "rovecode-not-a-real-binary-srv" } } }));
+  const restoreHome = scratchHome(); // a project .mcp.json loads only once trusted (mcp/trust.ts) — approve it in a scratch home
+  writeTrustedMcpJson(dir, { toy: { command: "rovecode-not-a-real-binary-srv" } });
   const closed: McpManager[] = [];
   const orig = McpManager.prototype.close;
   McpManager.prototype.close = async function (this: McpManager) { closed.push(this); return orig.call(this); };
@@ -382,6 +384,7 @@ test("MED-F3: stop() closes every session runtime's MCP manager", async () => {
     expect(new Set(closed).size).toBe(2);   // two distinct managers
   } finally {
     McpManager.prototype.close = orig;
+    restoreHome();
     rmSync(dir, { recursive: true, force: true });
   }
 });

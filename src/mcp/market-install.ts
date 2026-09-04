@@ -12,6 +12,7 @@ import { dirname } from "node:path";
 import { isRecord, mcpConfigFiles, normalizeEntry, parseConfigFile, type McpServerConfig } from "./config.ts";
 import type { EnvSpec, MarketEntry, MarketInstall } from "./market.ts";
 import { installLabel } from "./market.ts";
+import { mcpTrustStatus, trustMcpFile } from "./trust.ts";
 
 export type McpScope = "user" | "project";
 const SERVER_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -156,26 +157,45 @@ function writeShape(file: string, shape: FileShape, secret: boolean): void {
 }
 
 /** add or replace one server; the entry is normalized first (every `${NAME}` counted as set) so the
- *  runtime is guaranteed to accept what was written. Returns the loader's view of it. */
-export function writeServer(file: string, name: string, raw: Record<string, unknown>, opts: { replace?: boolean } = {}): McpServerConfig {
+ *  runtime is guaranteed to accept what was written. Returns the loader's view of it. `trustHome`: the
+ *  human just approved this exact content on a card/prompt, so a PROJECT file is recorded as trusted in
+ *  that home's store right after the write (mcp/trust.ts) — the "trust my own" half of the gate. */
+export function writeServer(file: string, name: string, raw: Record<string, unknown>, opts: { replace?: boolean; trustHome?: string } = {}): McpServerConfig & { trusted?: boolean } {
   const warnings: string[] = [];
   const cfg = normalizeEntry(name, raw, file, warnings, new Proxy({}, { get: () => "set" }) as Record<string, string>);
   if (!cfg) throw new Error(warnings.join("; ") || `${name}: not a valid server entry`);
   const shape = readShape(file);
   if (shape.servers[name] !== undefined && !opts.replace) throw new Error(`${file} already has a server named "${name}" — remove it first, or add --force`);
+  // the human approved THIS entry. The rest of the file is approved only if it already was (or there was
+  // no file): adding to a cloned, unapproved file must not quietly bless the strangers already in it.
+  const mayTrust = opts.trustHome !== undefined && (!existsSync(file) || Object.keys(shape.servers).filter((k) => k !== name).length === 0 || mcpTrustStatus(opts.trustHome, file) === "trusted");
   shape.servers[name] = raw;
   const secret = JSON.stringify(raw).includes("env") || JSON.stringify(raw).includes("headers");
   writeShape(file, shape, secret);
-  return cfg;
+  if (opts.trustHome === undefined) return cfg;
+  if (mayTrust) trustMcpFile(opts.trustHome, file);
+  return { ...cfg, trusted: mayTrust };
 }
 
-export function removeServer(file: string, name: string): boolean {
+/** delete one server; with `trustHome` the file's new bytes stay approved when the file was approved
+ *  before (a removal is the human's edit too) — an unapproved file stays unapproved */
+export function removeServer(file: string, name: string, opts: { trustHome?: string } = {}): boolean {
   if (!existsSync(file)) return false;
+  const wasTrusted = opts.trustHome !== undefined && mcpTrustStatus(opts.trustHome, file) === "trusted";
   const shape = readShape(file);
   if (shape.servers[name] === undefined) return false;
   delete shape.servers[name];
   writeShape(file, shape, false);
+  if (wasTrusted) trustMcpFile(opts.trustHome!, file);
   return true;
+}
+
+/** one configured server on one line, NAMES of env/headers only — never their values (they may be keys) */
+export function serverLine(s: McpServerConfig): string {
+  const what = s.transport === "stdio" ? [s.command, ...(s.args ?? [])].join(" ") : s.url ?? "";
+  const env = s.env && Object.keys(s.env).length ? `  env ${Object.keys(s.env).join(", ")}` : "";
+  const headers = s.headers && Object.keys(s.headers).length ? `  headers ${Object.keys(s.headers).join(", ")}` : "";
+  return `${s.name.padEnd(24)} ${s.transport.padEnd(5)} ${what}${env}${headers}${s.enabled === false ? "  (disabled)" : ""}`;
 }
 
 /** every configured server with the scope it comes from, most local last (what the runtime would load) */

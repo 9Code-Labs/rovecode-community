@@ -91,38 +91,41 @@ The TUI has **no masked input, so it never asks for a secret**: every asked valu
 closing note lists the names to set before the restart — or says to run `rovecode mcp add <name>` on a shell,
 where the prompt is masked. Nothing typed into the TUI's prompt ever becomes a key.
 
-## Trust: what runs on first open, and the proposed gate
+## Trust: project files pass the same gate as project plugins
 
-**Today, project-scope MCP entries run on first open.** `.rovecode/mcp.json` and the harvested `.mcp.json` in a
-freshly cloned repo are read by `createRuntime` and their `command` is spawned (lazily, on the first
-`mcp_list`/`mcp_call`) with no confirmation — the same class of hole `docs/plugins.md` closes for project
-plugins. The market does not widen it (a `--project` add writes to the same file the repo already controls) and
-this pass does not close it either, because closing it changes what existing checkouts do. The design below is
-what closing it should look like; it is one decision, not a new store.
+A repo's `.rovecode/mcp.json` and `.mcp.json` describe commands that would run on your machine. Since
+Berkay's decision ("Kapı + kendi projelerimi otomatik güven") they load only once **you** have approved them
+on this machine; until then they contribute **nothing** — no server, no `mcp_list`/`mcp_call` — and the launch
+carries one warning per file:
 
-**Proposed gate — one "trust this project" for plugins and MCP alike.**
+```
+mcp: /path/.rovecode/mcp.json: not trusted on this machine — its 2 MCP servers stay off (they would run commands from this repo). Review: rovecode mcp show --project · approve: rovecode mcp trust
+```
 
-- Reuse `~/.rovecode/plugins.json` (`src/plugins/state.ts`): `trusted: Record<absDir, digest>`. Add the project's
-  two MCP files as trust subjects keyed by their absolute path, digest = sha256 of the file bytes (the plugin
-  digest routine over a one-file "folder" gives exactly that). No second file, no second CLI verb.
-- `loadMcpConfig` grows a `trusted?: (file: string, digest: string) => boolean` predicate; `createRuntime` passes
-  `isTrusted(state, path, digest)`. The user file is always trusted (it is yours). A project file that is not
-  trusted contributes **nothing** and yields one warning per file: `.rovecode/mcp.json holds 2 MCP servers that
-  would run commands from this repo — review with \`rovecode mcp show --project\`, then \`rovecode mcp trust\``.
-- `rovecode mcp show --project` prints each entry's exact command/args/URL (the same `describePlan` lines);
-  `rovecode mcp trust` records the digest; any later edit to the file flips it back to untrusted, like a plugin
-  whose files changed. `rovecode plugin trust <name>` and `rovecode mcp trust` write the same map, and a future
-  `rovecode trust` could do both in one step.
-- `rovecode mcp add --project` records the digest of the file it just wrote — the human approved that exact
-  content on the card, so the gate does not ask twice. A clone by someone else still has to trust it.
-- Migration: on the first run after the gate ships, an existing project file that has never been seen prints the
-  warning once and stays inert until trusted. That is the behaviour change to take to Berkay.
+- **Store**: the plugin trust store, `~/.rovecode/plugins.json` → `trusted`, keyed by the file's absolute path,
+  value = sha256 of its bytes (`src/mcp/trust.ts`). It lives in the USER home, so a repo cannot trust itself.
+  Plugins and MCP files share one map: "trust this project" is one decision, not two stores.
+- **Any edit asks again**: a changed byte changes the digest; the file drops back to untrusted and warns.
+- **Your own writes are approved as you approve them**: `rovecode mcp add --project` (after the plan and the
+  y/N) and `/mcp … --project` (after the approval card) record the digest of the file they just wrote — but only
+  when the file was already trusted or held no other server. Adding into a cloned file that still holds
+  unapproved strangers writes the entry and says `NOT trusted yet`, pointing at `show`/`trust`; it never blesses
+  what you did not see. `remove --project` keeps a trusted file trusted.
+- **Manual path**: `rovecode mcp show --project` prints each project file, its trust, and every server with the
+  exact command/URL and the env/header **names** (never values); `rovecode mcp trust [--yes]` approves both
+  files as they are now after showing them (no TTY + no `--yes` → nothing); `rovecode mcp untrust` undoes.
+  In the TUI `/mcp trust` raises one approval card per file (the file as the preview, its servers as the detail).
+- **The user file is never gated** — `~/.rovecode/mcp.json` is yours.
+- **Migration**: a project file that existed before this shipped is inert until trusted once; nothing is
+  auto-trusted retroactively. `loadMcpConfig` without a `trusted` predicate (other callers, tests) behaves as
+  before; the runtime always passes one.
 
 ## Files
 
 - `src/mcp/market.ts` — types, registry re-typing (`parseRegistryPage`, `entryFromRegistry`), cache, `searchMarket`, `marketInfo`
 - `src/mcp/market-catalog.ts` — the curated shelf
 - `src/mcp/market-install.ts` — `planInstall` → `describePlan` → `fillPlan` → `writeServer` / `removeServer` / `configuredServers`
-- `src/mcp/config.ts` — `loadMcpConfig(cwd, warnings, { home, env })`, `mcpConfigFiles`, `expandVars`, `parseConfigFile`
+- `src/mcp/trust.ts` — `trustedPredicate`, `trustMcpFile`, `untrustMcpFile`, `mcpTrustStatus`, `projectMcpFiles`
+- `src/mcp/config.ts` — `loadMcpConfig(cwd, warnings, { home, env, trusted })`, `mcpConfigFiles`, `expandVars`, `parseConfigFile`
 - `src/cli/mcp-market-cmd.ts` — `rovecode mcp …`; `src/tui/mcp-cmd.ts` — `/mcp`
-- `test/unit/mcp-market.test.ts`, `test/unit/mcp-market-cmd.test.ts` — fixture registry + injected fetch; no network
+- `test/unit/mcp-market.test.ts`, `test/unit/mcp-market-cmd.test.ts`, `test/unit/mcp-trust.test.ts` (the gate through bootRuntime) — fixture registry + injected fetch; no network

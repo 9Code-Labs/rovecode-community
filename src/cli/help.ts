@@ -82,6 +82,8 @@ const ADVANCED = `advanced — the full command reference
   rovecode mcp info <name>      publisher, version, the exact command or URL, the keys it asks for
   rovecode mcp add <name> [--project] [--pick N] [--yes]  show the plan, ask for keys masked, write ~/.rovecode/mcp.json (or .rovecode/mcp.json)
   rovecode mcp remove <name> [--project] · rovecode mcp list   (docs/mcp-market.md; /mcp does the same inside the TUI)
+  rovecode mcp show --project   this repo's .rovecode/mcp.json + .mcp.json: exact commands/URLs, env names, trusted or not
+  rovecode mcp trust            approve those files as they are now — until then nothing in them loads; your own add --project is trusted as you approve it
   rovecode auth set <provider> [--key <name>]  store an API key (prompts on stdin; ~/.rovecode/credentials.json)
   rovecode auth list            stored providers + key names (values redacted)
   rovecode auth remove <provider>  delete a stored credential

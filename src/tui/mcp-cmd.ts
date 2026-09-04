@@ -11,10 +11,29 @@
 
 import type { Renderer, PickItem } from "./renderer.ts";
 import { installLabel, searchMarket, type MarketDeps, type MarketEntry } from "../mcp/market.ts";
-import { describePlan, fillPlan, planInstall, writeServer, type McpScope } from "../mcp/market-install.ts";
+import { describePlan, fillPlan, planInstall, serverLine, writeServer, type McpScope } from "../mcp/market-install.ts";
+import { parseConfigFile } from "../mcp/config.ts";
+import { mcpTrustStatus, projectMcpFiles, trustMcpFile } from "../mcp/trust.ts";
 import { rovecodeHome } from "../providers/auth.ts";
 
-export const MCP_COMMAND = { name: "mcp", description: "Find and install an MCP server: /mcp [query] [--project] — the curated shelf, then the registry", group: "modes & safety" };
+export const MCP_COMMAND = { name: "mcp", description: "Find and install an MCP server: /mcp [query] [--project] — the curated shelf, then the registry · /mcp trust approves this repo's MCP files", group: "modes & safety" };
+
+/** `/mcp trust` — one approval card per project MCP file: the file as preview, its servers as detail; a yes
+ *  records the file's current bytes as trusted (mcp/trust.ts), so the NEXT launch loads it */
+async function trustProjectFiles(ctx: McpCmdCtx, home: string): Promise<void> {
+  const files = projectMcpFiles(ctx.cwd);
+  if (files.length === 0) { ctx.renderer.addSystemNote("mcp: no project MCP files here (.rovecode/mcp.json, .mcp.json)"); return; }
+  const anySet = new Proxy({}, { get: () => "set" }) as Record<string, string>;
+  for (const file of files) {
+    if (mcpTrustStatus(home, file) === "trusted") { ctx.renderer.addSystemNote(`mcp: ${file} is already trusted as it is now`); continue; }
+    const warnings: string[] = [];
+    const lines = parseConfigFile(file, warnings, anySet).map(serverLine).concat(warnings.map((w) => `! ${w}`));
+    const answer = await ctx.renderer.askApproval("mcp trust", file, lines.join("\n") || "(no servers in it)");
+    if (answer === "deny") { ctx.renderer.addSystemNote(`mcp: ${file} stays untrusted — nothing in it loads`); continue; }
+    const r = trustMcpFile(home, file);
+    ctx.renderer.addSystemNote(r.ok ? `mcp: trusted ${file} — restart me to connect; an edit asks again` : `mcp: ${r.reason}`, r.ok ? "info" : "warn");
+  }
+}
 
 export interface McpCmdCtx {
   renderer: Renderer;
@@ -37,6 +56,7 @@ export async function cmdMcp(ctx: McpCmdCtx, arg: string): Promise<void> {
   const scope: McpScope = words.includes("--project") ? "project" : "user";
   const query = words.filter((w) => !w.startsWith("--")).join(" ");
   const home = ctx.home ?? rovecodeHome();
+  if (words[0] === "trust") { await trustProjectFiles(ctx, home); return; }
   const market: MarketDeps = { home, ...ctx.market };
   const found = await searchMarket(query, market);
   for (const n of found.notes) renderer.addSystemNote(`mcp: ${n}`, "warn");
@@ -56,10 +76,13 @@ export async function cmdMcp(ctx: McpCmdCtx, arg: string): Promise<void> {
   // the approval card: title = what is being done, preview = the one line that runs, detail = the whole plan
   const answer = await renderer.askApproval("mcp add", `${plan.name} ← ${installLabel(plan.install)}`, describePlan(plan, "env").join("\n"));
   if (answer === "deny") { renderer.addSystemNote("mcp: nothing written"); return; }
+  let trusted: boolean | undefined;
   try {
-    writeServer(plan.file, plan.name, fillPlan(plan, {}));
+    // the card just approved this exact content: a project file is trusted as written (mcp/trust.ts)
+    trusted = writeServer(plan.file, plan.name, fillPlan(plan, {}), scope === "project" ? { trustHome: home } : {}).trusted;
   } catch (e) { renderer.addSystemNote(`mcp: ${e instanceof Error ? e.message : String(e)}`, "error"); return; }
-  renderer.addSystemNote(`mcp: added "${plan.name}" → ${plan.file} — restart me to connect (servers are read once per process)`);
+  renderer.addSystemNote(`mcp: added "${plan.name}" → ${plan.file}${trusted === true ? " (trusted as written)" : ""} — restart me to connect (servers are read once per process)`);
+  if (trusted === false) renderer.addSystemNote("mcp: that file already held servers you have not approved, so it is NOT trusted yet — /mcp trust shows them", "warn");
   if (plan.asks.length) renderer.addSystemNote(`mcp: set ${plan.asks.map((a) => a.name).join(", ")} in your environment before the restart — or run \`rovecode mcp add ${entry.key}\` on a shell, which asks for them masked`, "warn");
   if (plan.pending.length) renderer.addSystemNote(`mcp: fill in ${plan.pending.join(", ")} in that file's args before use`, "warn");
 }

@@ -29,6 +29,7 @@ import { loadMcpConfig, McpManager } from "../mcp/client.ts";
 import { createMcpTools } from "../mcp/tools.ts";
 import { activatePlugins, discoverPlugins, loadState as loadPluginState, type DiscoveredPlugin, type LoadedPlugin } from "../plugins/index.ts";
 import type { McpServerConfig } from "../mcp/config.ts";
+import { trustedPredicate } from "../mcp/trust.ts";
 import { rovecodeHome } from "../providers/auth.ts";
 import { readTool, editTool, writeTool, bashTool } from "../coding/hashline.ts";
 import { globTool, grepTool, lsTool } from "../coding/files.ts";
@@ -226,7 +227,8 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   // command dirs, MCP servers) join their file-based twins below as if they had been in .rovecode/.
   // The entry modules import after construction (see the activation block after hooks.open).
   const pluginHome = rovecodeHome();
-  const pluginsFound = discoverPlugins(cwd, { home: pluginHome, state: loadPluginState(pluginHome) });
+  const pluginState = loadPluginState(pluginHome); // one trust store for project plugins AND project MCP files
+  const pluginsFound = discoverPlugins(cwd, { home: pluginHome, state: pluginState });
   const pluginWarnings: string[] = [...pluginsFound.warnings];
   const pluginListeners: ((note: string) => void)[] = [];
   const pluginWarn = (note: string): void => { pluginWarnings.push(note); for (const l of pluginListeners) l(note); };
@@ -315,9 +317,11 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     if (mcpByName.has(c.name)) { pluginWarn(`plugin ${p.name}: MCP server "${c.name}" is also declared by another plugin — first kept`); continue; }
     mcpByName.set(c.name, c);
   }
-  // the user file (~/.rovecode/mcp.json — where `rovecode mcp add` writes) is the lowest of the three layers
+  // the user file (~/.rovecode/mcp.json — where `rovecode mcp add` writes) is the lowest of the three layers.
+  // Project files (.rovecode/mcp.json, .mcp.json) pass the same trust gate as project plugins (mcp/trust.ts):
+  // unapproved on this machine → nothing of theirs loads, one `mcp: …` note names the file and the command.
   const mcpWarnings: string[] = [];
-  for (const c of loadMcpConfig(cwd, mcpWarnings, { home: pluginHome })) { if (mcpByName.has(c.name)) pluginWarn(`mcp.json server "${c.name}" overrides a plugin's entry of the same name`); mcpByName.set(c.name, c); }
+  for (const c of loadMcpConfig(cwd, mcpWarnings, { home: pluginHome, trusted: trustedPredicate(pluginState) })) { if (mcpByName.has(c.name)) pluginWarn(`mcp.json server "${c.name}" overrides a plugin's entry of the same name`); mcpByName.set(c.name, c); }
   for (const w of mcpWarnings) pluginWarn(`mcp: ${w}`);
   const mcpConfigs = [...mcpByName.values()];
   let mcp: McpManager | null = null;

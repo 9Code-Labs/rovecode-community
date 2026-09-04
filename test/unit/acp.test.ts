@@ -15,6 +15,7 @@ import { PNG_1x1, PNG_1x1_B64 } from "../fixtures/images.ts";
 import { createHash } from "node:crypto";
 import { textTurn, toolTurn } from "../../src/providers/stream.ts";
 import { McpManager } from "../../src/mcp/client.ts";
+import { scratchHome, writeTrustedMcpJson } from "../helpers/mcp-trust.ts";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -471,7 +472,8 @@ test("HIGH-G1: session cwd reaches tools — bash pwd runs in the SESSION cwd, n
 
 test("MED-G3: shutdown() closes every session runtime's MCP manager (stdin-close reap seam)", async () => {
   const cwd = tmpCwd();
-  writeFileSync(join(cwd, ".mcp.json"), JSON.stringify({ mcpServers: { toy: { command: "rovecode-not-a-real-binary-acp" } } }));
+  const restoreHome = scratchHome(); // a project .mcp.json loads only once trusted (mcp/trust.ts) — approve it in a scratch home
+  writeTrustedMcpJson(cwd, { toy: { command: "rovecode-not-a-real-binary-acp" } });
   const closed: McpManager[] = [];
   const orig = McpManager.prototype.close;
   McpManager.prototype.close = async function (this: McpManager) { closed.push(this); return orig.call(this); };
@@ -486,6 +488,7 @@ test("MED-G3: shutdown() closes every session runtime's MCP manager (stdin-close
     expect(new Set(closed).size).toBe(2);
   } finally {
     McpManager.prototype.close = orig;
+    restoreHome();
     rmSync(cwd, { recursive: true, force: true });
   }
 });

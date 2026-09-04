@@ -16,6 +16,7 @@ import type { ToolContext } from "../../src/core/types.ts";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { scratchHome, writeTrustedMcpJson } from "../helpers/mcp-trust.ts";
 
 afterEach(() => resetExecutor()); // the seam is module-global — never leak a fake runner or a poisoned desire
 
@@ -173,17 +174,19 @@ test("unknown rung in the file → createRuntime throws SandboxConfigError synch
 test("a failed boot reaps the MCP children construction spawned (no orphan processes behind a startup error)", async () => {
   const cwd = tmpCwd();
   const restore = envScope();
+  const restoreHome = scratchHome(); // the project .mcp.json must be TRUSTED to spawn anything (mcp/trust.ts) — in a scratch home
   const closed: McpManager[] = [];
   const orig = McpManager.prototype.close;
   McpManager.prototype.close = async function (this: McpManager) { closed.push(this); return orig.call(this); };
   try {
     sandboxFile(cwd, { rung: "wsl" });
-    writeFileSync(join(cwd, ".mcp.json"), JSON.stringify({ mcpServers: { toy: { command: "rovecode-not-a-real-binary-sbx" } } }));
+    writeTrustedMcpJson(cwd, { toy: { command: "rovecode-not-a-real-binary-sbx" } });
     const { runner } = fakeRunner(() => fail(1, "no wsl here"));
     await expect(bootRuntime({ cwd, stream: null, spawnRunner: runner, platform: "win32" })).rejects.toBeInstanceOf(SandboxConfigError);
     expect(closed).toHaveLength(1); // mutation: drop rt.mcp?.close() in bootRuntime → 0
   } finally {
     McpManager.prototype.close = orig;
+    restoreHome();
     restore();
     rmSync(cwd, { recursive: true, force: true });
   }

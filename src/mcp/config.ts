@@ -9,7 +9,18 @@
  *  Malformed files/entries are skipped with a warning — this loader never throws. */
 
 import { existsSync, readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
+
+/** sha256 (hex) of a file's bytes — the trust key for a project file (mcp/trust.ts); undefined when absent */
+export function fileDigest(file: string): string | undefined {
+  try { return createHash("sha256").update(readFileSync(file)).digest("hex"); } catch { return undefined; }
+}
+
+/** the one line an untrusted project file gets — names the file, the count, the review and the approval command */
+export function untrustedNote(file: string, count: number): string {
+  return `${file}: not trusted on this machine — its ${count} MCP server${count === 1 ? "" : "s"} stay off (they would run commands from this repo). Review: rovecode mcp show --project · approve: rovecode mcp trust`;
+}
 
 /** where each scope's file lives; the market's `add`/`remove` write exactly these */
 export function mcpConfigFiles(cwd: string, home?: string): { user?: string; harvest: string; project: string } {
@@ -172,14 +183,33 @@ export function parseConfigFile(path: string, warnings: string[], envSource: Rec
   return out;
 }
 
+export interface LoadMcpOptions {
+  /** the user home; without it the user file is not read (existing callers and tests) */
+  home?: string;
+  /** what `${NAME}` is filled from (default process.env) */
+  env?: Record<string, string | undefined>;
+  /** the trust gate for PROJECT files (mcp/trust.ts trustedPredicate). Without it project files load as
+   *  they always did; with it an unapproved file contributes nothing and leaves one warning. The user
+   *  file is never gated — it is yours. */
+  trusted?: (file: string, digest: string) => boolean;
+}
+
 /** Merge the user file (`<home>/mcp.json`, only when a home is given) under `.mcp.json` (harvest)
  *  under `.rovecode/mcp.json` (ours). The most local wins on a name clash. Pass a `warnings` array
  *  to collect human-readable skip reasons. */
-export function loadMcpConfig(cwd: string, warnings: string[] = [], opts: { home?: string; env?: Record<string, string | undefined> } = {}): McpServerConfig[] {
+export function loadMcpConfig(cwd: string, warnings: string[] = [], opts: LoadMcpOptions = {}): McpServerConfig[] {
   const files = mcpConfigFiles(cwd, opts.home);
   const byName = new Map<string, McpServerConfig>();
-  for (const path of [files.user, files.harvest, files.project]) {
+  const anySet = new Proxy({}, { get: () => "set" }) as Record<string, string>; // counting entries, not launching them
+  for (const [scope, path] of [["user", files.user], ["harvest", files.harvest], ["project", files.project]] as const) {
     if (path === undefined) continue;
+    if (scope !== "user" && opts.trusted !== undefined) {
+      const digest = fileDigest(path);
+      if (digest !== undefined && !opts.trusted(path, digest)) {
+        warnings.push(untrustedNote(path, parseConfigFile(path, [], anySet).length));
+        continue; // absence, not "loaded but marked"
+      }
+    }
     for (const c of parseConfigFile(path, warnings, opts.env)) byName.set(c.name, c); // later layers win
   }
   return [...byName.values()];

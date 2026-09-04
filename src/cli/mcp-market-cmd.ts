@@ -10,8 +10,9 @@
 import { readSecret } from "../providers/auth.ts";
 import { rovecodeHome } from "../providers/auth.ts";
 import { installLabel, marketInfo, searchMarket, type MarketDeps, type MarketEntry } from "../mcp/market.ts";
-import { configuredServers, describePlan, fillPlan, planInstall, removeServer, writeServer, type InstallPlan, type McpScope } from "../mcp/market-install.ts";
-import { mcpConfigFiles } from "../mcp/config.ts";
+import { configuredServers, describePlan, fillPlan, planInstall, removeServer, serverLine, writeServer, type InstallPlan, type McpScope } from "../mcp/market-install.ts";
+import { mcpConfigFiles, parseConfigFile } from "../mcp/config.ts";
+import { mcpTrustStatus, projectMcpFiles, trustMcpFile, untrustMcpFile } from "../mcp/trust.ts";
 import { createInterface } from "node:readline";
 
 export interface McpCliDeps {
@@ -37,9 +38,28 @@ export const MCP_USAGE = [
   "                             install: shows the exact command/URL + source, asks (masked) for keys by name, then writes",
   "                             ~/.rovecode/mcp.json — or .rovecode/mcp.json with --project (keys stay out of it: ${NAME})",
   "  remove <name> [--project]  delete the entry from that file",
-  "  list                       every configured server, by file (user · .mcp.json · project)",
-  "restart rovecode after add/remove — servers are read once per process (docs/mcp-market.md)",
+  "  list                       every configured server, by file (user · .mcp.json · project), with the project files' trust",
+  "  show --project             each project file's servers — exact command/URL, env NAMES — and whether it is trusted here",
+  "  trust · untrust            approve this repo's .rovecode/mcp.json and .mcp.json as they are now (any edit asks again);",
+  "                             files you write through `add --project` are trusted as you approve them",
+  "restart rovecode after add/remove/trust — servers are read once per process (docs/mcp-market.md)",
 ];
+
+/** `show --project` — every project file, its trust, its servers (names only for env/headers) */
+export function showLines(cwd: string, home: string): string[] {
+  const files = projectMcpFiles(cwd);
+  if (files.length === 0) return ["no project MCP files here (.rovecode/mcp.json, .mcp.json)"];
+  const anySet = new Proxy({}, { get: () => "set" }) as Record<string, string>;
+  const out: string[] = [];
+  for (const file of files) {
+    const status = mcpTrustStatus(home, file);
+    out.push(`${file}  — ${status === "trusted" ? "trusted on this machine" : "NOT trusted: nothing in it loads until `rovecode mcp trust`"}`);
+    const warnings: string[] = [];
+    for (const s of parseConfigFile(file, warnings, anySet)) out.push(`  ${serverLine(s)}`);
+    for (const w of warnings) out.push(`  ! ${w}`);
+  }
+  return out;
+}
 
 async function readLine(prompt: string): Promise<string> {
   process.stderr.write(prompt);
@@ -140,10 +160,13 @@ export async function cmdMcp(args: string[], deps: McpCliDeps = {}): Promise<num
       }
       const answers = await askPlan(plan, { secret, plain, tty, err });
       if (answers === null) { out("nothing written"); return 1; }
+      let trusted: boolean | undefined;
       try {
-        writeServer(plan.file, plan.name, fillPlan(plan, answers), { replace: flag(rest, "--force") });
+        // a project file the human just approved is trusted as written (mcp/trust.ts); the user file is never gated
+        trusted = writeServer(plan.file, plan.name, fillPlan(plan, answers), { replace: flag(rest, "--force"), ...(scope === "project" ? { trustHome: home } : {}) }).trusted;
       } catch (e) { err(e instanceof Error ? e.message : String(e)); return 1; }
-      out(`added "${plan.name}" → ${plan.file}`);
+      out(`added "${plan.name}" → ${plan.file}${trusted === true ? "  (trusted on this machine as written)" : ""}`);
+      if (trusted === false) out(`NOT trusted yet: that file already held servers you have not approved — rovecode mcp show --project, then rovecode mcp trust`);
       if (plan.pending.length) out(`fill in before use: ${plan.pending.join(", ")} (edit the args in that file)`);
       if (plan.scope === "project" && plan.asks.some((a) => a.secret)) out(`set ${plan.asks.filter((a) => a.secret).map((a) => a.name).join(", ")} in your environment — the project file only names them`);
       out("restart rovecode to connect (servers are read once per process)");
@@ -154,7 +177,7 @@ export async function cmdMcp(args: string[], deps: McpCliDeps = {}): Promise<num
       const files = mcpConfigFiles(cwd, home);
       const file = scope === "project" ? files.project : files.user!;
       try {
-        if (!removeServer(file, names[0])) { err(`${file} has no server named "${names[0]}"${scope === "user" ? " (project entries: add --project)" : ""}`); return 1; }
+        if (!removeServer(file, names[0], scope === "project" ? { trustHome: home } : {})) { err(`${file} has no server named "${names[0]}"${scope === "user" ? " (project entries: add --project)" : ""}`); return 1; }
       } catch (e) { err(e instanceof Error ? e.message : String(e)); return 1; }
       out(`removed "${names[0]}" from ${file}`);
       return 0;
@@ -162,7 +185,30 @@ export async function cmdMcp(args: string[], deps: McpCliDeps = {}): Promise<num
     case "list": {
       const rows = configuredServers(cwd, home);
       if (rows.length === 0) { out("no MCP servers configured — rovecode mcp search <query>"); return 0; }
-      for (const r of rows) out(`${r.server.name.padEnd(24)} ${r.scope.padEnd(8)} ${r.server.transport.padEnd(5)} ${r.server.transport === "stdio" ? [r.server.command, ...(r.server.args ?? [])].join(" ") : r.server.url}${r.server.enabled === false ? "  (disabled)" : ""}`);
+      for (const r of rows) {
+        const gate = r.scope === "user" ? "" : mcpTrustStatus(home, r.file) === "trusted" ? "" : "  (file not trusted — off; rovecode mcp trust)";
+        out(`${r.scope.padEnd(8)} ${serverLine(r.server)}${gate}`);
+      }
+      return 0;
+    }
+    case "show": { for (const l of showLines(cwd, home)) out(l); return 0; }
+    case "trust": {
+      const files = projectMcpFiles(cwd);
+      if (files.length === 0) { out("no project MCP files here (.rovecode/mcp.json, .mcp.json) — nothing to trust"); return 1; }
+      for (const l of showLines(cwd, home)) out(l);
+      if (!flag(rest, "--yes")) {
+        if (!tty) { err("nothing trusted: no terminal to confirm on — re-run with --yes after reading the lines above"); return 1; }
+        const a = (await plain("trust these files as they are now? [y/N] ")).toLowerCase();
+        if (a !== "y" && a !== "yes") { out("nothing trusted"); return 1; }
+      }
+      for (const f of files) { const r = trustMcpFile(home, f); out(r.ok ? `trusted ${f}  (${r.digest.slice(0, 12)}…)` : r.reason); }
+      out("restart rovecode to connect — an edit to either file asks again");
+      return 0;
+    }
+    case "untrust": {
+      const files = [mcpConfigFiles(cwd).harvest, mcpConfigFiles(cwd).project];
+      const had = files.filter((f) => untrustMcpFile(home, f));
+      out(had.length ? `untrusted ${had.join(", ")}` : "nothing was trusted here");
       return 0;
     }
     default: err(`unknown mcp command "${cmd}"`); for (const l of MCP_USAGE) err(l); return 1;

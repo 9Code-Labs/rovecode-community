@@ -99,7 +99,7 @@ test("cli: on a terminal add shows the plan, asks y/N, asks the secret MASKED by
   expect(await again.run("add io.github.acme/widgets --yes --force")).toBe(0);
   const lst = cli(cwd, home);
   expect(await lst.run("list")).toBe(0);
-  expect(lst.out).toEqual([expect.stringMatching(/^widgets\s+user\s+stdio\s+npx -y widgets-mcp@1\.2\.0 --mode fast$/)]);
+  expect(lst.out).toEqual([expect.stringMatching(/^user\s+widgets\s+stdio\s+npx -y widgets-mcp@1\.2\.0 --mode fast  env WIDGET_TOKEN$/)]); // names, never values
   expect(await lst.run("remove widgets --project")).toBe(1);
   expect(await lst.run("remove widgets")).toBe(0);
   expect(await lst.run("remove widgets")).toBe(1);
