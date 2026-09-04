@@ -63,6 +63,21 @@ export interface DesignDirection {
   notes?: string;
   /** ISO date the human chose it */
   chosenAt?: string;
+
+  /* Headless runs. `ask_user` needs a human on the other end; in a one-shot `rovecode run` there is
+   * none, so an agent that must ship a page either stalls or — measured, 2026-09-04 — picks a
+   * direction itself and records it as though a human had chosen. The second is worse than the first:
+   * it launders the agent's taste into the one file whose whole job is to hold the HUMAN's choice, and
+   * every later screen is then measured against a default nobody picked. So the record carries who
+   * chose. A provisional direction is honoured exactly like a chosen one while it stands — the point
+   * is not to weaken it, only to stop it from silently becoming permanent. */
+
+  /** true when no human could answer and the agent built to one direction to get unblocked */
+  provisional?: boolean;
+  /** who chose it. Absent means a human did (every record written before this field existed). */
+  chosenBy?: "human" | "agent";
+  /** the directions NOT built, by name — what the next interactive session offers instead */
+  alternatives?: string[];
 }
 
 export function designPath(cwd: string): string {
@@ -107,6 +122,13 @@ export function parseDirection(raw: unknown): DesignDirection | null {
   }
   // the §6.3 axes. Same discipline as everything above: a malformed field is dropped, never thrown on,
   // so one bad hand-edit costs that axis and not the run.
+  if (r["provisional"] === true) out.provisional = true;
+  const chosenBy = str(r["chosenBy"])?.toLowerCase();
+  if (chosenBy === "human" || chosenBy === "agent") out.chosenBy = chosenBy;
+  if (Array.isArray(r["alternatives"])) {
+    const alts = r["alternatives"].map(str).filter((x): x is string => x !== undefined);
+    if (alts.length > 0) out.alternatives = alts;
+  }
   const heroPattern = str(r["heroPattern"]); if (heroPattern !== undefined) out.heroPattern = heroPattern;
   const motion = str(r["motion"]); if (motion !== undefined) out.motion = motion;
   const copyRegister = str(r["copyRegister"]); if (copyRegister !== undefined) out.copyRegister = copyRegister;
@@ -142,7 +164,10 @@ export function saveDirection(cwd: string, d: DesignDirection): string {
 /** The direction as prompt text — what the agent must stay faithful to. Empty string when none. */
 export function renderDirection(d: DesignDirection | null): string {
   if (d === null) return "";
-  const lines: string[] = [`Chosen direction: ${d.name}${d.chosenAt ? ` (chosen ${d.chosenAt})` : ""}`];
+  const lines: string[] = d.provisional === true
+    ? [`PROVISIONAL direction: ${d.name}${d.chosenAt ? ` (recorded ${d.chosenAt})` : ""} — chosen by the agent, no human was available.`,
+       "Build to it, but ask the human once before the next screen: this is the one decision that is theirs."]
+    : [`Chosen direction: ${d.name}${d.chosenAt ? ` (chosen ${d.chosenAt})` : ""}`];
   if (d.rationale !== undefined) lines.push(`Why: ${d.rationale}`);
   if (d.palette !== undefined) lines.push(`Palette: ${Object.entries(d.palette).map(([k, v]) => `${k} ${v}`).join(", ")}`);
   if (d.typeface !== undefined) {
@@ -160,5 +185,6 @@ export function renderDirection(d: DesignDirection | null): string {
   if (d.motion !== undefined) lines.push(`Motion: ${d.motion}`);
   if (d.copyRegister !== undefined) lines.push(`Copy register: ${d.copyRegister}`);
   if (d.notes !== undefined) lines.push(`Notes: ${d.notes}`);
+  if (d.alternatives !== undefined) lines.push(`Not built: ${d.alternatives.join(", ")}`);
   return lines.join("\n");
 }

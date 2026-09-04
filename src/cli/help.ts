@@ -63,6 +63,9 @@ const ADVANCED = `advanced — the full command reference
                             "/name args" expands a custom command (.rovecode/commands/<name>.md, else ~/.rovecode/commands)
                             the way the TUI does; an unknown /name is sent verbatim; model:/mode: frontmatter is
                             TUI-only and not applied headlessly
+    --max-turns N · --max-seconds S|off   ceilings on one run; a hit ends it cleanly with status
+                            "budget" (exit 1) and the work so far, instead of an external kill. Headless runs
+                            default to a 20-minute wall clock; --max-seconds off removes it
     --output <text|json|ndjson>  text (default): progress + the final answer on stdout
                             json: exactly ONE result object on stdout {status, summary, sessionId,
                             model:{provider,model}, origin (served model|null), usage:{input,output,cacheRead,
@@ -171,6 +174,10 @@ const ENV = `env — every ROVECODE_* setting
   ROVECODE_TOOL_MIDDLEWARE=1  force the text tool-call protocol (a prompt block + a parser) even for a model
                     the catalog says has native tool calling; ROVECODE_NO_TOOL_MIDDLEWARE=1 forces native only
   ROVECODE_EVAL_CELL=1  register the persistent eval cell tool (a REPL that keeps state between calls)
+  ROVECODE_MAX_TURNS  turn ceiling for one run, every surface (TUI included); a hit ends it with status
+                    "budget" and exit 1
+  ROVECODE_MAX_SECONDS  the same as a wall clock, or "off". Every surface honours it, but only
+                    one-shot runs have a DEFAULT (1200 s) — the TUI has no clock unless this sets one
   ROVECODE_HOME       credentials + user-scope providers/commands dir (default ~/.rovecode)
 providers: built in — kaesra openai anthropic deepseek groq openrouter ollama lmstudio
             together mistral cerebras fireworks perplexity xai moondream vllm

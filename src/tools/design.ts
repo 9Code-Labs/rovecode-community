@@ -41,7 +41,7 @@ export function designAuditTool(): Tool {
         properties: {
           files: { type: "array", items: { type: "string" }, description: "paths inside the project to audit (html/css/jsx/tsx/vue/svelte)" },
           source: { type: "string", description: "audit this markup/CSS directly instead of reading files" },
-          ignore: { type: "array", items: { type: "string" }, description: "rule ids to skip (the full table is in docs/design.md): cliche-font, font-deviation, cliche-accent-amber, accent-deviation, template-grid, template-icons, reflex-hero, cliche-gradient, off-palette, decoration-density, rule-line-density, everything-centered, all-square" },
+          ignore: { type: "array", items: { type: "string" }, description: "rule ids to skip (the full table is in docs/design.md): cliche-font, font-deviation, font-named-not-loaded, cliche-accent-amber, accent-deviation, template-grid, template-icons, reflex-hero, cliche-gradient, off-palette, decoration-density, rule-line-density, everything-centered, all-square" },
         },
       },
     },
@@ -86,7 +86,7 @@ export function designDirectionTool(): Tool {
     schema: {
       name: "design_direction",
       description:
-        "Read or record this project's design direction (.rovecode/design.json). `get` returns the recorded direction, or says none is recorded. `set` records the direction THE HUMAN CHOSE after you proposed three — do not call it with a direction you picked yourself. Recording it is what makes the choice a once-per-project question and lets design_audit check later screens for consistency.",
+        "Read or record this project's design direction (.rovecode/design.json). `get` returns the recorded direction, or says none is recorded. `set` records the direction THE HUMAN CHOSE after you proposed three — do not call it with a direction you picked yourself. The one exception is a headless run where nothing can ask a human: then build ONE direction and record it with provisional:true and the other two in `alternatives`, so the next interactive session asks before more UI is built. Recording it is what makes the choice a once-per-project question and lets design_audit check later screens for consistency.",
       args: {
         type: "object",
         properties: {
@@ -104,6 +104,8 @@ export function designDirectionTool(): Tool {
           motion: { type: "string", description: "the motion rule in the human's words, e.g. \"one entrance per section, no loops\"" },
           copyRegister: { type: "string", description: "how the copy reads, e.g. \"technical, names and numbers, no marketing verbs\"" },
           notes: { type: "string", description: "what the audit cannot infer: imagery, what to avoid here" },
+          provisional: { type: "boolean", description: "true ONLY when no human could be asked (a headless run): you built to one direction to get unblocked. Never true when a human answered." },
+          alternatives: { type: "array", items: { type: "string" }, description: "with provisional: the names of the directions you did NOT build, so the next interactive session can offer them" },
         },
         required: ["action"],
       },
@@ -115,7 +117,7 @@ export function designDirectionTool(): Tool {
       if (a["action"] === "get") {
         const d = loadDirection(ctx.cwd);
         return d === null
-          ? { ok: true, output: `No design direction recorded for this project (${designPath(ctx.cwd)} does not exist). Propose three distinct directions and let the human choose before writing UI.` }
+          ? { ok: true, output: `No design direction recorded for this project (${designPath(ctx.cwd)} does not exist). Propose three distinct directions and let the human choose before writing UI. If nothing here can ask a human, build ONE and record it with provisional: true.` }
           : { ok: true, output: renderDirection(d), data: d };
       }
       if (a["action"] !== "set") return { ok: false, output: "design_direction: action must be \"get\" or \"set\"." };
@@ -124,7 +126,14 @@ export function designDirectionTool(): Tool {
       if (parsed === null) {
         return { ok: false, output: "design_direction set needs at least `name` — the short name of the direction the human chose." };
       }
+      // `provisional` implies the agent chose: the two cannot disagree, so the record derives one from
+      // the other rather than trusting a call that sets only one of them.
+      if (parsed.provisional === true) parsed.chosenBy = "agent";
       const path = saveDirection(ctx.cwd, parsed);
+      if (parsed.provisional === true) {
+        const alts = parsed.alternatives === undefined ? "" : ` The alternatives (${parsed.alternatives.join(", ")}) are recorded with it.`;
+        return { ok: true, output: `Recorded "${parsed.name}" in ${path} as PROVISIONAL — you chose it, not the human.${alts} Build to it and say so in your final summary, naming what you did not build. The next interactive session asks before more UI is written.`, data: parsed };
+      }
       return { ok: true, output: `Recorded "${parsed.name}" in ${path}. Later UI in this project is built to it, and design_audit checks against it.`, data: parsed };
     },
   };

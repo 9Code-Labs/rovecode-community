@@ -60,9 +60,32 @@ dropped rather than throwing, so one bad hand-edit costs that field and not the 
 | `copyRegister` | string | how the copy reads |
 | `notes` | string | anything the audit cannot infer |
 | `chosenAt` | string | ISO date; filled in automatically when omitted |
+| `provisional` | boolean | `true` only when no human could be asked — see below |
+| `chosenBy` | `human` \| `agent` | derived: setting `provisional` forces `agent`. Absent means a human chose |
+| `alternatives` | string[] | with `provisional`: the directions that were **not** built |
 
 The record lives at `<cwd>/.rovecode/design.json` and is deliberately **per project, never global** — a
 global design file would be the carried-over default the rule forbids.
+
+### Headless runs: the provisional direction
+
+`ask_user` needs a human on the other end. A one-shot `rovecode run` has none, and a run measured on
+2026-09-04 showed what an agent does then: it picks a direction itself and records it as though a human
+had chosen — which launders the agent's taste into the one file whose whole job is to hold the human's.
+
+So the record carries who chose. With no human reachable, the agent builds **one** direction and records
+it with `provisional: true` and the other two names in `alternatives`. From then on:
+
+- `design_direction get` and the system prompt both open with `PROVISIONAL direction: …`, not
+  `Chosen direction: …`, and say the choice is still the human's.
+- `design_audit`'s consistency line reads *"consistent with the recorded direction X (provisional
+  direction — recorded by the agent, not yet confirmed by a human)"*. The rules run exactly as they
+  would against a chosen direction — the flag weakens nothing, it only stops the record from silently
+  becoming permanent.
+- The final summary of the headless run names the two directions it did not build.
+- The next interactive session that touches UI asks the question once, then re-records without the flag.
+
+`provisional: true` always implies `chosenBy: "agent"`; the two cannot disagree.
 
 The tool prompts for approval once (it is `kind: "custom"`, action `tool.design_direction`, which the gated
 permission rules prompt on). That one prompt is the point: it is where the human sees what is being recorded
@@ -106,6 +129,7 @@ count tells them apart. Only the record does.
 | id | kind | scope | fires when |
 | --- | --- | --- | --- |
 | `cliche-font` | slop | file | a default webfont is **loaded** (a `next/font/google` import, `@fontsource`, `@font-face`, a Google Fonts `family=` URL) and no direction is recorded. A mention in prose, a fallback position and a system stack are not decisions and never count; `.md`/`.mdx` and OG-image files are excluded |
+| `font-named-not-loaded` | slop, or deviation when it is the recorded face | **project** | a face is named in a `font-family` (or a Tailwind `font-[…]`) that **nothing in the audited set loads**. It renders as its fallback, so the page does not look the way the code says. Generic keywords, system stacks and `var()` indirection are not faces. Project-scoped because the load site is usually a layout or a global stylesheet — pass those in or the rule cannot see them. Blind spot: `next/font/local` and a bare `src: url(…)` outside `@font-face` do not name their face reliably, so a face loaded only that way still reports |
 | `font-deviation` | deviation | file | a face is loaded that is not the recorded one, or a `font-family` declaration leads with a system stack while a face is recorded |
 | `cliche-accent-amber` | slop | file | amber sits in an **accent position** (a `--primary`/`--accent`/`--brand` token, or `bg`/`text`/`from`/`border-amber-[3-7]00` next to a button, link or heading) with no direction recorded. Warning and status uses, `<svg>` payloads and data URIs never count, and a document declaring five or more saturated hue families is a palette, not an amber theme |
 | `accent-deviation` | deviation | file | the same, when the recorded palette holds no amber |
@@ -124,6 +148,15 @@ login form, a 404, an empty state, a tooltip.
 
 Every finding names the evidence it counted, so a human can overrule it. Saying plainly why a finding is
 wrong for this project is a valid response; so is recording the decision and watching the finding disappear.
+
+### The amber floor
+
+`cliche-accent-amber` fires on hues 20–55°. Rust and terracotta measure below that — `#b4431d` is 15°,
+`#c2410c` 17°, `#9a3412` 15° — and the reflex amber ramp above it: `#ea580c` 21°, `#b45309` 26°,
+`#d97706` 32°, `#f59e0b` 38°. The floor stays at 20 on purpose: a rust is a colour somebody reaches for,
+never a default. The cost is accepted and stated — an amber at exactly 19° escapes too. This rule only
+ever fires when no direction is recorded, and one wrong slop finding on a deliberate palette costs more
+trust than one missed cliché costs quality.
 
 ### Known limits
 

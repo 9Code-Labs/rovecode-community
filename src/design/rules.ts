@@ -50,7 +50,10 @@ export const DESIGN_RULES: string = [
   "  an anchor, it is the wrong anchor for this project:",
   "    A. ITS OWN OUTPUT — the page is made of what the tool produces: a real transcript or diff as the",
   "       first screen, hierarchy from monospace rhythm, colour functional only (add/remove, exit status),",
-  "       proof = actual runs. Forbids itself stock illustration and invented copy.",
+  "       proof = actual runs. Forbids itself stock illustration and invented copy. Even here the first",
+  "       screen still SAYS what the product is, in one visible line above or beside the output — a",
+  "       caption, not a hero. A transcript a stranger cannot name is a demo, not a page, and an",
+  "       sr-only h1 is not that line: it has to be visible.",
   "    B. THE MANUAL — a technical document that happens to be a web page: a stated claim in a long",
   "       measure plus a spec table, hierarchy from type scale and space alone, colour nearly absent",
   "       with one accent, proof = tables and versioned facts. Forbids itself cards, the headline-plus-",
@@ -62,10 +65,20 @@ export const DESIGN_RULES: string = [
   "  and light/dark are chosen independently of it. \"Terminal\" is not a licence for dark-plus-green;",
   "  that would be a default smuggled in through the back door.",
   "- Let the human choose. Do not build while the question is open, and do not pick for them.",
+  "- Keep each option LABEL to 60 characters or less — a letter and the direction's name (\"A. Its own",
+  "  output\"). The four axes, the palette and the rationale go in the question body, not the label:",
+  "  ask_user truncates a long option and the human then chooses between three cut-off phrases.",
+  "- WHEN NOTHING CAN ASK A HUMAN (a headless `rovecode run`, no terminal): do not stall, and do not",
+  "  quietly promote your own pick to a decision. Build ONE direction and record it as provisional —",
+  "  `design_direction set` with `provisional: true` and the other two names in `alternatives`. Then say",
+  "  so in your final summary: which one you built, which two you did not, and that the choice is still",
+  "  theirs. The next interactive session asks the question once before writing more UI.",
   "- Once they choose, record it with the `design_direction` tool. That is what makes this a",
   "  once-per-project question instead of a once-per-task one.",
   "- When a direction is already recorded, do NOT re-ask. Build to it. Propose a change only if the",
-  "  work genuinely cannot be done within it, and say why.",
+  "  work genuinely cannot be done within it, and say why. The one exception: a direction recorded as",
+  "  PROVISIONAL was chosen by an agent, not a human — ask once, in the first interactive session that",
+  "  touches UI, before building more; then record the answer with `provisional` dropped.",
   "",
   "## The defaults to climb out of",
   "",
@@ -79,7 +92,10 @@ export const DESIGN_RULES: string = [
   "  the set that arrives when no one picked. What matters is the face you LOAD — an import, an",
   "  @font-face, a fonts URL — because that is where the decision is; a system stack sitting behind your",
   "  chosen face is a fallback, not a choice, and neither is a face merely named in prose. Pick the face",
-  "  you load for a reason you can state.",
+  "  you load for a reason you can state. And if you name a face in CSS, LOAD it — a link, an @import,",
+  "  an @font-face or a framework font import — or drop the name: a named-but-unloaded face renders as",
+  "  its fallback, so the page does not look the way the code says it does. That is no decision at all,",
+  "  and `design_audit` reports it as `font-named-not-loaded`.",
   "- Hairlines everywhere: a border around every card, a rule between every row. Separation reads better",
   "  from spacing, weight, size and background than from drawn lines.",
   "- Everything square. Corner treatment is a decision; make it once, deliberately, either way.",
@@ -102,6 +118,12 @@ export const DESIGN_RULES: string = [
   "DEVIATION means the code contradicts what this project already chose, which is the half worth acting",
   "on. Fix what it finds, or say plainly why a finding is wrong for this project: it reports evidence,",
   "not verdicts, and it can be overruled.",
+  "",
+  "The audit measures patterns, not promises, so it cannot check the half of the direction that is",
+  "prose. Do that part yourself: re-read the `notes` and `rationale` recorded in design.json and take",
+  "each claim to the page one at a time. \"No stock imagery\", \"numbers in place, no adjectives\",",
+  "\"one entrance per section\" — either the page does it or it does not, and a clean audit says",
+  "nothing about any of them.",
 ].join("\n");
 
 /** The prompt section for a project: the rules, plus either the recorded direction or the instruction
@@ -112,5 +134,14 @@ export function designPromptSection(cwd: string): string {
   if (direction === null) {
     return `${DESIGN_RULES}\n\n## This project\n\nNo design direction is recorded yet (.rovecode/design.json). The next interface work in this project starts with the proposal above.`;
   }
-  return `${DESIGN_RULES}\n\n## This project's direction — build to this, do not re-ask\n\n${renderDirection(direction)}`;
+  // A provisional direction is built to exactly like a chosen one, but the heading must not tell the
+  // model "do not re-ask" about the one question that is still open. renderDirection carries the rest.
+  const heading = direction.provisional === true
+    ? "## This project's direction — PROVISIONAL: build to this, and ask once before more UI"
+    : "## This project's direction — build to this, do not re-ask";
+  return `${DESIGN_RULES}
+
+${heading}
+
+${renderDirection(direction)}`;
 }

@@ -143,7 +143,16 @@ export function hueFamily(hex: string): number | null {
 const familyLabel = (f: number): string => `${f * 30}-${f * 30 + 30} deg`;
 
 /** The amber/orange/gold band AI-generated sites reach for by reflex. Saturated and mid-light: a
- *  dark brown or a pale cream in the same hue range is not the cliche and is not flagged. */
+ *  dark brown or a pale cream in the same hue range is not the cliche and is not flagged.
+ *
+ *  The 20 deg floor is a decision, not an accident (nimbus-96 raised it on #b4431d, 2026-09-04).
+ *  Measured: rust and terracotta sit at h 12-19 (#b4431d h 15, #c2410c h 17, #9a3412 h 15) and the
+ *  reflex amber ramp at h 21-38 (#ea580c 21, #b45309 26, #d97706 32, #f59e0b 38). A rust is a colour
+ *  someone reaches for on purpose — it is nobody's default — so the floor stays at 20 and all three
+ *  rusts go unflagged, verified above. The cost is honest and accepted: an amber at exactly h 19 also
+ *  escapes. This rule only ever fires when NO direction is recorded, and one wrong slop finding on a
+ *  deliberate palette costs more trust than one missed cliche costs quality. Widening the floor to
+ *  catch h 15-19 would flag every terracotta brand there is. */
 export function isAmberish(hex: string): boolean {
   const c = hexToHsl(hex);
   if (c === null) return false;
@@ -205,6 +214,54 @@ export function fontLoadSites(text: string): string[] {
     }
   }
   return [...hits];
+}
+
+/** CSS generic families and the keywords a font-family can legally lead with. None of these is a face,
+ *  so none of them can be "named but not loaded". */
+const GENERIC_FAMILIES: readonly string[] = [
+  "sans-serif", "serif", "monospace", "cursive", "fantasy", "system-ui", "ui-sans-serif", "ui-serif",
+  "ui-monospace", "ui-rounded", "math", "emoji", "fangsong", "inherit", "initial", "unset", "revert",
+  "revert-layer", "none", "currentcolor",
+];
+
+/** Every face this text actually LOADS, by name — the general form of fontLoadSites, which answers the
+ *  same question for the cliché list only. Four load sites: a next/font/google import, an @fontsource
+ *  package, a Google-Fonts `family=` URL, and an @font-face block that defines the face here. */
+export function loadedFaceNames(text: string): string[] {
+  const hits = new Set<string>();
+  const put = (raw: string): void => {
+    const name = raw.trim().replace(/^["']|["']$/g, "").replace(/[_+-]+/g, " ").trim();
+    if (name.length > 0) hits.add(name.toLowerCase());
+  };
+  for (const m of text.matchAll(/\{([^}]*)\}\s*from\s*["']next\/font\/google/gi)) {
+    for (const ident of (m[1] ?? "").split(",")) put(ident.split(" as ")[0] ?? "");
+  }
+  for (const m of text.matchAll(/@fontsource(?:-variable)?\/([a-z0-9-]+)/gi)) put(m[1] ?? "");
+  for (const m of text.matchAll(/family=([^&"'`\s:;)]+)/gi)) put(m[1] ?? "");
+  for (const block of text.match(/@font-face\s*\{[^}]*\}/gi) ?? []) {
+    const m = /font-family\s*:\s*([^;}\n]+)/i.exec(block);
+    if (m) put((m[1] ?? "").split(",")[0] ?? "");
+  }
+  // next/font/local and a bare `src: url(...)` outside @font-face cannot name their face reliably;
+  // that is this rule's known blind spot, recorded in docs/design.md rather than guessed at here.
+  return [...hits];
+}
+
+/** Faces this text NAMES: the leading family of each font-family declaration, plus Tailwind's
+ *  `font-[Family_Name]` arbitrary value. Generic keywords and var()/theme() indirection are dropped —
+ *  a family behind a custom property is not a name this rule can check. */
+export function namedFaces(text: string): string[] {
+  const out: string[] = [];
+  const push = (raw: string): void => {
+    const name = raw.trim().replace(/^["']|["']$/g, "").replace(/_/g, " ").trim();
+    if (name.length === 0) return;
+    if (/^(?:var|theme|calc)\s*\(/i.test(name) || name.startsWith("--") || name.includes("$")) return;
+    if (GENERIC_FAMILIES.includes(name.toLowerCase())) return;
+    out.push(name);
+  };
+  for (const m of text.matchAll(/font-family\s*:\s*([^;}\n]+)/gi)) push((m[1] ?? "").split(",")[0] ?? "");
+  for (const m of text.matchAll(/\bfont-\[([^\]]+)\]/g)) push((m[1] ?? "").split(",")[0] ?? "");
+  return out;
 }
 
 /** The leading family of every `font-family:` declaration, plus Tailwind `font-\[...\]` arbitrary
@@ -578,6 +635,34 @@ export function auditProject(files: readonly SourceFile[], opts: Omit<AuditOptio
     }
   }
 
+  // Project scope, and deterministic: a face named in a font-family that nothing in the audited set
+  // LOADS renders as its fallback. That is not a taste call — the page does not look the way the code
+  // says it does, and if the name is the recorded face the record is describing a page that is not
+  // there. Project-scoped because the load site is usually a layout or a global stylesheet, not the
+  // file that names the face; pass those in or this rule cannot see them (docs/design.md).
+  {
+    const loaded = new Set(files.flatMap((f) => loadedFaceNames(f.text)));
+    const chosen = Object.values(direction?.typeface ?? {}).map((f) => f.toLowerCase());
+    const seen = new Set<string>();
+    for (const f of files) {
+      if (isProseOrGenerated(f.path)) continue;
+      for (const face of namedFaces(f.text)) {
+        const key = face.toLowerCase();
+        if (seen.has(key)) continue;
+        if (loaded.has(key)) continue;
+        // a system stack is a fallback by definition — it needs no load site and never fires here
+        if (SYSTEM_STACK_FONTS.some((sys) => sys.toLowerCase() === key)) continue;
+        seen.add(key);
+        const isChosen = chosen.includes(key);
+        add("font-named-not-loaded", isChosen ? "deviation" : "slop", "low",
+          isChosen
+            ? `"${face}" is the face this project recorded, but nothing in the audited set loads it — the page renders its fallback, so the recorded direction is not what a reader sees.`
+            : `"${face}" is named in a font-family but nothing in the audited set loads it (no @font-face, next/font import, @fontsource package or Google-Fonts URL). It renders as the fallback, which is nobody's decision. Load it, or drop the name.`,
+          `named in ${f.path}; no load site across ${files.length} audited file${files.length === 1 ? "" : "s"}`, f.path);
+      }
+    }
+  }
+
   // Project scope. Per file this fired on 330 files across repos that ALL use rounded corners somewhere
   // (calibration §3.5) — a component with no radius is not a design statement, a whole project with none
   // is. Recording corners "sharp" silences it, which is the point.
@@ -611,15 +696,21 @@ export function auditFiles(paths: readonly string[], opts: Omit<AuditOptions, "f
 
 const ORDER: Record<Severity, number> = { high: 0, med: 1, low: 2 };
 
+/** A provisional direction is checked exactly like a chosen one — but "consistent with the direction"
+ *  must not read as "the human approved this". The suffix says which of the two it is, every time. */
+function provisionalNote(d: DesignDirection): string {
+  return d.provisional === true ? " (provisional direction — recorded by the agent, not yet confirmed by a human)" : "";
+}
+
 /** Findings as the model reads them: worst first, evidence attached, no finding without a reason. */
 export function formatFindings(findings: readonly Finding[], direction: DesignDirection | null): string {
   if (findings.length === 0) {
     return direction === null
       ? "No design findings. Note: this project has recorded no design direction, so only the \"nobody decided\" checks ran — once the human has chosen a direction, record it with design_direction and later screens get consistency checks too."
-      : `No design findings; consistent with the recorded direction "${direction.name}".`;
+      : `No design findings; consistent with the recorded direction "${direction.name}"${provisionalNote(direction)}.`;
   }
   const sorted = [...findings].sort((a, b) => ORDER[a.severity] - ORDER[b.severity]);
-  const head = `${findings.length} design finding${findings.length === 1 ? "" : "s"}${direction === null ? " (no direction recorded — \"nobody decided\" checks only, no consistency checks)" : ` against "${direction.name}"`}:`;
+  const head = `${findings.length} design finding${findings.length === 1 ? "" : "s"}${direction === null ? " (no direction recorded — \"nobody decided\" checks only, no consistency checks)" : ` against "${direction.name}"${provisionalNote(direction)}`}:`;
   const body = sorted.map((f) => `- [${f.severity}] ${f.rule}${f.kind === "deviation" ? " (deviation)" : ""}${f.file !== undefined ? ` (${f.file})` : ""}: ${f.message}\n  evidence: ${f.evidence}`);
   return [head, ...body].join("\n");
 }
