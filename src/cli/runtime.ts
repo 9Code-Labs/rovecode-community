@@ -30,6 +30,7 @@ import { createMcpTools } from "../mcp/tools.ts";
 import { activatePlugins, discoverPlugins, loadState as loadPluginState, type DiscoveredPlugin, type LoadedPlugin } from "../plugins/index.ts";
 import type { McpServerConfig } from "../mcp/config.ts";
 import { trustedPredicate } from "../mcp/trust.ts";
+import { positiveInt, type RunLimits } from "./run-limits.ts";
 import { rovecodeHome } from "../providers/auth.ts";
 import { readTool, editTool, writeTool, bashTool } from "../coding/hashline.ts";
 import { globTool, grepTool, lsTool } from "../coding/files.ts";
@@ -120,6 +121,9 @@ export interface Runtime {
    *  A ref that already names an effort keeps it. */
   effort: ThinkingEffort;
   setEffort(e: ThinkingEffort): void;
+  /** the two ceilings on a run (cli/run-limits.ts): buildCfg reads them ahead of ROVECODE_MAX_TURNS /
+   *  ROVECODE_MAX_SECONDS and the 60-turn default — `rovecode run` sets its flags and headless default here */
+  setRunLimits(limits: RunLimits): void;
   /** MCP server manager (port #3); null when no servers configured */
   mcp: McpManager | null;
   /** port #8 config snapshot (AGENTS.md/CLAUDE.md/… harvested cwd-upward ONCE
@@ -449,11 +453,17 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
    *  merely STARTS with the cwd (…/repo-backup) does not match, because the separator is in the glob. */
   const insideCwd = `${cwd.replace(/[\/]$/, "")}${sep}*`;
 
+  // run ceilings (cli/run-limits.ts): a surface's explicit limits, else the environment, else 60 turns and no
+  // clock — the TUI and serve/acp get the env knobs for free, `rovecode run` adds its flags + a 20-minute default
+  let runLimits: RunLimits = {};
   const buildCfg = (permission: PermissionLevel | boolean, approval?: ApprovalFn): RunConfig => {
     const level: PermissionLevel = permission === true ? "auto" : permission === false ? "ask" : permission;
     const yolo = level === "auto";
+    const maxSeconds = runLimits.maxSeconds ?? positiveInt(process.env.ROVECODE_MAX_SECONDS);
     return (activeCfg = {
-    maxTurns: 60, contextBudgetTokens: 200_000, compactionThreshold: 0.8,
+    maxTurns: runLimits.maxTurns ?? positiveInt(process.env.ROVECODE_MAX_TURNS) ?? 60,
+    ...(maxSeconds !== undefined ? { maxSeconds } : {}),
+    contextBudgetTokens: 200_000, compactionThreshold: 0.8,
     compactionStrategy: parseCompactionStrategy(process.env.ROVECODE_COMPACTION) ?? "head-summarize", // port #25: ROVECODE_COMPACTION=head-summarize|keep-window|provider-native
     parallelTools: true,
     permissionRules: yolo
@@ -534,6 +544,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     guard, planReminder: planReminderFor, mcp, projectContext, router,
     get effort() { return effort; },
     setEffort(e: ThinkingEffort) { effort = e; },
+    setRunLimits(l: RunLimits) { runLimits = l; },
     drainRouterNotes: () => routerNotes.splice(0),
     checkpointsFor,
     setSessionStore(s: SessionStore) { activeStore = s; },

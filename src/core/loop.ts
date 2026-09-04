@@ -51,6 +51,8 @@ export interface LoopDeps {
    *  (orchestrator children, cmdRun, gauntlet) keep in-flight-tool
    *  cancellation without constructing anything. */
   signal?: AbortSignal;
+  /** the run's clock for RunConfig.maxSeconds (default Date.now) — tests inject a fake one */
+  clock?: () => number;
 }
 
 /** Synthesized output for a tool_call the abort left unanswered — ONE owner, tools.ts (dispatch
@@ -156,11 +158,20 @@ async function* runLoop(
   // turns out to be a no-op (nothing droppable: re-driving the identical request is pointless)
   let emergencyPending: string | null = null;
   let emergencyRedrives = 0;
+  const clock = deps.clock ?? Date.now;
+  const startedAt = clock();
 
   for (let turn = 1; turn <= cfg.maxTurns; turn++) {
     // --- abort check: an abort that landed during the previous batch (or before
     // turn 1) must not consume steering or touch the provider again
     if (runAc.signal.aborted) { yield { type: "run_end", status: "stopped", summary: "run aborted" }; return; }
+    // --- wall clock (RunConfig.maxSeconds): a turn boundary, never mid-tool, so the run ends with every
+    // result it already has and the same "budget" status the turn cap uses — a spiral of short verification
+    // turns ends in a result object instead of an external kill
+    if (cfg.maxSeconds !== undefined && (clock() - startedAt) / 1000 >= cfg.maxSeconds) {
+      yield { type: "run_end", status: "budget", summary: `wall clock (${cfg.maxSeconds}s) reached after ${turn - 1} turn${turn === 2 ? "" : "s"}` };
+      return;
+    }
 
     // --- steering drain point: before the model call ---
     for (const s of steering.drainAll()) {

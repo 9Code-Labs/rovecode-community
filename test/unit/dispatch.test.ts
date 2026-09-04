@@ -91,7 +91,7 @@ test("--output <mode> before the command: cmd is the command, the mode is never 
 
 test("VALUE_FLAGS is the inventory of every value flag main.ts/export.ts/output.ts/dispatch.ts/registry.ts hand-parse", () => {
   // --protocol --key-env --model --scope: `rovecode provider add` (providers/registry.ts parseAddArgs)
-  expect([...VALUE_FLAGS].sort()).toEqual(["--effort", "--key", "--key-env", "--model", "--out", "--output", "--pet", "--protocol", "--resume", "--scope"]);
+  expect([...VALUE_FLAGS].sort()).toEqual(["--effort", "--key", "--key-env", "--max-seconds", "--max-turns", "--model", "--out", "--output", "--pet", "--protocol", "--resume", "--scope"]); // --max-*: cli/run-limits.ts
 });
 
 test("--accept-edits is a boolean flag, never the command", () => {

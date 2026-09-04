@@ -38,6 +38,7 @@ import { runTui } from "../tui/app.ts";
 import { pickRenderer } from "../tui/sextant-io.ts";
 import { expandSlashPrompt } from "../tui/commands.ts";
 import { parseCli } from "./dispatch.ts";
+import { parseRunLimits } from "./run-limits.ts";
 import { buildRunDeps, createOutputSink, guardStdout, parseOutputMode, runPromptWords } from "./output.ts";
 import { join } from "node:path";
 import { rmSync } from "node:fs";
@@ -85,6 +86,11 @@ async function cmdRun(prompt: string): Promise<void> {
   // + meta.json + memory dir, skills scan, sandbox probe, MCP children) and a usage error is a bare
   // process.exit(2) — parsing after the boot left a stray session dir behind every `--output xml`.
   const mode = parseOutputMode(process.argv);
+  // --max-turns N · --max-seconds S|off (ROVECODE_MAX_TURNS / ROVECODE_MAX_SECONDS): parsed before the boot like
+  // --output, so a bad value is a bare exit 2 with no stray session dir. Headless runs default to a 20-minute
+  // wall clock: a run that keeps verifying after its files are done ends in a result object, not a kill.
+  const limits = parseRunLimits(process.argv, process.env, { defaultSeconds: 1200 });
+  if ("error" in limits) { console.error(`error: ${limits.error}`); process.exit(2); }
   // port #35 (fix-wave 4 MED-C): json/ndjson stdout is guarded from HERE, before bootRuntime — its
   // session_open hooks (and MCP/sandbox startup) may print, and a guard installed by the sink after
   // the boot left those lines on fd 1. The raw writer is bound FIRST and handed to the sink as its
@@ -132,6 +138,7 @@ async function cmdRun(prompt: string): Promise<void> {
   const sink = createOutputSink(mode, { stdout: mode === "text" ? process.stdout : rawOut, stderr: process.stderr, model, messages: () => rt.store.messages() });
   const effortFlag = parseEffort(process.argv[process.argv.indexOf("--effort") + 1]);
   if (effortFlag !== undefined) rt.setEffort(effortFlag); // --effort beats ROVECODE_EFFORT for this run
+  rt.setRunLimits(limits); // turns + wall clock → buildCfg below
   // same ladder as the TUI (core/settings.ts): flag → env → project file → user file → "ask"
   const level = resolvePermission(rt.cwd, yolo ? "auto" : process.argv.includes("--accept-edits") ? "accept-edits" : undefined,
     { ROVECODE_PERMISSION: process.env.ROVECODE_PERMISSION, ROVECODE_YOLO: process.env.ROVECODE_YOLO, ROVECODE_ACCEPT_EDITS: process.env.ROVECODE_ACCEPT_EDITS });

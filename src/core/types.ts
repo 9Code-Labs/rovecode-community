@@ -221,6 +221,10 @@ export interface SpawnResult { agent: string; ok: boolean; summary: string; usag
 
 export interface RunConfig {
   maxTurns: number;
+  /** wall-clock ceiling for one run, in seconds; checked at every turn boundary (core/loop.ts), so a
+   *  verification spiral of many short turns ends in a clean run_end "budget" with what was done so far.
+   *  Unset = no clock. `rovecode run` defaults it to 20 minutes; ROVECODE_MAX_SECONDS / --max-seconds set it. */
+  maxSeconds?: number;
   contextBudgetTokens: number;
   compactionThreshold: number;   // fraction of budget triggering compaction
   /** port #25: history compaction strategy (core/compaction.ts; env ROVECODE_COMPACTION); default head-summarize */

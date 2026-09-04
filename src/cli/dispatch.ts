@@ -30,7 +30,7 @@ export interface CliInvocation {
  *  providers/registry.ts parseAddArgs). parseCli only skips the value when locating cmd;
  *  the owners still read it themselves, and `rest` keeps post-command values
  *  (cmdAuth/export.ts/output.ts drop their own). Add here when a new value flag lands. */
-export const VALUE_FLAGS: ReadonlySet<string> = new Set(["--resume", "--key", "--out", "--output", "--pet", "--effort", "--protocol", "--key-env", "--model", "--scope"]);
+export const VALUE_FLAGS: ReadonlySet<string> = new Set(["--resume", "--key", "--out", "--output", "--pet", "--effort", "--protocol", "--key-env", "--model", "--scope", "--max-turns", "--max-seconds"]);
 
 export function parseCli(argv: string[]): CliInvocation {
   const args = argv.slice(2);

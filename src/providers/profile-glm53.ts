@@ -76,7 +76,7 @@ export const GLM_53_AGENT_CONTRACT: string = [
   "",
   "Solve the general problem: a fix that special-cases the test inputs is not a fix. When a test contradicts the task or the task is infeasible, say so rather than shaping code to satisfy the test.",
   "",
-  "Verify before you report: run the test, type check or command that would expose a mistake and read the output. Report the result in the same plain wording as a success: a failing test as failing, with the relevant line; a skipped step as skipped; an unverified change as unverified.",
+  "Verify before you report with the checks the task implies: a test, a build, design_audit or one structural read that would expose a mistake. No pixel measuring, no probe pages, unless asked. Report a failing test as failing, with the line; a skipped step as skipped; an unverified change as unverified.",
   "",
   "# Questions and permissions",
   "",
