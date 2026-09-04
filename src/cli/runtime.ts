@@ -420,6 +420,8 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     // the answer's room comes from the catalog (models.dev maxOutput), capped: the old flat 4096 default
     // truncated long outputs — a whole page of UI, a long plan — mid-sentence, and the model was blamed
     if (model.maxTokens === undefined && info?.maxOutput) model = { ...model, maxTokens: Math.min(info.maxOutput, MAX_OUTPUT_CAP) };
+    // the catalog's word on a reasoning mode rides with the ref: thinking.ts sends no dial to a model listed without one
+    if (model.reasoning === undefined && info?.supportsReasoning !== undefined) model = { ...model, reasoning: info.supportsReasoning };
     const nonNative = info?.supportsTools === false || process.env.ROVECODE_TOOL_MIDDLEWARE === "1";
     // model profile (providers/profiles.ts): a per-family behavioral section rides AFTER the base prompt
     // and its indexes and BEFORE the tool-calling block — one string for the whole run (prompt cache);

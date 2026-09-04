@@ -27,7 +27,9 @@ import { discoverCommands, commandsForPalette, dispatchCustomCommand, type Custo
 import type { Renderer, AssistantView, SlashCommand, StatusInfo } from "./renderer.ts";
 import { PiTuiRenderer } from "./pi-renderer.ts";
 import { buildSextantAttach, SEXTANT_LOCAL_NAMES } from "./sextant-attach.ts";
-import type { PermissionLevel, RunEvent, StreamFn } from "../core/types.ts";
+import type { ModelRef, PermissionLevel, RunEvent, StreamFn } from "../core/types.ts";
+import { thinkingLine } from "../providers/thinking.ts";
+import { anthropicShapeFor } from "../providers/stream.ts";
 import { parseEffort, THINKING_EFFORTS } from "../core/types.ts";
 import { resolvePermission, saveSetting } from "../core/settings.ts";
 import type { ThinkingEffort } from "../core/types.ts";
@@ -75,7 +77,7 @@ export const TUI_COMMANDS: SlashCommand[] = [
   ...PROVIDER_COMMANDS, // /models · /provider — providers-cmd.ts (live registry: no restart after add/key/use)
   { name: "yolo", description: "Toggle ask first / auto (never asks)", group: "modes & safety" },
   { name: "accept-edits", description: "Stop asking for writes inside this folder; shell, subagents and writes outside it still ask", group: "modes & safety" },
-  { name: "effort", description: "How hard I think before answering: /effort auto | off | low | medium | high", group: "model & provider" },
+  { name: "effort", description: "How hard I think before answering: /effort auto | off | low | medium | high — the note says what the current model actually receives", group: "model & provider" },
   { name: "plan", description: "Plan mode: I only read and plan, nothing changes", group: "modes & safety" },
   { name: "act", description: "Act mode: I can edit and run again", group: "modes & safety" },
   { name: "checkpoints", description: "Snapshots I took before each change (shadow git)", group: "files & history" },
@@ -280,6 +282,14 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     }
   };
 
+  /** what the CURRENT model's endpoint receives for a level — the /effort note's second line (providers/thinking.ts).
+   *  Built like buildDef builds a ref (catalog reasoning flag), without touching the runtime's active model. */
+  const receives = (level: ThinkingEffort): string => {
+    const info = catalog.lookup(state.provider, state.model);
+    const ref: ModelRef = { provider: state.provider, model: state.model, effort: level, ...(info?.supportsReasoning !== undefined ? { reasoning: info.supportsReasoning } : {}) };
+    return thinkingLine(ref, rt.providers.get(state.provider)?.protocol ?? "openai", { shape: anthropicShapeFor(ref) });
+  };
+
   const handleSlash = (text: string): boolean => {
     const [cmd, ...rest] = text.slice(1).split(/\s+/);
     const arg = rest.join(" ").trim();
@@ -288,11 +298,11 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
       case "help": cmdHelp(infoCtx); return true;
       case "effort": {
         const want = arg.trim();
-        if (want.length === 0) { renderer.addSystemNote(effortNote(rt.effort)); return true; }
+        if (want.length === 0) { renderer.addSystemNote(effortNote(rt.effort, receives(rt.effort))); return true; }
         const level = parseEffort(want);
         if (level === undefined) { renderer.addSystemNote(`"${want}" is not a level — ${THINKING_EFFORTS.join(" · ")}`, "warn"); return true; }
         rt.setEffort(level);
-        renderer.addSystemNote(effortNote(level));
+        renderer.addSystemNote(effortNote(level, receives(level)));
         pushStatus(); return true;
       }
       case "accept-edits":

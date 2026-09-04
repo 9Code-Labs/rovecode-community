@@ -8,14 +8,15 @@
  *  Error-turn shaping (abort vs error; HTTP status + Retry-After side-channel, port #23) lives in stream-errors.ts.
  *  Message lowering (harness parts → wire content, incl. port #34 image blocks) lives in wire-messages.ts. */
 
-import type { StreamFn, Message, AssistantTurn, StreamEvent, ModelRef, StopReason, ThinkingEffort } from "../core/types.ts";
+import type { StreamFn, Message, AssistantTurn, StreamEvent, ModelRef, StopReason } from "../core/types.ts";
 import { partsText } from "../core/loop.ts";
 import { applyAnthropicCacheBoundaries } from "./cache.ts";
 import { normalizeUsage } from "../core/usage.ts";
 import { BUILTIN_PROVIDERS, buildSnapshot, pickDefault } from "./provider-config.ts";
 import { failedTurn, httpErrorTurn } from "./stream-errors.ts";
 import { supportsImages } from "./catalog.ts";
-import { profileWire, wireProfileFor } from "./profiles.ts";
+import { profileWire } from "./profiles.ts";
+import { anthropicThinking, thinkingBudget, thinkingPlan, type AnthropicThinkingShape } from "./thinking.ts";
 import { toOpenAiMessages, toAnthropicMessages, toOpenAiToolSchemas, asToolSchema, type WireOptions } from "./wire-messages.ts";
 
 export { toOpenAiMessages, toAnthropicMessages, toOpenAiToolSchemas } from "./wire-messages.ts";
@@ -138,24 +139,23 @@ const isJsonBody = (res: Response): boolean => (res.headers.get("content-type") 
  *  Extended thinking and tool use: the thinking blocks are NOT echoed back on the next turn, and
  *  measurement says they need not be — a tool_result turn that omits them answers 200 on both shapes
  *  and both model generations. */
-export type AnthropicThinkingShape = "effort" | "budget";
+// the dial itself (budgets, both Anthropic shapes, every OpenAI-compatible dialect) lives in thinking.ts;
+// re-exported so the adapters' callers and tests keep one import
+export { anthropicThinking, thinkingBudget, type AnthropicThinkingShape };
 
-/** what the endpoint said when the shape was wrong — both spellings it uses */
+/** what the endpoint said when the shape was wrong — both spellings it uses. The message must ALSO name
+ *  the dial (thinking/effort/budget): "not supported for this model" alone is how the API refuses other
+ *  things too (a tool feature, an image), and flipping the shape on those would cost every later request
+ *  a wasted round trip. */
 const WRONG_SHAPE = /not supported for this model|does not support the effort parameter/i;
+const ABOUT_THINKING = /thinking|effort|budget_tokens|output_config/i;
+const wrongShape = (text: string): boolean => WRONG_SHAPE.test(text) && ABOUT_THINKING.test(text);
 
-/** per model id, learned from a 400. Process-lifetime: a model's shape does not change under us. */
-const shapeByModel = new Map<string, AnthropicThinkingShape>();
-
-/** The budget in tokens per level for the older `thinking.enabled` shape. Steps ~x4 apart so the
- *  levels are felt. The endpoint requires ≥1024 and max_tokens strictly greater (anthropicMaxTokens). */
-export function thinkingBudget(effort: ThinkingEffort | undefined): number | null {
-  switch (effort) {
-    case "low": return 2_048;
-    case "medium": return 8_192;
-    case "high": return 24_576;
-    default: return null; // "off" and unset: no budget
-  }
-}
+/** per provider+model, learned from a 400. Process-lifetime: a model's shape does not change under us.
+ *  Keyed with the provider so a gateway that fronts the same model id differently cannot poison the
+ *  direct endpoint's memory (or the other way round). Exported for tests only. */
+export const shapeByModel = new Map<string, AnthropicThinkingShape>();
+export const shapeKey = (model: ModelRef): string => `${model.provider}/${model.model}`;
 
 /** the answer needs room BESIDE the thinking budget — never less than the caller asked for */
 export function anthropicMaxTokens(model: ModelRef): number {
@@ -164,43 +164,36 @@ export function anthropicMaxTokens(model: ModelRef): number {
   return budget === null ? base : Math.max(base, budget + 4096);
 }
 
-/** the request fields that carry the effort, for one shape */
-export function anthropicThinking(effort: ThinkingEffort | undefined, shape: AnthropicThinkingShape): Record<string, unknown> {
-  if (effort === undefined || effort === "auto") return {};              // unset / auto: leave the model's default alone (Claude 5: adaptive, high)
-  if (effort === "off") return { thinking: { type: "disabled" } };       // explicit, deliberate: opus-5 thinks unless told not to
-  if (shape === "effort") return { output_config: { effort } };          // low | medium | high (the API also has xhigh/max)
-  const budget = thinkingBudget(effort);
-  return budget === null ? {} : { thinking: { type: "enabled", budget_tokens: budget } };
-}
+/** the shape the next request for this model will use (for /effort and `model show` to say the truth) */
+export function anthropicShapeFor(model: ModelRef): AnthropicThinkingShape { return shapeByModel.get(shapeKey(model)) ?? "effort"; }
 
-/** POST to Anthropic, learning the model's thinking shape from a wrong-shape 400 and retrying once.
+/** POST to Anthropic, learning the model's thinking shape from a wrong-shape 400 and retrying ONCE.
  *  `build` is called per attempt because the shape changes the body. A failure that is NOT about the
- *  shape is returned as-is — the adapters turn it into an error turn (httpErrorTurn). */
+ *  shape is returned as-is — the adapters turn it into an error turn (httpErrorTurn). Bounded: at most
+ *  two sends per request, and the flipped shape is remembered only when the retry was not the same
+ *  refusal — two wrong-shape 400s in a row (a model that takes neither) leave no memory, so the next
+ *  request does not oscillate between two guaranteed failures. */
 async function anthropicPost(url: string, headers: Record<string, string>, model: ModelRef, build: (extra: Record<string, unknown>) => unknown, signal: AbortSignal | undefined): Promise<Response> {
   const wanted = model.effort;
-  let shape: AnthropicThinkingShape = shapeByModel.get(model.model) ?? "effort";
+  const key = shapeKey(model);
+  let shape: AnthropicThinkingShape = shapeByModel.get(key) ?? "effort";
   const send = (): Promise<Response> => fetch(url, { method: "POST", headers, body: JSON.stringify(build(anthropicThinking(wanted, shape))), signal });
   const res = await send();
-  // nothing to learn when the request carried no effort, or when it worked
-  if (res.ok || wanted === undefined || wanted === "off" || res.status !== 400) return res;
+  // nothing to learn when the request carried no level (auto/off/unset use one shape-free field), or when it worked
+  if (res.ok || wanted === undefined || wanted === "auto" || wanted === "off" || res.status !== 400) return res;
   const text = await res.clone().text().catch(() => "");
-  if (!WRONG_SHAPE.test(text)) return res;
+  if (!wrongShape(text)) return res;
   shape = shape === "effort" ? "budget" : "effort";
-  shapeByModel.set(model.model, shape);
-  return send();
+  const retry = await send();
+  if (retry.status === 400 && wrongShape(await retry.clone().text().catch(() => ""))) shapeByModel.delete(key);
+  else shapeByModel.set(key, shape);
+  return retry;
 }
 
-/** OpenAI names the same dial with a word and no budget; `off` sends nothing, which is the default
- *  for a reasoning model and simply ignored by one that does not reason. A model profile
- *  (providers/profiles.ts) owns the word when the endpoint's vocabulary differs — GLM-5.3 has
- *  low|high|max and no "medium", and cannot be switched off. */
+/** OpenAI-compatible endpoints name the dial in a dozen vocabularies (thinking.ts): the plan's fields are
+ *  spread into the body after the profile's own wire fields (profiles.ts), so the dial wins a clash. */
 function reasoningEffort(model: ModelRef): Record<string, unknown> {
-  const profile = wireProfileFor(model); // by model id only — a forced prompt profile never reaches the wire
-  if (profile !== null) {
-    const word = profile.reasoningEffort(model.effort);
-    return word === null ? {} : { reasoning_effort: word };
-  }
-  return model.effort === undefined || model.effort === "auto" || model.effort === "off" ? {} : { reasoning_effort: model.effort };
+  return thinkingPlan(model, "openai").fields;
 }
 
 export function openaiCompatStream(opts: AdapterOptions): StreamFn {

@@ -21,6 +21,8 @@ import { loadPlugins } from "../plugins/index.ts";
 import { runGauntlet, reportResults, providerPreflight, basicTasks, codingTasks, failureTasks, adversarialTasks } from "../eval/gauntlet.ts";
 import { liveGauntletTasks, runTask, runTaskLive } from "../eval/gauntlet-runner.ts";
 import { profileFor, profileHint } from "../providers/profiles.ts";
+import { thinkingReport } from "../providers/thinking.ts";
+import { ModelCatalog } from "../providers/catalog.ts";
 import { runBenchmarks } from "../eval/bench.ts";
 import { resetTurnFailureCount } from "../memory/tools.ts";
 import type { PermissionLevel, ModelRef, StreamFn } from "../core/types.ts";
@@ -364,7 +366,20 @@ async function cmdModel(words: string[]): Promise<void> {
     if (p !== undefined && !isConfigured(p)) console.log(reg.keyHint(p));
     return;
   }
-  console.error("usage: rovecode model list [provider] | rovecode model use <provider/model> [--project]");
+  // `rovecode model show [provider/model]`: the model, its protocol, and — level by level — the exact thinking
+  // field its endpoint receives (providers/thinking.ts; docs/thinking.md). Reads the same catalog flag buildDef
+  // stamps, so what it prints is what a run sends.
+  if (action === "show") {
+    const ref = arg !== undefined ? reg.resolveSelector(arg, reg.defaultRef()?.provider ?? "") : reg.defaultRef();
+    if (ref === null) { console.error("error: no default model — rovecode model use <provider/model>"); process.exit(1); }
+    if ("error" in ref) { console.error(`error: ${ref.error}`); process.exit(1); }
+    const p = reg.get(ref.provider);
+    const info = new ModelCatalog().lookup(ref.provider, ref.model);
+    const model: ModelRef = { ...ref, effort: parseEffort(process.env.ROVECODE_EFFORT) ?? "auto", ...(info?.supportsReasoning !== undefined ? { reasoning: info.supportsReasoning } : {}) };
+    for (const l of thinkingReport(model, p?.protocol ?? "openai", { source: arg !== undefined ? "as named" : "the default" })) console.log(l);
+    return;
+  }
+  console.error("usage: rovecode model list [provider] | rovecode model use <provider/model> [--project] | rovecode model show [provider/model]");
   process.exit(2);
 }
 

@@ -91,7 +91,16 @@ export function parseEffort(v: string | undefined): ThinkingEffort | undefined {
   return (THINKING_EFFORTS as readonly string[]).includes(w) ? (w as ThinkingEffort) : undefined;
 }
 
-export interface ModelRef { provider: string; model: string; maxTokens?: number; effort?: ThinkingEffort }
+export interface ModelRef {
+  provider: string;
+  model: string;
+  maxTokens?: number;
+  effort?: ThinkingEffort;
+  /** the catalog's word on whether the model has a reasoning mode (models.dev `reasoning`), stamped by
+   *  cli/runtime.ts buildDef; `false` means no thinking field is ever sent (providers/thinking.ts).
+   *  Unset = unknown: the dial goes out in the endpoint's dialect and a model that cannot reason ignores it. */
+  reasoning?: boolean;
+}
 
 // ---------- Tools (ADR-005: validate → revise → policy → approve → sandbox → execute) ----------
 
