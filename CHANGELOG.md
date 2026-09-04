@@ -50,6 +50,8 @@ machine it names.
 - The tokenizer parses on the first count, ~430 ms off every launch; the repo map's ast-grep loads after the first frame (3be18f7, c80cc1f)
 - Process start to first frame ~948 → ~240 ms, measured with the new ROVECODE_TRACE_BOOT=1, which prints boot timestamps to stderr (8c24361, 3be18f7)
 - The files tree and the transcript rows are built once per frame, not twice; the scrollbar painters drop a placeholder (4b23ee2, a7ad4fe, 79d27f5)
+- `/help`, `/status`, `/cost` and the session commands load on first use instead of before the first frame (b3daccb)
+- `bun run build:cli` pre-bundles the TUI path (opt-in, re-run after git pull); the `rovecode` bin routes a TUI launch to the bundle and everything else to the source, so `--help` stays ~80 ms and the first frame drops ~230 → ~75 ms (d252e1b)
 
 ### Tooling & CI
 
@@ -69,6 +71,7 @@ machine it names.
 - `deploy-site.sh --check` runs the live walk after the flip and rolls the release back when a page fails; live-check exits non-zero on failure and checks a preview URL where it lives (e0fc4ae, 529217f)
 - One command deploys site/ to the VPS; docs/deploy.md covers the server, the release layout, the CI key and what is still open; the webtop container is gone and port 3001 is closed (b04262f, 47ce15c, f1b51d0, 53773a8)
 - The site's frames, design.json and facts.json describe what actually ships (de35af2, ffddf2c, aee0f63)
+- Round 12, Y3 · Sabah sisi: a softer visual system on the same content — periwinkle ground, white 24 px cards with one shadow, pills, Manrope + JetBrains Mono, a two-tone blue accent that meets 4.6:1 on every small text; og.png and favicons follow; live-check 120 pages clean, design_audit 0 findings, Lighthouse mobile 91 (live was 87) (c1c8c09)
 
 ### Docs
 
