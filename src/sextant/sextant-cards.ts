@@ -11,6 +11,7 @@ import type { ApprovalAnswer, PickItem, QuestionAnswer, QuestionPrompt } from ".
 import { fuzzy } from "./engine.ts";
 import { closePalette, openPalette, paletteVisible } from "./overlays.ts";
 import type { CardState, InputEvent, SextantState } from "./types.ts";
+import { notify } from "./model.ts";
 
 /** palette action prefix of a picker row; the value follows verbatim (it may contain ":") */
 export const PICK = "pick:";
@@ -24,6 +25,8 @@ export interface CardHostDeps {
   /** an approval card opened / was allowed (the pet's permission / allowed quips) */
   onApprovalOpen?(): void;
   onAllowed?(): void;
+  /** the surface clock, for the "needs you" notice a card raises (model.ts notify); Date.now() when absent */
+  clock?(): number;
 }
 
 /** tools whose approval card offers the accept-edits door */
@@ -70,7 +73,7 @@ export class CardHost {
         const cancel = (): void => settle(fallback);
         this.pending.add(cancel);
         card = make(settle);
-        this.d.state.card = card; this.d.dirty();
+        this.d.state.card = card; notify(this.d.state, "tool" in card ? `needs you: ${card.tool}` : "needs you: a question", this.d.clock?.() ?? Date.now(), "warn", "approval"); this.d.dirty();
       });
       this.queue = this.queue.then(open, open);
     });
@@ -94,7 +97,7 @@ export class CardHost {
         resolve: (a) => settle(a === null ? null : a.kind === "option" ? { choice: a.index, label: q.options?.[a.index] } : { text: a.text }),
       };
       this.pending.add(cancel); signal?.addEventListener("abort", cancel, { once: true });
-      this.d.state.card = card; this.d.dirty();
+      this.d.state.card = card; notify(this.d.state, "tool" in card ? `needs you: ${card.tool}` : "needs you: a question", this.d.clock?.() ?? Date.now(), "warn", "approval"); this.d.dirty();
     });
   }
 

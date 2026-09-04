@@ -1,6 +1,6 @@
-╭─ ◆ rovecode  ·  atlas  ·  feature/auth  ·  4 modified ────────────────────── ◆ denied  00:14.0 ─╮
+╭─ ◆ rovecode  ·  atlas  ·  feature/auth  ·  4 modified ──────────────── ◆ 1   ◆ denied  00:14.0 ─╮
 │ ╭─ code ──────────────────────────────────────────────────────────────────────────────────────╮ │
-│ │                                                                                             │ │
+│ │                                                                               ◆ tool denied │ │
 │ │                                                                                             │ │
 │ │                                                                                             │ │
 │ │                                                                                             │ │

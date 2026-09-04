@@ -16,7 +16,7 @@ export function makeState(over: Partial<SextantState> = {}): SextantState {
     messages: [], msgScroll: 0, stick: true, card: null, plan: { todos: [] }, crew: [],
     usage: { provider: "p", model: "m", turns: 0, tokensIn: 0, tokensOut: 0, contextPct: null, costUsd: null },
     input: { text: "", cur: 0, history: [], histIdx: -1, sgSel: 0 },
-    focus: "messages", page: "code", palette: null, help: false, toasts: [], escUntil: 0, running: false, mode: "act", yolo: false,
+    focus: "messages", page: "code", palette: null, help: false, toasts: [], notices: [], escUntil: 0, running: false, mode: "act", yolo: false,
     theme: "night", bootAt: 0,
     commands: [{ name: "help", description: "Show commands" }, { name: "exit", description: "Quit rovecode" }, { name: "new", description: "Branch back to session start" }, { name: "hello", description: "custom greeting" }],
     version: "0.2.0", ...over,

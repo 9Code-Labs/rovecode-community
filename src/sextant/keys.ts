@@ -37,6 +37,7 @@ import { dismissCard, onCardKey } from "./card-keys.ts";
 import { gridFor } from "./draw-agents.ts";
 import { mouseKind } from "./input.ts";
 import { mainPage, nextPage } from "./draw-tabs.ts";
+import { openNotices } from "./overlays.ts";
 
 // ------------------------------------------------------------------ contract
 
@@ -121,6 +122,7 @@ function onCtrl(s: SextantState, ev: KeyEvent, ctx: KeyCtx): KeyEffect[] {
       if (next !== s.page) { s.page = next; s.focus = next === "files" ? "files" : "code"; }
       return R();
     }
+    case "b": openNotices(s); return R(); // the notification history (overlays.ts openNotices)
     case "s": setMode(s, ctx, "code"); s.focus = "code"; return R();
     case "d": setMode(s, ctx, s.code.mode === "diff" ? "code" : "diff"); return R();
     case "r": setMode(s, ctx, "run"); return R();

@@ -11,6 +11,7 @@ import { panel, segWidth } from "./layout.ts";
 import { st } from "./theme.ts";
 import { thinkingWord } from "./pet.ts";
 import { scrollbar } from "./scrollbar.ts";
+import { unreadNotices } from "./model.ts";
 
 const gap: Seg = [" ", undefined];
 
@@ -52,7 +53,9 @@ export function drawFrame(scr: ScreenLike, L: { frame: Rect }, s: SextantState, 
   const F = L.frame;
   scr.box(F.x, F.y, F.w, F.h, st(theme.frameDim));
   const [g, gc] = activityGlyph(s, theme, now);
-  const right: Seg[] = [gap, [g, st(gc)], [" " + activityLabel(s, now), st(activityColor(s, theme))]];
+  // unread notices (model.ts notify) sit left of the activity: `◆ 3` in warn, gone when read (⌃b)
+  const unread = unreadNotices(s);
+  const right: Seg[] = [gap, ...(unread > 0 ? [[`◆ ${unread}`, st(theme.warn)] as Seg, ["   ", st(-1)] as Seg] : []), [g, st(gc)], [" " + activityLabel(s, now), st(activityColor(s, theme))]];
   if (s.activity.startedAt !== null) right.push(["  " + fmtClock(elapsed(s, now)), st(theme.muted)]);
   right.push(gap);
   const rw = segWidth(right);

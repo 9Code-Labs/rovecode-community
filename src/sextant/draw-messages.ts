@@ -195,10 +195,26 @@ export function cardShape(card: CardState, w: number, maxDetail: number): { tota
     const n = card.detail ? detailLines(card.detail).length : 0;
     return { total: 3 + Math.min(n, Math.max(1, maxDetail)), freeText: null };
   }
+  const { q, opts, freeRows } = questionRows(card, w);
+  return { total: 1 + q + opts + freeRows + 2, freeText: freeRows > 0 ? 1 + q + opts : null };
+}
+
+/** the longest free-text answer shown (wrapped rows) before the head scrolls off — the tail keeps
+ *  the caret and the last words in view, the way a chat box behaves */
+export const MAX_FREE_TEXT_ROWS = 6;
+
+/** Row arithmetic the question card shares between its shape, its rows, the caret and the click
+ *  zones (card-hits.ts): `q` question rows (capped), `opts` option rows, and `freeRows` — the typed
+ *  answer WRAPPED to the card width (Berkay: a long answer used to be clipped to one row with `…`,
+ *  so the text you were typing vanished; it belongs on the next line). 0 when free text is off. */
+export function questionRows(card: Extract<CardState, { kind: "question" }>, w: number): { q: number; opts: number; freeRows: number; freeLines: string[] } {
   const q = Math.min(MAX_QUESTION_ROWS, wrap(card.prompt.question, Math.max(1, w - 2)).length);
   const opts = card.prompt.options?.length ?? 0;
-  const free = card.prompt.allowFreeText !== false;
-  return { total: 1 + q + opts + (free ? 1 : 0) + 2, freeText: free ? 1 + q + opts : null };
+  if (card.prompt.allowFreeText === false) return { q, opts, freeRows: 0, freeLines: [] };
+  // the hint occupies the single empty row; typed text wraps at the row width minus the `▌ ` marker
+  const all = card.freeText.length === 0 ? [""] : wrap(card.freeText, Math.max(1, w - 4));
+  const freeLines = all.length > MAX_FREE_TEXT_ROWS ? all.slice(all.length - MAX_FREE_TEXT_ROWS) : all;
+  return { q, opts, freeRows: freeLines.length, freeLines };
 }
 
 /** the previewDiff lines worth a card row: the leading `--- a/x` / `+++ b/x` pair is dropped (the
@@ -242,11 +258,16 @@ export function cardRows(card: CardState, w: number, maxDetail: number, theme: T
   shown.forEach((l, k) => rows.push({ segs: [[k === 0 ? "◆ " : "  ", st(theme.warn)], [l, st(theme.fg, -1, ATTR.BOLD)]] }));
   const opts = card.prompt.options ?? [];
   opts.forEach((o, i) => rows.push({ segs: [button(o, i === card.selected)], indent: 2 }));
-  const free = card.prompt.allowFreeText !== false;
+  const { freeRows, freeLines } = questionRows(card, w);
+  const free = freeRows > 0;
   if (free) {
     const sel = card.selected === opts.length;
-    const text = card.freeText;
-    rows.push({ segs: [["▌ ", st(sel ? theme.accent : theme.accentDim)], [text || FREE_TEXT_HINT, text ? st(theme.fg, -1, ATTR.BOLD) : st(theme.dim)]], indent: 2 });
+    // the answer wraps: `▌ ` marks the first row, continuation rows align under the text
+    freeLines.forEach((line, k) => {
+      const marker: Seg = [k === 0 ? "▌ " : "  ", st(sel ? theme.accent : theme.accentDim)];
+      const empty = card.freeText.length === 0;
+      rows.push({ segs: [marker, [empty ? FREE_TEXT_HINT : line, empty ? st(theme.dim) : st(theme.fg, -1, ATTR.BOLD)]], indent: 2 });
+    });
   }
   rows.push({ segs: [button(SKIP_LABEL, card.selected === opts.length + (free ? 1 : 0))], indent: 2 });
   rows.push({ segs: [["⏎ confirm  ↑↓ choose", st(theme.dim)]], indent: 2 });
@@ -287,9 +308,12 @@ export function promptCursor(rect: Rect, s: SextantState): { x: number; y: numbe
     if (s.card.kind !== "question") return null;
     const shape = cardShape(s.card, B.w, maxDetail);
     if (shape.freeText === null || s.card.selected !== (s.card.prompt.options?.length ?? 0)) return null; // selection index = options.length is the free-text row
-    const row = shape.freeText - (shape.total - cardH); // rows hidden when the card is clipped scroll off the top
+    // the caret sits at the end of the LAST wrapped row of the answer (questionRows keeps the tail)
+    const { freeRows, freeLines } = questionRows(s.card, B.w);
+    const row = shape.freeText + freeRows - 1 - (shape.total - cardH); // rows hidden when the card is clipped scroll off the top
     if (row < 0) return null;
-    return { x: Math.min(B.x + 4 + s.card.freeText.length, B.x + B.w - 1), y: B.y + msgH + row };
+    const last = freeLines[freeLines.length - 1] ?? "";
+    return { x: Math.min(B.x + 4 + [...last].length, B.x + B.w - 1), y: B.y + msgH + row };
   }
   if (s.focus !== "messages") return null;
   const inW = B.w - 2;

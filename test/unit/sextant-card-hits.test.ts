@@ -8,7 +8,7 @@
 
 import { test, expect } from "bun:test";
 import { cardHits } from "../../src/sextant/card-hits.ts";
-import { VERDICT_LABEL, SKIP_LABEL } from "../../src/sextant/draw-messages.ts";
+import { VERDICT_LABEL, SKIP_LABEL, MAX_FREE_TEXT_ROWS, cardRows, promptCursor } from "../../src/sextant/draw-messages.ts";
 import type { CardState, SextantState } from "../../src/sextant/types.ts";
 
 /** the question prompt's shape as the card reads it — a structural stand-in so the fixture stays terse */
@@ -91,6 +91,43 @@ test("with free text disabled the skip row moves up and keeps the right index", 
   const { hits } = withCard(question({ prompt: { question: "q?", options: ["a"], allowFreeText: false } }));
   expect(hits.map((h) => h.index)).toEqual([0, 1]); // one option + skip
   expect(hits.map((h) => h.confirm)).toEqual([true, true]);
+});
+
+// ---------- the free-text answer wraps (Berkay: "yazi alt satira gecmesi gerekirken ... oluyor") ----------
+
+test("a long typed answer wraps onto more rows: the card grows, skip moves down, the zone covers every row", () => {
+  const short = withCard(question({ freeText: "sqlite" }));
+  const long = withCard(question({ freeText: "I would rather we used postgres because the deployment target already runs it and the team knows it well " + "x".repeat(120) }));
+  const shortSkip = short.hits.find((h) => h.index === 3)!, longSkip = long.hits.find((h) => h.index === 3)!;
+  const shortFree = short.hits.find((h) => h.index === 2)!, longFree = long.hits.find((h) => h.index === 2)!;
+  const shortOpt = short.hits.find((h) => h.index === 0)!, longOpt = long.hits.find((h) => h.index === 0)!;
+  expect(shortFree.rect.h).toBe(1);
+  expect(longFree.rect.h).toBeGreaterThan(1);
+  // the card is pinned to the bottom of the messages area and grows UPWARD: skip stays put, the
+  // rows above it climb by exactly the extra free-text rows
+  expect(longSkip.rect.y).toBe(shortSkip.rect.y);
+  expect(shortOpt.rect.y - longOpt.rect.y).toBe(longFree.rect.h - shortFree.rect.h);
+  expect(longFree.rect.y + longFree.rect.h).toBe(longSkip.rect.y); // the zone reaches right up to skip
+  expect(longFree.confirm).toBe(false);
+});
+
+test("the caret sits at the end of the LAST wrapped row, not clipped off the first", () => {
+  const { s } = withCard(question({ freeText: "a long answer that certainly needs more than one row of the card " + "y".repeat(150), selected: 2 }));
+  const c = promptCursor(L.messages, s)!;
+  expect(c).not.toBeNull();
+  const { hits } = withCard(s.card!);
+  const free = hits.find((h) => h.index === 2)!;
+  expect(c.y).toBe(free.rect.y + free.rect.h - 1);
+  expect(c.x).toBeLessThan(L.messages.x + L.messages.w);
+});
+
+test("an answer longer than the row budget keeps its TAIL on screen, the way a chat box does", () => {
+  const { s, hits } = withCard(question({ freeText: Array.from({ length: 40 }, (_, i) => `row ${i} of the answer`).join(" ") }));
+  const free = hits.find((h) => h.index === 2)!;
+  expect(free.rect.h).toBe(MAX_FREE_TEXT_ROWS);
+  const rows = cardRows(s.card!, L.messages.w - 4, 5, THEME).map((r) => r.segs.map(([t]) => t).join(""));
+  expect(rows.some((r) => r.includes("row 39 of the answer"))).toBe(true); // the end is visible
+  expect(rows.some((r) => r.includes("row 0 of the answer"))).toBe(false);  // the head scrolled off
 });
 
 // ---------- the click actually resolves ----------

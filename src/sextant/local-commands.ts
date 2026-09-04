@@ -11,6 +11,7 @@
 import type { KeyCtx } from "./keys.ts";
 import { parseInput, resolveFile } from "./overlays.ts";
 import { THEME_ORDER, type CodeMode, type Focus, type SextantState, type ThemeName } from "./types.ts";
+import { openNotices } from "./overlays.ts";
 
 /** prototype commands with an rovecode equivalent: a toast instead of a submission — unless
  *  setCommands lists a custom command of that name, which then runs like any other */
@@ -75,6 +76,9 @@ export function runLocal(s: SextantState, cmd: string, arg: string, ctx: KeyCtx)
     case "help":
       s.help = true;
       return false; // the card opens AND /help reaches the transcript
+    case "notices":
+      openNotices(s);
+      return true;
     case "theme":
       if (isTheme(arg)) setTheme(s, ctx, arg);
       else ctx.local.toast(`unknown theme "${arg}" · night, ember or contrast`);

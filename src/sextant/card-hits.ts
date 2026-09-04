@@ -23,7 +23,7 @@
  *  here", not "submit an empty answer". Every other target is a labelled button, and a click on a
  *  button is the decision — the same as clicking OK in any dialog. */
 
-import { areas, cardRows, cardShape, SKIP_LABEL, VERDICT_LABEL } from "./draw-messages.ts";
+import { areas, cardRows, cardShape, questionRows, SKIP_LABEL, VERDICT_LABEL } from "./draw-messages.ts";
 import { inner } from "./draw-util.ts";
 import { strWidth } from "./screen.ts";
 import type { Rect, SextantState, Theme } from "./types.ts";
@@ -76,21 +76,27 @@ export function cardHits(rect: Rect, s: SextantState, theme: Theme): CardHit[] {
     return out;
   }
 
-  // question card: blank, q question rows, one row per option, [free text], skip, hint.
-  // q is derived from cardShape rather than re-wrapped here, so the two cannot disagree.
+  // question card: blank, q question rows, one row per option, [free text, wrapped], skip, hint.
+  // The row arithmetic comes from questionRows — the same helper the painter and the caret use — so
+  // the three cannot disagree; cardShape is still consulted for the clip.
   const opts = card.prompt.options ?? [];
-  const free = card.prompt.allowFreeText !== false;
+  const { q, freeRows } = questionRows(card, B.w);
   const shape = cardShape(card, B.w, maxDetail);
-  const q = shape.total - opts.length - (free ? 1 : 0) - 3;
-  if (q < 0) return [];
-  const push = (rowIndex: number, index: number, w: number, confirm: boolean): void => {
+  if (shape.total !== 1 + q + opts.length + freeRows + 2) return []; // the painter and the helper disagree: register nothing rather than wrong zones
+  const push = (rowIndex: number, index: number, w: number, confirm: boolean, h = 1): void => {
     const y = yOf(rowIndex);
-    if (y !== null && w > 0) out.push({ rect: { x: B.x + ROW_INDENT, y, w, h: 1 }, index, confirm });
+    if (y !== null && w > 0) out.push({ rect: { x: B.x + ROW_INDENT, y, w, h }, index, confirm });
   };
   const full = Math.max(0, B.w - ROW_INDENT);
   for (const [i, o] of opts.entries()) push(1 + q + i, i, Math.min(strWidth(o) + BUTTON_PAD, full), true);
-  // the free-text row is a text field: select it, do not answer for the human
-  if (free) push(1 + q + opts.length, opts.length, full, false);
-  push(1 + q + opts.length + (free ? 1 : 0), opts.length + (free ? 1 : 0), Math.min(strWidth(SKIP_LABEL) + BUTTON_PAD, full), true);
+  // the free-text field is one zone across all its wrapped rows: select it, do not answer for the human.
+  // Rows clipped off the top shrink the zone from above (the first visible row is where it starts).
+  if (freeRows > 0) {
+    const first = 1 + q + opts.length;
+    const visibleFrom = Math.max(first, hidden);
+    const rows = first + freeRows - visibleFrom;
+    if (rows > 0) push(visibleFrom, opts.length, full, false, rows);
+  }
+  push(1 + q + opts.length + freeRows, opts.length + (freeRows > 0 ? 1 : 0), Math.min(strWidth(SKIP_LABEL) + BUTTON_PAD, full), true);
   return out;
 }

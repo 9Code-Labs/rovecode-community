@@ -1,6 +1,6 @@
-╭─ ◆ rovecode  ·  atlas  ·  feature/auth  ·  4 modified ────────────────────────────────────────────────────────────────────────────────── ◆ denied  00:14.0 ─╮
+╭─ ◆ rovecode  ·  atlas  ·  feature/auth  ·  4 modified ──────────────────────────────────────────────────────────────────────────── ◆ 1   ◆ denied  00:14.0 ─╮
 │ ╭─ files ───────────────── 9 ╮ ╭─ code ────────────────────────────────────────────────────────────────────────────────╮ ╭─ plan ──────────────────── 1/4 ╮ │
-│ │ ▾ src/                     │ │                                                                                       │ │ steps  1/4                     │ │
+│ │ ▾ src/                     │ │                                                                                       │ │ steps  1/4       ◆ tool denied │ │
 │ │ ├ ▸ api/                   │ │                                                                                       │ │ ◆  read the auth flow          │ │
 │ │ ├ ▾ auth/                  │ │                                                                                       │ │ ◈  add the state check    high │ │
 │ │ │ ├ callback.ts ◈        M │ │                                                                                       │ │ ◇  run the auth tests          │ │

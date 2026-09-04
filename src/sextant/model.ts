@@ -8,7 +8,8 @@ import { contextHealth } from "../core/usage.ts";
 import { estimateTokens } from "../core/context.ts";
 import { todoCounts, type TodoItem, type TodoCounts } from "../tools/todo.ts";
 import type { TaskInfo } from "../core/tasks.ts";
-import type { ActivityState, ApplyEvent, DiffHunk, FileStatus, MessageRow, SextantState, ThemeName, Toast, ToolRow, TreeRow } from "./types.ts";
+import type { ActivityState, ApplyEvent, DiffHunk, FileStatus, MessageRow, Notice, SextantState, ThemeName, Toast, ToolRow, TreeRow } from "./types.ts";
+import { MAX_NOTICES } from "./types.ts";
 import { describeCall, summarizeEnd } from "./tool-rows.ts";
 
 export const TOUCH_MS = 1500;
@@ -40,7 +41,7 @@ export function initialState(o: InitOptions): SextantState {
     plan: { todos: [] }, crew: [],
     usage: { provider: o.model?.provider ?? "", model: o.model?.model ?? "", turns: 0, tokensIn: 0, tokensOut: 0, contextPct: null, costUsd: null },
     input: { text: "", cur: 0, history: [], histIdx: -1, sgSel: 0 },
-    focus: "messages", page: "code", palette: null, help: false, toasts: [], escUntil: 0,
+    focus: "messages", page: "code", palette: null, help: false, toasts: [], notices: [], escUntil: 0,
     running: false, mode: o.mode, yolo: o.yolo, theme: o.theme, bootAt: o.now, commands: o.commands, version: o.version,
   };
 }
@@ -159,6 +160,7 @@ export function makeApplyEvent(hooks: ApplyHooks = {}): ApplyEvent {
         pushRow(s, { kind: "system", tone: "error", text: `${reason}: ${ev.detail}` });
         const what = ev.reason === "permission_denied" ? "denied" : reason;
         setActivity(s, "ERROR", row ? `${row.label} ${what}` : what, now);
+        notify(s, row ? `${row.label} ${what}` : `tool ${what}`, now, "error", "error");
         break;
       }
       case "compaction":
@@ -175,12 +177,15 @@ export function makeApplyEvent(hooks: ApplyHooks = {}): ApplyEvent {
         if (ev.status === "done") {
           setActivity(s, "SUCCESS", "done");
           if (!sawText && ev.summary) pushRow(s, { kind: "assistant", text: ev.summary, streaming: false });
+          notify(s, "run done", now, "info", "done");
         } else if (ev.status === "error") {
           setActivity(s, "ERROR", "error", now);
           if (ev.summary) pushRow(s, { kind: "system", tone: "error", text: ev.summary });
+          notify(s, `run failed${ev.summary ? `: ${ev.summary.split("\n")[0]!.slice(0, 80)}` : ""}`, now, "error", "error");
         } else {
           setActivity(s, "IDLE", ev.status);
           pushRow(s, { kind: "system", tone: "warn", text: `run ${ev.status}: ${ev.summary}` });
+          notify(s, `run ${ev.status}`, now, "warn", "done");
         }
         s.activity.endedAt = now; s.running = false;
         for (const r of s.messages) if (r.kind === "tool" && r.running) { r.running = false; r.ok = false; r.detail ??= "interrupted"; }
@@ -295,6 +300,19 @@ export function pushToast(s: SextantState, text: string, now: number, tone: Toas
   s.toasts.push({ text, until: now + TOAST_MS, tone });
   if (s.toasts.length > MAX_TOASTS) s.toasts.splice(0, s.toasts.length - MAX_TOASTS);
 }
+
+/** A notification: a toast now AND a Notice in the history, so it can be read after the toast fades.
+ *  Berkay's four triggers — a run finishing, a failed tool, a card waiting, plus a history — all come
+ *  through here; a bare pushToast stays for the renderer-local "unknown theme" class of message that
+ *  nobody needs to read back. */
+export function notify(s: SextantState, text: string, now: number, tone: Toast["tone"] = "info", kind: Notice["kind"] = "info"): void {
+  pushToast(s, text, now, tone);
+  const id = (s.notices[s.notices.length - 1]?.id ?? 0) + 1;
+  s.notices.push({ id, at: now, tone, kind, text, read: false });
+  if (s.notices.length > MAX_NOTICES) s.notices.splice(0, s.notices.length - MAX_NOTICES);
+}
+export function unreadNotices(s: SextantState): number { return s.notices.reduce((n, x) => n + (x.read ? 0 : 1), 0); }
+export function markNoticesRead(s: SextantState): void { for (const n of s.notices) n.read = true; }
 export function pruneToasts(s: SextantState, now: number): void {
   if (s.toasts.some((t) => t.until <= now)) s.toasts = s.toasts.filter((t) => t.until > now);
 }

@@ -318,6 +318,22 @@ export const PAGES: readonly Page[] = ["code", "files", "plan"];
 
 export interface Toast { text: string; until: number; tone: "info" | "warn" | "error" }
 
+/** A notification worth keeping after its toast fades: a run finishing, a failed tool, a card
+ *  waiting for the human. Toasts are the transient surface (three seconds, top right); notices are
+ *  the record behind them, so what you missed while looking away can be read back (⌃b / /notices). */
+export interface Notice {
+  id: number;
+  /** clock when it happened */
+  at: number;
+  tone: Toast["tone"];
+  kind: "done" | "error" | "approval" | "info";
+  text: string;
+  /** cleared when the history is opened */
+  read: boolean;
+}
+/** the history keeps this many; older notices fall off the front */
+export const MAX_NOTICES = 50;
+
 export interface PaletteState {
   query: string;
   sel: number;
@@ -352,6 +368,8 @@ export interface SextantState {
   palette: PaletteState | null;
   help: boolean;
   toasts: Toast[];
+  /** the notification history behind the toasts (Notice); newest last */
+  notices: Notice[];
   /** first Esc while busy arms "again to stop" until this clock */
   escUntil: number;
   /** two-press ⌃c guarantee (renderer-level): a ⌃c while busy interrupts and arms this clock; a

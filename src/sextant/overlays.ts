@@ -19,6 +19,7 @@ import {
   ATTR, THEME_ORDER, type CodeMode, type KeyEvent, type Layout, type PaletteState, type Rect,
   type ScreenLike, type SextantState, type Style, type Theme, type ThemeName,
 } from "./types.ts";
+import { markNoticesRead } from "./model.ts";
 
 // ------------------------------------------------------------------ parsing (commands.js)
 
@@ -98,6 +99,7 @@ export const LOCAL_COMMANDS: readonly (CommandInfo & { options?: (s: SextantStat
   { name: "focus", description: "move keyboard focus", arg: "messages·code·files", local: true,
     options: (_s, q, fz) => rank(q, ["messages", "code", "files"], fz).map((f) => ({ label: f, hint: "" })) },
   { name: "agents", description: "the crew board (code panel ∷)", local: true },
+  { name: "notices", description: "notification history (⌃b)", local: true },
 ];
 
 const THEME_HINT: Record<ThemeName, string> = { night: "night + mint", ember: "ink + ember", contrast: "pure contrast" };
@@ -216,6 +218,30 @@ export function openPalette(s: SextantState, items: PaletteItem[] = paletteItems
 }
 export function closePalette(s: SextantState): void { s.palette = null; }
 
+/** The notification history (⌃b, /notices): the palette box titled "notifications", newest first,
+ *  one row per Notice with its clock as the hint. Read-only rows — Enter just closes (the "noop:"
+ *  action is ignored by runAction). Opening marks everything read, which clears the frame badge.
+ *  Reuses the palette rather than adding a fourth overlay: same box, same keys, nothing new to learn. */
+export function openNotices(s: SextantState, now: number = Date.now()): void {
+  const items = [...s.notices].reverse().map((n) => ({
+    label: `${n.tone === "error" ? "✗" : n.tone === "warn" ? "◆" : "·"} ${n.text}`,
+    group: "notices",
+    action: "noop:",
+    hint: agoLabel(now - n.at),
+  }));
+  markNoticesRead(s);
+  openPalette(s, items.length ? items : [{ label: "no notifications yet", group: "notices", action: "noop:", hint: "" }], "notifications");
+}
+
+/** "just now" · "12s" · "3m" · "2h" — the age of a notice, coarse on purpose */
+export function agoLabel(ms: number): string {
+  const sec = Math.max(0, Math.round(ms / 1000));
+  if (sec < 5) return "just now";
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.round(sec / 60)}m`;
+  return `${Math.round(sec / 3600)}h`;
+}
+
 /** the rows the query leaves: no query = everything with `open` capped at 6; otherwise fuzzy
  *  hits, best first inside each group, groups in their fixed order (app.js:1112-1118) */
 export function paletteVisible(p: PaletteState, fz: Fuzzy = fuzzy): PaletteItem[] {
@@ -310,6 +336,7 @@ export const HELP_KEYS: readonly (readonly [string, string])[] = [
   ["⌃a", "agents board"],
   ["⌃e", "files panel"],
   ["⌃o", "next tab (narrow terminal)"],
+  ["⌃b", "notifications"],
   ["⌃t", "next theme"],
   ["⌃n", "new session (/new)"],
   ["↑↓ ←→", "files: pick · fold — code: scroll · mode — prompt: history"],
