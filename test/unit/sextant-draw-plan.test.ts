@@ -101,6 +101,23 @@ test("crew block: `crew k working` counts queued + running, rows label · status
   expect(plan(s)).not.toContain("crew");
 });
 
+test("a long plan windows around the step in progress: `…k earlier` above, `+k more` below, the current step visible", () => {
+  const s = state();
+  const items: TodoItem[] = Array.from({ length: 30 }, (_, i) => ({ id: `t${i}`, content: `step ${i}`, status: i < 20 ? "completed" as const : i === 20 ? "in_progress" as const : "pending" as const }));
+  setPlan(s, { items });
+  const L = lines(plan(s, 34, 12));
+  expect(L[1]).toBe("steps  20/30");
+  expect(L.find((l) => l.startsWith("  …"))).toMatch(/^ {2}…\d+ earlier$/);
+  expect(L.some((l) => l.includes("◈ step 20"))).toBe(true); // the current step is on screen
+  expect(L.some((l) => l.includes("step 0"))).toBe(false);   // the head is not
+  expect(L.find((l) => l.startsWith("  +"))).toMatch(/^ {2}\+\d+ more$/);
+  // the current step near the head: no window, the head shows as before
+  setPlan(s, { items: items.map((t, i) => ({ ...t, status: i < 2 ? "completed" as const : i === 2 ? "in_progress" as const : "pending" as const })) });
+  const H = lines(plan(s, 34, 12));
+  expect(H.some((l) => l.startsWith("  …"))).toBe(false);
+  expect(H.some((l) => l.includes("step 0"))).toBe(true);
+});
+
 test("plan overflow: steps that do not fit collapse into a `+k more` marker; the anchored blocks yield when the panel is too short", () => {
   const s = state();
   setPlan(s, { items: Array.from({ length: 12 }, (_, i) => ({ id: `t${i}`, content: `step ${i}`, status: i < 3 ? "completed" as const : i === 3 ? "in_progress" as const : "pending" as const })) });

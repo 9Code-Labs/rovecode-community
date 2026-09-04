@@ -70,8 +70,17 @@ export function drawPlan(scr: ScreenLike, R: Rect, s: SextantState, theme: Theme
     scr.put(B.x, y++, EMPTY.plan[0], st(theme.dim), B.w);
     if (y < stepsEnd) scr.put(B.x, y++, EMPTY.plan[1], st(theme.dim), B.w);
   }
-  let shown = 0;
-  for (const t of todos) {
+  // a long plan windows around the step in progress instead of always showing its head: the person
+  // wants to see what is being done now, not steps 1-8 of 30. One row above says how many are earlier.
+  const room = Math.max(0, stepsEnd - y), curIdx = todos.findIndex((t) => t.status === "in_progress");
+  let start = 0;
+  if (todos.length > room && curIdx >= room - 1) { // the current step would be hidden (or be the marker row)
+    const visible = Math.max(1, room - 2); // minus the "earlier" row and the "+N more" row
+    start = Math.max(0, Math.min(curIdx - Math.floor(visible / 2), todos.length - visible));
+  }
+  if (start > 0 && y < stepsEnd) scr.put(B.x, y++, `  …${start} earlier`, st(theme.dim), B.w);
+  let shown = start;
+  for (const t of todos.slice(start)) {
     if (y >= stepsEnd) break;
     const cur = t.status === "in_progress", done = t.status === "completed";
     const pr = t.priority === "high" ? "high" : t.priority === "low" ? "low" : "";
