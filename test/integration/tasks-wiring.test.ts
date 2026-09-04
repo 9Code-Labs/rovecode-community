@@ -364,7 +364,7 @@ test("children run the PARENT's model: the child stream receives the ModelRef of
     // mutation target: delete `activeModel = model` in runtime.ts buildDef → the child runs fallbackRef
     // (mock/default, or the env provider's default model), never the parent's pin
     // buildDef also stamps the runtime's thinking dial, so the child inherits the parent's effort too
-    expect(childModels).toEqual([{ ...pin, effort: "off" }]);
+    expect(childModels).toEqual([{ ...pin, effort: "auto" }]); // the runtime's default dial rides to children: "auto" = the provider's own default
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }

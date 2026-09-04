@@ -76,8 +76,13 @@ export type StreamEvent =
  *  levels map to each protocol's own dial — an Anthropic thinking budget in tokens, an OpenAI
  *  `reasoning_effort` string (providers/stream.ts thinkingBudget). A model with no reasoning mode
  *  ignores it: the field is sent, the endpoint drops it. */
-export type ThinkingEffort = "off" | "low" | "medium" | "high";
-export const THINKING_EFFORTS: readonly ThinkingEffort[] = ["off", "low", "medium", "high"];
+/** `auto` = send NO thinking field and let the provider's own default stand — for the Claude 5 family
+ *  that is adaptive thinking at high effort. It is the runtime default: the old default `off` sent an
+ *  explicit `thinking: disabled`, which switched OFF the reasoning Opus 5 and Sonnet 5 do on their own
+ *  and was a large part of "the model is not performing" (Berkay, 2026-09-04). `off` stays as the
+ *  explicit, deliberate choice. */
+export type ThinkingEffort = "auto" | "off" | "low" | "medium" | "high";
+export const THINKING_EFFORTS: readonly ThinkingEffort[] = ["auto", "off", "low", "medium", "high"];
 
 /** a level from a flag/env word; undefined when it names nothing (the caller keeps its default,
  *  rather than silently reading a typo as "off") */

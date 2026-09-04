@@ -21,7 +21,8 @@
  *  (core/images.ts), never the extension. */
 
 import { resolve } from "node:path";
-import { checkImageCount, describeImage, imageChip, loadImageAttachment, MAX_IMAGES_PER_MESSAGE } from "../core/images.ts";
+import { checkImageCount, describeImage, imageChip, imageFromBytes, loadImageAttachment, MAX_IMAGES_PER_MESSAGE } from "../core/images.ts";
+import { clipboardImageName, readClipboardImage } from "./clipboard-image.ts";
 import type { SessionStore } from "../core/session.ts";
 import type { ImagePart, MessagePart } from "../core/types.ts";
 import { supportsImages } from "../providers/catalog.ts";
@@ -73,6 +74,34 @@ export function cmdAttach(ctx: AttachCtx, arg: string): void {
   const vision = supportsImages(ref);
   if (vision === false) renderer.addSystemNote(`model ${ref.provider}/${ref.model} has no image input — it will be sent as a text placeholder`, "warn");
   else if (vision === undefined) renderer.addSystemNote(`unknown model ${ref.provider}/${ref.model}; image sent as-is (provider may reject)`);
+}
+
+/** `/paste` — the clipboard image as an attachment (⌃v in the sextant surface lands here). */
+export const PASTE_COMMAND: SlashCommand = {
+  name: "paste",
+  description: "attach the image on the clipboard (⌃v)",
+};
+
+/** Stage the image currently on the system clipboard. Berkay: "gorsel gonderebilme olayini yapalim" —
+ *  /attach <path> existed, but the thing everyone tries first is copying a screenshot and pressing ⌃v,
+ *  and a terminal delivers only TEXT pastes, so that did nothing. tui/clipboard-image.ts asks the OS.
+ *  Same rules as /attach: magic-byte sniff, size cap, the 8-image cap, the vision note; never throws.
+ *  `read` is injectable (tests never touch a real clipboard). */
+export function cmdPasteImage(ctx: AttachCtx, read: () => Uint8Array | null = () => readClipboardImage(), name = clipboardImageName()): void {
+  const { renderer } = ctx;
+  const bytes = read();
+  if (bytes === null) { renderer.addSystemNote("no image on the clipboard — copy a screenshot or picture first, or /attach <path>"); return; }
+  const loaded = imageFromBytes(bytes, { name });
+  if ("error" in loaded) { renderer.addSystemNote(loaded.error, "error"); return; }
+  const store = ctx.store();
+  const staged = store.stagedAttachments;
+  const over = checkImageCount(staged.length + 1);
+  if (over !== undefined) { renderer.addSystemNote(over, "error"); return; }
+  store.stageAttachments([...staged, loaded]);
+  renderer.addSystemNote(`attached ${describeImage(loaded)} from the clipboard (${staged.length + 1}/${MAX_IMAGES_PER_MESSAGE}) — type your message and press Enter to send it`);
+  const ref = ctx.modelRef();
+  const vision = supportsImages(ref);
+  if (vision === false) renderer.addSystemNote(`model ${ref.provider}/${ref.model} has no image input — it will be sent as a text placeholder`, "warn");
 }
 
 /** Transcript line for a user turn: the text, then one chip per image on a second line; an

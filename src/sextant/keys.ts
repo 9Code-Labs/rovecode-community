@@ -82,7 +82,7 @@ export function focusOrder(L: Layout, page: Page = "code"): Focus[] {
 
 export function handleInput(s: SextantState, ev: InputEvent, ctx: KeyCtx, now: number): KeyEffect[] {
   if (ev.type === "mouse") return onMouse(s, ev, ctx, now);
-  if (ev.type === "paste") return onPaste(s, ev.text);
+  if (ev.type === "paste") return onPaste(s, ev.text, ctx);
   if (s.palette) {
     if (ev.ctrl && ev.name === "c") return ctrlC(s, ctx);
     onPaletteKey(s, ev, (a) => runAction(s, a, ctx), ctx.fuzzy);
@@ -123,6 +123,9 @@ function onCtrl(s: SextantState, ev: KeyEvent, ctx: KeyCtx): KeyEffect[] {
       return R();
     }
     case "b": openNotices(s); return R(); // the notification history (overlays.ts openNotices)
+    // ⌃v with an IMAGE on the clipboard: the terminal sends no paste for it, only this key — ask the
+    // OS for the image through /paste (tui/attach.ts cmdPasteImage). Text pastes never arrive here.
+    case "v": ctx.hooks.onSubmit("/paste"); return R();
     case "s": setMode(s, ctx, "code"); s.focus = "code"; return R();
     case "d": setMode(s, ctx, s.code.mode === "diff" ? "code" : "diff"); return R();
     case "r": setMode(s, ctx, "run"); return R();
@@ -312,9 +315,25 @@ function onHistoryKey(s: SextantState, d: -1 | 1, ctx: KeyCtx): KeyEffect[] {
   return R();
 }
 
-function onPaste(s: SextantState, text: string): KeyEffect[] {
+/** a pasted line that is ONE image path — what a terminal delivers when a file is dragged onto it
+ *  (Windows Terminal quotes paths with spaces). Syntactic only: keys.ts is pure and never touches the
+ *  disk; app.ts's /attach loads the file, sniffs the magic bytes and reports a non-image as a note. */
+export function pastedImagePath(text: string): string | null {
+  const t = text.trim();
+  if (t.length === 0 || t.includes("\n")) return null;
+  const m = /^(?:"([^"]+)"|'([^']+)'|(\S+))$/.exec(t);
+  const p = m?.[1] ?? m?.[2] ?? m?.[3];
+  return p !== undefined && /\.(png|jpe?g|gif|webp)$/i.test(p) ? p : null;
+}
+
+function onPaste(s: SextantState, text: string, ctx: KeyCtx): KeyEffect[] {
   if (s.help) return NONE();
   if (s.palette) { s.palette.query += text.replace(/\s+/g, " "); s.palette.sel = 0; return R(); }
+  // a dropped image file attaches instead of landing in the prompt as a path string
+  if (!s.card) {
+    const img = pastedImagePath(text);
+    if (img !== null) { ctx.hooks.onSubmit(`/attach "${img}"`); return R(); }
+  }
   const c = s.card;
   if (c?.kind === "question" && c.prompt.allowFreeText !== false) {
     const onFreeText = c.selected === (c.prompt.options?.length ?? 0); // index options.length = the free-text row

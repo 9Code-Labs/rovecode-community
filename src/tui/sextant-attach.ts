@@ -13,7 +13,7 @@ import { sessionUsage } from "./cost.ts";
 /** slash names the sextant surface handles itself before onSubmit (keys.ts runLocal — the future
  *  src/sextant/local-commands.ts); reserved against custom commands like the built-ins, so a
  *  `.rovecode/commands/theme.md` warns and loses instead of silently never being reachable. */
-export const SEXTANT_LOCAL_NAMES: readonly string[] = ["theme", "open", "diff", "focus", "agents"];
+export const SEXTANT_LOCAL_NAMES: readonly string[] = ["theme", "open", "diff", "focus", "agents", "notices"];
 
 export interface AttachSources {
   cwd: string;
@@ -37,6 +37,8 @@ export function buildSextantAttach(a: AttachSources): SextantAttach {
     model: a.model,
     contextWindow: () => { const m = a.model(); return a.catalog.lookup(m.provider, m.model)?.contextWindow; },
     usage: () => sessionUsage(a.store().messages(), a.catalog, a.model()),
+    // the images staged for the next message (tui/attach.ts /attach, /paste) — read live, the store owns them
+    staged: () => a.store().stagedAttachments.map((p) => p.name ?? "image"),
     ...(a.petName !== undefined ? { petName: a.petName } : {}),
   };
 }

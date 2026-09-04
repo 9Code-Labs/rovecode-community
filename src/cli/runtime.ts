@@ -17,7 +17,7 @@ import { designAuditTool, designDirectionTool } from "../tools/design.ts";
 import { designPromptSection } from "../design/rules.ts";
 import { withToolCallParsing, toolPromptBlock } from "../providers/middleware.ts";
 import { ModelCatalog } from "../providers/catalog.ts";
-import { profileFor, profilePromptSection } from "../providers/profiles.ts";
+import { GLM_53_AGENT_CONTRACT, profileFor, profilePromptSection } from "../providers/profiles.ts";
 import { loadProjectContext, type ProjectContext } from "../core/config.ts";
 import { estimateTokens, type ContextChunk } from "../core/context.ts";
 import { parseCompactionStrategy } from "../core/compaction.ts";
@@ -53,6 +53,10 @@ import { mkdirSync } from "node:fs";
 import { sep, join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { noModelHint } from "../core/voice.ts";
+
+/** upper bound on the per-model max_tokens buildDef derives from the catalog: enough for a long page or
+ *  plan, not the 128K some models advertise — a runaway answer should stop before it costs that much */
+export const MAX_OUTPUT_CAP = 32_768;
 
 export interface RuntimeOptions {
   cwd?: string;
@@ -311,7 +315,10 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     if (mcpByName.has(c.name)) { pluginWarn(`plugin ${p.name}: MCP server "${c.name}" is also declared by another plugin — first kept`); continue; }
     mcpByName.set(c.name, c);
   }
-  for (const c of loadMcpConfig(cwd)) { if (mcpByName.has(c.name)) pluginWarn(`mcp.json server "${c.name}" overrides a plugin's entry of the same name`); mcpByName.set(c.name, c); }
+  // the user file (~/.rovecode/mcp.json — where `rovecode mcp add` writes) is the lowest of the three layers
+  const mcpWarnings: string[] = [];
+  for (const c of loadMcpConfig(cwd, mcpWarnings, { home: pluginHome })) { if (mcpByName.has(c.name)) pluginWarn(`mcp.json server "${c.name}" overrides a plugin's entry of the same name`); mcpByName.set(c.name, c); }
+  for (const w of mcpWarnings) pluginWarn(`mcp: ${w}`);
   const mcpConfigs = [...mcpByName.values()];
   let mcp: McpManager | null = null;
   if (mcpConfigs.length > 0) {
@@ -391,11 +398,14 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   const systemPrompt = (cwdOverride?: string): string => {
     const skillsIndex = buildSkillsIndex(skillStore);
     const memoryIndex = blocks.renderForPrompt();
-    return `You are Rovecode, an interactive coding agent in ${cwdOverride ?? cwd}. Use read/edit/write/bash tools. Edits require line hashes from read output. Be concise.${skillsIndex ? "\n\n# Skills\n" + skillsIndex : ""}${memoryIndex ? "\n\n# Memory\n" + memoryIndex : ""}`;
+    return `You are Rovecode, an interactive coding agent in ${cwdOverride ?? cwd}. Use read/edit/write/bash tools. Edits require line hashes from read output. Match the length of an answer to the task: a line for a lookup, the full thing for a plan, a design or a review — never pad, never truncate work that was asked for.${skillsIndex ? "\n\n# Skills\n" + skillsIndex : ""}${memoryIndex ? "\n\n# Memory\n" + memoryIndex : ""}`;
   };
 
   // ROVECODE_EFFORT is the boot default; /effort and --effort move it at runtime
-  let effort: ThinkingEffort = parseEffort(process.env.ROVECODE_EFFORT) ?? "off";
+  // default "auto": no thinking field on the wire, the provider's own default stands (Claude 5: adaptive,
+  // high). The old default "off" sent an explicit `thinking: disabled` and switched off the reasoning the
+  // model does by itself — most of "we are not getting the model's real performance" (Berkay, 2026-09-04).
+  let effort: ThinkingEffort = parseEffort(process.env.ROVECODE_EFFORT) ?? "auto";
 
   const buildDef = (model: ModelRef, opts: { cwd?: string } = {}): AgentDefinition => {
     if (model.effort === undefined) model = { ...model, effort }; // one dial, every surface
@@ -403,12 +413,18 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     // models the catalog knows CANNOT do native tool calling get the senpi-format
     // prompt block (port #7); unknown models attempt native first. Force: ROVECODE_TOOL_MIDDLEWARE=1
     const info = catalog.lookup(model.provider, model.model);
+    // the answer's room comes from the catalog (models.dev maxOutput), capped: the old flat 4096 default
+    // truncated long outputs — a whole page of UI, a long plan — mid-sentence, and the model was blamed
+    if (model.maxTokens === undefined && info?.maxOutput) model = { ...model, maxTokens: Math.min(info.maxOutput, MAX_OUTPUT_CAP) };
     const nonNative = info?.supportsTools === false || process.env.ROVECODE_TOOL_MIDDLEWARE === "1";
     // model profile (providers/profiles.ts): a per-family behavioral section rides AFTER the base prompt
     // and its indexes and BEFORE the tool-calling block — one string for the whole run (prompt cache);
     // .rovecode/profiles/<id>.md replaces the built-in text, ROVECODE_PROFILE=off drops it
     const profile = profileFor(model);
-    const section = profile === null ? "" : profilePromptSection(profile, cwd); // "" = an empty override file: no section, no separator
+    // A model WITHOUT a profile gets the working agreement too (profile-glm53.ts names no model or vendor
+    // — it is the harness's contract: read before edit, verify before "done", parallel calls, scope).
+    // Until now only GLM received it and Claude/GPT got one sentence; that asymmetry cost quality.
+    const section = profile === null ? GLM_53_AGENT_CONTRACT : profilePromptSection(profile, cwd); // "" = an empty override file: no section, no separator
     // design protocol (design/rules.ts): the ban list plus this project's recorded direction, read
     // once per run start like the profile so the system prefix stays byte-stable (prompt cache).
     // ROVECODE_DESIGN=off drops it for a run that has nothing to do with interfaces.

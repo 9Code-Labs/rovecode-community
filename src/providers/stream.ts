@@ -159,15 +159,15 @@ export function thinkingBudget(effort: ThinkingEffort | undefined): number | nul
 
 /** the answer needs room BESIDE the thinking budget — never less than the caller asked for */
 export function anthropicMaxTokens(model: ModelRef): number {
-  const base = model.maxTokens ?? 4096;
+  const base = model.maxTokens ?? 8192; // buildDef normally sets maxTokens from the catalog; 8192 is the floor every current Claude accepts
   const budget = thinkingBudget(model.effort);
   return budget === null ? base : Math.max(base, budget + 4096);
 }
 
 /** the request fields that carry the effort, for one shape */
 export function anthropicThinking(effort: ThinkingEffort | undefined, shape: AnthropicThinkingShape): Record<string, unknown> {
-  if (effort === undefined) return {};                                   // unset: leave the model's default alone
-  if (effort === "off") return { thinking: { type: "disabled" } };       // explicit: opus-5 thinks unless told not to
+  if (effort === undefined || effort === "auto") return {};              // unset / auto: leave the model's default alone (Claude 5: adaptive, high)
+  if (effort === "off") return { thinking: { type: "disabled" } };       // explicit, deliberate: opus-5 thinks unless told not to
   if (shape === "effort") return { output_config: { effort } };          // low | medium | high (the API also has xhigh/max)
   const budget = thinkingBudget(effort);
   return budget === null ? {} : { thinking: { type: "enabled", budget_tokens: budget } };
@@ -200,7 +200,7 @@ function reasoningEffort(model: ModelRef): Record<string, unknown> {
     const word = profile.reasoningEffort(model.effort);
     return word === null ? {} : { reasoning_effort: word };
   }
-  return model.effort === undefined || model.effort === "off" ? {} : { reasoning_effort: model.effort };
+  return model.effort === undefined || model.effort === "auto" || model.effort === "off" ? {} : { reasoning_effort: model.effort };
 }
 
 export function openaiCompatStream(opts: AdapterOptions): StreamFn {

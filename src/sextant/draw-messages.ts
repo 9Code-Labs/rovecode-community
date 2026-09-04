@@ -18,6 +18,8 @@ import { scrollbar } from "./scrollbar.ts";
 
 export interface Row { segs: Seg[]; indent?: number }
 
+/** the attachment cap the chip row quotes (core/images.ts MAX_IMAGES_PER_MESSAGE; a literal here keeps this painter free of node:fs) */
+const MAX_STAGED_HINT = 8;
 /** prompt placeholder when the input is empty */
 export const PLACEHOLDER = "ask rovecode — e.g. fix the failing test";
 /** button label per verdict — `all edits` reads as the mode it turns on, not as a third yes */
@@ -349,6 +351,14 @@ export function drawMessages(scr: ScreenLike, rect: Rect, s: SextantState, theme
   }
   const py = B.y + B.h - 1;
   if (B.h >= 2) scr.hline(B.x, py - 1, B.w, st(theme.frameDim), "╌");
+  // staged images ride ON the rule row as chips — visible before the message is sent, and no row is
+  // taken from the transcript for them (Berkay: keep the surface simple). Clipped, oldest dropped first.
+  if (B.h >= 2 && s.staged.length > 0) {
+    const segs: Seg[] = [[" ", st(-1)]];
+    for (const name of s.staged) segs.push([` ▣ ${name} `, st(theme.fg2, theme.selBg)], [" ", st(-1)]);
+    segs.push([`${s.staged.length}/${MAX_STAGED_HINT} · enter sends · /attach clear`, st(theme.dim)]);
+    scr.text(B.x, py - 1, segs, B.w);
+  }
   const hasText = s.input.text.length > 0;
   scr.put(B.x, py, "▌", st(hasText || focused ? theme.accent : theme.accentDim));
   const inW = B.w - 2;

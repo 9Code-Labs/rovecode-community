@@ -81,7 +81,7 @@ const glm53Wire = ({ streaming }: { streaming: boolean }): Record<string, unknow
 // path; medium has no GLM word and rounds UP (a rovecode "medium" asks for more than "low" —
 // rounding down would hand the two lower levels the same behavior)
 const glm53Effort = (e: ThinkingEffort | undefined): string | null =>
-  e === undefined || e === "off" ? null : e === "low" ? "low" : e === "medium" ? "high" : "max";
+  e === undefined || e === "auto" || e === "off" ? null : e === "low" ? "low" : e === "medium" ? "high" : "max";
 
 /** The default for the GLM-5.3 family: the Sonnet 5 persona, real Sonnet 5 voice examples, then the
  *  working agreement. */

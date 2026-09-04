@@ -337,6 +337,7 @@ export const HELP_KEYS: readonly (readonly [string, string])[] = [
   ["⌃e", "files panel"],
   ["⌃o", "next tab (narrow terminal)"],
   ["⌃b", "notifications"],
+  ["⌃v", "paste image from clipboard"],
   ["⌃t", "next theme"],
   ["⌃n", "new session (/new)"],
   ["↑↓ ←→", "files: pick · fold — code: scroll · mode — prompt: history"],

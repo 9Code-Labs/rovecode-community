@@ -370,6 +370,9 @@ export interface SextantState {
   toasts: Toast[];
   /** the notification history behind the toasts (Notice); newest last */
   notices: Notice[];
+  /** images staged for the next user message (names), shown as chips above the prompt; synced from
+   *  SextantAttach.staged() each tick — the store owns the stage, this is the painted mirror */
+  staged: string[];
   /** first Esc while busy arms "again to stop" until this clock */
   escUntil: number;
   /** two-press ⌃c guarantee (renderer-level): a ⌃c while busy interrupts and arms this clock; a
@@ -406,6 +409,9 @@ export interface SextantAttach {
   usage?(): { costUsd: number | null; contextTokens: number };
   /** `--pet <name>`; the renderer's own option is the fallback */
   petName?: string;
+  /** names of the images staged for the NEXT user message (tui/attach.ts stage on the active store),
+   *  read live each tick so the prompt can show them as chips before they are sent */
+  staged?(): string[];
 }
 
 /** pure reducer contract (model.ts): (state, event, now) → same state object, mutated in place */

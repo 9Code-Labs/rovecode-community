@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { createRuntime } from "../../src/cli/runtime.ts";
 import type { ApprovalFn, StreamFn } from "../../src/core/types.ts";
 import { textTurn } from "../../src/providers/stream.ts";
-import { GLM_53_PROFILE } from "../../src/providers/profiles.ts";
+import { GLM_53_AGENT_CONTRACT, GLM_53_PROFILE } from "../../src/providers/profiles.ts";
 import { designPromptSection } from "../../src/design/rules.ts";
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -72,9 +72,9 @@ test("buildDef returns main agent with wildcard tools and the runtime prompt", (
   const def = rt.buildDef({ provider: "p", model: "m-1" });
   expect(def.name).toBe("main");
   expect(def.tools).toEqual(["*"]);
-  expect(def.model).toEqual({ provider: "p", model: "m-1", effort: "off" }); // buildDef stamps the runtime's thinking dial onto every ref
-  // no profile matches "m-1", so the prompt is base + the always-on design section (design/rules.ts)
-  expect(def.systemPrompt).toBe(`${rt.systemPrompt()}\n\n${designPromptSection(cwd)}`);
+  expect(def.model).toEqual({ provider: "p", model: "m-1", effort: "auto" }); // buildDef stamps the runtime's thinking dial onto every ref; "auto" = the provider's own default
+  // no profile matches "m-1", so the prompt is base + the working agreement every profile-less model gets + the always-on design section
+  expect(def.systemPrompt).toBe(`${rt.systemPrompt()}\n\n${GLM_53_AGENT_CONTRACT}\n\n${designPromptSection(cwd)}`);
   rmSync(cwd, { recursive: true, force: true });
 });
 
@@ -188,8 +188,11 @@ test("buildDef appends the GLM-5.3 profile section after the base prompt, leaves
     const glm = { provider: "kaesra", model: "zai-org/glm-5.3-flash" };
     const claude = { provider: "anthropic", model: "claude-opus-5" };
     expect(rt.buildDef(glm).systemPrompt).toBe(`${rt.systemPrompt()}\n\n${GLM_53_PROFILE.promptSection}`);
-    expect(rt.buildDef(claude).systemPrompt).toBe(rt.systemPrompt());
-    expect(rt.buildDef({ provider: "openai", model: "gpt-5" }).systemPrompt).toBe(rt.systemPrompt());
+    // a model without a profile is not bare: it gets the vendor-neutral working agreement (the GLM
+    // profile carries the same text after its persona) — only GLM used to receive it, Claude and GPT
+    // got one sentence, and the quality gap showed
+    expect(rt.buildDef(claude).systemPrompt).toBe(`${rt.systemPrompt()}\n\n${GLM_53_AGENT_CONTRACT}`);
+    expect(rt.buildDef({ provider: "openai", model: "gpt-5" }).systemPrompt).toBe(`${rt.systemPrompt()}\n\n${GLM_53_AGENT_CONTRACT}`);
     // the identity sentence can name another directory (live gauntlet); indexes and the section are unchanged
     const elsewhere = rt.buildDef(glm, { cwd: "Z:/scratch" }).systemPrompt as string;
     expect(elsewhere.startsWith("You are Rovecode, an interactive coding agent in Z:/scratch.")).toBe(true);
@@ -206,7 +209,7 @@ test("buildDef appends the GLM-5.3 profile section after the base prompt, leaves
     // kill switch
     writeFileSync(join(cwd, ".rovecode", "profiles", "glm-5.3.md"), "# Custom rules\nbe brief\n");
     process.env.ROVECODE_PROFILE = "off";
-    expect(rt.buildDef(glm).systemPrompt).toBe(rt.systemPrompt());
+    expect(rt.buildDef(glm).systemPrompt).toBe(`${rt.systemPrompt()}\n\n${GLM_53_AGENT_CONTRACT}`); // profile off = no persona, but the working agreement stays
     // forced onto a model it was not written for: the prompt section only (the wire follows the model id)
     process.env.ROVECODE_PROFILE = "glm-5.3";
     expect(rt.buildDef(claude).systemPrompt).toBe(`${rt.systemPrompt()}\n\n# Custom rules\nbe brief`);

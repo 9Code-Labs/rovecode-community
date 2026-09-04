@@ -362,6 +362,10 @@ export class SextantRenderer implements Renderer {
   private onTick(now: number): void {
     const s = this.state;
     if (s.code.file && s.code.content === null && this.loadedFile !== s.code.file) { s.code.content = readFileBounded(s.cwd, s.code.file); this.loadedFile = s.code.file; this.loop.markDirty(); }
+    // the staged images are owned by the store (tui/attach.ts); mirror their names so the prompt shows
+    // chips before the message is sent — one read per tick, never a second copy of the list
+    const staged = this.ctx?.staged?.() ?? [];
+    if (staged.length !== s.staged.length || staged.some((n, i) => n !== s.staged[i])) { s.staged = staged; this.loop.markDirty(); }
     this.repo.onTick(now, s.running);
   }
 }

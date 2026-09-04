@@ -216,7 +216,7 @@ test("thinkingBudget/anthropicMaxTokens: the ceiling rises with the budget, neve
   expect(thinkingBudget("off")).toBeNull();
   expect([thinkingBudget("low"), thinkingBudget("medium"), thinkingBudget("high")]).toEqual([2048, 8192, 24576]);
   // the endpoint rejects max_tokens <= budget_tokens, so an unraised ceiling is a 400, not a downgrade
-  expect(anthropicMaxTokens({ provider: "a", model: "m" })).toBe(4096);
+  expect(anthropicMaxTokens({ provider: "a", model: "m" })).toBe(8192); // the floor when buildDef found no catalog maxOutput (was a flat 4096 that truncated long answers)
   expect(anthropicMaxTokens({ provider: "a", model: "m", effort: "high" })).toBe(24576 + 4096);
   expect(anthropicMaxTokens({ provider: "a", model: "m", maxTokens: 64000, effort: "low" })).toBe(64000); // caller wins when larger
 });
