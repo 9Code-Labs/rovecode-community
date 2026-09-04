@@ -1,0 +1,32 @@
+{
+  "name": "KB · Sessiz lüks",
+  "rationale": "The owner asked for a corporate page that does not look like every other corporate page. This one says almost nothing: warm off-white paper, one near-black ink at three strengths, a single deep accent that is almost never used, no decoration, no box rules, and a lot of air. The one image is the real 160×44 frame, large and alone. Read, not announced.",
+  "palette": {
+    "paper": "#f6f6f4",
+    "surface": "#ffffff",
+    "surface-2": "#efefec",
+    "border": "#e5e5e1",
+    "border-strong": "#d2d2cc",
+    "text": "#141414",
+    "text-muted": "#6b6b66",
+    "text-faint": "#a1a19a",
+    "brand-sea-ink": "#1e3d4c",
+    "brand-hover": "#142b36",
+    "on-brand": "#f6f6f4",
+    "ink": "#161819",
+    "ink-2": "#1f2224",
+    "ink-border": "#2c3033",
+    "ink-text": "#e6e6e2",
+    "ink-muted": "#a6a6a0",
+    "ink-faint": "#6f6f69",
+    "ink-accent": "#9fc5d4",
+    "terminal-plus": "#7fc48f",
+    "terminal-minus": "#f0605d",
+    "destructive": "#9b3b2e"
+  },
+  "typeface": { "display": "Hanken Grotesk Variable", "text": "Hanken Grotesk Variable", "label": "Hanken Grotesk Variable", "mono": "IBM Plex Mono" },
+  "corners": "soft",
+  "layout": "centered",
+  "notes": "Hero and CTA are centred in a 40–44rem measure with 6–9rem of vertical air; section headings alternate left/right (Section `shift`). Type is small and light: display 300, h2 28–36px, body 16px, captions 11px spaced uppercase in text-faint. No cards except the frame bezel and code blocks (surface lift by one wide soft shadow, never an outline). No colour accent word in the headline. Motion: entrances only (0.9s), transcript replays once, frame lens-zoom on hover; mascot holds still and appears exactly twice (statement line, close) — owner insisted it stays. No video, no isobars, no chart marks. rejected: navy+glass (r1), storm-red/Schibsted (r2), light-sky/Fraunces/full-bleed video (r3-4), C canlı motion pass (r5), K2 lacivert band + beyaz gövde/Geist (r6, 'too classic'), R3 hava haritası/IBM Plex/chart-red (r7, 'not corporate'). Owner's tells to avoid: amber, hero for its own sake, unrelated typefaces, too many lines, too angular, everything stacked down the middle (accepted here only for the hero/CTA measure, by the owner's own pick).",
+  "chosenAt": "2026-09-04"
+}

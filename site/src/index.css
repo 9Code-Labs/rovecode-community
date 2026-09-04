@@ -1,0 +1,247 @@
+@import "tailwindcss";
+
+/* Quiet — the page says very little and leaves the room to the one thing that is real: the 160×44 frame.
+   Warm off-white paper, one near-black ink at three strengths, a single deep accent that almost never appears,
+   no decoration, no rules, and a lot of air. Cards are not outlined; the few surfaces that exist are lifted by
+   one soft, wide shadow. Type is small, light and spaced — the page is read, not announced.
+   Type: Hanken Grotesk (everything) · IBM Plex Mono (commands, code — the product's own register). */
+:root {
+  --color-bg: #f6f6f4;
+  --color-surface: #ffffff;
+  --color-surface-2: #efefec;
+  --color-border: #e5e5e1;
+  --color-border-strong: #d2d2cc;
+  --color-text: #141414;
+  --color-text-muted: #6b6b66;
+  --color-text-faint: #a1a19a;
+
+  /* the one accent: a deep sea-ink, for links, focus and the single mark per section */
+  --color-brand: #1e3d4c;
+  --color-brand-hover: #142b36;
+  --color-brand-text: #1e3d4c;
+  --color-on-brand: #f6f6f4;
+  --color-ring: rgba(30, 61, 76, 0.35);
+  /* kept for the transcript's terminal palette and the one dark panel */
+  --color-ink: #161819;
+  --color-ink-2: #1f2224;
+  --color-ink-border: #2c3033;
+  --color-ink-text: #e6e6e2;
+  --color-ink-muted: #a6a6a0;
+  --color-ink-faint: #6f6f69;
+  --color-ink-accent: #9fc5d4;
+  --color-front: #1e3d4c;
+  --color-front-soft: #3a6c82;
+  --color-sky: #1e3d4c;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  /* one soft, wide lift: the only depth on the page */
+  --shadow-sm: 0 1px 2px rgba(20, 20, 20, 0.04), 0 24px 60px -20px rgba(20, 20, 20, 0.12);
+
+  --header-h: 64px;
+
+  --background: var(--color-bg);
+  --foreground: var(--color-text);
+  --card: var(--color-surface);
+  --card-foreground: var(--color-text);
+  --popover: var(--color-surface);
+  --popover-foreground: var(--color-text);
+  --primary: var(--color-brand);
+  --primary-foreground: var(--color-on-brand);
+  --secondary: var(--color-surface-2);
+  --secondary-foreground: var(--color-text);
+  --muted: var(--color-surface-2);
+  --muted-foreground: var(--color-text-muted);
+  --accent: var(--color-surface-2);
+  --accent-foreground: var(--color-text);
+  --destructive: #9b3b2e;
+  --border: var(--color-border);
+  --input: var(--color-border);
+  --ring: var(--color-ring);
+  --radius: var(--radius-md);
+}
+
+@theme inline {
+  --color-bg: var(--color-bg);
+  --color-surface: var(--color-surface);
+  --color-surface-2: var(--color-surface-2);
+  --color-border: var(--color-border);
+  --color-border-strong: var(--color-border-strong);
+  --color-text: var(--color-text);
+  --color-text-muted: var(--color-text-muted);
+  --color-text-faint: var(--color-text-faint);
+  --color-brand: var(--color-brand);
+  --color-brand-hover: var(--color-brand-hover);
+  --color-brand-text: var(--color-brand-text);
+  --color-on-brand: var(--color-on-brand);
+  --color-front: var(--color-front);
+  --color-front-soft: var(--color-front-soft);
+  --color-ring: var(--color-ring);
+  --color-sky: var(--color-sky);
+  --color-ink: var(--color-ink);
+  --color-ink-2: var(--color-ink-2);
+  --color-ink-border: var(--color-ink-border);
+  --color-ink-text: var(--color-ink-text);
+  --color-ink-muted: var(--color-ink-muted);
+  --color-ink-faint: var(--color-ink-faint);
+  --color-ink-accent: var(--color-ink-accent);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-input: var(--input);
+
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+
+  --font-sans: "Hanken Grotesk Variable", "Hanken Grotesk", ui-sans-serif, sans-serif;
+  --font-display: "Hanken Grotesk Variable", "Hanken Grotesk", ui-sans-serif, sans-serif;
+  --font-label: "Hanken Grotesk Variable", "Hanken Grotesk", ui-sans-serif, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@layer base {
+  html { color-scheme: light; scroll-behavior: smooth; }
+  section[id] { scroll-margin-top: calc(var(--header-h) + 1rem); }
+  body {
+    background-color: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    font-weight: 400;
+    font-size: 16px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  h1, h2 {
+    font-family: var(--font-display);
+    font-weight: 300;
+    letter-spacing: -0.015em;
+    text-wrap: balance;
+  }
+  h3 { font-weight: 500; letter-spacing: -0.005em; text-wrap: balance; }
+  code, kbd, pre, .mono { font-family: var(--font-mono); }
+  ::selection { background: var(--color-border-strong); color: var(--color-text); }
+  :focus-visible { outline: 1.5px solid var(--color-brand); outline-offset: 3px; border-radius: var(--radius-sm); }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  }
+}
+
+/* ---------- surfaces: only what has to exist ---------- */
+
+/* the frame's bezel and the very few cards: white, lifted once, never outlined */
+@utility panel {
+  position: relative;
+  background: var(--color-surface);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+/* a shade of the paper for nested blocks (commands, code, crops) */
+@utility panel-2 {
+  position: relative;
+  background: var(--color-surface-2);
+  border-radius: var(--radius-md);
+}
+@utility panel-hover {
+  transition: transform 300ms var(--ease-out-soft);
+}
+/* a small quiet tag: step numbers, the version */
+@utility chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+  font-family: var(--font-mono);
+}
+@utility ink {
+  position: relative;
+  background: var(--color-ink);
+  color: var(--color-ink-text);
+}
+@utility terminal {
+  position: relative;
+  background: var(--color-ink);
+  color: var(--color-ink-text);
+  border-radius: var(--radius-lg);
+  --t-muted: #a6a6a0;
+  --t-faint: #6f6f69;
+  --t-accent: #9fc5d4;
+  --t-plus: #7fc48f;
+  --t-card: #1f2224;
+  --t-line: #2c3033;
+}
+
+/* ---------- type ---------- */
+@utility display {
+  font-family: var(--font-display);
+  font-weight: 300;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  text-wrap: balance;
+}
+/* a small caption: 11 px, spaced, muted — the only "label" style on the page */
+@utility label {
+  font-family: var(--font-label);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-text-faint);
+}
+@utility eyebrow {
+  font-family: var(--font-label);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--color-text-faint);
+}
+@utility h2 {
+  font-family: var(--font-display);
+  font-size: 1.75rem;
+  line-height: 1.2;
+  font-weight: 300;
+  letter-spacing: -0.015em;
+  @media (width >= 48rem) { font-size: 2.25rem; }
+}
+@utility lead {
+  font-size: 16px;
+  line-height: 1.7;
+  color: var(--color-text-muted);
+}
+@utility section-pad {
+  padding-block: 6rem;
+  @media (width >= 48rem) { padding-block: 9rem; }
+}
+@utility reading {
+  font-family: var(--font-display);
+  font-weight: 300;
+  font-variant-numeric: tabular-nums lining-nums;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+/* ---------- motion ---------- */
+@keyframes caret { 50% { opacity: 0; } }
+@utility caret-blink { animation: caret 1s steps(1, end) infinite; }

@@ -1,0 +1,7 @@
+node_modules
+dist
+scripts/out/dev.log
+.env
+.env.*
+media-src
+screenshots
