@@ -12,8 +12,11 @@ What ships instead is a protocol and a checker.
 - A **checker**, the `design_audit` tool, which counts patterns in source and compares them against the
   record.
 
-The research behind this is in [design-slop-research.md](design-slop-research.md); the measurements that
-set the checker's thresholds are in [design-audit-calibration.md](design-audit-calibration.md).
+This page is the whole shipped behaviour; nothing below depends on reading anything else. Two research
+write-ups sit beside it in the repository — `docs/design-slop-research.md`, which argued for recording more
+of the direction rather than widening a ban list, and `docs/design-audit-calibration.md`, which measured the
+checker against twenty repositories and set the thresholds quoted here. Both are pinned to the code as it
+was before the rework and are kept as history, not as documentation.
 
 ## The prompt section
 

@@ -1,7 +1,9 @@
 # Deploying the site and running the server
 
-The site (`site/`) is static — Vite builds it, nginx serves it. Everything below was set up on
-2026-09-04 and is idempotent; nothing here needs a Node process on the server.
+The site (`site/`) is static: Vite builds it, nginx serves it, and nothing on the server runs Node. This
+page is the reference for that setup — what the host holds, how a release lands, and how to roll one back.
+Every step described here is idempotent, so re-running any of it on a fresh host reproduces the same state.
+The current host was provisioned on 2026-09-04.
 
 ## The server
 

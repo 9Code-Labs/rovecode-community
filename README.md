@@ -8,6 +8,8 @@ OpenHands) — every port traces to file:line in a snapshotted source and lands 
 fresh-context critic verifies it against a pre-written bar (ledger: `PORTS.md`, kept outside this
 repository for now).
 
+![The sextant TUI at 160×44 cells: the files tree with git statuses, the code panel on src/auth/callback.ts with edited lines highlighted, the messages panel with read and edit tool rows and an approval card asking to run bun test, the plan at step 1 of 4, usage at 13% context, and the rovecode cloud pet waiting for a nod.](site/public/shots/approval-160x44.png)
+
 ## Status (2026-09-04, post wave 4)
 
 - **All 20 BLUEPRINT §3 ports landed** (P1 8/8 · P2 6/6 · P3 4/4 · P4 2/2) **+ all 19 Wave-3 parity ports (#21–#39)** landed
@@ -30,7 +32,7 @@ Requires [Bun](https://bun.sh) ≥ 1.3.14 (the CLI entry is TypeScript, executed
 ```bash
 # from source
 git clone https://github.com/9Code-Labs/rovecode.git && cd rovecode && bun install
-bun run src/cli/main.ts --help          # or: bun link  → `rovecode` on PATH
+bun run src/cli/main.ts --help          # or: bun link → `rovecode` on PATH
 
 # single binary (~110 MB: bun runtime + bundled deps + embedded native addons)
 bun run build                           # scripts/build.ts → dist/rovecode(.exe) + smoke
@@ -46,43 +48,56 @@ reinstall to update).
 ## Quickstart
 
 ```bash
-rovecode connect                # connect a model, step by step: pick a provider, paste the key (hidden), one test call
-rovecode connect anthropic      # the same in one line — see Providers for the flags (rovecode setup = the wizard)
-rovecode                        # TUI chat — sextant on a colour TTY ≥ 100×30 (truecolor or 256), else the classic chat
-rovecode --classic              # force the classic chat; --plain = readline REPL; --pet <name> names the sextant pet
+rovecode connect                # connect a model, step by step: pick a provider, paste the key (hidden), one
+                                # test call
+rovecode connect anthropic      # the same in one line — see Providers for the flags (rovecode setup = the
+                                # wizard)
+rovecode                        # TUI chat — sextant on a colour TTY ≥ 100×30 (truecolor or 256), else the
+                                # classic chat
+rovecode --classic              # force the classic chat; --plain = readline REPL; --pet <name> names the
+                                # sextant pet
 rovecode "fix the failing test" # one-shot task
 rovecode run "<prompt>" --yolo  # one-shot in auto mode (never asks)
-rovecode --effort high          # how hard the model thinks first: auto (default) | off | low | medium | high (/effort in the
-                              # TUI, ROVECODE_EFFORT=…). auto sends no thinking field and leaves the
-                              # endpoint's own default standing. Anthropic takes output_config.effort or a
-                              # thinking budget depending on the model — rovecode learns which from the
-                              # endpoint's own 400 and remembers it; OpenAI takes reasoning_effort. Billed as
-                              # output tokens. `rovecode model show` prints what YOUR model receives per level
-                              # (docs/thinking.md).
+rovecode --effort high          # how hard the model thinks first: auto (default) | off | low | medium | high
+                                # (/effort in the TUI, ROVECODE_EFFORT=…). auto sends no thinking field and
+                                # leaves the endpoint's own default standing. Anthropic takes
+                                # output_config.effort or a thinking budget depending on the model — rovecode
+                                # learns which from the endpoint's own 400 and remembers it; OpenAI takes
+                                # reasoning_effort. Billed as output tokens. `rovecode model show` prints what
+                                # YOUR model receives per level (docs/thinking.md).
 rovecode --accept-edits         # middle tier: writes INSIDE this folder stop asking; shell, subagents,
 /yolo --save                  # make it stick: the level is written to ~/.rovecode/settings.json and the
 /accept-edits --save --project  # next launch starts there. --project pins it to this checkout instead.
-                              # Ladder: CLI flag > ROVECODE_PERMISSION > .rovecode/settings.json (project)
-                              # > ~/.rovecode/settings.json (user) > ask. Without --save a toggle lasts one session.
-                              # network and writes outside it still ask (/accept-edits · ROVECODE_ACCEPT_EDITS=1
-                              # · or the `all edits` button on a write approval card)
-rovecode run "<prompt>" --output json    # ONE result object on stdout (ndjson: one line per RunEvent + a result line)
+                                # Ladder: CLI flag > ROVECODE_PERMISSION > .rovecode/settings.json (project) >
+                                # ~/.rovecode/settings.json (user) > ask. Without --save a toggle lasts one
+                                # session. network and writes outside it still ask (/accept-edits ·
+                                # ROVECODE_ACCEPT_EDITS=1 · or the `all edits` button on a write approval
+                                # card)
+rovecode run "<prompt>" --output json    # ONE result object on stdout (ndjson: one line per RunEvent + a
+                                         # result line)
 rovecode run "<prompt>" --max-seconds 300 --max-turns 40  # ceilings on one run: a hit ends it cleanly with
-                              # status "budget" (exit 1) and the work so far, not an outside kill. A headless run
-                              # already has a 20-minute clock (--max-seconds off removes it);
-                              # ROVECODE_MAX_TURNS / ROVECODE_MAX_SECONDS set both on every surface, TUI included
-rovecode run "/review src/x.ts" # a leading /name expands .rovecode/commands/<name>.md (custom slash command) headlessly
+                                                          # status "budget" (exit 1) and the work so far, not
+                                                          # an outside kill. A headless run already has a
+                                                          # 20-minute clock (--max-seconds off removes it);
+                                                          # ROVECODE_MAX_TURNS / ROVECODE_MAX_SECONDS set both
+                                                          # on every surface, TUI included
+rovecode run "/review src/x.ts" # a leading /name expands .rovecode/commands/<name>.md (a custom slash
+                                # command) headlessly
 rovecode gauntlet               # adversarial eval suite (offline, deterministic, 10 tasks)
 rovecode gauntlet --live        # 9 of those tasks against the configured REAL model, through the real prompt
-                                # (--model provider/model, --effort …): the before/after instrument for prompt work
+                                # (--model provider/model, --effort …): the before/after instrument for prompt
+                                # work
 rovecode bench                  # cross-harness micro-benchmarks
 rovecode tools                  # registered tool listing
-rovecode auth set <provider>    # store an API key (prompted on the terminal, never echoed); auth list / auth remove
-rovecode provider add <id> <url> # register any OpenAI-compatible or Anthropic endpoint — live, no restart; provider list|test
+rovecode auth set <provider>    # store an API key (prompted on the terminal, never echoed); auth list / auth
+                                # remove
+rovecode provider add <id> <url>  # register any OpenAI-compatible or Anthropic endpoint — live, no
+                                  # restart; also provider list|test
 rovecode model                # pick from a numbered menu of every configured provider's models
 rovecode models               # just list them (* = current); alias for `model list`
 rovecode model use <provider/model>  # persist the default model directly (--project pins it to this repo)
-rovecode model show           # the model, its protocol, and the exact thinking field each --effort level sends
+rovecode model show           # the model, its protocol, and the exact thinking field each --effort level
+                              # sends
 rovecode trace <session-id>     # replay a session's JSONL tree
 rovecode acp                    # Agent Client Protocol v1 over stdio (Zed/JetBrains)
 rovecode serve                  # headless HTTP + SSE server (ROVECODE_PORT, loopback-only)
@@ -127,7 +142,8 @@ next model call, no restart:
 rovecode provider add myproxy https://llm.example.com/v1 --model gpt-5 --key   # --key prompts (never echoed)
 rovecode provider add ollama http://127.0.0.1:11434/v1 --no-key                # local server, no key
 rovecode provider add gw https://gw.corp/v1 --protocol anthropic --key-env GW_TOKEN --project  # ./.rovecode
-rovecode provider list                       # configured providers + the default provider/model (key SOURCES only)
+rovecode provider list                       # configured providers + the default provider/model (key SOURCES
+                                             # only)
 rovecode provider test myproxy               # one tiny real call: url + key + model
 rovecode model list myproxy                  # ids from providers.json or the endpoint's /models
 rovecode model use myproxy/gpt-5             # persist the default (running TUIs switch live)
@@ -153,7 +169,8 @@ Or configure by env:
 ROVECODE_BASE_URL=... ROVECODE_API_KEY=...   # any OpenAI-compatible or Anthropic endpoint (always wins)
 OPENAI_API_KEY=... / ANTHROPIC_API_KEY=... / DEEPSEEK_API_KEY=... / GROQ_API_KEY=...  # named providers
 ROVECODE_MODEL=zai-org/glm-5.3           # model id
-ROVECODE_MODEL_DEFAULT=prov/a,prov/b     # role fallback chains (DEFAULT SMOL PLAN COMMIT TASK); advance on 429/5xx
+ROVECODE_MODEL_DEFAULT=prov/a,prov/b     # role fallback chains (DEFAULT SMOL PLAN COMMIT TASK); advance on
+                                         # 429/5xx
 ```
 
 TUI slash commands: `/help /setup /status /cost /model /effort /yolo /accept-edits /plan /act /rewind /tree
@@ -332,8 +349,9 @@ one shape:
 {
   "default": "myproxy/gpt-5",
   "providers": {
-    "myproxy": { "baseUrl": "https://llm.example.com/v1", "protocol": "openai", "keyEnv": "MYPROXY_API_KEY",
-                 "defaultModel": "gpt-5", "models": ["gpt-5", "gpt-5-mini"], "headers": { "x-org": "9code" } },
+    "myproxy": { "baseUrl": "https://llm.example.com/v1", "protocol": "openai",
+                 "keyEnv": "MYPROXY_API_KEY", "defaultModel": "gpt-5",
+                 "models": ["gpt-5", "gpt-5-mini"], "headers": { "x-org": "9code" } },
     "ollama":  { "baseUrl": "http://127.0.0.1:11434/v1", "noKey": true }
   }
 }
@@ -367,9 +385,16 @@ Environment knobs (`rovecode help env` is the full reference; this list is the c
 - `ROVECODE_MODEL` — model id (beats the providers.json `default`); `ROVECODE_MODEL_<ROLE>` — fallback chain per role
   (DEFAULT SMOL PLAN COMMIT TASK), comma-separated `provider/model`, advancing on 429/5xx (#14); each candidate
   is served by its own provider's endpoint
-- `ROVECODE_RETRY_MAX` (default 3; 0 = off) / `ROVECODE_RETRY_BASE_MS` (default 2000) — same-model retries on 429/5xx/transport
-  failures with exponential backoff, full jitter and `Retry-After` honored; wired INSIDE the router so retries exhaust
-  before the chain advances (#23); each retry is reported like a router note
+- `ROVECODE_RETRY_MAX` (default 3, so 4 attempts; 0 = off) / `ROVECODE_RETRY_BASE_MS` (default 1000) — same-model
+  retries on 429/5xx/transport failures. The first backoff is capped at `RETRY_BASE_MS`, doubles per attempt up to
+  20 s, is fully jittered, and a `Retry-After` header raises the wait but never lowers it. Wired INSIDE the router,
+  so retries exhaust before the fallback chain advances (#23). The wait is announced **while it happens** —
+  `anthropic: overloaded — retrying in 4 s (2/4)` as a TUI note or on `rovecode run`'s stderr — and giving up says
+  which limit was hit: the attempts, the retry budget, or the run's own deadline
+- `ROVECODE_FIRST_BYTE_TIMEOUT_MS` (default 60000) — how long a provider may go without sending **anything** before
+  the request counts as failed and is retried. Only the first byte is on this clock; once the model is talking the
+  body may take as long as it takes. A connection that drops mid-stream **after** text arrived is NOT retried: the
+  partial answer is kept and the error row says why (`docs/wire-failures.md`)
 - `ROVECODE_WEBFETCH_TIMEOUT_MS` (default 30000) / `ROVECODE_WEBFETCH_ALLOW_PRIVATE=1` — `web_fetch` timeout and the SSRF-guard
   escape for loopback/private hosts (local dev servers) (#31)
 - `ROVECODE_COMPACTION` — `head-summarize` (default) | `keep-window` | `provider-native` (#25)
@@ -554,7 +579,7 @@ tokens, cache hits, and catalog-priced spend.
 - **Site** (`site/`, `docs/deploy.md`): the landing page — Vite + React, prerendered once per language, no
   runtime; `cd site && bun install --frozen-lockfile && bun run build` → `site/dist`. `bun run deploy:site`
   ships it to the VPS as a new release and flips `current`; `.github/workflows/site.yml` does the same on a
-  push to `main`. Live at http://64.177.43.110/ until there is a domain.
+  push to `main`. Live at [64.177.43.110](http://64.177.43.110/) until there is a domain.
 
 ## License & notices
 

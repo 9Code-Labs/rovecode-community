@@ -80,7 +80,7 @@ test("help: the env block documents the retry / webfetch / compaction / tasks kn
   expect(r.code).toBe(0);
   const out = r.stdout;
   expect(out).toMatch(/^\s*ROVECODE_RETRY_MAX\s+.*default 3.*0 = off/m);
-  expect(out).toMatch(/^\s*ROVECODE_RETRY_BASE_MS\s+.*2000.*jitter.*Retry-After/m);
+  expect(out).toMatch(/^\s*ROVECODE_RETRY_BASE_MS\s+.*1000.*jitter.*Retry-After/m); // default halved with the wire-failure pass
   expect(out).toMatch(/^\s*ROVECODE_WEBFETCH_TIMEOUT_MS\s+.*30000/m);
   expect(out).toMatch(/^\s*ROVECODE_WEBFETCH_ALLOW_PRIVATE=1\s+.*private/m);
   expect(out).toMatch(/^\s*ROVECODE_COMPACTION\s+.*head-summarize.*keep-window.*provider-native/m);

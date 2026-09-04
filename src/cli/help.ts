@@ -154,8 +154,13 @@ const ENV = `env — every ROVECODE_* setting
   ROVECODE_PET=0      hide the sextant pet panel (rovecode); --pet <name> renames it
   ROVECODE_SANDBOX    executor rung for bash: direct (default) | wsl | docker; beats .rovecode/sandbox.json {"rung","dockerImage"}
   ROVECODE_SANDBOX_IMAGE  image for the docker rung (default debian:stable-slim; must contain bash)
-  ROVECODE_RETRY_MAX  same-model retries after a 429/5xx/transport failure (default 3; 0 = off)
-  ROVECODE_RETRY_BASE_MS  first backoff cap in ms (default 2000; exponential, full jitter, Retry-After honored)
+  ROVECODE_RETRY_MAX  same-model retries after a 429/5xx/transport failure (default 3 = 4 attempts; 0 = off)
+                    The wait is announced live, while it is happening, not in a summary after the run
+  ROVECODE_RETRY_BASE_MS  cap of the FIRST backoff, ms (default 1000; full jitter; a Retry-After hint is a floor)
+                    It doubles per attempt up to 20 s, and a server hint can raise the wait, never shorten it
+  ROVECODE_FIRST_BYTE_TIMEOUT_MS  how long a provider may go without ANY response before the request
+                    counts as failed and is retried (default 60000). Only the FIRST byte is on this clock:
+                    once the model is talking, the body may take as long as it takes
   ROVECODE_WEBFETCH_TIMEOUT_MS  web_fetch request timeout in ms (default 30000)
   ROVECODE_WEBFETCH_ALLOW_PRIVATE=1  let web_fetch reach loopback/private hosts (SSRF guard escape for local dev)
   ROVECODE_COMPACTION  history compaction strategy: head-summarize (default) | keep-window | provider-native

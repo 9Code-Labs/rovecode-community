@@ -6,7 +6,27 @@ wrapped around the OpenAI-compatible and Anthropic adapters in `src/providers/st
 inside the router's fallback chain), one first-byte timeout (`stream-errors.ts fetchFirstByte`), one rule for
 mid-stream failures (no re-drive after content), and one note channel for the human.
 
-## Before and after (audit of 2026-09-04)
+## The policy
+
+A failure is retried when retrying could help and cannot duplicate work: **429 and 5xx are retryable**,
+transport failures (no HTTP prefix) are retryable, and `config:` errors and every other 4xx are not — the same
+classifier the router uses for its fallback chain (`router.ts classifyStreamError`).
+
+`ROVECODE_RETRY_MAX` sets the retries after the first attempt (default 3, so 4 attempts; `0` disables).
+`ROVECODE_RETRY_BASE_MS` caps the FIRST backoff (default 1000); it doubles per attempt up to 20 s and is fully
+jittered (`U[0,1) × cap`), so a rate-limited fleet does not come back in lockstep. Whatever the server asks for
+— `Retry-After` in seconds or as an HTTP date, `retry-after-ms`, or Anthropic's rate-limit reset headers — is a
+**floor**, never a ceiling: a hint raises the wait, it can never shorten it.
+
+Three things end the retrying rather than the attempts running out, and each says so by name: the per-turn
+retry budget (60 s total), the run's own deadline from `--max-seconds`, and a hint longer than either.
+
+`ROVECODE_FIRST_BYTE_TIMEOUT_MS` (default 60000) bounds only the wait for the **first** byte. Once the model is
+talking the body may take as long as it takes — a long answer is not a hung request.
+
+## What changed on 2026-09-04
+
+Kept for anyone who knew the old behaviour; the right-hand column is what ships.
 
 | case | before | now |
 |---|---|---|
@@ -20,11 +40,6 @@ mid-stream failures (no re-drive after content), and one note channel for the hu
 | **abort (Ctrl-C, Esc Esc) during the backoff** | the sleep woke at once, no retry | unchanged |
 | **`--max-seconds` deadline** | unknown to the retry: a 30 s Retry-After could overshoot the clock | the loop passes `StreamOptions.deadlineAt`; a wait that would end past it is not taken: `anthropic: overloaded (HTTP 529) — not retried: the run's time limit is closer than the 8 s wait: Overloaded` |
 | retry budget per turn | 60 s total | unchanged (60 s); the note says `not retried: the 30 s wait would pass the retry budget` |
-
-Attempt count: `ROVECODE_RETRY_MAX` (default 3 retries → 4 attempts; 0 disables). First backoff cap
-`ROVECODE_RETRY_BASE_MS` (default 1000), doubling to 20 s, full jitter (`U[0,1) × cap`), the server's hint as
-a floor. The classifier is shared with the router (`router.ts classifyStreamError`): 429 and 5xx retryable,
-transport failures (no HTTP prefix) retryable, `config:` errors and every other 4xx not.
 
 ## Idempotency
 

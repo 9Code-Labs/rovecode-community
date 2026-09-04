@@ -53,7 +53,8 @@ export default {
   api: 1,
   // an array, or a factory that gets { cwd, home, pluginDir }
   tools: (ctx) => [{
-    kind: "read",                       // read | write | execute | spawn | memory | network | custom — the permission class
+    // permission class: read | write | execute | spawn | memory | network | custom
+    kind: "read",
     schema: { name: "my_tool", description: "…", args: { type: "object", properties: {} } },
     async execute(args, toolCtx) { return { ok: true, output: "…" }; },
   }],

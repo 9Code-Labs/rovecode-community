@@ -36,13 +36,24 @@ remotes are left out because our http transport carries a header, not a browser 
 **Official registry** (`registry.modelcontextprotocol.io`, `src/mcp/market.ts`). The API as verified live:
 
 ```
-GET /v0/servers?search=<substring of name>&version=latest&limit=50   → { servers: [{ server, _meta }], metadata: { nextCursor, count } }
-GET /v0/servers/<url-encoded name>/versions/latest                    → { server, _meta }
-server: { name "io.github.owner/repo", description, title?, version, repository?, websiteUrl?,
-          packages?: [{ registryType npm|pypi|oci|nuget|mcpb, identifier, version?, runtimeHint?, transport{type},
-                        runtimeArguments?, packageArguments?, environmentVariables?[{name,isRequired,isSecret,value|default}] }],
-          remotes?:  [{ type streamable-http|sse, url, headers?[{name, value "Bearer {var}", isSecret, isRequired}] }] }
-_meta["io.modelcontextprotocol.registry/official"]: { status active|deprecated|deleted, isLatest, publishedAt, … }
+GET /v0/servers?search=<substring of name>&version=latest&limit=50
+  -> { servers: [{ server, _meta }], metadata: { nextCursor, count } }
+GET /v0/servers/<url-encoded name>/versions/latest
+  -> { server, _meta }
+
+server: { name "io.github.owner/repo", description, title?, version,
+          repository?, websiteUrl?,
+          packages?: [{ registryType npm|pypi|oci|nuget|mcpb, identifier,
+                        version?, runtimeHint?, transport{type},
+                        runtimeArguments?, packageArguments?,
+                        environmentVariables?: [{ name, isRequired, isSecret,
+                                                  value|default }] }],
+          remotes?:  [{ type streamable-http|sse, url,
+                        headers?: [{ name, value "Bearer {var}", isSecret,
+                                     isRequired }] }] }
+
+_meta["io.modelcontextprotocol.registry/official"]:
+  { status active|deprecated|deleted, isLatest, publishedAt, ... }
 ```
 
 A query shorter than two characters (and the empty query) is answered from the curated shelf only — the
@@ -118,7 +129,9 @@ on this machine; until then they contribute **nothing** — no server, no `mcp_l
 carries one warning per file:
 
 ```
-mcp: /path/.rovecode/mcp.json: not trusted on this machine — its 2 MCP servers stay off (they would run commands from this repo). Review: rovecode mcp show · approve: rovecode mcp trust
+mcp: /path/.rovecode/mcp.json: not trusted on this machine — its 2 MCP servers
+stay off (they would run commands from this repo).
+Review: rovecode mcp show · approve: rovecode mcp trust
 ```
 
 - **Store**: the plugin trust store, `~/.rovecode/plugins.json` → `trusted`, keyed by the file's absolute path,
