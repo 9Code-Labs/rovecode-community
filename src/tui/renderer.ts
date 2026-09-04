@@ -55,6 +55,9 @@ export interface SlashCommand {
    *  the command is typed and completes the one picked. A function is read at suggestion time, for a
    *  set that changes while the TUI runs (the models of the providers that have a key). */
   choices?: readonly string[] | (() => readonly string[]);
+  /** what Enter does on a picked choice: "submit" (default — `/effort high` runs) or "complete" — the
+   *  choice is a subcommand that wants more words (`/mcp add ` waits for a name) */
+  choicesThen?: "submit" | "complete";
 }
 
 export interface PickItem { value: string; label: string; description?: string }

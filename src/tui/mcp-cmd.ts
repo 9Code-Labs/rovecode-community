@@ -16,7 +16,9 @@ import { parseConfigFile } from "../mcp/config.ts";
 import { mcpTrustStatus, projectMcpFiles, trustMcpFile } from "../mcp/trust.ts";
 import { rovecodeHome } from "../providers/auth.ts";
 
-export const MCP_COMMAND = { name: "mcp", description: "Find and install an MCP server: /mcp [query] [--project] — the curated shelf, then the registry · /mcp trust approves this repo's MCP files", group: "modes & safety" };
+/** the subcommands the sextant offers after `/mcp ` (Enter completes the word, the name comes next) */
+export const MCP_SUBCOMMANDS = ["search", "info", "add", "remove", "list", "show", "trust", "untrust"] as const;
+export const MCP_COMMAND = { name: "mcp", choices: MCP_SUBCOMMANDS, choicesThen: "complete" as const, description: "Find and install an MCP server: /mcp [query] [--project] — the curated shelf, then the registry · /mcp trust approves this repo's MCP files", group: "modes & safety" };
 
 /** `/mcp trust` — one approval card per project MCP file: the file as preview, its servers as detail; a yes
  *  records the file's current bytes as trusted (mcp/trust.ts), so the NEXT launch loads it */

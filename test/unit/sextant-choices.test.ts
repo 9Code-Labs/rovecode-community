@@ -50,6 +50,17 @@ test("listModelIds: configured providers' models as provider/model ids; unconfig
   expect(await listModelIds(reg as never)).toEqual(["anthropic/claude-opus-5", "anthropic/claude-sonnet-5", "local/qwen3"]);
 });
 
+test("a subcommand set (choicesThen complete): Enter fills `/mcp add ` and waits for the name instead of submitting", () => {
+  const s = makeState({ commands: [{ name: "mcp", description: "MCP", choices: ["search", "add", "trust"], choicesThen: "complete" }] });
+  const spy = spyCtx();
+  type(s, spy, "/mcp ad");
+  expect(suggestions(s, [], fuzzy).map((x) => `${x.label}:${x.enter}`)).toEqual(["add:complete"]);
+  press(s, spy, key("enter"));
+  expect(spy.submits).toEqual([]);
+  expect(s.input.text).toBe("/mcp add ");
+  expect(s.input.cur).toBe(9);
+});
+
 test("Enter on the picked value submits `/effort high`", () => {
   const s = withEffort(), spy = spyCtx();
   type(s, spy, "/effort hi");

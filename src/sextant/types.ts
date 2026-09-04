@@ -399,7 +399,7 @@ export interface SextantState {
   /** slash commands known to the prompt/palette (built-ins + custom) */
   /** the app's slash commands for the palette and the suggestions; `choices` = a fixed argument set
    *  offered once the command is typed (tui/renderer.ts SlashCommand.choices) */
-  commands: { name: string; description: string; choices?: readonly string[] | (() => readonly string[]) }[];
+  commands: { name: string; description: string; choices?: readonly string[] | (() => readonly string[]); choicesThen?: "submit" | "complete" }[];
   version: string;
 }
 

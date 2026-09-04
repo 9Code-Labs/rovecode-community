@@ -84,7 +84,7 @@ function rank<T>(q: string, items: readonly T[], fz: Fuzzy, key: (t: T) => strin
 
 // ------------------------------------------------------------------ commands
 
-export interface CommandInfo { name: string; description: string; arg?: string; local?: boolean; choices?: readonly string[] | (() => readonly string[]) }
+export interface CommandInfo { name: string; description: string; arg?: string; local?: boolean; choices?: readonly string[] | (() => readonly string[]); choicesThen?: "submit" | "complete" }
 /** the argument set of an app command right now: a list as given, a function read at suggestion time */
 export const choicesOf = (c: { choices?: readonly string[] | (() => readonly string[]) }): readonly string[] =>
   typeof c.choices === "function" ? c.choices() : c.choices ?? [];
@@ -118,7 +118,7 @@ export function allCommands(s: SextantState): CommandInfo[] {
     ...s.commands.filter((c) => !local.has(c.name)).map((c) => {
       if (!c.choices) return { name: c.name, description: c.description };
       const arg = typeof c.choices === "function" ? "provider/model" : c.choices.join("·");
-      return { name: c.name, description: c.description, arg, choices: c.choices };
+      return { name: c.name, description: c.description, arg, choices: c.choices, ...(c.choicesThen ? { choicesThen: c.choicesThen } : {}) };
     })];
 }
 
@@ -182,9 +182,11 @@ function suggestionRows(s: SextantState, files: readonly string[], fz: Fuzzy): S
   const app = allCommands(s).find((x) => x.name === p.cmd && x.choices);
   const values = app ? choicesOf(app) : [];
   if (!app || !values.length) return [];
+  // a subcommand-style set ("complete") leaves the prompt open with a trailing space for the next word
+  const complete = app.choicesThen === "complete";
   return rank(p.arg, values, fz).map((label) => {
-    const t = "/" + app.name + " " + label;
-    return { kind: "arg", label, hint: "", apply: { text: t, cur: t.length }, enter: "submit" };
+    const t = "/" + app.name + " " + label + (complete ? " " : "");
+    return { kind: "arg", label, hint: "", apply: { text: t, cur: t.length }, enter: complete ? "complete" : "submit" };
   });
 }
 
