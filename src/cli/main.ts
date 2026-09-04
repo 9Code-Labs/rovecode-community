@@ -17,6 +17,7 @@ import { ProviderRegistry, formatProviderList, parseAddArgs, ADD_USAGE } from ".
 import { isConfigured, providersPathFor } from "../providers/provider-config.ts";
 import { providerEditTool, providerListTool } from "../tools/provider.ts";
 import { designAuditTool, designDirectionTool } from "../tools/design.ts";
+import { loadPlugins } from "../plugins/index.ts";
 import { runGauntlet, reportResults, providerPreflight, basicTasks, codingTasks, failureTasks, adversarialTasks } from "../eval/gauntlet.ts";
 import { liveGauntletTasks, runTask, runTaskLive } from "../eval/gauntlet-runner.ts";
 import { profileFor, profileHint } from "../providers/profiles.ts";
@@ -111,6 +112,7 @@ async function cmdRun(prompt: string): Promise<void> {
     ? rt.stream
     : mockStream({ turns: [textTurn(MOCK_PROVIDER_TEXT)] });
   rt.hooks.onWarning((w) => console.error(`hooks: ${w}`)); // port #29: load + runtime hook notes → stderr (stdout stays the transcript)
+  rt.plugins.onWarning((w) => console.error(`plugins: ${w}`)); // plugin discovery/activation notes, the same channel
   const exit = async (code: number): Promise<never> => {
     // port #26 (fix-wave MED-1): a one-shot run does not outlive its process — cancel the children
     // still running (their in-flight fetch + subprocess trees die through the run signal) and wait,
@@ -202,7 +204,7 @@ async function cmdBench(): Promise<void> {
   process.exit(results.some((r) => !r.pass) ? 1 : 0);
 }
 
-function cmdTools(): void {
+async function cmdTools(): Promise<void> {
   const registry = new ToolRegistry();
   registry.register(readTool, editTool, writeTool, bashTool, globTool, grepTool, lsTool);
   registry.register(webFetchTool); // port #31
@@ -211,6 +213,12 @@ function cmdTools(): void {
   const tasks = new TaskManager({ deps: () => null }); registry.register(createTaskTool(tasks), createTaskStatusTool(tasks)); // port #26: listing only — no provider, nothing can start
   const providers = new ProviderRegistry(process.cwd()); registry.register(providerListTool(providers), providerEditTool(providers)); // listing only — reads providers.json, writes nothing
   registry.register(designAuditTool(), designDirectionTool()); // listing only — neither is called here
+  // plugins: the ACTIVE ones' tools, the way the runtime registers them (a taken name is refused, not replaced);
+  // discovery + import only — nothing executes. Notes go to stderr so stdout stays the list.
+  const { plugins, warnings } = await loadPlugins(process.cwd());
+  const taken = new Set(registry.list().map((t) => t.schema.name));
+  for (const p of plugins) for (const t of p.tools) { if (taken.has(t.schema.name)) { warnings.push(`plugin ${p.name}: tool "${t.schema.name}" is already registered — refused`); continue; } taken.add(t.schema.name); registry.register(t); }
+  for (const w of warnings) console.error(`plugins: ${w}`);
   for (const t of registry.list()) {
     console.log(`${t.schema.name.padEnd(8)} ${t.kind.padEnd(8)} sequential=${t.sequential !== false}`);
     console.log(`         ${t.schema.description}`);
@@ -407,7 +415,7 @@ async function cmdTrace(sessionId: string): Promise<void> {
   }
 }
 
-const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "auth", "provider", "model", "models", "setup", "connect", "trace", "help", "chat", "repl", "smoke-tui", "acp", "serve", "export"]);
+const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "plugin", "auth", "provider", "model", "models", "setup", "connect", "trace", "help", "chat", "repl", "smoke-tui", "acp", "serve", "export"]);
 // --resume <id>: TUI-only value flag, parsed here (parseCli skips its value when locating the
 // command but returns no flag values); its value must not be mistaken for a one-shot prompt
 const rIx = process.argv.indexOf("--resume");
@@ -424,7 +432,9 @@ if (cmd === "" || cmd === "chat" || cmd === "repl") {
     case "run": await cmdRun(expandSlashPrompt(runPromptWords(cli, process.argv).join(" ") || "hello", process.cwd())); break;
     case "gauntlet": case "eval": await cmdGauntlet(); break;
     case "bench": await cmdBench(); break;
-    case "tools": cmdTools(); break;
+    case "tools": await cmdTools(); break;
+    // plugins (src/plugins, docs/plugins.md): list/add/remove/enable/disable/trust/untrust/show — filesystem + plugins.json only, never imports a plugin
+    case "plugin": process.exitCode = await (await import("../plugins/cli.ts")).cmdPlugin(argvAfter("plugin")); break;
     case "setup": process.exitCode = await runSetup({ registry: new ProviderRegistry(process.cwd()) }); break; // connect a model step by step (cli/setup.ts)
     // `connect` is the one-line form of setup: bare it IS the wizard, with an id it takes the answers
     // from argv (cli/connect.ts) so a README or a CI step can do it without a terminal

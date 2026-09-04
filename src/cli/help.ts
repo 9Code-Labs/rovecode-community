@@ -74,6 +74,10 @@ const ADVANCED = `advanced — the full command reference
   rovecode gauntlet --live      the gauntlet's tasks minus loop-guard (9) against the configured REAL model through
                                 the real prompt — --model <provider/model> and --effort pick; compare pass/calls/tokens
   rovecode tools                list registered tools
+  rovecode plugin list          plugins in ~/.rovecode/plugins and .rovecode/plugins with status (active · disabled · untrusted · broken)
+  rovecode plugin add <folder|git-url> [--project] [--force]  install a plugin folder (tools, hooks, commands, skills, MCP in one manifest)
+  rovecode plugin trust <name>  approve a PROJECT plugin's current files on this machine (show <name> lists them first)
+  rovecode plugin remove|enable|disable|untrust|show <name>   (docs/plugins.md; restart to load — read once per process, like hooks)
   rovecode auth set <provider> [--key <name>]  store an API key (prompts on stdin; ~/.rovecode/credentials.json)
   rovecode auth list            stored providers + key names (values redacted)
   rovecode auth remove <provider>  delete a stored credential

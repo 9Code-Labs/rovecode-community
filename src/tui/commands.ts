@@ -118,6 +118,9 @@ export interface DiscoverOptions {
   home?: string;
   /** built-in command names — a custom command with one of these names is dropped, with a warning */
   reserved?: readonly string[];
+  /** more command folders — a plugin's (src/plugins) — scanned AFTER the folder of the same scope, so
+   *  your own `~/.rovecode/commands/x.md` or `.rovecode/commands/x.md` keeps `/x` over a plugin's */
+  extraDirs?: readonly { dir: string; scope: CommandScope }[];
 }
 
 export interface DiscoveredCommands { commands: CustomCommand[]; warnings: string[] }
@@ -130,10 +133,11 @@ export function discoverCommands(cwd: string, opts: DiscoverOptions = {}): Disco
   const reserved = new Set(opts.reserved ?? []);
   const userDir = join(opts.home ?? rovecodeHome(), "commands");
   const projectDir = join(cwd, ".rovecode", "commands");
+  const extra = (scope: CommandScope): [CommandScope, string][] => (opts.extraDirs ?? []).filter((e) => e.scope === scope).map((e) => [scope, e.dir]);
   // cwd IS the rovecode home: one directory, scanned once (gemini-cli FileCommandLoader.ts:221-228)
   const dirs: [CommandScope, string][] = resolve(userDir) === resolve(projectDir)
-    ? [["project", projectDir]]
-    : [["user", userDir], ["project", projectDir]];
+    ? [["project", projectDir], ...extra("user"), ...extra("project")]
+    : [["user", userDir], ...extra("user"), ["project", projectDir], ...extra("project")];
   const byName = new Map<string, CustomCommand>();
   for (const [scope, dir] of dirs) {
     for (const cmd of scanCommandDir(dir, scope, warnings)) {

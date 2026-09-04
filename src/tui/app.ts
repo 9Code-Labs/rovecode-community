@@ -142,7 +142,10 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   // port #30: custom slash commands — .rovecode/commands/*.md, project shadows ~/.rovecode/commands (commands.ts);
   // LOW-1: /quit is a `case` alias of /exit below, not a TUI_COMMANDS entry — reserve it explicitly;
   // port #44: the sextant surface's own /theme /open /diff /focus /agents never reach handleSlash — reserved too
-  const custom = discoverCommands(rt.cwd, { reserved: [...TUI_COMMANDS.map((c) => c.name), "quit", ...SEXTANT_LOCAL_NAMES] });
+  // plugins (src/plugins): an ACTIVE plugin's commands folder is one more root, after the folder of its own
+  // scope — the same path setCommands feeds the palette and suggestions from, so nothing else changes
+  const pluginCommandDirs = rt.plugins.found.flatMap((p) => (p.status === "active" && p.commandsDir ? [{ dir: p.commandsDir, scope: p.scope }] : []));
+  const custom = discoverCommands(rt.cwd, { reserved: [...TUI_COMMANDS.map((c) => c.name), "quit", ...SEXTANT_LOCAL_NAMES], extraDirs: pluginCommandDirs });
   if (opts.effort !== undefined) rt.setEffort(opts.effort);
   // one resolved answer instead of two independent booleans: flag → env → project file → user file →
   // "ask" (core/settings.ts). This is what makes `/yolo --save` survive the terminal closing.
@@ -188,6 +191,10 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     void (async () => {
       await settled;
       await rt.hooks.close().catch(() => {});
+      // the sextant renderer's git children (repo watcher) must be GONE before the process exits — on
+      // Windows a live child holds its cwd, so a scratch repo removed at quit throws EBUSY (fee2e8c root
+      // cause). Optional: the Renderer seam stays untouched; FakeRenderer and pi-tui have no drain()
+      await (renderer as { drain?: () => Promise<void> }).drain?.()?.catch(() => {});
       resolveClosed();
       if (opts.exitOnClose !== false) process.exit(0);
     })();
@@ -462,6 +469,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   for (const w of custom.warnings) renderer.addSystemNote(w, "warn"); // port #30: skipped/shadowed command files
   for (const w of rt.providers.warnings()) renderer.addSystemNote(`providers: ${w}`, "warn"); // malformed providers.json entries
   rt.hooks.onWarning((w) => renderer.addSystemNote(`hooks: ${w}`, "warn")); // port #29: hook load/runtime notes (buffered ones replay first)
+  rt.plugins.onWarning((w) => renderer.addSystemNote(`plugins: ${w}`, "warn")); // plugin discovery/activation notes, the same way
   pushStatus();
   watchProviders(provCtx()); // follow a default-model change made elsewhere; announce the first provider
   // port #27: an unavailable configured rung (probe failed) is a clean one-line startup

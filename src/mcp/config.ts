@@ -31,7 +31,7 @@ export function message(err: unknown): string {
 
 /** Normalize one server entry (claude-code `.mcp.json` style or ours). Returns
  *  undefined (and records a warning) when the entry cannot produce a usable config. */
-function normalizeEntry(name: string, raw: unknown, file: string, warnings: string[]): McpServerConfig | undefined {
+export function normalizeEntry(name: string, raw: unknown, file: string, warnings: string[]): McpServerConfig | undefined {
   if (!isRecord(raw)) {
     warnings.push(`${file}: server "${name}" is not an object; skipped`);
     return undefined;

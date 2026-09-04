@@ -71,7 +71,18 @@ export async function sextantSmoke(opts: { cols?: number; rows?: number; deadlin
   for (const seq of LEAVE) if (!tail.includes(seq)) reasons.push(`the output tail lacks ${JSON.stringify(seq)} — terminal not restored`);
   if (!wasActive) reasons.push("the frame interval was not running before quit");
   if (renderer.active) reasons.push("the frame interval survived quit");
-  rmSync(cwd, { recursive: true, force: true });
+  // the repo watcher's git children must be GONE before the scratch repo goes (sextant-renderer drain);
+  // on Windows a live `git status` holds its cwd and rmSync answers EBUSY — the tui-sextant "flake".
+  // The retry is the belt to that brace: handle release on Windows lags the process exit itself.
+  await renderer.drain().catch(() => {});
+  for (let attempt = 0; ; attempt++) {
+    try { rmSync(cwd, { recursive: true, force: true }); break; }
+    catch (e) {
+      const code = (e as NodeJS.ErrnoException).code;
+      if ((code !== "EBUSY" && code !== "EPERM" && code !== "ENOTEMPTY") || attempt >= 20) throw e;
+      await sleep(25);
+    }
+  }
   return { ok: reasons.length === 0, reasons, cardFrame: cardFrames[1] ?? cardFrames[0] ?? "(no approval card rendered)", frame, tail };
 }
 

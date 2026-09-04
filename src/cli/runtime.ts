@@ -27,6 +27,9 @@ import { createReflectionHooks, reflectionEnabled } from "../core/reflection.ts"
 import { createOtelHooks, otelOptionsFromEnv } from "../telemetry/otel.ts";
 import { loadMcpConfig, McpManager } from "../mcp/client.ts";
 import { createMcpTools } from "../mcp/tools.ts";
+import { activatePlugins, discoverPlugins, loadState as loadPluginState, type DiscoveredPlugin, type LoadedPlugin } from "../plugins/index.ts";
+import type { McpServerConfig } from "../mcp/config.ts";
+import { rovecodeHome } from "../providers/auth.ts";
 import { readTool, editTool, writeTool, bashTool } from "../coding/hashline.ts";
 import { globTool, grepTool, lsTool } from "../coding/files.ts";
 import { withLspGate, lspGateNote } from "../coding/lsp.ts";
@@ -148,6 +151,24 @@ export interface Runtime {
    *  (port #39 OTel); surfaces call hooks.close() at teardown → session_close once. Load + runtime
    *  notes (import failure, wrong version, timeout, throw) land in hooks.warnings / onWarning(). */
   hooks: HookRunner;
+  /** plugins (src/plugins, docs/plugins.md): discovered synchronously at construction — manifests and
+   *  statuses only, no code run — so an ACTIVE plugin's skills, commands and MCP servers wire in with
+   *  their file-based twins; the entry modules (tools + hooks) import in the background and `ready`
+   *  joins them (bootRuntime awaits it, so no surface's first prompt can miss a plugin tool). A
+   *  PROJECT plugin stays `untrusted` — nothing of it loads — until `rovecode plugin trust`. */
+  plugins: RuntimePlugins;
+}
+
+export interface RuntimePlugins {
+  /** every plugin found at construction, with its status (`rovecode plugin list` shows the same) */
+  found: readonly DiscoveredPlugin[];
+  /** settles when the active entry modules are imported and their tools/hooks attached */
+  ready: Promise<void>;
+  /** the plugins as activated — empty until `ready` */
+  readonly loaded: readonly LoadedPlugin[];
+  /** discovery + activation notes; a listener gets the buffered ones first (hooks.onWarning idiom) */
+  readonly warnings: readonly string[];
+  onWarning(fn: (note: string) => void): void;
 }
 
 export function createRuntime(opts: RuntimeOptions = {}): Runtime {
@@ -196,13 +217,25 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   };
 
   const registry = new ToolRegistry();
+  // plugins (src/plugins, docs/plugins.md): discovery runs no code — manifests, statuses, digests — so
+  // it can happen here, synchronously, and the ACTIVE plugins' declarative halves (skills dirs,
+  // command dirs, MCP servers) join their file-based twins below as if they had been in .rovecode/.
+  // The entry modules import after construction (see the activation block after hooks.open).
+  const pluginHome = rovecodeHome();
+  const pluginsFound = discoverPlugins(cwd, { home: pluginHome, state: loadPluginState(pluginHome) });
+  const pluginWarnings: string[] = [...pluginsFound.warnings];
+  const pluginListeners: ((note: string) => void)[] = [];
+  const pluginWarn = (note: string): void => { pluginWarnings.push(note); for (const l of pluginListeners) l(note); };
+  const activePlugins = pluginsFound.plugins.filter((p) => p.status === "active"); // untrusted/disabled/broken contribute NOTHING
   // port #13: successful edits/writes get LSP diagnostics appended within a ≤2s
   // settle window (typescript-language-server on PATH; absent → silently off).
   const lspNote = (p: string): Promise<string> => lspGateNote(p, cwd);
   registry.register(readTool, withCheckpoint(withLspGate(editTool, lspNote)), withCheckpoint(withLspGate(writeTool, lspNote)), withCheckpoint(bashTool));
   registry.register(globTool, grepTool, lsTool); // port #22: bounded, gitignore-aware search/list (kind read → file.read auto-allow; non-mutating, no checkpoint)
   registry.register(webFetchTool); // port #31: kind network → net.fetch, PROMPT by default (rule below); SSRF-guarded, bounded; no checkpoint
-  const skillStore = new SkillStore(cwd);
+  // a plugin's skills dir joins the store as one more root: a user plugin's as global, a project
+  // plugin's as project (the same precedence its own files would have had)
+  const skillStore = new SkillStore(cwd, { extraDirs: activePlugins.flatMap((p) => (p.skillsDir ? [{ dir: p.skillsDir, scope: p.scope === "project" ? "project" as const : "global" as const }] : [])) });
   skillStore.scan();
   registry.register(...createSkillTools(skillStore));
   let blocks = new BlockStore(join(sessionsDir, sessionId, "memory"));
@@ -243,9 +276,43 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   const hooks = new HookRunner({ cwd, sessionId });
   void hooks.open(cwd);
 
+  // plugin entry modules: imported in the background like the hook files, joined by bootRuntime through
+  // plugins.ready. Tools land on THIS registry (the same permission path as every built-in: kind → action)
+  // and are refused loudly when the name is taken — a plugin cannot replace `bash`. Hooks join the runner
+  // after the hook files (they miss session_open; pre_run is theirs). Activation failures are notes.
+  let loadedPlugins: LoadedPlugin[] = [];
+  const pluginsReady = activatePlugins(pluginsFound.plugins, { cwd, home: pluginHome }).then((a) => {
+    for (const w of a.warnings) pluginWarn(w);
+    const taken = new Set(registry.list().map((t) => t.schema.name));
+    for (const p of a.plugins) {
+      if (p.status !== "active") continue;
+      for (const t of p.tools) {
+        if (taken.has(t.schema.name)) { pluginWarn(`plugin ${p.name}: tool "${t.schema.name}" is already registered — refused (a plugin cannot replace a built-in or another plugin's tool)`); continue; }
+        taken.add(t.schema.name);
+        registry.register(t);
+      }
+      if (p.hooks) hooks.add(p.hooks, `plugin:${p.name}`);
+    }
+    loadedPlugins = a.plugins;
+  }, (e: unknown) => { pluginWarn(`plugins: activation failed — ${e instanceof Error ? e.message : String(e)}`); });
+  const plugins: RuntimePlugins = {
+    found: pluginsFound.plugins,
+    ready: pluginsReady,
+    get loaded() { return loadedPlugins; },
+    warnings: pluginWarnings,
+    onWarning(fn) { for (const w of pluginWarnings) fn(w); pluginListeners.push(fn); },
+  };
+
   // port #3: MCP servers from .rovecode/mcp.json + harvested .mcp.json; two lazy tools only.
   // connect() is fire-and-forget; tool executes await first-connect before dispatching.
-  const mcpConfigs = loadMcpConfig(cwd);
+  // plugin MCP servers first, then the project's own files — .rovecode/mcp.json keeps the last word on a name
+  const mcpByName = new Map<string, McpServerConfig>();
+  for (const p of activePlugins) for (const c of p.mcp) {
+    if (mcpByName.has(c.name)) { pluginWarn(`plugin ${p.name}: MCP server "${c.name}" is also declared by another plugin — first kept`); continue; }
+    mcpByName.set(c.name, c);
+  }
+  for (const c of loadMcpConfig(cwd)) { if (mcpByName.has(c.name)) pluginWarn(`mcp.json server "${c.name}" overrides a plugin's entry of the same name`); mcpByName.set(c.name, c); }
+  const mcpConfigs = [...mcpByName.values()];
   let mcp: McpManager | null = null;
   if (mcpConfigs.length > 0) {
     const manager = new McpManager(mcpConfigs);
@@ -451,6 +518,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     sandbox,
     setAskUser(fn: AskFn | undefined) { askUser = fn; },
     hooks,
+    plugins,
     providers,
     get provider() { return providers.defaultConfig(); },
     stream,
@@ -477,6 +545,7 @@ export async function bootRuntime(opts: RuntimeOptions = {}): Promise<Runtime> {
   try {
     await rt.sandbox.ready;
     await rt.hooks.ready; // port #29: hook files + session_open joined here too (notes recorded before the first prompt)
+    await rt.plugins.ready; // plugin entry modules imported, their tools and hooks attached — before any surface's first prompt
   } catch (e) {
     await rt.mcp?.close().catch(() => {});
     throw e;

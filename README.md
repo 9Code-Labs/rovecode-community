@@ -469,6 +469,15 @@ tokens, cache hits, and catalog-priced spend.
 
 ## Extending
 
+- **Plugins** (`src/plugins`, `docs/plugins.md`): a folder with a `plugin.json` that bundles the things below —
+  an in-process entry module (tools + hooks), `commands/*.md`, `skills/**/SKILL.md`, MCP servers — so one
+  `rovecode plugin add <folder|git-url>` installs all of it and `rovecode plugin list` shows all of it. User scope
+  `~/.rovecode/plugins/<name>`; project scope `.rovecode/plugins/<name>` is **listed but never run** until
+  `rovecode plugin trust <name>` records the folder's content digest in your home (a repo cannot trust itself; a
+  pull that changes any file asks again). Plugin tools go through the same `ToolRegistry` and permission rules as
+  built-ins (a plugin cannot replace `bash`); plugin hooks join the same `HookRunner`. Read once per process;
+  `ROVECODE_NO_PLUGINS=1` skips discovery. First-party plugins live in `plugins/` (safety-net · notes ·
+  conventional-commits).
 - **Tool**: implement `Tool` (schema + kind + execute), `registry.register(t)`; kind maps to a policy action.
 - **Provider**: implement `StreamFn` — must not throw; failures become `{stopReason: "error"}`.
 - **Hooks** (`core/hooks.ts`, port #29): drop a `.rovecode/hooks.ts` (or `.js`; user scope `~/.rovecode/hooks.*`)

@@ -54,6 +54,9 @@ export interface SkillStoreOptions {
   globalDir?: string | null;
   /** max directory depth when walking for SKILL.md (default 3) */
   maxDepth?: number;
+  /** more roots — a plugin's skills folder (src/plugins) — walked like the two above, tagged with the
+   *  scope the plugin itself has (a project plugin's skills win a name clash as the project's own would) */
+  extraDirs?: readonly { dir: string; scope: SkillScope }[];
 }
 
 // ---------- Frontmatter ----------
@@ -161,11 +164,14 @@ export class SkillStore {
       ? null
       : resolve(opts.globalDir ?? join(homedir(), ".rovecode", "skills"));
     this.maxDepth = opts.maxDepth ?? 3;
+    this.extraDirs = (opts.extraDirs ?? []).map(({ dir, scope }) => [resolve(cwd, dir), scope]);
   }
+  private readonly extraDirs: Array<[string, SkillScope]>;
 
   private dirs(): Array<[string, SkillScope]> {
     const d: Array<[string, SkillScope]> = [[this.projectDir, "project"]];
     if (this.globalDir && existsSync(this.globalDir)) d.push([this.globalDir, "global"]);
+    for (const [dir, scope] of this.extraDirs) if (existsSync(dir)) d.push([dir, scope]);
     return d;
   }
 
@@ -190,11 +196,13 @@ export class SkillStore {
   /** Rescan: stat every SKILL.md, diff the manifest, reparse only added/changed files. */
   scan(): ScanResult {
     const next = new Map<string, string>();
-    for (const [dir] of this.dirs()) {
+    const scopeOf = new Map<string, SkillScope>(); // by root, not by path prefix: a plugin's project skills live outside <cwd>/.rovecode/skills
+    for (const [dir, scope] of this.dirs()) {
       for (const p of this.find(dir)) {
         try {
           const st = statSync(p);
           next.set(p, `${st.mtimeMs}:${st.size}`);
+          if (!scopeOf.has(p)) scopeOf.set(p, scope);
         } catch { /* vanished between readdir and stat */ }
       }
     }
@@ -207,7 +215,7 @@ export class SkillStore {
 
     const invalid: InvalidSkill[] = [];
     for (const p of [...changes.added, ...changes.changed]) {
-      const scope = p.startsWith(this.projectDir) ? "project" : "global";
+      const scope = scopeOf.get(p) ?? (p.startsWith(this.projectDir) ? "project" : "global");
       const r = parseSkillFile(p, scope);
       if ("skill" in r) this.cache.set(p, r.skill);
       else { this.cache.delete(p); invalid.push(r.invalid); }
