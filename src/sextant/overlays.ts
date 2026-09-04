@@ -84,7 +84,10 @@ function rank<T>(q: string, items: readonly T[], fz: Fuzzy, key: (t: T) => strin
 
 // ------------------------------------------------------------------ commands
 
-export interface CommandInfo { name: string; description: string; arg?: string; local?: boolean; choices?: readonly string[] }
+export interface CommandInfo { name: string; description: string; arg?: string; local?: boolean; choices?: readonly string[] | (() => readonly string[]) }
+/** the argument set of an app command right now: a list as given, a function read at suggestion time */
+export const choicesOf = (c: { choices?: readonly string[] | (() => readonly string[]) }): readonly string[] =>
+  typeof c.choices === "function" ? c.choices() : c.choices ?? [];
 interface Option { label: string; hint: string }
 
 /** app.js:940-965 SLASH minus the mock rows; `options` feeds the argument suggestions */
@@ -111,7 +114,12 @@ export function allCommands(s: SextantState): CommandInfo[] {
   const local = new Set(LOCAL_COMMANDS.map((c) => c.name));
   return [...LOCAL_COMMANDS.map(({ name, description, arg, local: l }) => ({ name, description, arg, local: l })),
     // an app command with a fixed argument set shows it the way a local one does ("auto·off·low·medium·high")
-    ...s.commands.filter((c) => !local.has(c.name)).map((c) => ({ name: c.name, description: c.description, ...(c.choices?.length ? { arg: c.choices.join("·"), choices: c.choices } : {}) }))];
+    // a fixed set reads like a local command's ("auto·off·low·medium·high"); a live one is named, not listed
+    ...s.commands.filter((c) => !local.has(c.name)).map((c) => {
+      if (!c.choices) return { name: c.name, description: c.description };
+      const arg = typeof c.choices === "function" ? "provider/model" : c.choices.join("·");
+      return { name: c.name, description: c.description, arg, choices: c.choices };
+    })];
 }
 
 /** app.js:966-970 — top 6 fuzzy-ranked files with their git status as the hint */
@@ -171,9 +179,10 @@ function suggestionRows(s: SextantState, files: readonly string[], fz: Fuzzy): S
     });
   }
   // an app command with a fixed argument set (/effort auto|off|low|medium|high): the same rows, ranked by what is typed
-  const app = allCommands(s).find((x) => x.name === p.cmd && x.choices?.length);
-  if (!app?.choices) return [];
-  return rank(p.arg, app.choices, fz).map((label) => {
+  const app = allCommands(s).find((x) => x.name === p.cmd && x.choices);
+  const values = app ? choicesOf(app) : [];
+  if (!app || !values.length) return [];
+  return rank(p.arg, values, fz).map((label) => {
     const t = "/" + app.name + " " + label;
     return { kind: "arg", label, hint: "", apply: { text: t, cur: t.length }, enter: "submit" };
   });

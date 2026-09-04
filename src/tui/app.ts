@@ -18,7 +18,7 @@ import { cmdCheckpoints, cmdRestore, type CheckpointCmdCtx } from "./checkpoints
 import { cmdRewind, cmdSessions, cmdNew, replayTranscript, usageOf, resolveBootSession, type SessionCmdCtx } from "./session-cmd.ts";
 import { cmdHelp, cmdStatus, cmdCost, cmdSkills, cmdMemory, cmdExport, cmdTodos, cmdTasks, todoLabel, type InfoCmdCtx } from "./info-cmd.ts";
 import { cmdAttach, cmdPasteImage, carryOverAttachments, queuedAttachNote, userTurnLine, ATTACH_COMMAND, PASTE_COMMAND, type AttachCtx } from "./attach.ts";
-import { cmdConnect, cmdModel as cmdModelSwitch, cmdModels, cmdProvider, cmdSetup, watchProviders, CONNECT_COMMAND, MODEL_COMMAND, PROVIDER_COMMANDS, SETUP_COMMAND, type ProviderCmdCtx } from "./providers-cmd.ts";
+import { cmdConnect, cmdModel as cmdModelSwitch, cmdModels, cmdProvider, cmdSetup, listModelIds, watchProviders, CONNECT_COMMAND, MODEL_COMMAND, PROVIDER_COMMANDS, SETUP_COMMAND, type ProviderCmdCtx } from "./providers-cmd.ts";
 import { cmdMcp, MCP_COMMAND } from "./mcp-cmd.ts";
 import { summarizePlugins } from "../plugins/index.ts";
 import { acceptEditsNote, effortNote, modeSwitchNote, noModelHint, resumedLine, welcomeCard } from "../core/voice.ts";
@@ -467,7 +467,13 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   };
   // port #44: a renderer with panels (sextant) reads the runtime through this handle — once, before start()
   renderer.attach?.(buildSextantAttach({ cwd: rt.cwd, sessionsDir, store: () => store, tasks: rt.tasks, model: () => modes.modelFor(), catalog, petName: opts.pet }));
-  renderer.setCommands([...TUI_COMMANDS, ...commandsForPalette(custom.commands)]);
+  // /model suggestions: the ids of every configured provider's models, fetched off the boot path and again
+  // whenever the registry changes; the sextant reads the list at suggestion time (SlashCommand.choices)
+  const modelChoices: string[] = [];
+  const refreshModelChoices = (): void => { void listModelIds(rt.providers).then((ids) => { modelChoices.splice(0, modelChoices.length, ...ids); }).catch(() => {}); };
+  renderer.setCommands([...TUI_COMMANDS.map((c) => (c.name === MODEL_COMMAND.name ? { ...c, choices: () => modelChoices } : c)), ...commandsForPalette(custom.commands)]);
+  setTimeout(refreshModelChoices, 0);
+  _trace("renderer.start");
   renderer.start({
     onSubmit: (text) => { if (text.startsWith("/")) handleSlash(text); else void submit(text); },
     // port #21: abort FIRST (kills in-flight fetch/subprocesses), then return() settles the generator

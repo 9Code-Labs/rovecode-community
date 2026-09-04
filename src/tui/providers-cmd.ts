@@ -31,6 +31,14 @@ export interface ProviderCmdCtx {
 type NoteLevel = Parameters<Renderer["addSystemNote"]>[1];
 
 export const MODEL_COMMAND = { name: "model", description: "Switch the model I use: /model <provider/model | model> [--save]", group: "model & provider" };
+
+/** every `provider/model` id the configured providers list — the `/model` suggestions in the sextant. A
+ *  provider that errors or lists nothing drops out silently here; `/models` is where the reasons show. */
+export async function listModelIds(reg: Pick<Runtime["providers"], "list" | "models">): Promise<string[]> {
+  const ids = reg.list().filter(isConfigured).map((p) => p.id);
+  const results = await Promise.all(ids.map(async (id) => ({ id, r: await reg.models(id) })));
+  return results.flatMap(({ id, r }) => (r.ok ? r.models.map((m) => `${id}/${m}`) : []));
+}
 export const SETUP_COMMAND = { name: "setup", description: "Connect a model step by step: provider, model, key, one test call", group: "start here" };
 export const CONNECT_COMMAND = { name: "connect", description: "Connect a model: /connect (guided, same as /setup) · /connect <id> [<url>] [--model <id>] [--key-env NAME] [--no-key] [--project] [--no-test]", group: "start here" };
 export const PROVIDER_COMMANDS = [

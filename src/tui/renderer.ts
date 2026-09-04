@@ -51,9 +51,10 @@ export interface SlashCommand {
   description: string;
   /** /help topic the command is listed under (info-cmd.ts); the palette ignores it */
   group?: string;
-  /** a fixed set of argument values (`/effort` levels, `/theme` names): the sextant lists them as
-   *  suggestions once the command is typed, and completes the one picked */
-  choices?: readonly string[];
+  /** the argument values (`/effort` levels; `/model` ids): the sextant lists them as suggestions once
+   *  the command is typed and completes the one picked. A function is read at suggestion time, for a
+   *  set that changes while the TUI runs (the models of the providers that have a key). */
+  choices?: readonly string[] | (() => readonly string[]);
 }
 
 export interface PickItem { value: string; label: string; description?: string }

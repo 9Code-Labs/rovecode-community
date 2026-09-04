@@ -23,6 +23,33 @@ test("the command row shows the set the way a local command does; `/effort ` lis
   expect(suggestions(s, [], fuzzy)).toEqual([]);
 });
 
+test("a live set (a function) is read at suggestion time and named, not listed, in the command row", () => {
+  const ids: string[] = [];
+  const s = makeState({ commands: [{ name: "model", description: "Switch the model", choices: () => ids }] });
+  expect(allCommands(s).find((c) => c.name === "model")?.arg).toBe("provider/model");
+  s.input.text = "/model "; s.input.cur = s.input.text.length;
+  expect(suggestions(s, [], fuzzy)).toEqual([]); // nothing fetched yet
+  ids.push("anthropic/claude-opus-5", "anthropic/claude-sonnet-5", "openai/gpt-5.2");
+  expect(suggestions(s, [], fuzzy).map((x) => x.label)).toEqual(ids);
+  s.input.text = "/model son"; s.input.cur = s.input.text.length;
+  expect(suggestions(s, [], fuzzy).map((x) => x.label)).toEqual(["anthropic/claude-sonnet-5"]);
+});
+
+test("listModelIds: configured providers' models as provider/model ids; unconfigured, erroring and empty providers drop out", async () => {
+  const { listModelIds } = await import("../../src/tui/providers-cmd.ts");
+  const reg = {
+    list: () => [
+      { id: "anthropic", apiKey: "k", noKey: false }, { id: "local", apiKey: null, noKey: true },
+      { id: "nokey", apiKey: null, noKey: false }, { id: "broken", apiKey: "k", noKey: false }, { id: "empty", apiKey: "k", noKey: false },
+    ],
+    models: async (id: string) => id === "anthropic" ? { ok: true as const, models: ["claude-opus-5", "claude-sonnet-5"] }
+      : id === "local" ? { ok: true as const, models: ["qwen3"] }
+      : id === "broken" ? { ok: false as const, error: "boom" }
+      : { ok: true as const, models: [] },
+  };
+  expect(await listModelIds(reg as never)).toEqual(["anthropic/claude-opus-5", "anthropic/claude-sonnet-5", "local/qwen3"]);
+});
+
 test("Enter on the picked value submits `/effort high`", () => {
   const s = withEffort(), spy = spyCtx();
   type(s, spy, "/effort hi");
