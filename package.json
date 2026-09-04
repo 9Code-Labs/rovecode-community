@@ -24,7 +24,10 @@
     "build": "bun run scripts/build.ts",
     "test": "bun test",
     "gauntlet": "bun run src/eval/gauntlet.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "check": "tsc --noEmit && bun test",
+    "smoke": "bun src/cli/main.ts smoke-tui --sextant",
+    "deploy:site": "bash scripts/deploy-site.sh"
   },
   "dependencies": {
     "@ast-grep/napi": "^0.45.3",
