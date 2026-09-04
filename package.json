@@ -3,7 +3,10 @@
   "version": "0.2.0",
   "license": "AGPL-3.0-only",
   "author": "9Code Labs",
-  "repository": { "type": "git", "url": "https://github.com/9Code-Labs/rovecode.git" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/9Code-Labs/rovecode.git"
+  },
   "homepage": "https://github.com/9Code-Labs/rovecode",
   "description": "Rovecode: a coding agent for the terminal. Research-derived harness on Bun/TypeScript with evidence-based ports from open-source harnesses (sextant TUI, MCP, ACP, headless server, repo-map, shadow-git checkpoints, execpolicy, model routers).",
   "type": "module",
@@ -32,17 +35,17 @@
   "dependencies": {
     "@ast-grep/napi": "^0.45.3",
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@opencode-ai/models": "^0.0.61",
+    "@opencode-ai/models": "^0.0.64",
     "@zed-industries/agent-client-protocol": "^0.4.5",
     "diff": "^9.0.0",
     "get-east-asian-width": "1.6.0",
     "gpt-tokenizer": "^4.0.0",
-    "marked": "18.0.5",
+    "marked": "18.0.11",
     "tokenlens": "^1.3.1"
   },
   "devDependencies": {
     "@types/bun": "latest",
     "@xterm/headless": "5.5.0",
-    "typescript": "^5"
+    "typescript": "^5.9.3"
   }
 }

@@ -7,8 +7,19 @@
 
 import { readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { providers as snapshotProviders } from "@opencode-ai/models/snapshot";
 import type { ProviderMap, Model } from "@opencode-ai/models";
+
+// Snapshot is loaded lazily on the first lookup() call so that merely importing
+// catalog.ts (e.g. at module load time) does not pay the @opencode-ai/models
+// parse cost — the TUI paints its first frame before buildDef() is called.
+let _snapshot: ProviderMap | null = null;
+function snapshotProviders(): ProviderMap {
+  if (_snapshot === null) {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    _snapshot = (require("@opencode-ai/models/snapshot") as { providers: ProviderMap }).providers;
+  }
+  return _snapshot;
+}
 
 export interface ModelInfo {
   provider: string;
@@ -55,6 +66,17 @@ const PROVIDER_MAP: Record<string, string> = {
   fireworks: "fireworks-ai",
   perplexity: "perplexity",
   xai: "xai",
+  // not built-in providers, but the ids people give `rovecode provider add` for these vendors' own endpoints
+  // (Google's OpenAI layer, Z.ai, Moonshot, Alibaba DashScope, MiniMax) — mapped so their models price and
+  // carry the reasoning flag like the built-ins (2026-09-04: models.dev snapshot 0.0.64 has all five)
+  google: "google",
+  gemini: "google",
+  zai: "zai",
+  moonshot: "moonshotai",
+  moonshotai: "moonshotai",
+  alibaba: "alibaba",
+  dashscope: "alibaba",
+  minimax: "minimax",
 };
 
 /**
@@ -182,7 +204,7 @@ export class ModelCatalog {
       }
     }
 
-    const snap = snapshotProviders[key];
+    const snap = snapshotProviders()[key];
     if (!snap) return undefined;
     const found = findModelKey(snap.models, modelId);
     if (found === undefined) return undefined;
