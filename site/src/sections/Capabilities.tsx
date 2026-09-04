@@ -1,4 +1,5 @@
 import { CodeCard } from "@/components/CodeCard";
+import { Pic } from "@/components/Pic";
 import { Item, Reveal, Stagger } from "@/components/Motion";
 import { Section } from "@/components/Section";
 import { useT } from "@/i18n";
@@ -17,7 +18,7 @@ export function Capabilities({ n }: { n: string }) {
           <p className="mt-3 max-w-[30rem] text-[15px] leading-7 text-text-muted">{t.capabilities.surfaceBody}</p>
           <code className="mono mt-4 block text-[12px] text-text-faint" dir="ltr">rovecode · ROVECODE_TUI=sextant|classic · /theme night|ember|contrast</code>
           <div className="panel-2 mt-8 h-[260px] overflow-hidden">
-            <img src="/shots/crops/cockpit.png" alt={t.capabilities.surfaceAlt} width={1942} height={1020} loading="lazy" decoding="async" className="h-full w-full object-cover object-left-top" />
+            <Pic src="/shots/crops/cockpit.png" alt={t.capabilities.surfaceAlt} width={1942} height={1020} loading="lazy" decoding="async" className="h-full w-full object-cover object-left-top" />
           </div>
         </Reveal>
         <Reveal delay={0.1}>

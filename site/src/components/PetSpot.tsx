@@ -1,5 +1,6 @@
 import { motion, useReducedMotion } from "motion/react";
 import { EASE } from "@/components/Motion";
+import { STATIC } from "@/lib/boot";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 
@@ -12,7 +13,7 @@ const SIZES = { sm: "size-10", md: "size-14", lg: "size-20" } as const;
  *  on a quiet page nothing loops. Decorative by default: the alt text is only spoken when `labelled` is on. */
 export function PetSpot({ pose, size = "md", className, labelled = false }: { pose: Pose; size?: keyof typeof SIZES; className?: string; labelled?: boolean }) {
   const t = useT();
-  const reduce = useReducedMotion();
+  const reduce = useReducedMotion() || STATIC;
   const alt = `${t.pet.alt}, ${t.pet[pose]}`;
   const enter = reduce
     ? {}

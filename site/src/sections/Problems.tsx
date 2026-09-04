@@ -1,4 +1,5 @@
 import { CodeCard } from "@/components/CodeCard";
+import { Pic } from "@/components/Pic";
 import { Item, Stagger } from "@/components/Motion";
 import { Section } from "@/components/Section";
 import { useT } from "@/i18n";
@@ -17,7 +18,7 @@ function Strip({ v, alt }: { v: Visual; alt: string }) {
   }
   return (
     <div className="panel-2 h-[170px] overflow-hidden">
-      <img src={v.src} alt={alt} {...CROP_SIZE[v.src]} loading="lazy" decoding="async" className="h-full w-full object-cover" style={{ objectPosition: v.position ?? "center" }} />
+      <Pic src={v.src} alt={alt} {...CROP_SIZE[v.src]} loading="lazy" decoding="async" className="h-full w-full object-cover" style={{ objectPosition: v.position ?? "center" }} />
     </div>
   );
 }

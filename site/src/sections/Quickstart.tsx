@@ -1,4 +1,5 @@
 import { CopyCommand } from "@/components/CopyCommand";
+import { Pic } from "@/components/Pic";
 import { Panel } from "@/components/Panel";
 import { Item, Stagger } from "@/components/Motion";
 import { Section } from "@/components/Section";
@@ -34,7 +35,7 @@ export function Quickstart({ n }: { n: string }) {
                       <div className="flex items-center bg-surface-2 px-3.5 py-1.5">
                         <span className="mono text-[11px] text-text-muted" dir="ltr">{t.quickstart.runLabel}</span>
                       </div>
-                      <img src={s.output.src} alt={t.quickstart.outputAlt} width={1374} height={170} loading="lazy" decoding="async" className="block w-full" />
+                      <Pic src={s.output.src} alt={t.quickstart.outputAlt} width={1374} height={170} loading="lazy" decoding="async" className="block w-full" />
                     </div>
                   )}
                 </div>

@@ -27,7 +27,7 @@ export function Footer() {
         <div className="mt-20 flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
           <div>
             <div className="flex items-center gap-2.5">
-              <img src="/brand/mark-sky.png" alt="" width={20} height={20} className="size-5 opacity-80 grayscale" />
+              <img src="/brand/mark-sky-96.png" alt="" width={20} height={20} className="size-5 opacity-80 grayscale" />
               <span className="text-[14px] font-medium tracking-[-0.01em]">rovecode</span>
             </div>
             <p className="mt-4 text-[12.5px] leading-5 text-text-faint">

@@ -39,13 +39,13 @@ export const tr: PartialDict = {
     chips: ["+4 −1 uygulandı", "önce sor · onay kartı", "bağlam 200k'nın %13'ü"],
   },
   proof: {
-    eyebrow: "depodan, 2026-09-02",
+    eyebrow: "depodan, derleme anında",
     ariaLabel: "Depodan gelen sayılar",
     stats: [
-      { label: "test", note: "birim + entegrasyon, bun test" },
-      { label: "aktarılan desen", note: "her biri anlık görüntülenmiş kaynakta file:line ile izlenir" },
-      { label: "panel", note: "dosyalar · kod · mesajlar · plan · kullanım · rovecode" },
+      { label: "test", note: "test/ altındaki test() çağrıları, derlemede sayılır" },
       { label: "hazır sağlayıcı", note: "artı OpenAI uyumlu her URL" },
+      { label: "politika katmanı", note: "rules · execpolicy · approval · runtime" },
+      { label: "bu sayfadaki dil", note: "tarayıcıdan seçilir, değiştirilebilir" },
       { label: "lisans", note: "özgür yazılım, ağ kullanımına da uzanan copyleft" },
     ],
   },

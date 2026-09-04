@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { animate, useInView, useReducedMotion } from "motion/react";
+import { STATIC } from "@/lib/boot";
 import { cn } from "@/lib/utils";
 import { TRANSCRIPT } from "@/content";
 
@@ -46,7 +47,7 @@ function Row({ on, className, children }: { on: boolean; className?: string; chi
 
 export function Transcript({ className }: { className?: string }) {
   const t = TRANSCRIPT;
-  const reduce = useReducedMotion() ?? false;
+  const reduce = (useReducedMotion() ?? false) || STATIC;
   const root = useRef<HTMLDivElement | null>(null);
   const inView = useInView(root, { once: true, amount: 0.45 });
   const [step, setStep] = useState(reduce ? DONE : -1);

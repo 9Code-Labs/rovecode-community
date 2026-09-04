@@ -8,8 +8,14 @@ no runtime process: the build is plain files.
 ```sh
 cd site
 bun install --frozen-lockfile
-bun run build          # tsc -b && vite build  →  dist/
+bun run build          # facts → tsc -b → vite build → SSR build → prerender  →  dist/
 ```
+
+`build` runs, in order: `scripts/facts.mjs` (reads test/provider/locale/licence counts from the repository into
+`src/generated/facts.json`), the type check, the client build, an SSR build of `src/entry-server.tsx`, and
+`scripts/prerender.mjs`, which puts the English page into `dist/index.html` so the text is on screen before any
+script runs (the live tree replaces it in the visitor's language). Image variants (`scripts/images.mjs`, AVIF/WebP
+twins of every PNG under `public/shots`) are committed; re-run `bun run images` after re-shooting frames.
 
 Output: `site/dist/` (index.html, assets/, brand/, shots/). Serve it from the domain (or IP) root.
 
@@ -38,4 +44,5 @@ One page, no client routes: unknown paths return `404.html`. Hashed assets under
 - Design direction is recorded in `.rovecode/design.json` (read by rovecode's `design_audit`).
 - `media-src/` (raw and encoded video, ~120 MB) and `screenshots/` are working files, git-ignored.
 - Regenerate the terminal frames after a copy change in `scripts/out/*.html`: `node scripts/shoot.ts frames`.
-- Dev server: `bun run dev` → http://localhost:5173/.
+- Dev server: `bun run dev` → http://localhost:5173/. In dev the root is empty, so entrances animate; in production the page arrives prerendered and components render their finished state (see `src/lib/boot.ts`).
+- Fonts are self-hosted under `public/fonts` (latin + latin-ext subsets); the two latin files are preloaded.

@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { FRAME_SIZES, FRAME_WIDTHS, Pic } from "./Pic";
 
 interface Chip { text: string; className?: string }
 
@@ -25,7 +26,7 @@ export function Device({ src, alt, title, meta, chips = [], className }: Props) 
         <span className="mono text-xs text-text-faint">real frame</span>
       </div>
       <div className="p-1.5 md:p-2">
-        <img src={src} alt={alt} width={2497} height={1496} fetchPriority="high" decoding="async" className="block w-full rounded-md" />
+        <Pic src={src} widths={FRAME_WIDTHS} sizes={FRAME_SIZES} alt={alt} width={2497} height={1496} fetchPriority="high" decoding="async" className="block w-full rounded-md" />
       </div>
       {chips.length > 0 && (
         <figcaption className="flex flex-wrap gap-x-6 gap-y-2 bg-surface-2 px-4 py-3">

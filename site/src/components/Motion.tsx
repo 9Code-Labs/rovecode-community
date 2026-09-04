@@ -1,5 +1,6 @@
 import type { ComponentPropsWithoutRef, ReactNode } from "react";
 import { motion, useReducedMotion, type Variants } from "motion/react";
+import { STATIC } from "@/lib/boot";
 import { cn } from "@/lib/utils";
 
 export const EASE = [0.22, 1, 0.36, 1] as const;
@@ -9,10 +10,11 @@ const rise: Variants = {
   show: { opacity: 1, y: 0, transition: { duration: 0.7, ease: EASE } },
 };
 
-/** one entrance per block: fade + 16 px rise, 700 ms ease-out, once; no motion under prefers-reduced-motion */
+/** one entrance per block: fade + 16 px rise, 700 ms ease-out, once. Plain markup under prefers-reduced-motion,
+ *  at build time, and when the page arrives prerendered — text that was already visible is never hidden to re-enter. */
 export function Reveal({ children, className, delay = 0, ...rest }: { children: ReactNode; className?: string; delay?: number } & ComponentPropsWithoutRef<"div">) {
   const reduce = useReducedMotion();
-  if (reduce) return <div className={className} {...rest}>{children}</div>;
+  if (reduce || STATIC) return <div className={className} {...rest}>{children}</div>;
   return (
     <motion.div
       className={className}
@@ -30,7 +32,7 @@ export function Reveal({ children, className, delay = 0, ...rest }: { children: 
 export function Stagger({ children, className, as = "div", ...rest }: { children: ReactNode; className?: string; as?: "div" | "ul" | "ol" } & Record<string, unknown>) {
   const reduce = useReducedMotion();
   const Tag = motion[as];
-  if (reduce) { const Plain = as; return <Plain className={className} {...(rest as object)}>{children}</Plain>; }
+  if (reduce || STATIC) { const Plain = as; return <Plain className={className} {...(rest as object)}>{children}</Plain>; }
   return (
     <Tag
       className={className}
@@ -47,7 +49,7 @@ export function Stagger({ children, className, as = "div", ...rest }: { children
 
 export function Item({ children, className, as = "div", ...rest }: { children: ReactNode; className?: string; as?: "div" | "li" | "article" } & Record<string, unknown>) {
   const reduce = useReducedMotion();
-  if (reduce) { const Plain = as; return <Plain className={cn("min-w-0", className)} {...(rest as object)}>{children}</Plain>; }
+  if (reduce || STATIC) { const Plain = as; return <Plain className={cn("min-w-0", className)} {...(rest as object)}>{children}</Plain>; }
   const Tag = motion[as];
   return <Tag className={cn("min-w-0", className)} variants={rise} {...(rest as object)}>{children}</Tag>;
 }

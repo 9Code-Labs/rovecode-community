@@ -39,15 +39,8 @@ export const fr: PartialDict = {
     chips: ["+4 −1 appliqué", "demander d'abord · carte d'autorisation", "contexte 13 % de 200k"],
   },
   proof: {
-    eyebrow: "depuis le dépôt, 2026-09-02",
+    eyebrow: "depuis le dépôt",
     ariaLabel: "Chiffres tirés du dépôt",
-    stats: [
-      { label: "tests", note: "unitaires + intégration, bun test" },
-      { label: "motifs portés", note: "chacun tracé à file:line dans une source figée" },
-      { label: "panneaux", note: "fichiers · code · messages · plan · usage · rovecode" },
-      { label: "fournisseurs intégrés", note: "plus toute URL compatible OpenAI" },
-      { label: "licence", note: "logiciel libre, copyleft étendu à l'usage en réseau" },
-    ],
   },
   cockpit: {
     eyebrow: "le cockpit",

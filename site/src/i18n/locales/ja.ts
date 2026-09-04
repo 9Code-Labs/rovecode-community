@@ -39,15 +39,8 @@ export const ja: PartialDict = {
     chips: ["+4 −1 が着地", "まず尋ねる · 承認カード", "コンテキストは 200k の 13 %"],
   },
   proof: {
-    eyebrow: "リポジトリより、2026-09-02",
+    eyebrow: "リポジトリより",
     ariaLabel: "リポジトリからの数字",
-    stats: [
-      { label: "テスト", note: "ユニット + 結合、bun test" },
-      { label: "移植パターン", note: "いずれも固定した原典の file:line まで辿れる" },
-      { label: "パネル", note: "ファイル · コード · メッセージ · 計画 · 使用量 · rovecode" },
-      { label: "組み込みプロバイダ", note: "加えて OpenAI 互換の任意の URL" },
-      { label: "ライセンス", note: "自由なソフトウェア、ネットワーク利用にも及ぶコピーレフト" },
-    ],
   },
   cockpit: {
     eyebrow: "コックピット",

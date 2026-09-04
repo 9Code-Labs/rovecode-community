@@ -39,15 +39,8 @@ export const zh: PartialDict = {
     chips: ["+4 −1 已落地", "先询问 · 批准卡片", "上下文占 200k 的 13 %"],
   },
   proof: {
-    eyebrow: "来自仓库，2026-09-02",
+    eyebrow: "来自仓库",
     ariaLabel: "来自仓库的数字",
-    stats: [
-      { label: "测试", note: "单元 + 集成，bun test" },
-      { label: "移植模式", note: "每一条都能追到冻结源码的 file:line" },
-      { label: "面板", note: "文件 · 代码 · 消息 · 计划 · 用量 · rovecode" },
-      { label: "内置提供方", note: "外加任意 OpenAI 兼容 URL" },
-      { label: "许可证", note: "自由软件，网络使用同样受 copyleft 约束" },
-    ],
   },
   cockpit: {
     eyebrow: "驾驶舱",

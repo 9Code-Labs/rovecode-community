@@ -1,6 +1,8 @@
 /** Every fact on the page comes from README.md, `bun run src/cli/main.ts --help`, src/cli/help.ts and
  *  src/providers/provider-config.ts (2026-09-02). */
 
+import facts from "./generated/facts.json";
+
 export const REPO = "https://github.com/9Code-Labs/rovecode";
 export const README = `${REPO}#readme`;
 export const readmeAnchor = (slug: string) => `${REPO}/blob/main/README.md#${slug}`;
@@ -45,12 +47,14 @@ export const TRANSCRIPT = {
   prompt: "ask rovecode — e.g. fix the failing test",
 } as const;
 
+/** figures read from the repository by scripts/facts.mjs at build time (src/generated/facts.json); the test
+ *  count is rounded down to the hundred and shown with "+" because the script counts test() calls, a lower bound */
 export const STATS = [
-  { value: "1,600+", label: "tests", note: "unit + integration, bun test" },
-  { value: "47", label: "ported patterns", note: "each traced to file:line in a snapshotted source" },
-  { value: "6", label: "panels", note: "files · code · messages · plan · usage · rovecode" },
-  { value: "16", label: "built-in providers", note: "plus any OpenAI-compatible URL" },
-  { value: "AGPL-3.0", label: "license", note: "free software, copyleft over network use" },
+  { value: `${Math.floor(facts.tests / 100) * 100}+`.replace(/\B(?=(\d{3})+(?!\d))/g, ","), key: "tests" },
+  { value: String(facts.providers), key: "providers" },
+  { value: String(facts.layers), key: "layers" },
+  { value: String(facts.locales), key: "locales" },
+  { value: facts.license, key: "license" },
 ] as const;
 
 /** ~/.rovecode/providers.json — ProvidersFile { default?, providers?: Record<id, ProviderSpec> } */

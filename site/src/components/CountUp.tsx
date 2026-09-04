@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { animate, useInView, useReducedMotion } from "motion/react";
+import { STATIC } from "@/lib/boot";
 
 /** "1,600+" counts from 0 to 1,600 over 1.1 s the first time it scrolls into view and keeps its suffix;
  *  a value without a leading number ("AGPL-3.0") is rendered as is */
@@ -7,7 +8,7 @@ export function CountUp({ value }: { value: string }) {
   const m = /^([\d,]+)(.*)$/.exec(value);
   const target = m ? Number(m[1].replace(/,/g, "")) : NaN;
   const suffix = m ? m[2] : "";
-  const reduce = useReducedMotion();
+  const reduce = useReducedMotion() || STATIC;
   const ref = useRef<HTMLSpanElement | null>(null);
   const inView = useInView(ref, { once: true, amount: 0.6 });
   const [n, setN] = useState(reduce ? target : 0);

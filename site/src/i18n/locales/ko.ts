@@ -39,15 +39,8 @@ export const ko: PartialDict = {
     chips: ["+4 −1 반영됨", "먼저 묻기 · 승인 카드", "컨텍스트 200k의 13 %"],
   },
   proof: {
-    eyebrow: "저장소에서, 2026-09-02",
+    eyebrow: "저장소에서",
     ariaLabel: "저장소에서 가져온 숫자",
-    stats: [
-      { label: "테스트", note: "단위 + 통합, bun test" },
-      { label: "이식한 패턴", note: "각각 고정된 원본의 file:line까지 추적 가능" },
-      { label: "패널", note: "파일 · 코드 · 메시지 · 계획 · 사용량 · rovecode" },
-      { label: "기본 제공자", note: "여기에 OpenAI 호환 URL은 무엇이든" },
-      { label: "라이선스", note: "자유 소프트웨어, 네트워크 사용까지 미치는 카피레프트" },
-    ],
   },
   cockpit: {
     eyebrow: "콕핏",

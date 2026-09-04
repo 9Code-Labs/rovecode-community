@@ -39,15 +39,8 @@ export const nl: PartialDict = {
     chips: ["+4 −1 geland", "eerst vragen · goedkeuringskaart", "context 13 % van 200k"],
   },
   proof: {
-    eyebrow: "uit de repository, 2026-09-02",
+    eyebrow: "uit de repository",
     ariaLabel: "Cijfers uit de repository",
-    stats: [
-      { label: "tests", note: "unit + integratie, bun test" },
-      { label: "overgezette patronen", note: "elk herleidbaar tot file:line in een bevroren bron" },
-      { label: "panelen", note: "bestanden · code · berichten · plan · verbruik · rovecode" },
-      { label: "ingebouwde providers", note: "plus elke OpenAI-compatibele URL" },
-      { label: "licentie", note: "vrije software, copyleft ook bij netwerkgebruik" },
-    ],
   },
   cockpit: {
     eyebrow: "de cockpit",

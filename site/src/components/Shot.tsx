@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
+import { FRAME_SIZES, FRAME_WIDTHS, Pic } from "./Pic";
 import type { Shot as ShotData } from "@/content";
 
 const COLS = 160, ROWS = 44;
@@ -18,7 +19,7 @@ interface Line { x1: number; y1: number; x2: number; y2: number; xm: number }
  *  lines join them to the explanation rows (desktop). Hovering (or focusing, on touch: tapping) a row or a marker
  *  turns the frame into a lens: it zooms 2× on that cell, the marker staying put as the fixed point, and pans to the
  *  next callout when the pointer moves on. */
-export function Shot({ file, alt, title, lead, callouts, flip, index }: Props) {
+export function Shot({ file, alt, title, lead, callouts, flip }: Props) {
   const [hot, setHot] = useState<number | null>(null);
   const [lines, setLines] = useState<Line[]>([]);
   const root = useRef<HTMLElement | null>(null);
@@ -74,12 +75,14 @@ export function Shot({ file, alt, title, lead, callouts, flip, index }: Props) {
           <div className="p-1.5 md:p-2">
             <div className="relative">
               <div className="overflow-hidden rounded-md">
-                <img
+                <Pic
                   src={file}
+                  widths={FRAME_WIDTHS}
+                  sizes={FRAME_SIZES}
                   alt={alt}
                   width={2497}
                   height={1496}
-                  loading={index === 0 ? "eager" : "lazy"}
+                  loading="lazy"
                   decoding="async"
                   onLoad={measure}
                   style={{ transform: lens, transformOrigin: "0 0" }}

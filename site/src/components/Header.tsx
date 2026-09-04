@@ -33,7 +33,7 @@ export function Header() {
     <header className={cn("fixed inset-x-0 top-0 z-40 transition-[background-color] duration-300", scrolled ? "bg-bg/85 backdrop-blur-md" : "bg-transparent")}>
       <div className="mx-auto flex h-[var(--header-h)] w-full max-w-[1200px] items-center justify-between gap-6 px-6 md:px-10">
         <a href="#top" className="flex shrink-0 items-center gap-2.5 rounded-sm" aria-label={t.ui.backToTop}>
-          <img src="/brand/mark-sky.png" alt="" width={20} height={20} className="size-5 opacity-80 grayscale" />
+          <img src="/brand/mark-sky-96.png" alt="" width={20} height={20} className="size-5 opacity-80 grayscale" />
           <span className="text-[14px] font-medium tracking-[-0.01em]">rovecode</span>
           <span className="label hidden sm:inline">v0.2.0</span>
         </a>

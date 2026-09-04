@@ -2,6 +2,7 @@ import { Fragment } from "react";
 import { ArrowUpRight } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { EASE } from "@/components/Motion";
+import { STATIC } from "@/lib/boot";
 import { CopyCommand } from "@/components/CopyCommand";
 import { CountUp } from "@/components/CountUp";
 import { Device } from "@/components/Device";
@@ -33,7 +34,7 @@ function words(title: string): Word[] {
  *  and surrounded by air — then the real frame, large, alone. Under it, the repository's figures in one quiet row. */
 export function Hero() {
   const t = useT();
-  const reduce = useReducedMotion();
+  const reduce = useReducedMotion() || STATIC;
   const enter = (delay: number) => (reduce ? {} : { initial: { opacity: 0, y: 10 }, animate: { opacity: 1, y: 0 }, transition: { duration: 0.9, ease: EASE, delay } });
   const line = words(t.hero.title);
 

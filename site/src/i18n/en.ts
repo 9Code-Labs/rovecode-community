@@ -56,13 +56,13 @@ export const en = {
   },
 
   proof: {
-    eyebrow: "from the repository, 2026-09-02",
-    ariaLabel: "Numbers from the repository",
+    eyebrow: "from the repository, at build time",
+    ariaLabel: "Figures from the repository",
     stats: [
-      { label: "tests", note: "unit + integration, bun test" },
-      { label: "ported patterns", note: "each traced to file:line in a snapshotted source" },
-      { label: "panels", note: "files · code · messages · plan · usage · rovecode" },
+      { label: "tests", note: "test() calls under test/, counted at build" },
       { label: "built-in providers", note: "plus any OpenAI-compatible URL" },
+      { label: "policy layers", note: "rules · execpolicy · approval · runtime" },
+      { label: "languages on this page", note: "picked from the browser, switchable" },
       { label: "license", note: "free software, copyleft over network use" },
     ],
   },
