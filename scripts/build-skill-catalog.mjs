@@ -44,16 +44,28 @@ const SOURCES = [
  *  shelf with no error anywhere. */
 class Unreachable extends Error {}
 
+/** Optional, and only ever a rate limit lever: anonymous GitHub gives 60 requests an hour, a token gives
+ *  5000, and this script makes ~40 — so in CI, where the runner's IP is shared with the world, running
+ *  without one is choosing a flaky job. It reads NOTHING private; every URL here is public. A token that
+ *  is expired or wrong comes back 401, which is "unreachable" above, so the bad case is a refusal to
+ *  write, never a shrunken catalog. */
+const TOKEN = process.env.GITHUB_TOKEN || process.env.GH_TOKEN || "";
+const HEADERS = {
+  "user-agent": "rovecode-catalog-build",
+  ...(TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}),
+};
+
 const RETRIES = 3;
 async function get(url) {
   let last;
   for (let attempt = 1; attempt <= RETRIES; attempt++) {
     try {
-      const r = await fetch(url, { headers: { "user-agent": "rovecode-catalog-build" } });
+      const r = await fetch(url, { headers: HEADERS });
       if (r.status === 404) return null;                       // an answer: nothing there
       if (r.ok) return await r.text();
       // 403 with a rate-limit header, 5xx, anything else: the host did not serve us
-      last = new Error(`HTTP ${r.status}${r.status === 403 ? " (rate limited?)" : ""} for ${url}`);
+      const hint = r.status === 403 ? " (rate limited?)" : r.status === 401 ? " (GITHUB_TOKEN rejected — unset it to fall back to anonymous)" : "";
+      last = new Error(`HTTP ${r.status}${hint} for ${url}`);
     } catch (e) {
       last = e;                                                // DNS, TLS, connection reset, timeout
     }
@@ -108,69 +120,67 @@ const licenceOf = (text) =>
 const items = [];
 const warnings = [];
 
-/** An unreachable host is not a catalog change: say so in one line and leave the shipped file alone. */
-process.on("unhandledRejection", (e) => {
-  if (e instanceof Unreachable) {
-    console.error(`cannot reach the source: ${e.message}`);
-    console.error("nothing was written — the shipped catalog is untouched. Try again, or check the network.");
-    process.exit(1);
-  }
-  throw e;
-});
+try {
+  for (const src of SOURCES) {
+    const [, owner, repo] = /github\.com\/([^/]+)\/([^/]+)/.exec(src.git);
+    const tree = await api(`https://api.github.com/repos/${owner}/${repo}/git/trees/${src.branch}?recursive=1`);
+    const skillFiles = tree.tree
+      .filter((t) => t.type === "blob" && t.path.startsWith(`${src.root}/`) && t.path.endsWith("/SKILL.md"))
+      .map((t) => t.path)
+      .sort();
 
-for (const src of SOURCES) {
-  const [, owner, repo] = /github\.com\/([^/]+)\/([^/]+)/.exec(src.git);
-  const tree = await api(`https://api.github.com/repos/${owner}/${repo}/git/trees/${src.branch}?recursive=1`);
-  const skillFiles = tree.tree
-    .filter((t) => t.type === "blob" && t.path.startsWith(`${src.root}/`) && t.path.endsWith("/SKILL.md"))
-    .map((t) => t.path)
-    .sort();
-
-  // tags: the publisher's own grouping, read from the repo. No group -> no tag; nothing is invented.
-  const tagOf = new Map();
-  if (src.groups) {
-    const gtext = await raw(`https://raw.githubusercontent.com/${owner}/${repo}/${src.branch}/${src.groups}`);
-    if (gtext === null) warnings.push(`${src.groups}: unreadable — entries will carry no tags`);
-    else {
-      try {
-        for (const g of JSON.parse(gtext).plugins ?? []) {
-          for (const s of g.skills ?? []) {
-            const n = String(s).split("/").pop();
-            if (n && g.name && g.name !== n) tagOf.set(n, [String(g.name)]);
+    // tags: the publisher's own grouping, read from the repo. No group -> no tag; nothing is invented.
+    const tagOf = new Map();
+    if (src.groups) {
+      const gtext = await raw(`https://raw.githubusercontent.com/${owner}/${repo}/${src.branch}/${src.groups}`);
+      if (gtext === null) warnings.push(`${src.groups}: unreadable — entries will carry no tags`);
+      else {
+        try {
+          for (const g of JSON.parse(gtext).plugins ?? []) {
+            for (const s of g.skills ?? []) {
+              const n = String(s).split("/").pop();
+              if (n && g.name && g.name !== n) tagOf.set(n, [String(g.name)]);
+            }
           }
-        }
-      } catch { warnings.push(`${src.groups}: not valid JSON — entries will carry no tags`); }
+        } catch { warnings.push(`${src.groups}: not valid JSON — entries will carry no tags`); }
+      }
+    }
+
+    for (const path of skillFiles) {
+      const name = path.slice(src.root.length + 1, -"/SKILL.md".length);
+      if (name.includes("/")) { warnings.push(`${path}: nested deeper than <root>/<name>/SKILL.md — skipped`); continue; }
+      const base = `https://raw.githubusercontent.com/${owner}/${repo}/${src.branch}`;
+      const text = await raw(`${base}/${path}`);
+      if (text === null) { warnings.push(`${path}: unreadable — skipped`); continue; }
+      const fm = frontmatter(text);
+      if (!fm || !fm["name"] || !fm["description"]) { warnings.push(`${path}: no usable frontmatter — skipped`); continue; }
+      if (fm["name"] !== name) warnings.push(`${path}: frontmatter name "${fm["name"]}" != folder "${name}"`);
+      const licence = licenceOf(await raw(`${base}/${src.root}/${name}/LICENSE.txt`));
+      if (licence === null) warnings.push(`${name}: no LICENSE.txt — licence recorded as unknown`);
+
+      items.push({
+        id: name,
+        title: name.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+        publisher: src.publisher,
+        description: fm["description"].replace(/\s+/g, " ").trim().slice(0, 500),
+        ...(fm["version"] ? { version: fm["version"] } : {}),   // real files rarely carry one; never invented
+        license: licence ?? "unknown",
+        tags: tagOf.get(name) ?? [],
+        repository: src.git,
+        homepage: src.homepage,
+        source: { git: src.git, subfolder: `${src.root}/${name}`, branch: src.branch },
+        bytes: text.length,
+      });
     }
   }
 
-  for (const path of skillFiles) {
-    const name = path.slice(src.root.length + 1, -"/SKILL.md".length);
-    if (name.includes("/")) { warnings.push(`${path}: nested deeper than <root>/<name>/SKILL.md — skipped`); continue; }
-    const base = `https://raw.githubusercontent.com/${owner}/${repo}/${src.branch}`;
-    const text = await raw(`${base}/${path}`);
-    if (text === null) { warnings.push(`${path}: unreadable — skipped`); continue; }
-    const fm = frontmatter(text);
-    if (!fm || !fm["name"] || !fm["description"]) { warnings.push(`${path}: no usable frontmatter — skipped`); continue; }
-    if (fm["name"] !== name) warnings.push(`${path}: frontmatter name "${fm["name"]}" != folder "${name}"`);
-    const licence = licenceOf(await raw(`${base}/${src.root}/${name}/LICENSE.txt`));
-    if (licence === null) warnings.push(`${name}: no LICENSE.txt — licence recorded as unknown`);
-
-    items.push({
-      id: name,
-      title: name.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
-      publisher: src.publisher,
-      description: fm["description"].replace(/\s+/g, " ").trim().slice(0, 500),
-      ...(fm["version"] ? { version: fm["version"] } : {}),   // real files rarely carry one; never invented
-      license: licence ?? "unknown",
-      tags: tagOf.get(name) ?? [],
-      repository: src.git,
-      homepage: src.homepage,
-      source: { git: src.git, subfolder: `${src.root}/${name}`, branch: src.branch },
-      bytes: text.length,
-    });
-  }
+} catch (e) {
+  // an unreachable host is not a catalog change: one line, and the shipped file is left alone
+  if (!(e instanceof Unreachable)) throw e;
+  console.error(`cannot reach the source: ${e.message}`);
+  console.error("nothing was written — the shipped catalog is untouched. Try again, or check the network.");
+  process.exit(1);
 }
-
 items.sort((a, b) => a.id.localeCompare(b.id));
 const doc = {
   version: 1,
