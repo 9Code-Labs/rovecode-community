@@ -293,10 +293,12 @@ export function drawMarket(scr: ScreenLike, L: Layout, C: Theme, s: SextantState
     if (sel) scr.tint(x + 2, yy, listW + 2, 1, C.selBg);
     const badge = rowBadge(r);
     const badgeW = badge ? strWidth(badge.text) + 1 : 0;
+    // the same three facts, in the same order, as the web card: kind, title, publisher
     scr.text(x + 2, yy, [
       [sel ? "▸ " : "  ", st(C.accent, sel ? C.selBg : C.bg2)],
+      [`${KIND_LABEL[r.kind]} `.padEnd(7), st(C.dim, sel ? C.selBg : C.bg2)],
       [r.title, st(sel ? C.fg : C.fg2, sel ? C.selBg : C.bg2, sel ? ATTR.BOLD : 0)],
-      [`  ${KIND_LABEL[r.kind]}`, st(C.dim, sel ? C.selBg : C.bg2)],
+      [`  ${r.publisher}`, st(C.dim, sel ? C.selBg : C.bg2)],
     ], listW - badgeW);
     if (badge) scr.put(x + 3 + listW - badgeW, yy, badge.text, st(badge.tone === "ok" ? C.ok : badge.tone === "warn" ? C.warn : C.info, sel ? C.selBg : C.bg2));
     const idx = off + i;
@@ -310,8 +312,8 @@ export function drawMarket(scr: ScreenLike, L: Layout, C: Theme, s: SextantState
   // the foot: what Enter will do, said before it is pressed
   const foot = current
     ? current.installed && !current.installed.updateAvailable
-      ? "⏎ show the install plan again · ↑↓ move · ⇥ next kind · esc closes"
-      : "⏎ show the install plan · ↑↓ move · ⇥ next kind · esc closes"
+      ? "⏎ install again · ↑↓ move · ⇥ next kind · esc closes"
+      : "⏎ install · ↑↓ move · ⇥ next kind · esc closes"
     : "↑↓ move · ⇥ next kind · esc closes";
   scr.clip(x + 3, y + h - 1, foot, st(C.dim), w - 6);
 

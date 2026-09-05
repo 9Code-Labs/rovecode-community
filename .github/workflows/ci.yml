@@ -25,3 +25,9 @@ jobs:
         run: bun test
         env:
           CI: "1"
+      # Local and deterministic: it reads plugins/*/plugin.json out of this checkout, no network. A
+      # failure means a manifest was edited without regenerating the catalog, which is a broken commit.
+      # The skill catalog's --check fetches from github.com and can go red for reasons that have nothing
+      # to do with the commit, so it is NOT here — see .github/workflows/catalogs.yml.
+      - name: plugins.json is regenerated
+        run: bun scripts/build-plugin-catalog.mjs --check

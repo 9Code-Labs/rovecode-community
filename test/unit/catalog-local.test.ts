@@ -77,23 +77,23 @@ test("a prompt-size price tier is attached to a models.dev row, which keeps its 
   expect(grok).toMatchObject({ source: "models.dev", pricing: { inputPerMTok: 2, outputPerMTok: 6 } }); // base price still models.dev's
   expect(grok!.tier).toMatchObject({ thresholdTokens: 200_000, mode: "per-request", above: { input: 4, output: 12, cacheRead: 1 } });
   expect(c.lookup("xai", "grok-4.3")!.tier).toMatchObject({ mode: "per-request", above: { input: 2.5, output: 5 } });
-  // Google charges the OVERFLOW, xAI charges the whole request: the difference is the expensive one
-  expect(c.lookup("google", "gemini-3.1-pro-preview")!.tier).toMatchObject({ thresholdTokens: 200_000, mode: "marginal", above: { input: 4, output: 18 } });
-  expect(c.lookup("google", "gemini-2.5-pro")!.tier).toMatchObject({ mode: "marginal", above: { input: 2.5, output: 15 } });
+  // Google prices by prompt size too (the page's columns say "prompts > 200k tokens"), so it is per-request, not marginal
+  expect(c.lookup("google", "gemini-3.1-pro-preview")!.tier).toMatchObject({ thresholdTokens: 200_000, mode: "per-request", above: { input: 4, output: 18 } });
+  expect(c.lookup("google", "gemini-2.5-pro")!.tier).toMatchObject({ mode: "per-request", above: { input: 2.5, output: 15 } });
   expect(c.lookup("anthropic", "claude-opus-5")!.tier).toBeUndefined(); // Anthropic has no long-context step any more
   expect(c.lookup("google", "GEMINI-2.5-PRO")!.tier).toBeDefined();     // model id matched case-insensitively, like every other lookup
 });
 
 test("a scheduled price change rides with the row, and describePricing says all of it in one place", () => {
   const c = new ModelCatalog();
-  expect(c.lookup("google", "gemini-3.8-flash")!.priceNote).toContain("doubles on 2027-01-01");
+  expect(c.lookup("google", "gemini-3.8-flash")!.priceNote).toContain("starting 2027-01-01");
   expect(c.lookup("google", "gemini-2.5-pro")!.priceNote).toBeUndefined();
 
   const grok = describePricing(c.lookup("xai", "grok-4.6")!);
   expect(grok[0]).toBe("$2 in / $6 out per 1M · cache read $0.5");
   expect(grok[1]).toBe("over 200,000 prompt tokens the WHOLE request bills at $4 in / $12 out");
   const gem = describePricing(c.lookup("google", "gemini-3.1-pro-preview")!);
-  expect(gem[1]).toBe("tokens past 200,000 bill at $4 in / $18 out");
+  expect(gem[1]).toBe("over 200,000 prompt tokens the WHOLE request bills at $4 in / $18 out");
   expect(describePricing(c.lookup("google", "gemini-3.8-flash")!).at(-1)).toContain("2027-01-01");
   expect(describePricing({ provider: "x", model: "y" })).toEqual([]); // unpriced says nothing rather than "$undefined"
 });
@@ -154,7 +154,8 @@ test("ratesFor: under the threshold nothing changes; over it the WHOLE request r
 test("ratesFor on a flat model is the trivial split, so a caller never has to branch on whether a tier exists", () => {
   const c = new ModelCatalog();
   const flat = ratesFor(c.lookup("anthropic", "claude-opus-5")!, 900_000);
-  expect(flat).toMatchObject({ mode: "flat", tierApplied: false, promptBase: 900_000, promptAbove: 0, above: undefined });
+  expect(flat).toMatchObject({ mode: "flat", tierApplied: false, promptBase: 900_000, promptAbove: 0 });
+  expect(flat.above).toBeUndefined();
   expect(flat.request.inputPerMTok).toBe(5);
   // an unpriced model yields empty rate tables rather than throwing
   expect(ratesFor({ provider: "x", model: "y" }, 10).request).toEqual({});

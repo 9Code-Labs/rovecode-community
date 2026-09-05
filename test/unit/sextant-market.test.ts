@@ -176,6 +176,7 @@ describe("market overlay · painting", () => {
     expect(text).toContain("Filesystem");
     expect(text).toContain("npx -y @modelcontextprotocol/server-filesystem");
     expect(text).toContain("what it runs");
+    expect(text).toContain("⏎ install");
     expect(text).toContain("esc closes");
   });
 
