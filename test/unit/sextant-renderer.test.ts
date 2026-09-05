@@ -513,11 +513,17 @@ test("frame budget: a 200-message transcript (user, assistant, tool rows) paints
   }
   renderer.setBusy(false);
   expect(renderer.state.messages.length).toBeGreaterThanOrEqual(200);
-  const t0 = performance.now();
-  const N = 10;
-  for (let i = 0; i < N; i++) { advance(40); }
-  const per = (performance.now() - t0) / N;
-  console.log(`sextant frame budget: ${per.toFixed(2)} ms/frame over ${renderer.state.messages.length} messages at 160×44`);
-  expect(per).toBeLessThan(40);
+  // Median, not mean, and two warm-up frames first. The claim is "this code can paint a frame in
+  // budget", and a mean over ten frames fails that claim whenever the machine preempts one of them —
+  // which it does whenever another test file (or another agent's suite) is running beside this one.
+  // A median needs half the frames to be slow before it moves, so it measures the painter and not the load.
+  advance(40); advance(40);
+  const N = 11;
+  const times: number[] = [];
+  for (let i = 0; i < N; i++) { const t = performance.now(); advance(40); times.push(performance.now() - t); }
+  const sorted = [...times].sort((a, b) => a - b);
+  const median = sorted[Math.floor(N / 2)] ?? 0;
+  console.log(`sextant frame budget: median ${median.toFixed(2)} ms/frame (min ${sorted[0]?.toFixed(2)}, max ${sorted[N - 1]?.toFixed(2)}) over ${renderer.state.messages.length} messages at 160×44`);
+  expect(median).toBeLessThan(40);
   renderer.stop();
 });

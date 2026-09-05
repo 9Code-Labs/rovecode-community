@@ -125,7 +125,10 @@ test("gitRunnerAsync: a hung child is killed at the timeout and the call resolve
   const t0 = Date.now();
   const hang = gitRunnerAsync({ timeoutMs: 100, argv: () => [process.execPath, "-e", "setTimeout(() => {}, 30000)"] });
   expect(await hang(["x"], ".")).toBeNull();
-  expect(Date.now() - t0).toBeLessThan(5000);                              // (mutation: no timeout → the sleeper holds the call for 30 s)
+  // 15 s, not 5: the claim is "the 100 ms timeout fires instead of waiting 30 s for the sleeper", and
+  // spawning a node child on a loaded machine can eat several seconds without saying anything about
+  // that claim. The mutation this guards (no timeout at all) parks for 30 s and still fails.
+  expect(Date.now() - t0).toBeLessThan(15_000);
   const missing = gitRunnerAsync({ argv: () => ["definitely-not-a-binary-f44", "--version"] });
   expect(await missing(["x"], ".")).toBeNull();
   for (const run of [none, notRepo, boom]) {
@@ -135,7 +138,7 @@ test("gitRunnerAsync: a hung child is killed at the timeout and the call resolve
   }
   expect(await gitBranchAsync("C:/x", toAsync(fake({ "rev-parse --abbrev-ref HEAD": "HEAD\n", "rev-parse --short HEAD": "d6d3977\n" })))).toBe("d6d3977");
   expect(await gitHeadContentAsync("C:/x", "../escape.ts", toAsync(fake({})))).toBeNull();
-});
+}, 30_000); // spawns real child processes; bun's 5 s default cut this under parallel load
 
 test.if(haveGit)("real repo: every async twin answers exactly what its sync form does — branch, porcelain (rename + untracked), HEAD content, the full scanRepo snapshot, fileDiff; `git --version` through spawnGitAsync exits 0; a non-repo dir → null", async () => {
   const dir = mkdtempSync(join(tmpdir(), "rovecode-sx-git-async-"));
