@@ -8,7 +8,8 @@
  *  when the two disagree by more than a twentieth, because compaction fires on the estimate.
  *
  *  Offline: the catalog is the bundled snapshot plus rovecode's own table, no fetch. `--json` prints the
- *  report verbatim for scripts. */
+ *  report verbatim for scripts; `--no-runtime` skips building the runtime, and with it the system-prompt
+ *  and tool-schema rows, for a project whose config does not load. */
 
 import { join } from "node:path";
 import { listSessions, SessionStore } from "../core/session.ts";
@@ -59,10 +60,15 @@ export function renderContext(r: ContextReport, sessionId: string): string[] {
   out.push("");
   const t = r.totals;
   out.push(`billed   ${n(t.input)} in · ${n(t.output)} out · ${n(t.cacheRead)} cache read · ${n(t.cacheWrite)} cache written`);
+  // three different silences, and saying the wrong one is a lie about the catalog: nothing has been
+  // billed yet, versus the catalog not pricing this model, versus a partly priced transcript.
+  const billedAnything = t.input + t.output + t.cacheRead + t.cacheWrite > 0;
   out.push(
     r.costUsd !== undefined
       ? `cost     $${r.costUsd.toFixed(4)}${r.unpricedTurns > 0 ? ` — lower bound, ${r.unpricedTurns} turn${r.unpricedTurns > 1 ? "s" : ""} unpriced` : ""}`
-      : `cost     unknown — no pricing for ${r.model.provider}/${r.model.model}`,
+      : billedAnything
+        ? `cost     unknown — no pricing for ${r.model.provider}/${r.model.model}`
+        : "cost     $0.0000 — nothing has been billed in this session yet",
   );
   return out;
 }
@@ -98,10 +104,38 @@ export async function cmdContext(args: string[], deps: ContextCliDeps = {}): Pro
     return 1;
   }
 
+  // The system prompt and the tool schemas are the two rows a transcript cannot tell us, and they are
+  // the largest fixed cost of every turn — so the command builds the same runtime a real run would and
+  // asks it, unless --no-runtime says not to (a broken project config should not stop a token count).
+  // MCP tools are deliberately absent: their schemas exist only after connecting to a server, and
+  // starting other people's processes to print a number is not a trade this command should make.
+  let fixed: { system?: string; toolSchemas?: string; note?: string } = {};
+  if (!args.includes("--no-runtime")) {
+    try {
+      const { createRuntime } = await import("./runtime.ts");
+      // sessionId: the one we are reporting on. Without it the runtime opens a NEW session directory,
+      // so merely asking "what is in the window" would leave an empty session behind — and the next
+      // `rovecode context` would report that empty one instead.
+      const rt = createRuntime({ cwd, stream: null, sessionId: chosen });
+      const schemas = rt.registry.list().map((t) => t.schema);
+      // buildDef, not systemPrompt(): the prompt a run actually sends is the base plus the model
+      // profile, the design section and — for a model without native tool calling — the tool block.
+      // Asking for the base alone under-counts the row by everything that makes it big.
+      const def = rt.buildDef({ ...ref, effort: "auto" });
+      const system = typeof def.systemPrompt === "string" ? def.systemPrompt : def.systemPrompt({});
+      fixed = { system, toolSchemas: JSON.stringify(schemas) };
+      await rt.mcp?.close().catch(() => {});
+    } catch (e) {
+      fixed = { note: `the system prompt and tool schemas are not counted — this project's runtime did not build (${e instanceof Error ? e.message : String(e)})` };
+    }
+  }
+
   const catalog = new ModelCatalog();
   const report = contextReport({
     messages,
     current: ref,
+    ...(fixed.system !== undefined ? { system: fixed.system } : {}),
+    ...(fixed.toolSchemas !== undefined ? { toolSchemas: fixed.toolSchemas } : {}),
     lookup: (r) => {
       const info = catalog.lookup(r.provider, r.model);
       if (!info) return undefined;
@@ -112,7 +146,11 @@ export async function cmdContext(args: string[], deps: ContextCliDeps = {}): Pro
     },
   });
 
-  if (json) log(JSON.stringify({ session: chosen, ...report }, null, 2));
-  else for (const line of renderContext(report, chosen)) log(line);
+  if (json) log(JSON.stringify({ session: chosen, ...report, ...(fixed.note ? { note: fixed.note } : {}) }, null, 2));
+  else {
+    for (const line of renderContext(report, chosen)) log(line);
+    if (fixed.note) log(`note     ${fixed.note}`);
+    else if (fixed.system !== undefined) log("note     MCP tools are not counted — their schemas exist only once a server is connected");
+  }
   return 0;
 }

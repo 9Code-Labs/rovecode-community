@@ -225,3 +225,21 @@ describe("contextBudgetFor", () => {
     expect(contextBudgetFor({ window: 1_000_000, override: 0 })).toBeGreaterThan(MIN_CONTEXT_BUDGET);
   });
 });
+
+describe("the cost line tells three silences apart", () => {
+  it("says nothing was billed, rather than blaming the catalog", () => {
+    const r = contextReport({ messages: [msg("user", text("hello"))], current: CURRENT, lookup: () => PRICED });
+    const out = renderContext(r, "s").join("\n");
+    expect(out).toContain("nothing has been billed in this session yet");
+    expect(out).not.toContain("no pricing for");
+  });
+
+  it("blames the catalog only when tokens were actually billed at an unpriced model", () => {
+    const r = contextReport({
+      messages: [msg("assistant", text("x"), { input: 100, output: 10 })],
+      current: CURRENT,
+      lookup: () => ({ contextWindow: 1000 }), // window known, pricing absent
+    });
+    expect(renderContext(r, "s").join("\n")).toContain("no pricing for anthropic/claude-sonnet-5");
+  });
+});
