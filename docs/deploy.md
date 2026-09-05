@@ -34,18 +34,50 @@ them fails `nginx -t` with "directive is duplicate" (this cost the first bootstr
 ## Deploying
 
 ```
-bun run deploy:site            # build site/ with /docs/ → tar over ssh → new release → flip current → curl 200
-scripts/deploy-site.sh --no-docs    # landing page only (bun run build), no /docs/ section
+bun run deploy:site            # build:all (docs + market) → tar over ssh → new release → flip current → curl 200
+scripts/deploy-site.sh --no-docs    # landing page only (bun run build), no /docs/ or /market/
 scripts/deploy-site.sh --no-build   # ship the existing site/dist
+scripts/deploy-site.sh --check      # after the flip, walk every URL in the live sitemap
 scripts/deploy-site.sh --rollback   # the previous release becomes current
 DEPLOY_HOST=root@1.2.3.4 scripts/deploy-site.sh   # another host
 ```
 
-`/docs/` (7 pages × 15 locales, `bun run build:docs`) has shipped with the site since release
-20260904-191403; the GitHub workflow builds the same target. The flip is the last step, so a
-half-uploaded release is never served. Verification is a GET
-on the page with a 200 check; `site/scripts/live-check.mjs` (`bun run live-check`) walks every
-URL in the live sitemap for the full per-page check (lang, canonical, hreflang, 0 console).
+The default build target is `build:all` (`VITE_DOCS=1 VITE_MARKET=1`) — `/docs/` and `/market/`, plus
+the markdown mirror, 735 pages in all. The flip is the last step, so a half-uploaded release is never
+served. Verification is a GET with a 200 check; `--check` then runs `site/scripts/live-check.mjs` over
+every URL in the live sitemap (status, lang, canonical, hreflang, console, axe) and **rolls back only
+after two failed attempts**, because a headless Chromium that crashes on one page once is not evidence
+that the release is bad — it rolled a good release back before that second attempt existed.
+
+**The manual deploy and the CI deploy do not ship the same thing.** `deploy-site.sh` defaults to
+`build:all`; `.github/workflows/site.yml` still runs `bun run build:docs`, so a CI-driven deploy would
+publish the site without `/market/`. Whichever runs last wins. Nothing has drifted in practice only
+because Actions has not run at all on this repository (billing, see below) — that is luck, not design,
+and the workflow needs the same target before Actions is turned back on.
+
+A full sweep of 735 pages is memory-hungry: it was killed by the OOM killer on a loaded workstation
+mid-run, after the upload and the flip had already succeeded. `--shard i/n` and `--only <substring>`
+exist for that — a shard is a sample, not equivalent to the sweep, and the difference is worth stating
+when reporting a result.
+
+## What nginx serves, and three things it was doing wrong
+
+Measured 2026-09-05 on the live host and fixed there:
+
+- **The markdown mirror was served without a charset.** `Content-Type: text/markdown` with no
+  `charset=utf-8`: HTTP does not default `text/*` to UTF-8, and unlike an HTML page a `.md` file has no
+  `<meta charset>` to fall back on, so every em dash and middle dot arrived as mojibake for a client
+  that believed the header. That surface exists to be read by other agents, which is exactly the
+  audience least likely to guess. Fixed with `charset utf-8; charset_types text/markdown …`.
+- **`.md` was not in `gzip_types`.** 404 KB of mirror served uncompressed; the index alone went
+  10,465 → 4,397 bytes once added, and it is the same prose that compresses 83% as HTML.
+- **`font/woff2` WAS in `gzip_types`.** woff2 is already compressed; gzipping it measurably produced a
+  larger response (24,836 → 24,864 bytes) and spent CPU per request to do it. Removed.
+
+Also: hashed assets carried both an `expires 30d` and an `add_header Cache-Control … immutable`, so
+every asset answered with two `Cache-Control` headers, and the shorter one contradicted the config's
+own comment ("can be cached for a year"). The filenames are content-hashed, so it is now a single
+one-year immutable header.
 
 ## GitHub Actions
 
