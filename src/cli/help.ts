@@ -99,6 +99,7 @@ const ADVANCED = `advanced — the full command reference
                             (docs/market.md; /market does the same inside the TUI; every subcommand takes --json)
   rovecode context [session] [--json]  what fills the window, item by item, and how far our estimate is from
                             the provider's own count of the same prompt (cache reads included — they are the prompt too)
+                            (--exact asks Anthropic to count it for real; --no-runtime skips the system prompt and tool schemas)
   rovecode auth set <provider> [--key <name>]  store an API key (prompts on stdin; ~/.rovecode/credentials.json)
   rovecode auth list            stored providers + key names (values redacted)
   rovecode auth remove <provider>  delete a stored credential

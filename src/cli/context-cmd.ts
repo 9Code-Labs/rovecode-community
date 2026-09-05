@@ -73,6 +73,21 @@ export function renderContext(r: ContextReport, sessionId: string): string[] {
   return out;
 }
 
+/** the `--exact` rows: the provider's own count of this prompt, and how far our meter sits from it.
+ *  A refusal prints the reason on the same row — a count nobody could obtain is not a zero. */
+export function renderExact(e: { inputTokens?: number; reason?: string; placeholder?: boolean }, estimated: number): string[] {
+  if (e.inputTokens === undefined) return ["", `exact    not counted — ${e.reason ?? "no reason given"}`];
+  const delta = estimated - e.inputTokens;
+  const fraction = e.inputTokens > 0 ? Math.abs(delta) / e.inputTokens : 0;
+  const verdict =
+    delta === 0
+      ? "our estimate agrees exactly"
+      : `our estimate reads ${delta > 0 ? "high" : "low"} by ${n(Math.abs(delta))} (${pct(fraction)})${fraction > DRIFT_TOLERANCE ? ` — beyond the ${pct(DRIFT_TOLERANCE)} tolerance` : ""}`;
+  const rows = ["", `exact    the provider counted ${n(e.inputTokens)} for this prompt`, `         ${verdict}`];
+  if (e.placeholder) rows.push("         this session has no turns yet — the count includes a one-character placeholder message, which the API requires");
+  return rows;
+}
+
 export async function cmdContext(args: string[], deps: ContextCliDeps = {}): Promise<number> {
   const log = deps.log ?? ((l: string) => console.log(l));
   const err = deps.err ?? ((l: string) => console.error(l));
@@ -109,7 +124,7 @@ export async function cmdContext(args: string[], deps: ContextCliDeps = {}): Pro
   // asks it, unless --no-runtime says not to (a broken project config should not stop a token count).
   // MCP tools are deliberately absent: their schemas exist only after connecting to a server, and
   // starting other people's processes to print a number is not a trade this command should make.
-  let fixed: { system?: string; toolSchemas?: string; note?: string } = {};
+  let fixed: { system?: string; toolSchemas?: string; schemas?: unknown[]; note?: string } = {};
   if (!args.includes("--no-runtime")) {
     try {
       const { createRuntime } = await import("./runtime.ts");
@@ -123,7 +138,7 @@ export async function cmdContext(args: string[], deps: ContextCliDeps = {}): Pro
       // Asking for the base alone under-counts the row by everything that makes it big.
       const def = rt.buildDef({ ...ref, effort: "auto" });
       const system = typeof def.systemPrompt === "string" ? def.systemPrompt : def.systemPrompt({});
-      fixed = { system, toolSchemas: JSON.stringify(schemas) };
+      fixed = { system, toolSchemas: JSON.stringify(schemas), schemas };
       await rt.mcp?.close().catch(() => {});
     } catch (e) {
       fixed = { note: `the system prompt and tool schemas are not counted — this project's runtime did not build (${e instanceof Error ? e.message : String(e)})` };
@@ -146,9 +161,34 @@ export async function cmdContext(args: string[], deps: ContextCliDeps = {}): Pro
     },
   });
 
-  if (json) log(JSON.stringify({ session: chosen, ...report, ...(fixed.note ? { note: fixed.note } : {}) }, null, 2));
+  // --exact: stop estimating and ask the provider. Anthropic counts the same body a request would carry
+  // and returns the number the window and the bill are computed from; o200k is only our stand-in for it.
+  let exact: { inputTokens?: number; reason?: string; endpoint?: string; placeholder?: true } | undefined;
+  if (args.includes("--exact")) {
+    const { countPromptRemotely } = await import("../core/count-remote.ts");
+    const { ProviderRegistry } = await import("../providers/registry.ts");
+    const p = new ProviderRegistry(cwd).get(ref.provider);
+    if (!p) exact = { reason: `provider "${ref.provider}" is not configured here` };
+    else {
+      const r = await countPromptRemotely({
+        provider: { baseUrl: p.baseUrl, protocol: p.protocol, ...(p.apiKey ? { apiKey: p.apiKey } : {}), ...(p.headers ? { headers: p.headers } : {}) },
+        model: ref.model,
+        messages,
+        ...(fixed.system !== undefined ? { system: fixed.system } : {}),
+        // the same schemas the estimate counted; without them the two numbers would describe
+        // different prompts and the comparison below would be meaningless
+        ...(fixed.schemas ? { tools: fixed.schemas } : {}),
+      });
+      exact = r.ok
+        ? { inputTokens: r.inputTokens, endpoint: r.endpoint, ...(r.placeholder ? { placeholder: true as const } : {}) }
+        : { reason: r.reason };
+    }
+  }
+
+  if (json) log(JSON.stringify({ session: chosen, ...report, ...(exact ? { exact } : {}), ...(fixed.note ? { note: fixed.note } : {}) }, null, 2));
   else {
     for (const line of renderContext(report, chosen)) log(line);
+    if (exact) for (const line of renderExact(exact, report.estimated)) log(line);
     if (fixed.note) log(`note     ${fixed.note}`);
     else if (fixed.system !== undefined) log("note     MCP tools are not counted — their schemas exist only once a server is connected");
   }

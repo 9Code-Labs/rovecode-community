@@ -10,12 +10,46 @@ one that reads high throws away history you paid to build.
 ```
 rovecode context            the newest session in this directory
 rovecode context <id>       a particular one · --json for the whole report
+rovecode context --exact    ask Anthropic to count the prompt instead of estimating it
 ```
 
 The estimate is exact for OpenAI models (o200k is their tokenizer) and an approximation everywhere else.
 Anthropic's tokenizer is not public and its 4.7-generation models produce materially more tokens for the
 same text, so expect the estimate to read low there — the drift line measures exactly how much, per model,
 from your own transcripts rather than from a claim on this page.
+
+## Asking instead of estimating
+
+Anthropic publishes the arithmetic: `POST /v1/messages/count_tokens` takes the same body a request would
+— model, system, messages, tools — and returns `input_tokens`, the number the window and the bill are
+computed from. `--exact` sends the prompt the report just measured and prints the provider's own count
+beside ours. On this repository, on a session with no turns yet:
+
+```
+context  ~7,790 of 1,000,000 (0.8%)
+exact    the provider counted 12,283 for this prompt
+         our estimate reads low by 4,493 (36.6%) — beyond the 5.0% tolerance
+```
+
+**That gap is the whole reason the flag exists.** o200k under-counts Anthropic's tokenizer by better than
+a third on rovecode's own system prompt and tool schemas, and compaction fires on the estimate: at a third
+low, a session believed to be at 70% of the window is really at 95%. The drift line measures the same thing
+from a transcript, but only after a turn has been billed; `--exact` answers before the first request.
+
+Four deliberate limits:
+
+- **Anthropic protocol only.** No other vendor publishes a counting endpoint. An OpenAI-protocol provider
+  gets a stated reason, not a fallback number whose provenance nobody could explain.
+- **Opt-in.** It is a network call with your key. Nothing in `rovecode context` reaches the network without
+  `--exact`.
+- **It never fails the command.** A refusal, a gateway without the route, a timeout — each prints as a
+  reason on the `exact` row. A token count is not worth failing a report over.
+- **A fresh session carries a placeholder.** The API rejects an empty message list, so a session with no
+  turns is counted with a one-character user message standing in for the transcript. The output says so;
+  a couple of tokens of scaffolding inside a number labelled *exact* has to be disclosed.
+
+Pair it with `--no-runtime` and the count describes the transcript alone, which is rarely what you want —
+the two rows below are most of a fresh window.
 
 ## What counts against the window
 
