@@ -203,3 +203,25 @@ describe("rovecode context", () => {
     expect(errs.join("")).toContain("no sessions here");
   });
 });
+
+describe("contextBudgetFor", () => {
+  it("follows the window instead of spending a fifth of it", async () => {
+    const { contextBudgetFor, DEFAULT_CONTEXT_BUDGET, MIN_CONTEXT_BUDGET } = await import("../../src/core/context-report.ts");
+    // 1M window, 128k answer: the history may use what is left, not a flat 200k
+    expect(contextBudgetFor({ window: 1_000_000, maxOutput: 128_000 })).toBe(1_000_000 - 128_000 - 24_000);
+    // 200k window, 64k answer: smaller than the old flat default, which used to overflow it
+    expect(contextBudgetFor({ window: 200_000, maxOutput: 64_000 })).toBe(112_000);
+    expect(contextBudgetFor({ window: 200_000, maxOutput: 64_000 })).toBeLessThan(DEFAULT_CONTEXT_BUDGET);
+    // unknown window keeps the old behaviour rather than guessing
+    expect(contextBudgetFor({})).toBe(DEFAULT_CONTEXT_BUDGET);
+    expect(contextBudgetFor({ window: 0 })).toBe(DEFAULT_CONTEXT_BUDGET);
+    // a window too small for the floor gets a share of itself, never more than it holds
+    const tiny = contextBudgetFor({ window: 32_000, maxOutput: 8_000 });
+    expect(tiny).toBeLessThan(32_000);
+    expect(tiny).toBeGreaterThan(0);
+    expect(contextBudgetFor({ window: 60_000 })).toBeLessThanOrEqual(60_000);
+    // an explicit override wins over everything
+    expect(contextBudgetFor({ window: 1_000_000, maxOutput: 128_000, override: 50_000 })).toBe(50_000);
+    expect(contextBudgetFor({ window: 1_000_000, override: 0 })).toBeGreaterThan(MIN_CONTEXT_BUDGET);
+  });
+});

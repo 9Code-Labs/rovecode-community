@@ -29,6 +29,7 @@ import { activatePlugins, discoverPlugins, loadState as loadPluginState, type Di
 import type { McpServerConfig } from "../mcp/config.ts";
 import { trustedPredicate } from "../mcp/trust.ts";
 import { positiveInt, type RunLimits } from "./run-limits.ts";
+import { contextBudgetFor } from "../core/context-report.ts";
 import { rovecodeHome } from "../providers/auth.ts";
 import { readTool, editTool, writeTool, bashTool } from "../coding/hashline.ts";
 import { globTool, grepTool, lsTool } from "../coding/files.ts";
@@ -510,7 +511,18 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     return (activeCfg = {
     maxTurns: runLimits.maxTurns ?? positiveInt(process.env.ROVECODE_MAX_TURNS) ?? 60,
     ...(maxSeconds !== undefined ? { maxSeconds } : {}),
-    contextBudgetTokens: 200_000, compactionThreshold: 0.8,
+    // the history budget follows the model's window: a flat 200k spent a fifth of a 1M window and
+    // overflowed a 128k one. ROVECODE_CONTEXT_BUDGET overrides; an unknown window keeps the old default.
+    contextBudgetTokens: (() => {
+      const ref = activeModel ?? fallbackRef;
+      const cur = catalog.lookup(ref.provider, ref.model);
+      return contextBudgetFor({
+        ...(cur?.contextWindow !== undefined ? { window: cur.contextWindow } : {}),
+        ...(cur?.maxOutput !== undefined ? { maxOutput: cur.maxOutput } : {}),
+        ...(positiveInt(process.env.ROVECODE_CONTEXT_BUDGET) !== undefined ? { override: positiveInt(process.env.ROVECODE_CONTEXT_BUDGET) as number } : {}),
+      });
+    })(),
+    compactionThreshold: 0.8,
     compactionStrategy: parseCompactionStrategy(process.env.ROVECODE_COMPACTION) ?? "head-summarize", // port #25: ROVECODE_COMPACTION=head-summarize|keep-window|provider-native
     parallelTools: true,
     permissionRules: yolo

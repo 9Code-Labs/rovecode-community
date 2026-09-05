@@ -24,6 +24,29 @@ import { contextHealth, costUsd, countTokens, type NormalizedUsage, type Pricing
 /** past this the estimate is misleading enough to name — the compaction trigger reads the estimate */
 export const DRIFT_TOLERANCE = 0.05;
 
+/** the budget for a model whose window we do not know — the old flat value, kept as the fallback */
+export const DEFAULT_CONTEXT_BUDGET = 200_000;
+/** never plan for less history than this, however small the window says it is */
+export const MIN_CONTEXT_BUDGET = 32_000;
+/** room left beside the history for the system prompt, the tool schemas and the indexes */
+export const PROMPT_OVERHEAD_TOKENS = 24_000;
+/** assumed answer room when the catalog states no output limit */
+const ASSUMED_OUTPUT = 32_000;
+
+/** How much history a run may carry before compaction. A flat 200k spends a fifth of a 1M window and
+ *  overflows a 128k one, so it is derived: the window minus what the answer and the fixed prompt need.
+ *  An explicit override wins (ROVECODE_CONTEXT_BUDGET), an unknown window keeps the old default, and a
+ *  window too small to hold the floor gets a proportional share rather than a budget larger than itself. */
+export function contextBudgetFor(opts: { window?: number; maxOutput?: number; override?: number }): number {
+  const { window, maxOutput, override } = opts;
+  if (override !== undefined && Number.isFinite(override) && override > 0) return Math.floor(override);
+  if (!window || !Number.isFinite(window) || window <= 0) return DEFAULT_CONTEXT_BUDGET;
+  const reserve = (Number.isFinite(maxOutput) && (maxOutput ?? 0) > 0 ? (maxOutput as number) : ASSUMED_OUTPUT) + PROMPT_OVERHEAD_TOKENS;
+  const room = window - reserve;
+  if (room < MIN_CONTEXT_BUDGET) return Math.max(1, Math.floor(window * 0.6));
+  return Math.floor(room);
+}
+
 export interface ContextSlice {
   label: string;
   tokens: number;
