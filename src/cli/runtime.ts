@@ -30,6 +30,7 @@ import type { McpServerConfig } from "../mcp/config.ts";
 import { trustedPredicate } from "../mcp/trust.ts";
 import { positiveInt, type RunLimits } from "./run-limits.ts";
 import { contextBudgetFor } from "../core/context-report.ts";
+import { tokenScaleFor } from "../core/token-scale.ts";
 import { rovecodeHome } from "../providers/auth.ts";
 import { readTool, editTool, writeTool, bashTool } from "../coding/hashline.ts";
 import { globTool, grepTool, lsTool } from "../coding/files.ts";
@@ -520,6 +521,9 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
         ...(cur?.contextWindow !== undefined ? { window: cur.contextWindow } : {}),
         ...(cur?.maxOutput !== undefined ? { maxOutput: cur.maxOutput } : {}),
         ...(positiveInt(process.env.ROVECODE_CONTEXT_BUDGET) !== undefined ? { override: positiveInt(process.env.ROVECODE_CONTEXT_BUDGET) as number } : {}),
+        // our estimator is not this model's tokenizer: on Claude 5 it reads up to 1.58x low, so a
+        // budget taken at face value compacts too late and the request that follows is rejected
+        scale: tokenScaleFor(ref).scale,
       });
     })(),
     compactionThreshold: 0.8,

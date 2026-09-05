@@ -37,10 +37,16 @@ export function renderContext(r: ContextReport, sessionId: string): string[] {
   out.push(`session ${sessionId} · ${r.model.provider}/${r.model.model}`);
   out.push("");
   if (r.window) {
-    out.push(`context  ${bar(r.fraction ?? 0)}  ~${n(r.estimated)} of ${n(r.window)} (${pct(r.fraction ?? 0)})`);
+    out.push(`context  ${bar(r.fraction ?? 0)}  ~${n(r.corrected)} of ${n(r.window)} (${pct(r.fraction ?? 0)})`);
     out.push(`         ${n(r.remaining ?? 0)} left${r.nearLimit ? " — near the limit, compaction is due" : ""}`);
   } else {
-    out.push(`context  ~${n(r.estimated)} tokens — this model's window is not in the catalog`);
+    out.push(`context  ~${n(r.corrected)} tokens — this model's window is not in the catalog`);
+  }
+  // never correct a number silently: say the raw estimate, the factor, and where the factor is from
+  if (r.scale.factor !== 1) {
+    out.push(`         o200k counted ${n(r.estimated)}, scaled by ${r.scale.factor}× — ${r.scale.note}`);
+  } else if (!r.scale.measured) {
+    out.push(`         ${r.scale.note}`);
   }
   out.push("");
   const width = Math.max(...r.slices.map((s) => s.label.length), 10);

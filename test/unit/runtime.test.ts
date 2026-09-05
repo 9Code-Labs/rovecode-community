@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test";
 import { createRuntime } from "../../src/cli/runtime.ts";
+import { tokenScaleFor } from "../../src/core/token-scale.ts";
 import { contextBudgetFor } from "../../src/core/context-report.ts";
 import type { ApprovalFn, StreamFn } from "../../src/core/types.ts";
 import { textTurn } from "../../src/providers/stream.ts";
@@ -88,7 +89,12 @@ test("buildCfg gated: repl defaults with memory/skill allows and prompt gates", 
   expect(cfg.maxTurns).toBe(60);
   // the budget follows the model's window now: this box's default model has a 1M window and a 128k answer,
   // so the history gets what is left. A model the catalog does not know still falls back to the flat 200_000.
-  expect(cfg.contextBudgetTokens).toBe(contextBudgetFor({ window: 1_000_000, maxOutput: 128_000 }));
+  // It is then divided by the model's measured token scale, because the budget is compared against an
+  // estimate our tokenizer produces and this model's own tokenizer counts more (core/token-scale.ts).
+  const ref = rt.providers.defaultRef() ?? { provider: "mock", model: "default" };
+  expect(cfg.contextBudgetTokens).toBe(
+    contextBudgetFor({ window: 1_000_000, maxOutput: 128_000, scale: tokenScaleFor(ref).scale }),
+  );
   expect(cfg.contextBudgetTokens).toBeGreaterThan(200_000);
   expect(cfg.compactionThreshold).toBe(0.8);
   expect(cfg.parallelTools).toBe(true);

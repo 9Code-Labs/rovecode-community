@@ -19,6 +19,7 @@
 
 import { partsTokenText } from "./loop.ts";
 import type { Message, MessagePart } from "./types.ts";
+import { tokenScaleFor } from "./token-scale.ts";
 import { contextHealth, costUsd, countTokens, type NormalizedUsage, type PricingRow } from "./usage.ts";
 
 /** past this the estimate is misleading enough to name — the compaction trigger reads the estimate */
@@ -37,14 +38,18 @@ const ASSUMED_OUTPUT = 32_000;
  *  overflows a 128k one, so it is derived: the window minus what the answer and the fixed prompt need.
  *  An explicit override wins (ROVECODE_CONTEXT_BUDGET), an unknown window keeps the old default, and a
  *  window too small to hold the floor gets a proportional share rather than a budget larger than itself. */
-export function contextBudgetFor(opts: { window?: number; maxOutput?: number; override?: number }): number {
+export function contextBudgetFor(opts: { window?: number; maxOutput?: number; override?: number; scale?: number }): number {
   const { window, maxOutput, override } = opts;
   if (override !== undefined && Number.isFinite(override) && override > 0) return Math.floor(override);
   if (!window || !Number.isFinite(window) || window <= 0) return DEFAULT_CONTEXT_BUDGET;
   const reserve = (Number.isFinite(maxOutput) && (maxOutput ?? 0) > 0 ? (maxOutput as number) : ASSUMED_OUTPUT) + PROMPT_OVERHEAD_TOKENS;
   const room = window - reserve;
-  if (room < MIN_CONTEXT_BUDGET) return Math.max(1, Math.floor(window * 0.6));
-  return Math.floor(room);
+  const raw = room < MIN_CONTEXT_BUDGET ? Math.max(1, Math.floor(window * 0.6)) : Math.floor(room);
+  // The budget is compared against an estimate, so a model whose tokenizer counts more than the
+  // estimator must get a smaller budget — dividing here is exactly equivalent to inflating every
+  // estimate at every call site, and there is one of it. See core/token-scale.ts for the measurements.
+  const scale = opts.scale !== undefined && Number.isFinite(opts.scale) && opts.scale > 0 ? opts.scale : 1;
+  return Math.max(1, Math.floor(raw / scale));
 }
 
 export interface ContextSlice {
@@ -74,10 +79,15 @@ export interface ContextReport {
   window?: number;
   /** o200k over the whole transcript — what the next request would carry */
   estimated: number;
+  /** the estimate corrected towards this model's own tokenizer; equals `estimated` when unmeasured.
+   *  The window rows below are computed from THIS, because it is the number the provider will use. */
+  corrected: number;
+  /** the correction that was applied, and where its number came from */
+  scale: { factor: number; measured: boolean; note: string };
   slices: ContextSlice[];
-  /** window − estimated, floored at 0; absent when the window is unknown */
+  /** window − corrected, floored at 0; absent when the window is unknown */
   remaining?: number;
-  /** estimated / window; absent when the window is unknown */
+  /** corrected / window; absent when the window is unknown */
   fraction?: number;
   nearLimit?: boolean;
   drift?: ContextDrift;
@@ -152,9 +162,16 @@ export function contextReport(input: ReportInput): ContextReport {
     else { cost += c; priced += 1; }
   }
 
+  // The window rows are what a reader acts on, so they are computed from the corrected estimate: on
+  // Claude 5 o200k reads up to 1.58x low, and a meter that says 60% of a window already at 95% is worse
+  // than no meter. `estimated` stays raw beside it so the correction is visible, never silent.
+  const sc = tokenScaleFor(current);
+  const corrected = Math.ceil(estimated * sc.scale);
   const report: ContextReport = {
     model: current,
     estimated,
+    corrected,
+    scale: { factor: sc.scale, measured: sc.measured, note: sc.note },
     slices,
     totals,
     unpricedTurns,
@@ -162,11 +179,11 @@ export function contextReport(input: ReportInput): ContextReport {
     ...(priced > 0 ? { costUsd: cost } : {}),
   };
   if (info?.contextWindow) {
-    const health = contextHealth(estimated, info.contextWindow);
+    const health = contextHealth(corrected, info.contextWindow);
     report.window = info.contextWindow;
     report.fraction = health.fraction;
     report.nearLimit = health.nearLimit;
-    report.remaining = Math.max(0, info.contextWindow - estimated);
+    report.remaining = Math.max(0, info.contextWindow - corrected);
   }
   const d = drift(messages);
   if (d) report.drift = d;

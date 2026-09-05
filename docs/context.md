@@ -51,6 +51,47 @@ Four deliberate limits:
 Pair it with `--no-runtime` and the count describes the transcript alone, which is rarely what you want —
 the two rows below are most of a fresh window.
 
+## The correction, and why it is measured
+
+`--exact` produced a number, and the number had a consequence: our estimate was not a little low, it was
+low by half again. `bun scripts/measure-tokenizer.ts` turns that observation into a table by sending real
+samples — the system prompt, the tool schemas, a TypeScript file, English prose, Turkish prose, a JSON
+tool result — to the counting endpoint and dividing. Measured 2026-09-05 against claude-opus-5:
+
+| sample | chars/4 | o200k | actual | o200k needs |
+|---|---|---|---|---|
+| system prompt | 3,703 | 3,461 | 4,941 | 1.428× |
+| tool schemas (json) | 4,610 | 4,329 | 6,574 | 1.519× |
+| typescript source | 5,964 | 5,999 | 9,489 | 1.582× |
+| english prose | 2,330 | 2,362 | 3,417 | 1.447× |
+| turkish prose | 5,000 | 5,088 | 7,678 | 1.509× |
+| json tool result | 807 | 970 | 1,461 | 1.506× |
+
+Three things that table settles. Sonnet 5 returns **identical** counts to Opus 5 on all six samples, so
+the factor belongs to a generation rather than to a model name. Haiku 4.5 is a different, older
+tokenizer at 1.08–1.21×, so the 5-generation figure must not be applied to it. And the spread across
+content kinds is real but small next to the error it corrects: a single factor is wrong by a few points,
+using none is wrong by fifty.
+
+`src/core/token-scale.ts` holds the factors. Each is the **maximum** ratio across the samples, not the
+mean, because the two errors are not symmetric — a budget that reads high leaves some window unused,
+while one that reads low sends a request the provider refuses. A model nobody has measured gets 1 and
+says so; a borrowed multiplier would move the budget by an amount whose provenance no one could explain.
+OpenAI models get 1 because o200k *is* their tokenizer.
+
+The correction is applied in exactly one place: `contextBudgetFor` divides the budget by the scale, which
+is arithmetically the same as inflating every estimate at every call site, and there is one of it. That
+is what makes compaction fire on time. `rovecode context` shows the raw estimate beside the corrected one
+and names the factor — a number that has been silently adjusted is not a measurement:
+
+```
+context  ~12,387 of 1,000,000 (1.2%)
+         o200k counted 7,790, scaled by 1.59× — measured 2026-09-05 against /v1/messages/count_tokens
+exact    the provider counted 12,283 for this prompt
+```
+
+12,387 against an actual 12,283: the corrected estimate lands within 1% on the case that started this.
+
 ## What counts against the window
 
 - **Cache reads and writes are part of the prompt.** A long agentic session is almost entirely cache
