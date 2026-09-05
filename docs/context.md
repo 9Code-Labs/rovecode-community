@@ -31,6 +31,25 @@ from your own transcripts rather than from a claim on this page.
   fifth of a 1M window and overflows a 128k one. It is now the window minus the answer's room minus a
   fixed allowance for the system prompt and tool schemas; `ROVECODE_CONTEXT_BUDGET` overrides it.
 
+## The fixed cost of a turn
+
+Two rows are in every prompt and in no transcript: the system prompt and the tool schemas. `rovecode
+context` builds the same runtime a run would and asks it for the definition it would actually send, so
+those rows are measured rather than guessed. On this repository they are the whole of a fresh session:
+
+```
+  system prompt      3,461   44.4%
+  tool schemas       4,329   55.6%
+```
+
+~7.8k tokens before you have typed anything — worth knowing when a model's window is 128k, and worth
+knowing per project, because both rows grow with what the project brings (skills index, memory blocks,
+the design section, a model profile). `--no-runtime` skips this for a project whose config does not load.
+
+MCP tools are deliberately not counted: a server's schemas exist only after connecting to it, and
+starting someone else's processes to print a number is not a trade this command makes. It says so
+instead of implying the total is complete.
+
 ## Prompt-size tiers
 
 Two vendors charge more for a large prompt, and they do it in the shape that costs the most: the rate is
