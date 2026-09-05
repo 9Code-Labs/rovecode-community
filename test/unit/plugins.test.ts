@@ -307,3 +307,47 @@ test("install --subfolder: takes the plugin out of a monorepo, and refuses one t
     r.done();
   }
 });
+
+/** The symlink filter, tested through BEHAVIOUR rather than through the helper that implements it.
+ *
+ *  This exists because the filter was committed and then silently disappeared: `isSymlink` stayed in the
+ *  file, its only call site did not, and nothing said a word — tsc does not object to a function nobody
+ *  calls, and no test named the effect. A test that imported `isSymlink` and checked it returns true for a
+ *  link would have stayed green through the entire regression, because the helper was never what broke.
+ *  So this one installs a plugin whose folder contains a link pointing OUT of it and asks the only
+ *  question that matters: did the thing on the other side come along?
+ *
+ *  Junctions, not file symlinks, on Windows: creating a file symlink there needs Developer Mode or an
+ *  elevated shell (EPERM on this machine), while a directory junction needs neither and `lstat` reports it
+ *  as a symbolic link just the same — so the test runs everywhere instead of skipping exactly where the
+ *  filter is least exercised. */
+function linkTo(target: string, path: string, kind: "file" | "dir"): boolean {
+  const { symlinkSync } = require("node:fs") as typeof import("node:fs");
+  try { symlinkSync(target, path, kind === "dir" ? "junction" : "file"); return true; }
+  catch { return false; }
+}
+
+test("a link pointing out of the source is not copied, so an install cannot drag in what it aims at", async () => {
+  const r = rig();
+  try {
+    const outside = mkdtempSync(join(tmpdir(), "rovecode-outside-"));
+    writeFileSync(join(outside, "id_rsa"), "PRIVATE KEY");
+
+    const src = plugin(r.cwd, "linky", { entry: "index.ts" }, { "index.ts": "export default { api: 1 };" });
+    const linked = linkTo(outside, join(src, "stolen"), "dir");
+    expect(linked, "could not create a junction; this platform cannot run the test at all").toBe(true);
+
+    const out = await addPlugin(src, { cwd: r.cwd, home: r.home, scope: "user" });
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+
+    // the plugin's own files are there — the filter drops links, not everything
+    expect(existsSync(join(out.dir, "plugin.json"))).toBe(true);
+    expect(existsSync(join(out.dir, "index.ts"))).toBe(true);
+    // and the link, with whatever it pointed at, is not
+    expect(existsSync(join(out.dir, "stolen"))).toBe(false);
+    expect(existsSync(join(out.dir, "stolen", "id_rsa"))).toBe(false);
+
+    rmSync(outside, { recursive: true, force: true });
+  } finally { r.done(); }
+});

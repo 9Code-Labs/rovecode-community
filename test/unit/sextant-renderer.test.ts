@@ -452,33 +452,54 @@ test("no `cannot read` flash: the file reload runs BEFORE the paint, so the firs
   rmSync(cwd, { recursive: true, force: true });
 });
 
-test("git runs beside the frame loop: with a 300 ms git runner the live 40 ms interval keeps painting (no frame gap near the scan's length) and the scan's result lands afterwards — branch, files and statuses on the next frame", async () => {
+test("git runs beside the frame loop: while a 300 ms git call is pending the painter keeps painting (a synchronous scan would paint nothing), and the scan's result lands afterwards — branch, files and statuses on the next frame", async () => {
+  // What this test is about is ORDER, not deadlines: the scan must not be on the painter's thread of
+  // control. It used to say that in wall-clock terms — "no gap between frames longer than 200 ms" — and a
+  // wall-clock claim measures the machine, so under a full suite (frames at 28 ms against a 40 ms budget)
+  // it failed while the code it guards was fine. The runner is ours, so it can mark the frame counter when
+  // each git call goes out and again when it comes back: frames painted in between is the real invariant,
+  // and it is the same number on a fast machine and a loaded one.
   let resolved = 0;
-  const slow: GitRunnerAsync = (args) => new Promise((res) => setTimeout(() => {
-    resolved++;
-    const k = args.join(" ");
-    res(k.startsWith("ls-files") ? { status: 0, stdout: "a.ts\0src/b.ts\0" } : k.startsWith("status") ? { status: 0, stdout: " M a.ts\0" } : k === "rev-parse --abbrev-ref HEAD" ? { status: 0, stdout: "feature/slow\n" } : { status: 128, stdout: "" });
-  }, 300));
+  let renderer!: SextantRenderer;
+  const marks: { branchAtCall: string | null; painted: number }[] = [];
+  const slow: GitRunnerAsync = (args) => {
+    const framesAtCall = renderer.frames;
+    const branchAtCall = renderer.state.repo.branch;
+    return new Promise((res) => setTimeout(() => {
+      resolved++;
+      marks.push({ branchAtCall, painted: renderer.frames - framesAtCall });
+      const k = args.join(" ");
+      res(k.startsWith("ls-files") ? { status: 0, stdout: "a.ts\0src/b.ts\0" } : k.startsWith("status") ? { status: 0, stdout: " M a.ts\0" } : k === "rev-parse --abbrev-ref HEAD" ? { status: 0, stdout: "feature/slow\n" } : { status: 128, stdout: "" });
+    }, 300));
+  };
   const io = new MemoryIO(160, 44, {});
-  const renderer = new SextantRenderer({ io, cwd: "C:/repo", git: slow, pet: "rovecode" });   // the real clock; the scan is on
+  renderer = new SextantRenderer({ io, cwd: "C:/repo", git: slow, pet: "rovecode" });   // the real clock; the scan is on
   renderer.start({ onSubmit() {}, onInterrupt() {}, onExit() {} });
+
   const t0 = Date.now();
-  let last = t0, maxGap = 0, frames = renderer.frames, sawInFlight = false;
-  while (Date.now() - t0 < 480) {
+  let last = t0, maxGap = 0, frames = renderer.frames;
+  while (resolved < 3 && Date.now() - t0 < 20_000) {
     await new Promise((r) => setTimeout(r, 5));
     if (renderer.frames !== frames) { const t = Date.now(); maxGap = Math.max(maxGap, t - last); last = t; frames = renderer.frames; }
-    if (Date.now() - t0 > 150 && Date.now() - t0 < 250 && renderer.state.repo.branch === null) sawInFlight = true; // the scan is genuinely still pending
   }
-  expect(sawInFlight).toBe(true);
-  expect(frames).toBeGreaterThan(5);                                        // the boot reveal animates: a frame every tick
-  expect(maxGap).toBeLessThan(200);                                         // a synchronous 300 ms scan would open a ≥300 ms gap
   expect(resolved).toBe(3);                                                 // ls-files, status, rev-parse — all landed
+  expect(marks).toHaveLength(3);
+  expect(marks[0]!.branchAtCall).toBeNull();                                // the scan was genuinely pending when it went out
+  // A synchronous 300 ms scan paints 0 frames while it runs; an asynchronous one paints whatever the
+  // interval manages. The floor is therefore ONE, not two: one is the whole distinction between
+  // blocking and not blocking, and every number above it is the machine's, not the painter's. It was
+  // two, and two failed under a loaded suite — the timer loop was starved, not the code under test,
+  // so the test reported the machine again in a different unit. What it may never see is zero.
+  for (const m of marks) expect(m.painted).toBeGreaterThanOrEqual(1);
+  expect(renderer.frames).toBeGreaterThan(5);                               // the boot reveal animates: a frame every tick
   expect(renderer.state).toMatchObject({ repo: { branch: "feature/slow" }, files: { paths: ["a.ts", "src/b.ts"] } });
   expect(renderer.state.files.statuses.get("a.ts")).toBe("M");
   renderer.tick();
   expect(renderer.frameText()).toContain("feature/slow");                   // painted, not just stored
   renderer.stop();
-});
+  // the gap is worth knowing and worth not gating on: it is the machine's number, not the painter's
+  console.log(`sextant git-async: frames painted per pending call ${marks.map((m) => m.painted).join("/")}, longest frame gap ${maxGap} ms`);
+}, 30_000);
 
 test("a DENIED approval drops its pre-edit snapshot: a later ungated edit of the same file never diffs against that stale base (the row keeps the reducer's counts)", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "rovecode-sx-deny-"));
