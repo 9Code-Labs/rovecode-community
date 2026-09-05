@@ -36,6 +36,10 @@ export interface InstallRecord {
   target: string;
   /** the catalog row's own version at the time, when it stated one */
   catalogVersion?: string;
+  /** what landed on disk, hashed at install — see digest.ts. `--ref` pins what was ASKED for; this is
+   *  what arrived, and it is the part that can still be checked later. Absent for an MCP entry, which
+   *  is a line inside a shared file rather than a folder of its own. */
+  digest?: { algo: "sha256"; value: string; files: number };
   /** for anything cloned: the URL as it was fetched (scrubbed) and the commit it resolved to */
   git?: {
     source: string; sha?: string; ref?: string;
@@ -126,6 +130,7 @@ export function recordFor(item: Pick<MarketItem, "kind" | "id">, scope: MarketSc
  *  resolved one; nothing here invents it, because an unverified commit id is worse than no commit id. */
 export function buildRecord(item: MarketItem, opts: {
   scope: MarketScope; target: string; now?: () => Date;
+  digest?: { algo: "sha256"; value: string; files: number };
   git?: { source: string; sha?: string; ref?: string; resolvedBy?: "branch" | "commit" | "default" };
 }): InstallRecord {
   const record: InstallRecord = {
@@ -134,6 +139,7 @@ export function buildRecord(item: MarketItem, opts: {
     installedBy: "market", target: opts.target,
   };
   if (item.version !== undefined) record.catalogVersion = item.version;
+  if (opts.digest) record.digest = opts.digest;
   if (opts.git) {
     record.git = { source: scrubUrl(opts.git.source),
       ...(opts.git.sha !== undefined ? { sha: opts.git.sha } : {}),

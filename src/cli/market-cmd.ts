@@ -18,7 +18,8 @@ import { allItems, searchMarket, type RegistryDeps } from "../market/registry.ts
 import { resolveTarget } from "../market/resolve.ts";
 import { installedState, planInstall, removeItem, runInstall, withInstalled, type PlanOptions, type RunDeps } from "../market/install.ts";
 import type { PrereqEnv } from "../market/prereq.ts";
-import { originLine, recordFor } from "../market/manifest.ts";
+import { originLine, readManifest, recordFor } from "../market/manifest.ts";
+import { verifyDigest, verifyLine } from "../market/digest.ts";
 import { disposeCloneCache } from "../plugins/install.ts";
 import { reportLines, validateCatalog } from "../market/validate.ts";
 import { readFileSync } from "node:fs";
@@ -58,6 +59,7 @@ export const MARKET_USAGE = [
   "  update [id] [--all] [--yes]                what is out of date; with an id or --all: plan, approve, reinstall",
   "                                             --all --yes skips plugins (new code): name one, or pass --yes-plugins",
   "  sources [probe]                            where rows come from right now; really asks the registry (--offline to skip)",
+  "  verify [id]                                re-hash what is installed and say what has changed since",
   "  validate <path|url> [--kind skill|plugin]  check a catalog you wrote before anyone trusts it: what would",
   "                                             load, what would be dropped, and which fields will not survive",
   "every command takes --json · --offline skips the network entirely",
@@ -228,6 +230,32 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
     }
     out(`${String(r.items.length).padStart(14)} items visible right now`);
     return Object.values(r.sources).every((s) => s.ok) ? 0 : 1;
+  }
+
+  // ---------------- verify
+  if (sub === "verify") {
+    // `--ref` pins what was ASKED for. This is what ARRIVED, checked again now. It detects drift; it does
+    // not prove provenance, and nothing here claims otherwise — nobody in this space signs anything yet.
+    const which = positional[1];
+    const rows: { id: string; result: ReturnType<typeof verifyDigest> }[] = [];
+    for (const scope of ["user", "project"] as const) {
+      for (const record of readManifest(scope, cwd, home)) {
+        const id = `${record.kind}:${record.id}`;
+        if (which !== undefined && which !== id && which !== record.id) continue;
+        rows.push({ id, result: record.kind === "mcp"
+          ? { state: "not-applicable", why: "an MCP entry is a line inside a shared mcp.json, not a folder of its own" }
+          : verifyDigest(record.digest, record.target) });
+      }
+    }
+    if (json) { jsonOut(deps, rows); return rows.some((r) => r.result.state === "changed" || r.result.state === "missing") ? 1 : 0; }
+    if (rows.length === 0) {
+      out(which !== undefined ? `nothing recorded for "${which}"` : "nothing installed through the market yet");
+      return which !== undefined ? 1 : 0;
+    }
+    for (const r of rows) out(verifyLine(r.id, r.result));
+    const bad = rows.filter((r) => r.result.state === "changed" || r.result.state === "missing").length;
+    if (bad > 0) err(`${bad} item${bad === 1 ? " is" : "s are"} not what was installed — reinstall with \`market install <id> --force\`, or keep the edit`);
+    return bad > 0 ? 1 : 0;
   }
 
   // ---------------- list

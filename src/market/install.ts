@@ -26,6 +26,7 @@ import { prereqLine, prereqOf, type PrereqEnv } from "./prereq.ts";
 import { buildRecord, forgetInstall, recordInstall } from "./manifest.ts";
 import { cloneAtRef, type ResolvedBy } from "./clone.ts";
 import { contextCostLines, contextCostOf } from "./context-cost.ts";
+import { digestOf } from "./digest.ts";
 import type { InstalledState, InstallOutcome, InstallPlanView, MarketItem, MarketRow, MarketScope } from "./types.ts";
 
 export interface PlanOptions {
@@ -258,6 +259,7 @@ export async function runInstall(plan: InstallPlanView, answers: Record<string, 
       });
       if (!r.ok) return { ok: false, error: r.error };
       recordInstall(buildRecord(item, { scope: opts.scope, target: r.dir,
+        ...(() => { const d = digestOf(r.dir); return d ? { digest: d } : {}; })(),
         ...(install.git ? { git: { source: install.source } } : {}) }),
         { cwd: opts.cwd, home: opts.home, stillInstalled: recordStillInstalled(opts.cwd, opts.home) });
       return {
@@ -297,6 +299,7 @@ export async function runInstall(plan: InstallPlanView, answers: Record<string, 
       }
     }
     recordInstall(buildRecord(item, { scope: opts.scope, target: dir,
+      ...(() => { const d = digestOf(dir); return d ? { digest: d } : {}; })(),
       ...(install.source ? { git: { source: install.source.git,
         ...(clonedSha !== undefined ? { sha: clonedSha } : {}),
         ...(opts.ref !== undefined ? { ref: opts.ref } : {}),
