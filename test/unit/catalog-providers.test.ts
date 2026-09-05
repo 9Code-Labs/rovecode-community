@@ -28,7 +28,7 @@ test("snapshot 0.0.64: the models we default to are priced with a reasoning flag
   expect(c.lookup("minimax", anyMinimax)).toBeDefined();
   // gaps at this snapshot — DeepSeek's API aliases and grok-4 are not listed — are filled by rovecode's own table (catalog-local.ts)
   expect(c.lookup("deepseek", "deepseek-chat")!.source).toBe("local");
-  expect(c.lookup("deepseek", "deepseek-v4-pro")!.source).toBe("models.dev");
+  expect(c.lookup("deepseek", "deepseek-v4-pro")!.source).toBe("local"); // overridden 2026-09-05: models.dev carries ~1/3 of the vendor page price
   expect(c.lookup("xai", "grok-4")!.source).toBe("local");
   expect(new ModelCatalog({ local: {} }).lookup("xai", "grok-4")).toBeUndefined(); // the snapshot alone still lacks it
 });

@@ -8,7 +8,7 @@
 import { readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ProviderMap, Model } from "@opencode-ai/models";
-import { LOCAL_MODELS, type LocalModel } from "./catalog-local.ts";
+import { LOCAL_MODELS, PRICE_NOTES, PRICE_TIERS, type LocalModel, type PriceTier } from "./catalog-local.ts";
 
 // Snapshot is loaded lazily on the first lookup() call so that merely importing
 // catalog.ts (e.g. at module load time) does not pay the @opencode-ai/models
@@ -35,6 +35,12 @@ export interface ModelInfo {
   source?: "models.dev" | "local";
   /** local entries only: the vendor page the numbers were read from, and when */
   sourceNote?: string;
+  /** this model's price changes past a prompt size (xAI, Gemini). Attached whatever the row's source —
+   *  models.dev has no field for it. A cost estimator that ignores it under-quotes a long prompt, and for
+   *  `mode: "per-request"` it under-quotes the WHOLE request, not just the overflow. */
+  tier?: PriceTier;
+  /** a scheduled change or a condition attached to the price ("doubles on 2027-01-01") */
+  priceNote?: string;
 }
 
 export interface CatalogOptions {
@@ -100,6 +106,86 @@ const VENDOR_PREFIX_MAP: Record<string, string> = {
   "deepseek-ai": "deepseek",
   "moonshotai": "moonshotai",
 };
+
+/** the tiered-price row for a model, if the vendor has one (case-insensitive, like every other lookup) */
+function tierFor(providerId: string, modelId: string): PriceTier | undefined {
+  const table = PRICE_TIERS[providerId.toLowerCase()];
+  if (!table) return undefined;
+  const key = Object.keys(table).find((k) => k.toLowerCase() === modelId.toLowerCase());
+  return key === undefined ? undefined : table[key];
+}
+
+function noteFor(providerId: string, modelId: string): string | undefined {
+  const table = PRICE_NOTES[providerId.toLowerCase()];
+  if (!table) return undefined;
+  const key = Object.keys(table).find((k) => k.toLowerCase() === modelId.toLowerCase());
+  return key === undefined ? undefined : table[key];
+}
+
+/** The four rates one request is billed at. Same field names as `ModelInfo.pricing`, so a caller can pass
+ *  either where a rate table is wanted. */
+export interface Rates { inputPerMTok?: number; outputPerMTok?: number; cacheReadPerMTok?: number; cacheWritePerMTok?: number }
+
+/** What `promptTokens` actually costs on this model, split the way the vendor bills it. PURE — no I/O, no
+ *  clock, no rounding: a cost function multiplies these and decides its own precision.
+ *
+ *  Read `promptBase`/`promptAbove` as token counts to multiply by `base`/`above`; `request` is the rate
+ *  table for everything that is not the prompt (output, cache) on this request, because both vendors we
+ *  have select the OUTPUT price by prompt size too. For a flat model the split is trivial (everything in
+ *  `promptBase`) so a caller never needs to branch on whether a tier exists — only on whether it wants the
+ *  detail. */
+export interface RateBreakdown {
+  mode: "flat" | "per-request" | "marginal";
+  /** true when the prompt crossed a threshold and the upper rates are in play */
+  tierApplied: boolean;
+  thresholdTokens?: number;
+  promptBase: number;
+  promptAbove: number;
+  base: Rates;
+  above?: Rates;
+  request: Rates;
+}
+
+/** The rate breakdown for a prompt of `promptTokens` on this model. A negative or non-finite count is
+ *  treated as 0 — an estimator must not be able to produce a negative bill. */
+export function ratesFor(info: ModelInfo, promptTokens: number): RateBreakdown {
+  const base: Rates = { ...(info.pricing ?? {}) };
+  const n = Number.isFinite(promptTokens) && promptTokens > 0 ? Math.floor(promptTokens) : 0;
+  const t = info.tier;
+  if (!t || n <= t.thresholdTokens) {
+    return { mode: t ? t.mode : "flat", tierApplied: false, ...(t ? { thresholdTokens: t.thresholdTokens } : {}),
+      promptBase: n, promptAbove: 0, base, ...(t ? { above: ratesOf(t) } : {}), request: base };
+  }
+  const above = ratesOf(t);
+  return t.mode === "per-request"
+    // every token of the prompt, and this request's output, at the upper rate
+    ? { mode: "per-request", tierApplied: true, thresholdTokens: t.thresholdTokens, promptBase: 0, promptAbove: n, base, above, request: above }
+    // only the overflow at the upper rate; output follows the upper table, which is the conservative read
+    : { mode: "marginal", tierApplied: true, thresholdTokens: t.thresholdTokens, promptBase: t.thresholdTokens, promptAbove: n - t.thresholdTokens, base, above, request: above };
+}
+
+function ratesOf(t: PriceTier): Rates {
+  return { inputPerMTok: t.above.input, outputPerMTok: t.above.output,
+    ...(t.above.cacheRead !== undefined ? { cacheReadPerMTok: t.above.cacheRead } : {}),
+    ...(t.above.cacheWrite !== undefined ? { cacheWritePerMTok: t.above.cacheWrite } : {}) };
+}
+
+/** The price lines a surface shows — one place, so `model show`, /cost and the market cannot drift apart.
+ *  Empty when the model is unpriced. */
+export function describePricing(info: ModelInfo): string[] {
+  const p = info.pricing;
+  if (!p || (p.inputPerMTok === undefined && p.outputPerMTok === undefined)) return [];
+  const money = (n?: number): string => (n === undefined ? "—" : `$${n}`);
+  const lines = [`${money(p.inputPerMTok)} in / ${money(p.outputPerMTok)} out per 1M${p.cacheReadPerMTok !== undefined ? ` · cache read ${money(p.cacheReadPerMTok)}` : ""}${p.cacheWritePerMTok !== undefined ? ` · cache write ${money(p.cacheWritePerMTok)}` : ""}`];
+  if (info.tier) {
+    const t = info.tier;
+    lines.push(t.mode === "per-request"
+      ? `over ${t.thresholdTokens.toLocaleString("en-US")} prompt tokens the WHOLE request bills at ${money(t.above.input)} in / ${money(t.above.output)} out`
+      : `tokens past ${t.thresholdTokens.toLocaleString("en-US")} bill at ${money(t.above.input)} in / ${money(t.above.output)} out`);
+  }
+  if (info.priceNote) lines.push(info.priceNote);
+  return lines;
+}
 
 /** a local overlay row in the snapshot's shape, so one toModelInfo serves both */
 function localAsModel(id: string, m: LocalModel): Model {
@@ -181,6 +267,10 @@ export class ModelCatalog {
     const info = toModelInfo(hit.as, hit.key, hit.model);
     info.source = hit.local ? "local" : "models.dev";
     if (hit.local) info.sourceNote = `${hit.local.source}, checked ${hit.local.checked}`;
+    const tier = tierFor(providerId, modelId) ?? tierFor(providerId, hit.key);
+    if (tier) info.tier = tier;
+    const note = noteFor(providerId, modelId) ?? noteFor(providerId, hit.key);
+    if (note) info.priceNote = note;
     return info;
   }
 
@@ -217,9 +307,19 @@ export class ModelCatalog {
     return undefined;
   }
 
-  /** one provider key: live layer, then the snapshot, then rovecode's own table (catalog-local.ts) — the
-   *  overlay never shadows a models.dev entry, so a later snapshot that adds the model wins by construction. */
+  /** one provider key: live layer, then the snapshot, then rovecode's own table (catalog-local.ts). The
+   *  overlay does not shadow a models.dev entry, so a later snapshot that adds a model wins by construction
+   *  — EXCEPT for a row marked `override: true`, which is how a vendor page that disagrees with the
+   *  snapshot wins (today: DeepSeek's v4 family, where models.dev carries about a third of the published
+   *  price). An override says which page and which day in its `source`, and `model show` prints it. */
   private findIn(key: string, modelId: string): { key: string; model: Model; local?: LocalModel } | undefined {
+    const overriding = this.local[key];
+    if (overriding) {
+      const found = findModelKey(overriding as unknown as Record<string, Model>, modelId);
+      const row = found === undefined ? undefined : overriding[found];
+      if (found !== undefined && row?.override === true) return { key: found, model: localAsModel(found, row), local: row };
+    }
+
     const live = this.liveProviders?.[key];
     if (live) {
       const found = findModelKey(live.models, modelId);

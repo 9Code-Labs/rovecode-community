@@ -48,9 +48,9 @@ test("offline lookup: deepseek deepseek-v4-pro resolves (reasoning model, huge c
   const info = catalog.lookup("deepseek", "deepseek-v4-pro");
   expect(info?.contextWindow).toBe(1000000);
   expect(info?.maxOutput).toBe(384000);
-  expect(info?.pricing?.inputPerMTok).toBe(0.435);
-  expect(info?.pricing?.outputPerMTok).toBe(0.87);
-  expect(info?.pricing?.cacheReadPerMTok).toBe(0.003625);
+  expect(info?.pricing?.inputPerMTok).toBe(1.32);
+  expect(info?.pricing?.outputPerMTok).toBe(3.96);
+  expect(info?.pricing?.cacheReadPerMTok).toBe(0.044);
   expect(info?.supportsReasoning).toBe(true);
   expect(info?.supportsTools).toBe(true);
 });
@@ -97,7 +97,7 @@ test("deepseek-ai/ and moonshotai/ vendor prefixes resolve for aggregator provid
   const catalog = new ModelCatalog();
   const ds = catalog.lookup("kaesra", "deepseek-ai/deepseek-v4-pro");
   expect(ds?.provider).toBe("deepseek");
-  expect(ds?.pricing?.inputPerMTok).toBe(0.435);
+  expect(ds?.pricing?.inputPerMTok).toBe(1.32);
   // the snapshot's key is "moonshotai" — there is NO bare "moonshot" provider key
   const kimi = catalog.lookup("kaesra", "moonshotai/kimi-k2-0711-preview");
   expect(kimi?.provider).toBe("moonshotai");
