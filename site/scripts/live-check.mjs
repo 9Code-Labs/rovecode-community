@@ -30,7 +30,22 @@ for (let i = 0; i < argv.length; i++) {
   base = a;
 }
 base = base.replace(/\/$/, "");
-if (only) only = only.replace(/^[A-Za-z]:[\\/].*?(?=\/[^/]*$|$)/, ""); // undo Git Bash's path mangling of "/market/"
+// Git Bash rewrites a leading-slash argument into a Windows path ("/market/" becomes
+// "C:/Program Files/Git/market/"), so that prefix is stripped back off. What matters is what happens when
+// the strip does NOT recover a usable filter: it left "/", which matches every URL in the sitemap — so a
+// run someone had narrowed to a handful of pages silently became all 735 of them. That is how two sweeps
+// ran a workstation out of memory tonight while their operator believed they were small, and the
+// machine's own terminal started freezing. Same rule as the empty selection below: a filter that cannot
+// do what it was asked is an error, never a wider search.
+if (only) {
+  const raw = only;
+  only = only.replace(/^[A-Za-z]:[\\/].*?(?=\/[^/]*$|$)/, "");
+  if (only === "" || only === "/") {
+    console.error(`--only "${raw}" did not survive the shell: it would now match every URL, which is the opposite of what you asked.`);
+    console.error(`Pass it without leading slashes (--only market), or set MSYS_NO_PATHCONV=1 for this command.`);
+    process.exit(2);
+  }
+}
 /** pages per browser context — high enough to amortize the launch, low enough that memory stays flat */
 const RECYCLE_EVERY = 40;
 const root = join(process.env.LOCALAPPDATA ?? "", "ms-playwright");
@@ -52,6 +67,20 @@ const scope = [only ? `only ${only}` : null, shard ? `shard ${shard.i}/${shard.n
 if (urls.length === 0) { console.error(`no URL matches ${scope || "the sitemap"} — nothing was checked`); process.exit(2); }
 console.log(`sitemap: ${urls.length}${urls.length !== total ? ` of ${total}` : ""} urls${scope ? ` (${scope})` : ""}${origin !== base ? ` (public origin ${origin}, fetched from ${base})` : ""}`);
 const browser = await chromium.launch({ executablePath: exe, headless: true });
+// Close the browser when this process ends for ANY reason, not only the happy one. A sweep of 735 pages
+// is long enough to be interrupted — ^C, a timeout, the OOM killer on a loaded workstation — and every
+// interrupted run used to leave its Chromium behind. They are invisible (headless), they do not exit on
+// their own, and they accumulate: 84 of them, holding the better part of a gigabyte, were found after two
+// killed runs tonight, on the machine whose terminal had started freezing. Playwright already handles
+// SIGINT/SIGTERM/SIGHUP itself; `exit` covers the ordinary paths, including a thrown error. Nothing can
+// cover a hard kill of this process, which is why the PID is printed — so the survivors can be found.
+const browserPid = typeof browser.process === "function" ? browser.process()?.pid : undefined;
+if (browserPid !== undefined) console.log(`browser pid ${browserPid} — it dies with this process; a hard kill leaves it behind`);
+let closed = false;
+const closeBrowser = () => { if (closed) return; closed = true; try { browser.close(); } catch { /* already gone */ } };
+process.on("exit", closeBrowser);
+for (const sig of ["SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"]) process.on(sig, () => { closeBrowser(); process.exit(130); });
+process.on("uncaughtException", (e) => { closeBrowser(); console.error(e); process.exit(1); });
 const newCtx = () => browser.newContext({ viewport: { width: 1366, height: 900 }, locale: "en-US" });
 let ctx = await newCtx();
 let totals = { pages: 0, consoleMsgs: 0, http4xx: 0, axe: { critical: 0, serious: 0, moderate: 0, minor: 0 } };
