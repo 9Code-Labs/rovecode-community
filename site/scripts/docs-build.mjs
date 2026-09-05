@@ -19,7 +19,9 @@ const SOURCES = [
   { slug: "commands", title: "Command reference", file: "README.md", from: "## Install", to: "## Features beyond" },
   { slug: "design", file: "docs/design.md" },
   { slug: "thinking", file: "docs/thinking.md" },
+  { slug: "market", file: "docs/market.md" },
   { slug: "mcp-market", file: "docs/mcp-market.md" },
+  { slug: "context", file: "docs/context.md" },
   { slug: "plugins", file: "docs/plugins.md" },
   { slug: "deploy", file: "docs/deploy.md" },
 ];
