@@ -29,16 +29,43 @@ const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => ESCAPES[c]);
  *  that happens to look like a tag. It survives the strip below and is rendered as a link like any other. */
 const AUTOLINK = /^<(?:[a-zA-Z][\w+.-]{1,31}:[^<>\s]*|[^<>\s@]+@[^<>\s@]+\.[^<>\s@]+)>$/;
 
+/** tags that were a line break in the original: removing them silently glues the words on either side
+ *  together — a `<details><summary>Using OAuth</summary>` next to another one became "Using OAuthUsing a
+ *  GitHub PAT", which is a sentence neither author wrote */
+const BLOCK_TAG = /^<\/?(?:p|div|br|hr|li|ul|ol|dl|dt|dd|table|thead|tbody|tr|td|th|details|summary|section|article|header|footer|nav|aside|blockquote|pre|h[1-6])\b/i;
+
 /** strip anything that would reach the renderer as html: the elements whose CONTENT is code (script,
  *  style and friends go body and all — leaving `alert(1)` as a paragraph is inert but reads like a bug),
  *  then comments, then every remaining tag */
-function stripHtml(md) {
+function stripTags(md) {
   return md
     .replace(/<(script|style|iframe|object|embed|template|noscript)\b[\s\S]*?<\/\1\s*>/gi, "")
     .replace(/<(script|style|iframe|object|embed|template|noscript)\b[^>]*>/gi, "")
     .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/<\/?[a-zA-Z][^>]*>/g, (tag) => (AUTOLINK.test(tag) ? tag : ""));
+    .replace(/<\/?[a-zA-Z][^>]*>/g, (tag) => (AUTOLINK.test(tag) ? tag : BLOCK_TAG.test(tag) ? "\n" : ""));
 }
+
+/** run `fn` over everything EXCEPT fenced code blocks. A fence is quoted source: a README that shows
+ *  `<div id="app"></div>` or a `[label](url)` is showing it on purpose, and marked escapes a fence's
+ *  contents anyway, so nothing in there can become markup however it is left. */
+function mapOutsideFences(md, fn) {
+  const parts = md.split(/^(```+|~~~+)/m);
+  // odd indexes are the fence markers, so an odd NUMBER of them means the last block never closes — a
+  // body cut at 24 KB often ends mid-fence. Nothing after an unclosed fence counts as code.
+  const markers = (parts.length - 1) / 2;
+  const openEnded = markers % 2 === 1;
+  let out = "";
+  let inFence = false;
+  for (let i = 0; i < parts.length; i++) {
+    const piece = parts[i];
+    if (i % 2 === 1) { inFence = !inFence; out += piece; continue; }
+    const last = i === parts.length - 1;
+    out += inFence && !(openEnded && last) ? piece : fn(piece);
+  }
+  return out;
+}
+
+const stripHtml = (md) => mapOutsideFences(md, stripTags);
 
 /** resolve a link inside someone else's document: absolute stays, relative is rebuilt against their source,
  *  anything else becomes plain text (the label survives, the dead link does not) */
@@ -138,14 +165,65 @@ export function renderItemDocs(docs) {
   html = html.replace(/<pre>/g, '<pre tabindex="0">').replace(/<table>/g, '<table tabindex="0">');
   return {
     html,
-    // the same body as markdown, cleaned the same way (HTML gone, frontmatter gone, the item title gone):
-    // what /market/<id>/index.md serves to a reader that would rather have the source than the page
-    markdown: md.trim(),
+    // the same body as markdown, cleaned the same way (HTML gone, frontmatter gone, the item title gone)
+    // and then thinned for the reader it actually has: what /market/<id>/index.md serves
+    markdown: markdownForMachines(md, source),
     toc: toc.filter((h) => h.depth === 3).map(({ id, text }) => ({ id, text })),
     source,
     truncated: docs.truncated === true,
     words: md.split(/\s+/).filter(Boolean).length,
   };
+}
+
+/** The markdown mirror's reader is a context window, not a person, so the measure of this pass is tokens
+ *  per fact. Three things in a README cost tokens and carry none of them:
+ *
+ *    · badges — `[![Install in VS Code](https://img.shields.io/badge/…)](https://insiders.vscode.dev/…)`
+ *      is 300 characters of percent-encoded button for another editor. The label survives as words; the
+ *      two URLs do not.
+ *    · images — the mirror cannot show them and this renderer refuses to fetch them anyway (the html side
+ *      does the same). The alt text is the information; the URL is the address of a picture.
+ *    · a relative link — `[policies](./docs/policy.md)` — is broken for anything that reads this file,
+ *      because the file is served from a path the document has never heard of. Resolved against the
+ *      document's own source, or dropped to its words when it cannot be resolved.
+ *
+ *  Everything else is left exactly as its author wrote it: prose, code blocks, tables, headings. */
+export function markdownForMachines(md, source = "") {
+  const keep = (label) => label.replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/\s+/g, " ").trim();
+  // marks a run of text that used to be a badge, so a line that is ONLY badges can be dropped whole:
+  // "Install in VS Code Install in VS Code Insiders Install in Visual Studio" is a row of buttons for
+  // other editors, and as words it says nothing this reader can act on
+  const MARK = String.fromCharCode(0);
+  const out = mapOutsideFences(md, (text) => text
+    // a link whose whole label is an image: a badge or an install button. Its words, never its URLs.
+    .replace(/\[!\[([^\]]*)\]\([^)]*\)\]\([^)]*\)/g, (_m, alt) => `${MARK}${keep(alt)}${MARK}`)
+    // a plain image: its alt text, or nothing when it has none
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, (_m, alt) => keep(alt))
+    // every remaining link: the href resolved against the source, or the label alone
+    .replace(/\[([^\]]*)\]\(([^)\s]+)(\s+"[^"]*")?\)/g, (m, label, href) => {
+      const text = keep(label);
+      if (!text) return "";
+      const resolved = resolveLink(href, source);
+      return resolved ? `[${text}](${resolved})` : text;
+    })
+    .split("\n")
+    .map((line) => {
+      // a line whose every word came from a badge goes entirely; anywhere else the words stay and only
+      // the marks go, because there the label is part of a sentence
+      const withoutBadges = line.replace(new RegExp(`${MARK}[^${MARK}]*${MARK}`, "g"), "").trim();
+      const l = withoutBadges === "" ? "" : line.split(MARK).join("");
+      // …and a line left holding empty brackets is worse than a line that is gone
+      const empty = /^[\s[\]()·|-]*$/.test(l) && !/^\s*([-*+]|\d+\.)\s/.test(l) && !/^\s*\|/.test(l) && !/^\s*-{3,}\s*$/.test(l);
+      return empty ? "" : l.replace(/[ \t]+$/, "");
+    })
+    .join("\n"));
+  // blank runs are collapsed across the whole document, fences included: three empty lines say what one does
+  return out
+    .replace(/\n{3,}/g, "\n\n")
+    // the body's own h1 repeats the item's title, which the file already carries as its first line — it is
+    // only reachable here when a badge row used to stand in front of it
+    .replace(/^\s*#\s+.+\n/, "")
+    .trim();
 }
 
 /** The same body as plain lines for the TUI: headings marked, code blocks kept, everything a terminal must

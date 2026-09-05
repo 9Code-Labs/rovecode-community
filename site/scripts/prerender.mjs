@@ -139,8 +139,11 @@ if (marketJson.enabled && marketJson.entries.length) {
     "# rovecode market",
     "",
     `Everything rovecode can install: ${entries.length} items — ${kinds.map((k) => `${k.count} ${k.kind}`).join(", ")}.`,
-    "Each line is: id · kind · publisher · one sentence · the command that installs it.",
-    `Full pages: ${siteUrl}/market/ · this file: ${siteUrl}/market/index.md · one file per item at ${siteUrl}/market/<id>/index.md`,
+    // the two derivable strings are said once here instead of on all 38 lines: the command and the docs
+    // URL are the id in a template, and repeating a template is the most expensive kind of nothing
+    "One item per line: `kind:id` · publisher · what it does.",
+    "Install any of them with `rovecode market install <kind:id>`.",
+    `Its own documentation is at ${siteUrl}/market/<id>/index.md, its page at ${siteUrl}/market/<id>/ — the full list of pages is at ${siteUrl}/market/.`,
     "",
   ];
   for (const e of entries) {
@@ -175,7 +178,7 @@ if (marketJson.enabled && marketJson.entries.length) {
     const dir = join(DIST, "market", e.id);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "index.md"), lines.join("\n"));
-    indexLines.push(`- \`${e.kind}:${e.id}\` · ${mdEsc(e.publisher)} · ${mdEsc(e.description)} · install: \`${e.install}\`${doc ? ` · docs: ${siteUrl}/market/${e.id}/index.md` : ""}`);
+    indexLines.push(`- \`${e.kind}:${e.id}\` · ${mdEsc(e.publisher)} · ${mdEsc(e.description)}${doc ? "" : " · no documentation"}`);
   }
   writeFileSync(join(DIST, "market", "index.md"), `${indexLines.join("\n")}\n`);
   console.log(`market: ${pages.length} pages × ${LOCALES.length} locales, markdown mirror ${entries.length + 1} files`);
