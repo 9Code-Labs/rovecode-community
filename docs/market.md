@@ -49,9 +49,29 @@ Installing is always four steps in this order, and none can be skipped:
    nothing is written; you still see the plan, which makes `rovecode market install x` safe to run just to
    read what it would do.
 
+`--dry-run` stops after step 3 and **exits 0**. That is the difference from just leaving `--yes` off: no
+TTY and no `--yes` also shows you the plan, but exits 1, because it is reporting a refusal — correct as a
+refusal, useless as a question. A script that wants to know what would happen should not have to read an
+error code to find out. `--dry-run` overrides `--yes` rather than arguing with it: between "show me" and
+"go ahead", the one that writes nothing wins.
+
+It does **not** fetch. A git-sourced skill is not cloned, so what you see is the plan and its target, never
+the repository's contents — and the last line says which of the two you got:
+
+```
+nothing written — --dry-run. The source was not fetched, so this is the plan, not its contents.
+nothing written — --dry-run. This is the whole plan.
+```
+
+With `--json` the plan comes back as one object carrying `dryRun: true` and no `ok` field, so a caller
+checking `ok` can never mistake a plan for a write.
+
 Secrets are asked by name through the masked prompt: never echoed, never passed on the command line, never
 written into a project file. In a project scope a secret is written as `${NAME}` and read from your
 environment when the server launches, so the file can be committed.
+
+Every `--json` output is **one document**. The human preview is not printed above it — the same lines are
+inside the object, as `preview`.
 
 ## What you can name
 
