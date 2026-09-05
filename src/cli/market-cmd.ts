@@ -41,6 +41,7 @@ export const MARKET_USAGE = [
   "  search [query] [--kind mcp|skill|plugin]   every source at once: the curated MCP shelf, the MCP registry,",
   "                                             rovecode's skill and plugin catalogs (skills/plugins work offline)",
   "  info <id>                                  one item in full: publisher, version, what it installs, what it asks",
+  "  docs <id>                                  the item's own documentation, as the catalog carries it",
   "  install <id|kind:id|git-url|npm-package> [--project] [--as <name>] [--pick N] [--yes] [--force]",
   "                                             shows the plan, asks (masked) for keys by name, then writes",
   "  remove <id|kind:id> [--project]            undo an install of any kind",
@@ -50,6 +51,9 @@ export const MARKET_USAGE = [
   "every command takes --json · --offline skips the network entirely",
   "an id is a bare slug inside its kind (filesystem); say mcp:filesystem when two kinds share a name",
 ];
+
+/** a size a person reads, from a byte count */
+const kb = (bytes: number): string => (bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`);
 
 const jsonOut = (deps: MarketCliDeps, value: unknown): void => (deps.out ?? console.log)(JSON.stringify(value, null, 2));
 
@@ -71,6 +75,9 @@ export function infoLines(item: MarketItem, cwd: string, home: string): string[]
     `  ${item.description}`,
   ];
   if (item.license) lines.push(`  licence    ${item.license}`);
+  lines.push(item.docs
+    ? `  docs       ${kb(item.docs.bytes)} from ${item.docs.source}${item.docs.truncated ? " (truncated)" : ""} — rovecode market docs ${qualify(item)}`
+    : `  docs       none${item.repository ? ` — try ${item.repository}` : ""}`);
   if (item.repository) lines.push(`  repo       ${item.repository}`);
   if (item.homepage) lines.push(`  home       ${item.homepage}`);
   if (item.tags.length) lines.push(`  tags       ${item.tags.join(", ")}`);
@@ -244,7 +251,7 @@ export async function cmdMarket(args: string[], deps: MarketCliDeps = {}): Promi
   }
 
   const target = positional[1];
-  if (["info", "install", "remove"].includes(sub) && target === undefined) { err(`market ${sub} needs a name`); return 2; }
+  if (["info", "install", "remove", "docs"].includes(sub) && target === undefined) { err(`market ${sub} needs a name`); return 2; }
 
   // ---------------- info
   if (sub === "info") {
@@ -252,6 +259,24 @@ export async function cmdMarket(args: string[], deps: MarketCliDeps = {}): Promi
     if (!r.ok) { err(r.error); if (json) jsonOut(deps, { error: r.error, candidates: r.ambiguous ?? [] }); return r.ambiguous ? 2 : 1; }
     if (json) { jsonOut(deps, { ...r.item, installed: installedState(r.item, cwd, home) }); return 0; }
     for (const l of infoLines(r.item, cwd, home)) out(l);
+    return 0;
+  }
+
+  // ---------------- docs
+  if (sub === "docs") {
+    const r = await resolveTarget(target!, registry);
+    if (!r.ok) { err(r.error); if (json) jsonOut(deps, { error: r.error, candidates: r.ambiguous ?? [] }); return r.ambiguous ? 2 : 1; }
+    const d = r.item.docs;
+    if (!d || d.body === undefined) {
+      // never silently empty: say where the documentation would be if the reader wants to go looking
+      const where = r.item.repository ?? r.item.homepage;
+      err(`${qualify(r.item)} carries no documentation in the catalog${where ? ` — the publisher's own is at ${where}` : ""}`);
+      if (json) jsonOut(deps, { id: qualify(r.item), docs: null, ...(where ? { repository: where } : {}) });
+      return 1;
+    }
+    if (json) { jsonOut(deps, { id: qualify(r.item), docs: d }); return 0; }
+    out(d.body);
+    if (d.truncated) err(`— truncated: ${kb(d.bytes)} upstream, read the rest at ${d.source}`);
     return 0;
   }
 

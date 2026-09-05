@@ -119,3 +119,62 @@ test("a catalog row that climbs out of its folder is dropped, not normalised", (
   }, []);
   expect(absolute).toBeNull();
 });
+
+/** Documentation on the shelf. These read what actually ships, so they are the thing that notices when a
+ *  regenerated catalog quietly comes back blank — the generators refuse that, and this is the second pair
+ *  of eyes on the file itself rather than on the run that produced it. */
+test("every skill and plugin row carries documentation, within the cap and pointing at its original", () => {
+  for (const kind of ["skills", "plugins"] as const) {
+    const doc = load(kind);
+    for (const raw of doc.items) {
+      const d = raw["docs"] as { source: string; format: string; bytes: number; truncated: boolean; body: string } | undefined;
+      expect(d, `${kind}/${String(raw["id"])} has no docs`).toBeDefined();
+      expect(d!.format).toBe("markdown");
+      expect(d!.source).toMatch(/^https:\/\//);
+      expect(Buffer.byteLength(d!.body, "utf8")).toBeLessThanOrEqual(LIMITS.docs);
+      expect(d!.bytes).toBeGreaterThan(0);
+      // a cut body must say so in both places: the flag a UI reads and the line a reader sees
+      if (d!.truncated) expect(d!.body).toContain(d!.source);
+      else expect(d!.bytes).toBe(Buffer.byteLength(d!.body, "utf8"));
+    }
+  }
+});
+
+test("the docs that ship are cleaned: no script tags in prose, no relative links left", () => {
+  for (const kind of ["skills", "plugins"] as const) {
+    for (const raw of load(kind).items) {
+      const body = (raw["docs"] as { body: string }).body;
+      // fenced code is carried verbatim on purpose, so only prose is asked this question
+      const prose = body.replace(/^ {0,3}(?:```|~~~)[\s\S]*?^ {0,3}(?:```|~~~).*$/gm, "");
+      expect(prose, `${String(raw["id"])}`).not.toMatch(/<script\b/i);
+      expect(prose, `${String(raw["id"])}`).not.toMatch(/<iframe\b/i);
+      expect(prose, `${String(raw["id"])}`).not.toMatch(/\]\(\s*(?:\.{1,2}\/|javascript:|data:)/i);
+    }
+  }
+});
+
+/** The MCP sidecar: hand-written shelf, generated docs, joined by key. The join is the part that can rot
+ *  silently — a key renamed on either side produces no error anywhere, just a row that lost its docs. */
+test("mcp-docs.json is keyed by keys the curated shelf actually has", () => {
+  const sidecar = JSON.parse(readFileSync(join(CATALOGS, "mcp-docs.json"), "utf8")) as
+    { version: number; docs: Record<string, { source: string; format: string; bytes: number; body: string }> };
+  expect(sidecar.version).toBe(1);
+
+  const shelf = readFileSync(join(CATALOGS, "..", "..", "mcp", "market-catalog.ts"), "utf8");
+  const keys = new Set([...shelf.matchAll(/\bkey:\s*"([^"]+)"/g)].map((m) => m[1]!));
+  expect(keys.size).toBeGreaterThan(10);
+
+  const documented = Object.keys(sidecar.docs);
+  expect(documented.length).toBeGreaterThan(0);
+  for (const k of documented) expect(keys.has(k), `sidecar documents "${k}", which is not on the shelf`).toBe(true);
+
+  // deepwiki is the one entry with no repository at all — homepage only — so it has no README to carry
+  const missing = [...keys].filter((k) => !documented.includes(k));
+  expect(missing).toEqual(["deepwiki"]);
+
+  for (const [k, d] of Object.entries(sidecar.docs)) {
+    expect(d.format, k).toBe("markdown");
+    expect(d.source, k).toMatch(/^https:\/\/raw\.githubusercontent\.com\//);
+    expect(Buffer.byteLength(d.body, "utf8")).toBeLessThanOrEqual(LIMITS.docs);
+  }
+});

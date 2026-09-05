@@ -177,3 +177,35 @@ test("a rejected token refuses the run and says which knob to turn", async () =>
   expect(r.err).toContain("unset it to fall back to anonymous");
   expect(r.wrote).toBe(false);
 }, 30_000);
+
+/** Losing the documentation is the count check's blind spot: every row still present, every row now blank.
+ *  One rate-limited run would empty every doc in the market and the item count would not move a digit, so
+ *  a row that HAS docs today must still have them — or this was not a good run. */
+test("a run that would blank a row's documentation is refused, and names the row", async () => {
+  // serve one skill as frontmatter and nothing else: valid row, no body, therefore no docs
+  const r = await run(harness(`
+    if (url.includes("/skills/pdf/SKILL.md")) {
+      const nl = String.fromCharCode(10);      // spelled out: this string is built here and read one level down
+      return { status: 200, body: ["---", "name: pdf", "description: d", "---", ""].join(nl) };
+    }
+    return null;`));
+  expect(r.code).toBe(1);
+  expect(r.err).toContain("refusing to write");
+  expect(r.err).toContain("lost docs: pdf");
+  expect(r.err).toContain("--allow-shrink");
+  expect(r.wrote).toBe(false);
+}, 30_000);
+
+test("every row the generator produces carries documentation, and the big ones say they were cut", async () => {
+  const r = await run(harness());
+  expect(r.code).toBe(0);
+  const doc = JSON.parse(readFileSync(CATALOG, "utf8")) as { items: { id: string; docs?: { truncated: boolean; bytes: number; body: string; source: string } }[] };
+  expect(doc.items.every((i) => i.docs !== undefined)).toBe(true);
+  for (const i of doc.items) {
+    expect(Buffer.byteLength(i.docs!.body, "utf8")).toBeLessThanOrEqual(24 * 1024);
+    expect(i.docs!.source).toMatch(/^https:\/\/raw\.githubusercontent\.com\//);
+    if (i.docs!.truncated) expect(i.docs!.body).toContain(i.docs!.source);   // it says where the rest is
+  }
+  // the two upstream files that genuinely exceed the cap
+  expect(doc.items.filter((i) => i.docs!.truncated).map((i) => i.id).sort()).toEqual(["claude-api", "skill-creator"]);
+}, 30_000);

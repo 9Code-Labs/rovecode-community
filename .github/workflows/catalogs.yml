@@ -28,7 +28,11 @@ on:
   push:
     paths:
       - "scripts/build-skill-catalog.mjs"
+      - "scripts/build-mcp-docs.mjs"
+      - "scripts/lib/docs.mjs"
       - "src/market/catalogs/skills.json"
+      - "src/market/catalogs/mcp-docs.json"
+      - "src/mcp/market-catalog.ts"
       - ".github/workflows/catalogs.yml"
 concurrency:
   group: catalogs
@@ -50,6 +54,13 @@ jobs:
           # private is read; every URL the script fetches is a public raw.githubusercontent.com path.
           GITHUB_TOKEN: ${{ github.token }}
         run: bun scripts/build-skill-catalog.mjs --check
+      # Separate step, not a second command on the one above: these read different repositories, and when
+      # one goes red the log should say which shelf moved without anyone opening it.
+      - name: mcp-docs.json matches upstream
+        if: always()                  # the skills answer does not decide whether this is worth asking
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bun scripts/build-mcp-docs.mjs --check
       - name: what to do if that failed
         if: failure()
         run: |

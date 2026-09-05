@@ -19,6 +19,7 @@
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildDocs } from "./lib/docs.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "src", "market", "catalogs", "plugins.json");
@@ -72,6 +73,16 @@ for (const src of SOURCES) {
     if (m.name !== name) warnings.push(`${name}: manifest name "${m.name}" != folder name`);
 
     const contributes = contributionsOf(m);
+
+    // The plugin's own README, read from THIS checkout — no network anywhere in this generator. The URL
+    // recorded is where the same file lives upstream, so a reader can reach the original; relative links
+    // inside it resolve against that URL, not against a path on this machine.
+    const readme = join(dir, "README.md");
+    const docUrl = `${src.git}/blob/${src.branch ?? "main"}/${src.subfolderPrefix}/${m.name}/README.md`;
+    const docs = existsSync(readme) ? buildDocs(readFileSync(readme, "utf8"), docUrl) : null;
+    // A plugin with no README is not an error; its description already carries the one line that matters.
+    if (docs === null) warnings.push(`${name}: no README.md worth carrying — the row ships without docs`);
+
     items.push({
       id: m.name,
       title: m.name.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
@@ -92,6 +103,7 @@ for (const src of SOURCES) {
           : "no entry module: this plugin contributes files only (commands, skills), nothing is imported",
         `contributes: ${contributes.join(", ") || "nothing"}`,
       ],
+      ...(docs ? { docs } : {}),
     });
   }
 }

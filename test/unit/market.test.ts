@@ -48,7 +48,11 @@ function scratch(): { cwd: string; home: string; deps: RegistryDeps; cleanup: ()
   const skills = join(home, "skills.json"), plugins = join(home, "plugins.json");
   writeFileSync(skills, JSON.stringify(SKILLS));
   writeFileSync(plugins, JSON.stringify(PLUGINS));
-  const deps: RegistryDeps = { offline: true, catalogFiles: { skill: skills, plugin: plugins }, mcp: { catalog: MCP_CATALOG, offline: true, home } };
+  // mcpDocsFile points into the scratch home ON PURPOSE: left unset it would read the SHIPPED
+  // src/market/catalogs/mcp-docs.json, and then whether a test passes depends on whether a real
+  // upstream README happens to exist today. A test writes the sidecar it wants.
+  const deps: RegistryDeps = { offline: true, catalogFiles: { skill: skills, plugin: plugins },
+    mcpDocsFile: join(home, "mcp-docs.json"), mcp: { catalog: MCP_CATALOG, offline: true, home } };
   return { cwd, home, deps, cleanup: () => { rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); } };
 }
 
@@ -452,4 +456,159 @@ test("update refuses an id that is not installed, and updates in the scope the i
     expect(existsSync(projectFile)).toBe(true);
     expect(existsSync(skillDir("code-review", { scope: "user", cwd: s.cwd, home: s.home }))).toBe(false);
   } finally { s.cleanup(); }
+});
+
+// ---------- documentation carried in the catalog ----------
+
+const DOC = "# Code review\n\nA checklist.\n";
+
+test("a good docs block survives; bytes/truncated describe upstream, not what we carry", () => {
+  const notes: string[] = [];
+  const it = itemFromCatalog("skill", {
+    id: "documented", description: "x", install: { files: [{ path: "SKILL.md", text: "x" }] },
+    docs: { source: "https://example.com/SKILL.md", format: "markdown", bytes: 84_000, truncated: true, body: DOC },
+  }, notes);
+  expect(it!.docs).toMatchObject({ source: "https://example.com/SKILL.md", format: "markdown", bytes: 84_000, truncated: true, body: DOC });
+  expect(notes).toEqual([]);
+  // no docs at all is a normal row, not a broken one
+  const plain = itemFromCatalog("skill", { id: "plain", description: "x", install: { files: [{ path: "SKILL.md", text: "x" }] } }, notes);
+  expect(plain).not.toBeNull();
+  expect(plain!.docs).toBeUndefined();
+  expect(notes).toEqual([]);
+});
+
+test("a broken docs block drops the DOCS, never the row, and says which item and why", () => {
+  const base = { id: "item", description: "x", install: { files: [{ path: "SKILL.md", text: "x" }] } };
+  for (const [docs, why] of [
+    [{ source: "ftp://example.com/x.md", format: "markdown", bytes: 10, truncated: false, body: DOC }, "http(s)"],
+    [{ source: "https://example.com/x.md", format: "html", bytes: 10, truncated: false, body: DOC }, "markdown"],
+    [{ source: "https://example.com/x.md", format: "markdown", bytes: 10, truncated: false, body: "   " }, "empty"],
+  ] as const) {
+    const notes: string[] = [];
+    const it = itemFromCatalog("skill", { ...base, docs }, notes);
+    expect(it).not.toBeNull();              // the row survives — a moved README is not an uninstallable item
+    expect(it!.docs).toBeUndefined();
+    expect(notes.join(" ")).toContain(why);
+    expect(notes.join(" ")).toContain("the row stays");
+  }
+});
+
+test("a 24 KB body is not silently cut to a label, and a junk `bytes` is replaced by what we can see", () => {
+  const notes: string[] = [];
+  const big = "#".repeat(30_000);
+  const it = itemFromCatalog("skill", {
+    id: "big", description: "x", install: { files: [{ path: "SKILL.md", text: "x" }] },
+    docs: { source: "https://example.com/x.md", format: "markdown", bytes: 30_000, truncated: true, body: big },
+  }, notes);
+  expect(it!.docs!.body!.length).toBe(24 * 1024);   // LIMITS.docs, not LIMITS.str's 300
+  expect(it!.docs!.bytes).toBe(30_000);
+
+  // bytes that is junk, negative, absurd or smaller than the body: trust the body we can measure
+  for (const bytes of [undefined, -5, Number.NaN, "12", {}, 1]) {
+    const n2: string[] = [];
+    const d = itemFromCatalog("skill", { ...{ id: "b", description: "x", install: { files: [{ path: "SKILL.md", text: "x" }] } },
+      docs: { source: "https://example.com/x.md", format: "markdown", bytes, truncated: false, body: DOC } }, n2)!.docs!;
+    expect(d.bytes).toBe(Buffer.byteLength(DOC, "utf8"));
+    expect(d.truncated).toBe(false);
+  }
+});
+
+test("the search path carries docs metadata but not the body; asking for one item carries it", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-docs-cwd-"));
+  const home = mkdtempSync(join(tmpdir(), "rovecode-docs-home-"));
+  try {
+    const skills = join(home, "skills.json");
+    writeFileSync(skills, JSON.stringify({ version: 1, items: [{ ...SKILLS.items[0]!,
+      docs: { source: "https://example.com/SKILL.md", format: "markdown", bytes: 84_000, truncated: true, body: DOC } }] }));
+    const deps: RegistryDeps = { offline: true, catalogFiles: { skill: skills, plugin: join(home, "none.json") }, mcp: { catalog: [], offline: true, home } };
+
+    const searched = (await searchMarket("", deps)).items.find((i) => i.kind === "skill")!;
+    expect(searched.docs).toMatchObject({ bytes: 84_000, truncated: true, source: "https://example.com/SKILL.md" });
+    expect(searched.docs!.body).toBeUndefined();   // NOT "" — a UI must not read this as an empty document
+
+    const one = (await findItem("skill", "code-review", deps)).item!;
+    expect(one.docs!.body).toBe(DOC);
+  } finally { rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); }
+});
+
+test("MCP docs ride in as a sidecar keyed by the curated key; a missing file is silently no docs", async () => {
+  const home = mkdtempSync(join(tmpdir(), "rovecode-mcpdocs-"));
+  try {
+    const sidecar = join(home, "mcp-docs.json");
+    writeFileSync(sidecar, JSON.stringify({ docs: { filesystem: { source: "https://example.com/fs.md", format: "markdown", bytes: 500, truncated: false, body: "# Filesystem\n" } } }));
+    const base: RegistryDeps = { offline: true, catalogFiles: { skill: join(home, "a.json"), plugin: join(home, "b.json") }, mcp: { catalog: MCP_CATALOG, offline: true, home } };
+
+    const withDocs = (await searchMarket("", { ...base, mcpDocsFile: sidecar })).items.find((i) => i.id === "filesystem")!;
+    expect(withDocs.docs).toMatchObject({ source: "https://example.com/fs.md", bytes: 500 });
+    expect(withDocs.docs!.body).toBeUndefined();                       // search path again: metadata only
+    expect((await searchMarket("", { ...base, mcpDocsFile: sidecar })).items.find((i) => i.id === "notes")!.docs).toBeUndefined();
+    const one = (await findItem("mcp", "filesystem", { ...base, mcpDocsFile: sidecar })).item!;
+    expect(one.docs!.body).toBe("# Filesystem\n");
+
+    // no sidecar at all: MCP rows simply have no docs, and nothing complains
+    const none = (await searchMarket("", { ...base, mcpDocsFile: join(home, "absent.json") })).items.find((i) => i.id === "filesystem")!;
+    expect(none.docs).toBeUndefined();
+  } finally { rmSync(home, { recursive: true, force: true }); }
+});
+
+test("the CLI: `market docs` prints the body, says when it is truncated, and exits 1 with a pointer when there is none", async () => {
+  const s = scratch();
+  try {
+    const skills = join(s.home, "skills.json");
+    writeFileSync(skills, JSON.stringify({ version: 1, items: [{ ...SKILLS.items[0]!, repository: "https://example.com/repo",
+      docs: { source: "https://example.com/SKILL.md", format: "markdown", bytes: 84_000, truncated: true, body: DOC } }] }));
+    const registry: RegistryDeps = { ...s.deps, catalogFiles: { ...s.deps.catalogFiles, skill: skills } };
+    const out: string[] = [], err: string[] = [];
+    const deps = { cwd: s.cwd, home: s.home, registry, out: (l: string) => out.push(l), err: (l: string) => err.push(l), tty: false };
+
+    expect(await cmdMarket(["docs", "skill:code-review"], deps)).toBe(0);
+    expect(out.join("\n")).toBe(DOC);
+    expect(err.join("\n")).toContain("truncated: 82.0 KB upstream");
+
+    out.length = 0; err.length = 0;
+    expect(await cmdMarket(["docs", "mcp:filesystem"], deps)).toBe(1);
+    expect(err.join("\n")).toContain("carries no documentation");
+
+    out.length = 0;
+    expect(await cmdMarket(["docs", "skill:code-review", "--json"], deps)).toBe(0);
+    expect(JSON.parse(out.join("\n")).docs.body).toBe(DOC);
+
+    out.length = 0;
+    expect(await cmdMarket(["info", "skill:code-review"], deps)).toBe(0);
+    expect(out.join("\n")).toContain("docs       82.0 KB from https://example.com/SKILL.md (truncated)");
+
+    expect(await cmdMarket(["docs"], deps)).toBe(2);
+  } finally { s.cleanup(); }
+});
+
+test("the SHIPPED mcp-docs.json is shaped the way the reader expects — a silent mismatch is the worst failure here", () => {
+  // This one deliberately reads the real file. Not to assert that any particular server has documentation
+  // (upstream moves, and that is not this test's business) but to catch the failure mode where the
+  // generator's shape and the reader's expectations drift apart: nothing throws, nothing is logged, and
+  // every MCP row quietly loses its docs.
+  const file = join(import.meta.dir, "..", "..", "src", "market", "catalogs", "mcp-docs.json");
+  if (!existsSync(file)) return;                       // the sidecar is optional by design
+  const raw = JSON.parse(readFileSync(file, "utf8")) as { docs?: Record<string, unknown> };
+  expect(raw.docs).toBeDefined();
+  const keys = Object.keys(raw.docs!);
+  expect(keys.length).toBeGreaterThan(0);
+
+  // every entry survives the validator this repo actually uses — not a re-implementation of it
+  // (bun's two-argument expect(value, message) upsets the matcher that follows it, so failures are
+  //  named by collecting them instead)
+  const notes: string[] = [];
+  const rejected: string[] = [];
+  for (const [key, value] of Object.entries(raw.docs!)) {
+    const item = itemFromCatalog("skill", { id: "probe", description: "x", install: { files: [{ path: "SKILL.md", text: "x" }] }, docs: value }, notes);
+    if (!item?.docs) rejected.push(key);
+  }
+  expect(rejected).toEqual([]);   // any name here is an entry the reader would silently drop
+  expect(notes).toEqual([]);
+
+  // the keys are curated shelf names, so they can actually attach to a row
+  const curated = readFileSync(join(import.meta.dir, "..", "..", "src", "mcp", "market-catalog.ts"), "utf8");
+  const shelf = new Set([...curated.matchAll(/\{ key: "([^"]+)"/g)].map((m) => m[1]!));
+  const orphans = keys.filter((k) => !shelf.has(k));
+  expect(orphans).toEqual([]);    // a key no curated entry uses attaches to nothing
+
 });

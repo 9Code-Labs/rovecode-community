@@ -19,7 +19,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { searchMarket as searchMcp, marketInfo as mcpInfo, type MarketDeps as McpDeps, type MarketEntry } from "../mcp/market.ts";
-import { LIMITS, type InstallSpec, type MarketEnv, type MarketItem, type MarketKind, type MarketResult, type SourceStatus } from "./types.ts";
+import { LIMITS, type InstallSpec, type ItemDocs, type MarketEnv, type MarketItem, type MarketKind, type MarketResult, type SourceStatus } from "./types.ts";
 
 /** where the skill and plugin catalogs live in the repo (written by the catalog owner, read here) */
 export const CATALOG_DIR = new URL("./catalogs/", import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, "$1");
@@ -27,6 +27,10 @@ export const CATALOG_FILES: Record<"skill" | "plugin", string> = {
   skill: join(CATALOG_DIR, "skills.json"),
   plugin: join(CATALOG_DIR, "plugins.json"),
 };
+/** MCP documentation arrives as a SIDECAR rather than in the shelf itself: `src/mcp/market-catalog.ts`
+ *  stays hand-written because a publisher, a command and an env var are human decisions, while a README is
+ *  generated data. Keyed by the curated entry's `key`. Absent file = no docs, which is not an error. */
+export const MCP_DOCS_FILE = join(CATALOG_DIR, "mcp-docs.json");
 
 export interface RegistryDeps {
   /** MCP registry access (fetch/offline/home/now) — passed through to mcp/market.ts unchanged */
@@ -37,6 +41,11 @@ export interface RegistryDeps {
   catalogFiles?: Partial<Record<"skill" | "plugin", string>>;
   /** read a catalog file (tests inject; default readFileSync) */
   readFile?: (path: string) => string | null;
+  /** override the MCP documentation sidecar's path (tests write fixtures) */
+  mcpDocsFile?: string;
+  /** carry `docs.body`. Off for search/list, where the bodies are ~200 KB the caller never reads; the
+   *  metadata comes either way. `findItem` turns it on. */
+  withDocs?: boolean;
 }
 
 // ---------------------------------------------------------------- untrusted-data re-typing
@@ -50,6 +59,14 @@ function str(v: unknown, max: number = LIMITS.str): string | undefined {
   if (typeof v !== "string") return undefined;
   const s = v.trim();
   return s.length === 0 ? undefined : s.slice(0, max);
+}
+
+/** a finite non-negative integer within `max`, or undefined — a catalog's numbers are untrusted too:
+ *  "12", -1, NaN, 1e30 and {} all have to come back as "no number", not as a value that poisons a UI. */
+function num(v: unknown, max: number): number | undefined {
+  if (typeof v !== "number" || !Number.isFinite(v) || v < 0) return undefined;
+  const n = Math.floor(v);
+  return n > max ? undefined : n;
 }
 
 function strList(v: unknown, max: number = LIMITS.list, each: number = LIMITS.str): string[] {
@@ -127,8 +144,30 @@ function catalogInstall(kind: "skill" | "plugin", raw: Record<string, unknown>, 
   return { kind: "skill", files };
 }
 
+/** The item's own documentation, or undefined. A BROKEN doc drops the doc, never the row — the same rule
+ *  as "a doc we could not reach is not an error": a shelf entry whose README moved is still installable.
+ *  `withBody: false` keeps the ~200 KB of markdown out of the search path; the metadata still comes, so a
+ *  row can carry its badge without its body. */
+function docsOf(raw: unknown, notes: string[], id: string, withBody: boolean): ItemDocs | undefined {
+  if (!isRecord(raw)) return undefined;
+  const source = url(raw.source);
+  if (source === undefined) { notes.push(`${id}: documentation source is not an http(s) URL — docs dropped, the row stays`); return undefined; }
+  if (raw.format !== "markdown") { notes.push(`${id}: documentation format ${JSON.stringify(raw.format)} is not "markdown" — docs dropped, the row stays`); return undefined; }
+  // NOT str(): that trims, and a document is a body rather than a label — trailing newlines and leading
+  // indentation are part of markdown. Only the cap and the "is there anything here at all" check apply.
+  const body = typeof raw.body === "string" && raw.body.trim().length > 0 ? raw.body.slice(0, LIMITS.docs) : undefined;
+  if (body === undefined) { notes.push(`${id}: documentation body is empty — docs dropped, the row stays`); return undefined; }
+  // `bytes` is the size upstream, before truncation, so it is normally LARGER than the body we carry.
+  // A number that is missing or junk is replaced by what we can actually see rather than trusted.
+  const declared = num(raw.bytes, 1024 * 1024 * 1024);
+  const carried = Buffer.byteLength(body, "utf8");
+  const bytes = declared === undefined || declared < carried ? carried : declared;
+  const truncated = raw.truncated === true || bytes > carried;
+  return { source, format: "markdown", bytes, truncated, ...(withBody ? { body } : {}) };
+}
+
 /** one catalog row → a MarketItem, or null (with a note) when it cannot be trusted into one */
-export function itemFromCatalog(kind: "skill" | "plugin", raw: unknown, notes: string[]): MarketItem | null {
+export function itemFromCatalog(kind: "skill" | "plugin", raw: unknown, notes: string[], withDocs = true): MarketItem | null {
   if (!isRecord(raw)) return null;
   const id = str(raw.id ?? raw.name, 64);
   if (id === undefined || !ID.test(id)) { notes.push(`${kind}s catalog: a row has no usable id — skipped`); return null; }
@@ -148,6 +187,7 @@ export function itemFromCatalog(kind: "skill" | "plugin", raw: unknown, notes: s
   const status = str(raw.status, 64); if (status !== undefined) item.status = status;
   const license = str(raw.license, 120); if (license !== undefined) item.license = license;
   const planNote = strList(raw.planNote, 8, LIMITS.desc); if (planNote.length) item.planNote = planNote;
+  const docs = docsOf(raw.docs, notes, id, withDocs); if (docs) item.docs = docs;
   return item;
 }
 
@@ -170,12 +210,34 @@ export function itemFromMcp(entry: MarketEntry): MarketItem {
 
 // ---------------------------------------------------------------- reading the catalogs
 
+function readFileOr(path: string, deps: RegistryDeps): string | null {
+  const read = deps.readFile ?? ((p: string) => (existsSync(p) ? readFileSync(p, "utf8") : null));
+  try { return read(path); } catch { return null; }
+}
+
+/** the MCP documentation sidecar, keyed by curated key. A missing or broken file is silently no docs. */
+function mcpDocs(deps: RegistryDeps, notes: string[], withBody: boolean): Record<string, ItemDocs> {
+  const text = readFileOr(deps.mcpDocsFile ?? MCP_DOCS_FILE, deps);
+  if (text === null || text.length > LIMITS.body) return {};
+  let json: unknown;
+  try { json = JSON.parse(text); } catch { notes.push("mcp documentation sidecar is not valid JSON — MCP rows keep their docs off"); return {}; }
+  const rows = isRecord(json) && isRecord(json.docs) ? json.docs : isRecord(json) && !Array.isArray(json) ? json : null;
+  if (rows === null) return {};
+  const out: Record<string, ItemDocs> = {};
+  for (const [key, raw] of Object.entries(rows).slice(0, LIMITS.items)) {
+    const d = docsOf(raw, notes, `mcp:${key}`, withBody);
+    if (d) out[key] = d;
+  }
+  return out;
+}
+
 function readCatalog(kind: "skill" | "plugin", deps: RegistryDeps): { items: MarketItem[]; status: SourceStatus; notes: string[] } {
   const path = deps.catalogFiles?.[kind] ?? CATALOG_FILES[kind];
   const notes: string[] = [];
   const read = deps.readFile ?? ((p: string) => (existsSync(p) ? readFileSync(p, "utf8") : null));
   let text: string | null;
   try { text = read(path); } catch (e) { return { items: [], status: { ok: false, reason: `${kind}s catalog unreadable: ${e instanceof Error ? e.message : String(e)}` }, notes }; }
+  const withDocs = deps.withDocs === true;
   // a catalog that is not there yet is not an error: rovecode ships without one until it is written
   if (text === null) return { items: [], status: { ok: true, from: "curated" }, notes };
   if (text.length > LIMITS.body) return { items: [], status: { ok: false, reason: `${kind}s catalog is over ${LIMITS.body} bytes` }, notes };
@@ -186,7 +248,7 @@ function readCatalog(kind: "skill" | "plugin", deps: RegistryDeps): { items: Mar
   const items: MarketItem[] = [];
   const seen = new Set<string>();
   for (const raw of rows.slice(0, LIMITS.items)) {
-    const item = itemFromCatalog(kind, raw, notes);
+    const item = itemFromCatalog(kind, raw, notes, withDocs);
     if (item === null) continue;
     if (seen.has(item.id)) { notes.push(`${kind}s catalog: "${item.id}" appears twice — first kept`); continue; }
     seen.add(item.id);
@@ -219,7 +281,13 @@ export async function searchMarket(query: string, deps: RegistryDeps = {}): Prom
   const mcpDeps: McpDeps = { ...deps.mcp, ...(deps.offline === true ? { offline: true } : {}) };
   try {
     const r = await searchMcp(query, mcpDeps);
-    for (const e of r.entries) items.push(itemFromMcp(e));
+    const docs = mcpDocs(deps, notes, deps.withDocs === true);
+    for (const e of r.entries) {
+      const item = itemFromMcp(e);
+      const d = docs[e.key];
+      if (d) item.docs = d;
+      items.push(item);
+    }
     const curatedOnly = r.entries.every((e) => e.source === "curated");
     sources["mcp:curated"] = { ok: true, from: "curated" };
     // mcp/market.ts asks the registry only for a query of two characters or more
@@ -247,7 +315,7 @@ export async function searchMarket(query: string, deps: RegistryDeps = {}): Prom
 export async function findItem(kind: MarketKind, id: string, deps: RegistryDeps = {}): Promise<{ item?: MarketItem; notes: string[] }> {
   const notes: string[] = [];
   if (kind === "skill" || kind === "plugin") {
-    const r = readCatalog(kind, deps);
+    const r = readCatalog(kind, { ...deps, withDocs: true }); // one item: the body is the point
     notes.push(...r.notes);
     const item = r.items.find((i) => i.id === id);
     return { ...(item ? { item } : {}), notes };
@@ -255,7 +323,11 @@ export async function findItem(kind: MarketKind, id: string, deps: RegistryDeps 
   const mcpDeps: McpDeps = { ...deps.mcp, ...(deps.offline === true ? { offline: true } : {}) };
   const r = await mcpInfo(id, mcpDeps);
   notes.push(...r.notes);
-  return { ...(r.entry ? { item: itemFromMcp(r.entry) } : {}), notes };
+  if (!r.entry) return { notes };
+  const item = itemFromMcp(r.entry);
+  const d = mcpDocs(deps, notes, true)[r.entry.key];
+  if (d) item.docs = d;
+  return { item, notes };
 }
 
 /** Every item from every source, unfiltered — what `market list --all` and the site page render. */

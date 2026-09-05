@@ -14,6 +14,7 @@
 import { readFileSync, writeFileSync, mkdirSync, renameSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildDocs } from "./lib/docs.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const OUT = join(ROOT, "src", "market", "catalogs", "skills.json");
@@ -158,6 +159,12 @@ try {
       const licence = licenceOf(await raw(`${base}/${src.root}/${name}/LICENSE.txt`));
       if (licence === null) warnings.push(`${name}: no LICENSE.txt — licence recorded as unknown`);
 
+      // The documentation IS this file, which we already have: carrying it costs no extra request, and it
+      // is why the skill catalog can hold a doc for every row without going near the rate limit.
+      const docUrl = `${base}/${path}`;
+      const docs = buildDocs(text, docUrl);
+      if (docs === null) warnings.push(`${name}: SKILL.md has no body beyond its frontmatter — no docs`);
+
       items.push({
         id: name,
         title: name.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
@@ -170,6 +177,7 @@ try {
         homepage: src.homepage,
         source: { git: src.git, subfolder: `${src.root}/${name}`, branch: src.branch },
         bytes: text.length,
+        ...(docs ? { docs } : {}),
       });
     }
   }
@@ -197,7 +205,7 @@ const previous = (() => {
   try { return JSON.parse(readFileSync(OUT, "utf8")); } catch { return null; }
 })();
 
-/** Three refusals, in the order they can happen. Each one leaves the existing catalog exactly as it is:
+/** Four refusals, in the order they can happen. Each one leaves the existing catalog exactly as it is:
  *  a market that is a day stale is a small problem, a market that silently lost most of its shelf is not. */
 function refuseToWrite() {
   if (items.length === 0) return "produced no items at all";
@@ -207,14 +215,20 @@ function refuseToWrite() {
     const gone = previous.items.filter((p) => !items.some((i) => i.id === p.id)).map((p) => p.id);
     return `has ${items.length} items where the shipped one has ${before} (missing: ${gone.join(", ")})`;
   }
+  // Losing documentation is the same failure wearing a different hat: every row still there, every row
+  // now blank. The count check above would pass it without a word, and one rate-limited run would empty
+  // every doc in the market. A row that HAD docs must still have them, or this is not a good run.
+  const lost = previous.items.filter((p) => p.docs && !items.find((i) => i.id === p.id)?.docs).map((p) => p.id);
+  if (lost.length > 0) return `drops the documentation of ${lost.length} row(s) that have it today (lost docs: ${lost.join(", ")})`;
   return null;
 }
 
 const refusal = refuseToWrite();
 if (refusal !== null) {
   console.error(`refusing to write: the new catalog ${refusal}.`);
-  console.error("The shipped catalog is untouched. If the shrink is real (a skill was withdrawn upstream),");
-  console.error("re-run with --allow-shrink; otherwise this was a bad fetch and running again is the fix.");
+  console.error("The shipped catalog is untouched. If the loss is real (a skill was withdrawn upstream, or");
+  console.error("its SKILL.md really is empty now), re-run with --allow-shrink; otherwise this was a bad");
+  console.error("fetch and running again is the fix.");
   if (!process.argv.includes("--allow-shrink")) process.exit(1);
   console.error("--allow-shrink given: writing anyway.");
 }

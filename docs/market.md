@@ -8,6 +8,7 @@ events when something is installed.
 ```
 rovecode market search [query] [--kind mcp|skill|plugin]
 rovecode market info <id>
+rovecode market docs <id>
 rovecode market install <id | kind:id | git-url | npm-package> [--project] [--as name] [--pick N] [--yes] [--force]
 rovecode market remove <id | kind:id>
 rovecode market list [--all]
@@ -147,6 +148,48 @@ supported (this rovecode speaks 1) — skipped`. Even with the manifest moved an
 contributions are declared by directory convention rather than an exported module, so nothing would bind.
 Listing them would be claiming a compatibility that does not exist, so the catalog lists what actually
 installs and runs.
+
+## Each item's own documentation
+
+`rovecode market docs <id>` prints what the publisher wrote about the item, and `market info` says whether
+there is any:
+
+```
+docs       82.0 KB from https://github.com/anthropics/skills/blob/main/skills/claude-api/SKILL.md (truncated)
+docs       none — try https://github.com/modelcontextprotocol/servers
+```
+
+The documentation is fetched **at build time and carried inside the catalog**, not fetched when you look at
+it. Three reasons, in order of how much they matter: the market has to work offline, the site's market page
+is a static build with no server to proxy through, and pulling third-party text into a UI at display time is
+a thing worth not doing when the alternative costs nothing. The body travels as text and only as text —
+rovecode never executes it, never evaluates it, never parses it as HTML; each surface renders it safely on
+its own side.
+
+An item with no documentation is a normal item. Upstream may simply not have a readable doc, and a shelf
+entry whose README has moved is still perfectly installable — so a **broken** docs block drops the
+documentation and keeps the row, with a note saying which item and why. The same three rules the rest of the
+catalog lives by apply here: `source` must be an `http(s)` URL, `format` must be `markdown`, and an empty
+body is treated as no documentation at all.
+
+Bodies are capped at 24 KB, which is its own limit and not the 300-character one every other string uses —
+run a document through the general validator and it comes back silently cut to a label, still a valid
+string, with nobody the wiser. `bytes` is the size **upstream, before truncation**, so a reader can be told
+how much is missing; when it is absent or junk it is replaced by the size of what we actually carry rather
+than trusted. Two of the current skills are cut this way (`claude-api` at 84 KB and `skill-creator` at
+32 KB) and both say so.
+
+Search does not carry bodies. `market search` and `market list` read the metadata — the size, the source,
+whether it was truncated — but leave the ~200 KB of markdown alone, since no search ever reads it; asking
+for one item with `market info`, `market docs` or an install brings the body with it. In the data that means
+`docs.body` is `undefined` on a search result, which is deliberately not the same as an empty string: a
+surface must send the reader to the document rather than tell them there is nothing in it.
+
+MCP documentation arrives as a **sidecar**, `src/market/catalogs/mcp-docs.json`, keyed by the curated
+entry's name. The curated shelf itself (`src/mcp/market-catalog.ts`) stays hand-written, because a
+publisher, a launch command and an environment variable are human decisions, while a README is generated
+data — mixing the two in one file would make the hand-written half look machine-owned. A missing sidecar
+means MCP rows have no documentation, which is not an error.
 
 ## Installed, updates, trust
 

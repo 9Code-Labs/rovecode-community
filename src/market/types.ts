@@ -38,7 +38,33 @@ export const LIMITS = {
   list: 32,
   /** environment variables one item may declare */
   env: 24,
+  /** an item's documentation body: markdown, not a label. Nothing else here is remotely this big, which is
+   *  exactly why it needs its own cap — run a 24 KB body through `str()` and it comes back silently cut to
+   *  300 characters, still a valid string, and nobody notices. */
+  docs: 24 * 1024,
 } as const;
+
+/** An item's own documentation, fetched at BUILD time and carried in the catalog.
+ *
+ *  Never fetched at runtime. The market has to work offline and the site's page is static, and pulling
+ *  third-party text into a UI at display time is not something worth doing for a docs pane. The body is
+ *  carried as TEXT and nothing more: it is never executed, never evaluated, never parsed as HTML here —
+ *  each surface renders it safely on its own side.
+ *
+ *  Absent when upstream had no readable doc. A row without docs is a normal row, not a broken one. */
+export interface ItemDocs {
+  /** the exact URL it was read from, so a reader can go to the original */
+  source: string;
+  format: "markdown";
+  /** the body's length in bytes BEFORE truncation, so a UI can say how much is missing */
+  bytes: number;
+  truncated: boolean;
+  /** Markdown text, capped at LIMITS.docs. OPTIONAL on purpose: the search path does not carry bodies
+   *  (they are ~200 KB the search never reads), so a row from `searchMarket` has the metadata and
+   *  `body === undefined`. `undefined` means "not carried on this call" and is not the same as an empty
+   *  document — a UI must send the reader to `market docs <id>` rather than say there is nothing. */
+  body?: string;
+}
 
 /** An environment variable an item needs. Same shape the MCP side already uses (mcp/market.ts EnvSpec):
  *  `secret: true` is asked masked on a shell and NEVER written into a project file — it is written as
@@ -92,6 +118,8 @@ export interface MarketItem {
   /** the variables this item needs before it can run. Empty for most skills and plugins. */
   env: MarketEnv[];
   install: InstallSpec;
+  /** the item's own documentation, carried in the catalog — see ItemDocs */
+  docs?: ItemDocs;
   /** extra lines a catalog wants in the approval preview, in its own words ("copies one SKILL.md, runs
    *  nothing"). install.ts writes the standard plan from `install`; these are appended verbatim, capped
    *  like every other list. A catalog that has nothing special to say omits them. */

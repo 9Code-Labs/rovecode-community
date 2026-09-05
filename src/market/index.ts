@@ -8,12 +8,12 @@
 
 export type {
   MarketKind, MarketSource, MarketScope, MarketEnv, InstallSpec, MarketItem,
-  InstalledState, MarketRow, SourceStatus, MarketResult, InstallPlanView, InstallOutcome,
+  InstalledState, MarketRow, SourceStatus, MarketResult, InstallPlanView, InstallOutcome, ItemDocs,
 } from "./types.ts";
 export { LIMITS, parseQualifiedId, qualify, itemLine } from "./types.ts";
 
 export type { RegistryDeps } from "./registry.ts";
-export { searchMarket, findItem, allItems, itemFromCatalog, itemFromMcp, CATALOG_FILES, CATALOG_DIR } from "./registry.ts";
+export { searchMarket, findItem, allItems, itemFromCatalog, itemFromMcp, CATALOG_FILES, CATALOG_DIR, MCP_DOCS_FILE } from "./registry.ts";
 
 export type { Resolution } from "./resolve.ts";
 export { resolveTarget, resolveDirect } from "./resolve.ts";
