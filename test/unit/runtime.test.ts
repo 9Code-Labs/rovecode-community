@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test";
 import { createRuntime } from "../../src/cli/runtime.ts";
+import { contextBudgetFor } from "../../src/core/context-report.ts";
 import type { ApprovalFn, StreamFn } from "../../src/core/types.ts";
 import { textTurn } from "../../src/providers/stream.ts";
 import { GLM_53_AGENT_CONTRACT, GLM_53_PROFILE } from "../../src/providers/profiles.ts";
@@ -85,7 +86,10 @@ test("buildCfg gated: repl defaults with memory/skill allows and prompt gates", 
   const approval: ApprovalFn = async (req) => { seen.push(req.tool); return "once"; };
   const cfg = rt.buildCfg(false, approval);
   expect(cfg.maxTurns).toBe(60);
-  expect(cfg.contextBudgetTokens).toBe(200_000);
+  // the budget follows the model's window now: this box's default model has a 1M window and a 128k answer,
+  // so the history gets what is left. A model the catalog does not know still falls back to the flat 200_000.
+  expect(cfg.contextBudgetTokens).toBe(contextBudgetFor({ window: 1_000_000, maxOutput: 128_000 }));
+  expect(cfg.contextBudgetTokens).toBeGreaterThan(200_000);
   expect(cfg.compactionThreshold).toBe(0.8);
   expect(cfg.parallelTools).toBe(true);
   expect(cfg.permissionRules).toEqual([
