@@ -8,7 +8,7 @@ OpenHands) — every port traces to file:line in a snapshotted source and lands 
 fresh-context critic verifies it against a pre-written bar (ledger: `PORTS.md`, kept outside this
 repository for now).
 
-![The sextant TUI at 160×44 cells: the files tree with git statuses, the code panel on src/auth/callback.ts with edited lines highlighted, the messages panel with read and edit tool rows and an approval card asking to run bun test, the plan at step 1 of 4, usage at 13% context, and the rovecode cloud pet waiting for a nod.](site/public/shots/approval-160x44.png)
+![The sextant TUI at 160×44 cells: the files tree with git statuses, the code panel on src/auth/callback.ts with edited lines highlighted, the messages panel with read and edit tool rows and an approval card asking to run bun test, the plan at step 1 of 4, usage at 13% context, and the rovecode cloud pet waiting for a nod.](https://raw.githubusercontent.com/9Code-Labs/rovecode-site/main/public/shots/approval-160x44.png)
 
 ## Status (2026-09-04, post wave 4)
 
@@ -32,7 +32,7 @@ repository for now).
   - **run budgets** — `--max-turns` / `--max-seconds`, so a spiral ends in a result instead of an outside kill
   - a decided **wire-failure policy** (`docs/wire-failures.md`): what is retried, what is never retried after
     text has arrived, and the wait announced while it happens
-  - the **site** (`site/`, 15 languages, prerendered, [live](http://64.177.43.110/)) and the CI/CD workflows
+  - the **site** ([its own repo](https://github.com/9Code-Labs/rovecode-site), 15 languages, prerendered, [live](http://64.177.43.110/)) and the CI/CD workflows
     that build and ship it
   - **sextant** gained mouse and scrollbar dragging, the page tab strip, the notices history and prompt suggestions
   - **startup** is lazy: `rovecode --help` no longer boots the TUI, the loop, the runtime or the plugin scanner
@@ -606,10 +606,13 @@ tokens, cache hits, and catalog-priced spend.
   `.rovecode/design.json`) and `design_audit`, which counts template patterns in source and reports them as
   *slop* only while nothing is recorded, or as *deviation* from what the project chose. `ROVECODE_DESIGN=off`
   drops the section for runs with no UI in them.
-- **Site** (`site/`, `docs/deploy.md`): the landing page — Vite + React, prerendered once per language, no
-  runtime; `cd site && bun install --frozen-lockfile && bun run build` → `site/dist`. `bun run deploy:site`
-  ships it to the VPS as a new release and flips `current`; `.github/workflows/site.yml` does the same on a
-  push to `main`. Live at [64.177.43.110](http://64.177.43.110/) until there is a domain.
+- **Site** ([9Code-Labs/rovecode-site](https://github.com/9Code-Labs/rovecode-site), `docs/deploy.md`):
+  the landing page, the docs and the market — Vite + React, prerendered once per language, no runtime.
+  It moved out of this repository on 2026-09-06 and builds without reading anything outside itself.
+  What stays here is the content it renders: `bun run publish:site` regenerates `docs.json`,
+  `market.json` and `facts.json` from `docs/*.md`, `src/market/catalogs/`, `src/mcp/market-catalog.ts`
+  and `plugins/`, and pushes them there. Deploying is `bun run deploy` in that repo. Live at
+  [64.177.43.110](http://64.177.43.110/) until there is a domain.
 
 ## License & notices
 

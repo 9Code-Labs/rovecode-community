@@ -267,13 +267,18 @@ test("abort DURING the real backoff sleep wakes it at once and nothing is retrie
   const ac = new AbortController();
   const notes: RetryNote[] = [];
   const done = run(withRetry(s.stream, { onRetry: (n) => notes.push(n) }), { signal: ac.signal }); // REAL sleepMs
-  await new Promise<void>((r) => setTimeout(r, 30)); // the 429 lands and the wrapper enters its sleep (ref'd timer)
+  // wait for the 429 to have LANDED, not for 30 ms of wall clock: under a loaded suite the note had not
+  // been recorded yet and the test failed in 120 ms — a claim about the machine, not about the wrapper
+  await until(() => notes.length === 1, 5_000); // the wrapper is now inside its sleep (ref'd timer)
   expect(notes).toHaveLength(1);
   expect(notes[0]?.delayMs).toBe(30_000);
   const abortedAt = performance.now();
   ac.abort();
   const { turn } = await deadline(done, 2_000, "retry wrapper after abort");
-  expect(performance.now() - abortedAt).toBeLessThan(50); // woke through the abort listener, not the timer
+  // woke through the abort listener, not through the 30 s timer. The whole distinction is 30_000 against
+  // "at once", so the bound only has to be far below the delay it is separating from — 50 ms was measuring
+  // how quickly this machine gets back to the event loop.
+  expect(performance.now() - abortedAt).toBeLessThan(1_000);
   expect(turn).toBe(t429); // the last provider outcome stands (router: aborted → no advance)
   expect(s.calls).toHaveLength(1);
 });

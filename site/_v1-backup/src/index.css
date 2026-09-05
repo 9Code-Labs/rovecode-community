@@ -1,0 +1,208 @@
+@import "tailwindcss";
+
+/* Ink & sky — one accent, tonal ink with soft sky light fields, glass on top.
+   Neutrals + brand ramp from AVOID tokens for #5CB8FF (dark); owner-chosen surface values. */
+:root {
+  --n-0: #f6fbff; --n-1: #eef4fa; --n-2: #e4eaf0; --n-3: #d5dce1; --n-4: #bec5cb; --n-5: #989fa6;
+  --n-6: #747b82; --n-7: #545c63; --n-8: #3a4147; --n-9: #242a2f; --n-10: #14191d; --n-11: #070c10;
+  --brand-50: #edf7ff; --brand-100: #d4ebff; --brand-200: #aedaff; --brand-300: #77c2ff; --brand-400: #53a6e6;
+  --brand-500: #4386bb; --brand-600: #356b95; --brand-700: #295475; --brand-800: #1d3e57; --brand-900: #12293a;
+
+  --color-bg: #0b0f14;
+  --color-surface: #121a24;
+  --color-surface-2: #182230;
+  --color-border: rgba(255, 255, 255, 0.1);
+  --color-border-strong: rgba(255, 255, 255, 0.16);
+  --color-text: #eef3f8;
+  --color-text-muted: #8a98a8;
+  --color-text-faint: #5d6b7b;
+  --color-brand: #5cb8ff;
+  --color-brand-hover: #91cdff;
+  --color-brand-text: #5cb8ff;
+  --color-on-brand: #070c10;
+  --color-ring: rgba(92, 184, 255, 0.45);
+
+  /* cornerless: generous radii, pills for controls */
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-xl: 24px;
+  --radius-pill: 999px;
+
+  /* glass recipe */
+  --glass-fill: rgba(18, 26, 36, 0.6);
+  --glass-fill-2: rgba(18, 26, 36, 0.45);
+  --glass-line: rgba(255, 255, 255, 0.1);
+  --glass-line-hover: rgba(92, 184, 255, 0.35);
+  --glass-top: rgba(255, 255, 255, 0.06);
+  --glass-top-hover: rgba(255, 255, 255, 0.12);
+  --glass-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+  --glass-blur: 20px;
+
+  --header-h: 56px;
+
+  /* shadcn semantic tokens mapped onto the same palette */
+  --background: var(--color-bg);
+  --foreground: var(--color-text);
+  --card: var(--color-surface);
+  --card-foreground: var(--color-text);
+  --popover: var(--color-surface);
+  --popover-foreground: var(--color-text);
+  --primary: var(--color-brand);
+  --primary-foreground: var(--color-on-brand);
+  --secondary: var(--color-surface-2);
+  --secondary-foreground: var(--color-text);
+  --muted: var(--color-surface-2);
+  --muted-foreground: var(--color-text-muted);
+  --accent: var(--color-surface-2);
+  --accent-foreground: var(--color-text);
+  --destructive: #f0605d;
+  --border: var(--color-border);
+  --input: var(--color-border);
+  --ring: var(--color-ring);
+  --radius: var(--radius-md);
+}
+
+@theme inline {
+  --color-bg: var(--color-bg);
+  --color-surface: var(--color-surface);
+  --color-surface-2: var(--color-surface-2);
+  --color-border: var(--color-border);
+  --color-border-strong: var(--color-border-strong);
+  --color-text: var(--color-text);
+  --color-text-muted: var(--color-text-muted);
+  --color-text-faint: var(--color-text-faint);
+  --color-brand: var(--color-brand);
+  --color-brand-hover: var(--color-brand-hover);
+  --color-brand-text: var(--color-brand-text);
+  --color-on-brand: var(--color-on-brand);
+  --color-ring: var(--color-ring);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-input: var(--input);
+
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+  --radius-pill: var(--radius-pill);
+
+  --font-sans: "Geist Variable", "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", "Geist Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  --ease-out-soft: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@layer base {
+  * { border-color: var(--color-border); }
+  html { color-scheme: dark; scroll-behavior: smooth; }
+  body {
+    background-color: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    font-weight: 450;
+    font-size: 17px;
+    line-height: 1.6;
+    font-feature-settings: "ss01", "cv01";
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  h1, h2, h3 { font-weight: 300; letter-spacing: -0.02em; text-wrap: balance; }
+  code, kbd, pre, .mono { font-family: var(--font-mono); font-feature-settings: normal; }
+  ::selection { background: rgba(92, 184, 255, 0.28); }
+  :focus-visible { outline: 2px solid var(--color-brand); outline-offset: 2px; border-radius: var(--radius-sm); }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+  }
+}
+
+/* ---------- surfaces ---------- */
+
+/* the ink field: solid ink + a 3.5 % dot grid; the sky light fields are placed per section (LightField) */
+@utility ink-field {
+  position: relative;
+  background-color: var(--color-bg);
+  background-image: radial-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1.2px);
+  background-size: 22px 22px;
+  background-position: 0 0;
+}
+
+@utility glass {
+  position: relative;
+  background: var(--glass-fill);
+  border: 1px solid var(--glass-line);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  box-shadow: inset 0 1px 0 0 var(--glass-top), var(--glass-shadow);
+  transition: border-color 200ms var(--ease-out-soft), box-shadow 200ms var(--ease-out-soft), transform 200ms var(--ease-out-soft), background-color 200ms var(--ease-out-soft);
+}
+@utility glass-2 {
+  position: relative;
+  background: var(--glass-fill-2);
+  border: 1px solid var(--glass-line);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  box-shadow: inset 0 1px 0 0 var(--glass-top);
+  transition: border-color 200ms var(--ease-out-soft), box-shadow 200ms var(--ease-out-soft), transform 200ms var(--ease-out-soft), background-color 200ms var(--ease-out-soft);
+}
+@utility glass-hover {
+  &:hover, &:focus-within {
+    border-color: var(--glass-line-hover);
+    box-shadow: inset 0 1px 0 0 var(--glass-top-hover), var(--glass-shadow);
+  }
+}
+@utility glass-hover-2 {
+  &:hover, &:focus-within {
+    border-color: var(--glass-line-hover);
+    box-shadow: inset 0 1px 0 0 var(--glass-top-hover);
+  }
+}
+/* a glass pill for chips/callouts/badges */
+@utility glass-pill {
+  position: relative;
+  border-radius: var(--radius-pill);
+  background: rgba(18, 26, 36, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.08), 0 12px 32px rgba(0, 0, 0, 0.35);
+}
+
+/* ---------- type ---------- */
+@utility eyebrow {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+@utility h2 {
+  font-size: 2.75rem;      /* 44 */
+  line-height: 1.08;
+  font-weight: 300;
+  letter-spacing: -0.02em;
+  @media (width >= 48rem) { font-size: 3rem; }  /* 48 */
+}
+@utility lead {
+  font-size: 17px;
+  line-height: 1.6;
+  color: var(--color-text-muted);
+}
+@utility section-pad {
+  padding-block: 4.5rem;
+  @media (width >= 48rem) { padding-block: 7rem; }  /* 112 */
+}

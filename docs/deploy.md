@@ -1,6 +1,23 @@
 # Deploying the site and running the server
 
-The site (`site/`) is static: Vite builds it, nginx serves it, and nothing on the server runs Node. This
+**The site lives in its own repository since 2026-09-06: [9Code-Labs/rovecode-site](https://github.com/9Code-Labs/rovecode-site)**
+(public, Berkay's call). The build and the deploy moved with it — `bun run deploy` over there, from
+`scripts/deploy.sh`, which is the old `scripts/deploy-site.sh` with the site root being the repository
+root. What stayed here is the CONTENT the site renders and the generators that turn it into data:
+
+```
+bun run publish:site         regenerate docs.json / market.json / facts.json → commit → push to the site repo
+bun run publish:site --dry-run          show what would change, put the checkout back
+SITE_REPO=/path/to/rovecode-site bun run publish:site
+```
+
+The boundary is one-way and worth stating: the documentation is `docs/*.md` here, the market is
+`src/market/catalogs/*.json`, `src/mcp/market-catalog.ts` and `plugins/` here, and the landing page's
+numbers are counted from this tree. `scripts/site-generators/` turns those into three JSON files and
+writes them into the site checkout, which builds without ever reading anything outside itself. Editing
+those JSON files by hand over there works until the next publish overwrites them.
+
+The site itself is static: Vite builds it, nginx serves it, and nothing on the server runs Node. This
 page is the reference for that setup — what the host holds, how a release lands, and how to roll one back.
 Every step described here is idempotent, so re-running any of it on a fresh host reproduces the same state.
 The current host was provisioned on 2026-09-04 and last rebooted the same evening (kernel 7.0.0-30);
@@ -34,26 +51,25 @@ them fails `nginx -t` with "directive is duplicate" (this cost the first bootstr
 ## Deploying
 
 ```
-bun run deploy:site            # build:all (docs + market) → tar over ssh → new release → flip current → curl 200
-scripts/deploy-site.sh --no-docs    # landing page only (bun run build), no /docs/ or /market/
-scripts/deploy-site.sh --no-build   # ship the existing site/dist
-scripts/deploy-site.sh --check      # after the flip, walk every URL in the live sitemap
-scripts/deploy-site.sh --rollback   # the previous release becomes current
-DEPLOY_HOST=root@1.2.3.4 scripts/deploy-site.sh   # another host
+bun run deploy                 # in the SITE repo: build:all → tar over ssh → new release → flip current → curl 200
+scripts/deploy.sh --no-docs    # landing page only (bun run build), no /docs/ or /market/
+scripts/deploy.sh --no-build   # ship the existing dist/
+scripts/deploy.sh --check      # after the flip, walk every URL in the live sitemap
+scripts/deploy.sh --rollback   # the previous release becomes current
+DEPLOY_HOST=root@1.2.3.4 scripts/deploy.sh   # another host
 ```
 
 The default build target is `build:all` (`VITE_DOCS=1 VITE_MARKET=1`) — `/docs/` and `/market/`, plus
 the markdown mirror, 735 pages in all. The flip is the last step, so a half-uploaded release is never
-served. Verification is a GET with a 200 check; `--check` then runs `site/scripts/live-check.mjs` over
+served. Verification is a GET with a 200 check; `--check` then runs `scripts/live-check.mjs` (in the site repo) over
 every URL in the live sitemap (status, lang, canonical, hreflang, console, axe) and **rolls back only
 after two failed attempts**, because a headless Chromium that crashes on one page once is not evidence
 that the release is bad — it rolled a good release back before that second attempt existed.
 
-**The manual deploy and the CI deploy do not ship the same thing.** `deploy-site.sh` defaults to
-`build:all`; `.github/workflows/site.yml` still runs `bun run build:docs`, so a CI-driven deploy would
-publish the site without `/market/`. Whichever runs last wins. Nothing has drifted in practice only
-because Actions has not run at all on this repository (billing, see below) — that is luck, not design,
-and the workflow needs the same target before Actions is turned back on.
+**The manual deploy and the CI deploy used to ship different things.** the two-deploy-paths problem is gone with the split: there is one build
+script and one deploy script, both in the site repository. `.github/workflows/site.yml` was deleted from
+this repo rather than fixed — a workflow that builds a directory this repo no longer has is worse than
+no workflow. If CI deploys are wanted again, the workflow belongs in the site repo, where the build is.
 
 A full sweep of 735 pages is memory-hungry: it was killed by the OOM killer on a loaded workstation
 mid-run, after the upload and the flip had already succeeded. `--shard i/n` and `--only <substring>`

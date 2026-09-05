@@ -170,7 +170,10 @@ test.if(haveGit)("real repo: every async twin answers exactly what its sync form
       expect(await gitBranchAsync(join(outside, "definitely", "missing"))).toBeNull();
     } finally { rmSync(outside, { recursive: true, force: true }); }
   } finally { rmSync(dir, { recursive: true, force: true }); }
-});
+  // ~40 real git child processes, 2.4 s on an idle machine. bun's default per-test budget is 5 s, so under
+  // a full suite this failed on the clock while every assertion in it was fine. The work is genuinely this
+  // large — the alternative to the budget is a smaller test, not a faster one.
+}, 30_000);
 
 test.if(haveGit)("real git, not a repo / missing dir → null for all three (real spawnGit, nothing thrown)", () => {
   const dir = mkdtempSync(join(tmpdir(), "rovecode-sx-norepo-"));

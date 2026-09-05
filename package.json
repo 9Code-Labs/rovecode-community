@@ -34,7 +34,7 @@
     "typecheck": "tsc --noEmit",
     "check": "tsc --noEmit && bun test",
     "smoke": "bun src/cli/main.ts smoke-tui --sextant",
-    "deploy:site": "bash scripts/deploy-site.sh"
+    "publish:site": "bash scripts/publish-site-data.sh"
   },
   "dependencies": {
     "@ast-grep/napi": "^0.45.3",

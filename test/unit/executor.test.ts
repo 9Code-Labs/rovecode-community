@@ -409,19 +409,35 @@ const taggedSleeps = (tag: string) => tagged("sleep.exe", tag);
 async function killTagged(tag: string): Promise<void> {
   for (const pid of await taggedSleeps(tag)) await Bun.spawn(["taskkill", "/F", "/PID", String(pid)], { stdout: "ignore", stderr: "ignore" }).exited;
 }
-/** poll (≤ms) until no tagged sleep is alive; returns the survivors */
-async function survivors(tag: string, ms: number): Promise<number[]> {
-  const deadline = Date.now() + ms;
-  let alive = await taggedSleeps(tag);
-  while (alive.length > 0 && Date.now() < deadline) { await wait(150); alive = await taggedSleeps(tag); }
-  return alive;
+/** Wait inside ONE powershell instead of spawning one per sample.
+ *
+ *  Every sample costs a powershell start: measured on this machine, 1.5–3.7 s each, on an idle machine.
+ *  A JS poll loop around it therefore spent most of a test's 20 s budget asking the question rather than
+ *  waiting for the answer, and under a full suite these tests timed out — not because a process refused
+ *  to die, but because the instrument was slower than the thing it measured. The loop moves into the
+ *  query: one start, then a sample every 100 ms until the condition holds or the deadline passes. The
+ *  pids are printed either way, so a timeout still reports the survivors. */
+async function awaitTagged(name: string, tag: string, ms: number, want: "appears" | "gone"): Promise<number[]> {
+  const cond = want === "appears" ? "$p.Count -gt 0" : "$p.Count -eq 0";
+  const script = [
+    `$deadline = (Get-Date).AddMilliseconds(${ms})`,
+    "while ($true) {",
+    `  $p = @((Get-CimInstance Win32_Process -Filter "Name='${name}' AND CommandLine LIKE '%${tag}%'").ProcessId)`,
+    `  if (${cond}) { $p -join ' '; exit 0 }`,
+    "  if ((Get-Date) -ge $deadline) { $p -join ' '; exit 1 }",
+    "  Start-Sleep -Milliseconds 100",
+    "}",
+  ].join("\n");
+  const ps = Bun.spawn(["powershell", "-NoProfile", "-Command", script], { stdout: "pipe", stderr: "pipe" });
+  const text = await new Response(ps.stdout).text();
+  await ps.exited;
+  return text.split(/\s+/).map((x) => x.trim()).filter(Boolean).map(Number);
 }
+/** the pids still alive after waiting (≤ms) for every tagged sleep to go */
+const survivors = (tag: string, ms: number) => awaitTagged("sleep.exe", tag, ms, "gone");
 /** the child must be RUNNING before the abort — a kill landing before the fork would pass vacuously */
 async function untilRunning(tag: string): Promise<void> {
-  const t0 = Date.now();
-  let n = 0;
-  while ((n = (await taggedSleeps(tag)).length) === 0 && Date.now() - t0 < 8000) await wait(50);
-  expect(n).toBeGreaterThan(0);
+  expect((await awaitTagged("sleep.exe", tag, 8000, "appears")).length).toBeGreaterThan(0);
 }
 const DEADLINE = Symbol("deadline");
 async function within<T>(p: Promise<T>, ms: number): Promise<T | typeof DEADLINE> {
@@ -462,7 +478,7 @@ for (const [shape, mk] of treeShapes) {
       await killTagged(tag);
       rmSync(dir, { recursive: true, force: true });
     }
-  }, 20_000);
+  }, 40_000);
 }
 
 test.skipIf(!isWin)("fail-safe without job objects: the abort still SETTLES inside the grace — bytes so far + truncation marker, code 143, treeKill taskkill-only", async () => {
@@ -488,7 +504,7 @@ test.skipIf(!isWin)("fail-safe without job objects: the abort still SETTLES insi
     overrideWinJobs(null);
     await killTagged(tag); // the orphan the fallback cannot reach — the very leak the job object closes
   }
-}, 20_000);
+}, 40_000);
 
 test.skipIf(!isWin)("a command that completes on its own keeps a child it deliberately left behind: the job is released, not killed, at a normal settle", async () => {
   const tag = sleepTag();
@@ -501,7 +517,7 @@ test.skipIf(!isWin)("a command that completes on its own keeps a child it delibe
   } finally {
     await killTagged(tag);
   }
-}, 20_000);
+}, 40_000);
 
 test.skipIf(!isWin)("Windows abort AFTER the launcher exited (`sleep N & echo started`, the child still holds stdout): the job kill reaches the child, the runner settles ≤1s with code 143, the daemon is gone ≤3s", async () => {
   const tag = sleepTag();
@@ -512,9 +528,7 @@ test.skipIf(!isWin)("Windows abort AFTER the launcher exited (`sleep N & echo st
     // the launcher (`bash -c "sleep <tag> & …"`: its -c string carries the tag, as does
     // its fork stub) must be GONE before the abort — while it lives this is the tree
     // case above, and the mutation below would pass vacuously
-    const t0 = Date.now();
-    while ((await tagged("bash.exe", tag)).length > 0 && Date.now() - t0 < 8000) await wait(50);
-    expect(await tagged("bash.exe", tag)).toEqual([]);
+    expect(await awaitTagged("bash.exe", tag, 8000, "gone")).toEqual([]);
     const tAbort = Date.now();
     ac.abort();
     // MUTATION: `if (proc.exitCode !== null) return;` at the top of onAbort → the abort is
@@ -530,7 +544,7 @@ test.skipIf(!isWin)("Windows abort AFTER the launcher exited (`sleep N & echo st
   } finally {
     await killTagged(tag);
   }
-}, 20_000);
+}, 40_000);
 
 test("abort grace pinned at 500ms (ref'd timer); truncation marker text pinned", () => {
   expect(ABORT_GRACE_MS).toBe(500);
