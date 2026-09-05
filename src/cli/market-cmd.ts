@@ -17,6 +17,8 @@ import { itemLine, qualify, type MarketItem, type MarketKind, type MarketRow, ty
 import { allItems, searchMarket, type RegistryDeps } from "../market/registry.ts";
 import { resolveTarget } from "../market/resolve.ts";
 import { installedState, planInstall, removeItem, runInstall, withInstalled, type PlanOptions, type RunDeps } from "../market/install.ts";
+import type { PrereqEnv } from "../market/prereq.ts";
+import { disposeCloneCache } from "../plugins/install.ts";
 import { createInterface } from "node:readline";
 
 export interface MarketCliDeps {
@@ -34,6 +36,8 @@ export interface MarketCliDeps {
   plain?: (prompt: string) => Promise<string>;
   /** default process.stdin.isTTY === true; a pipe is never consumed by a prompt */
   tty?: boolean;
+  /** PATH lookup for the plan's prerequisite row — tests inject a fixed environment */
+  prereqEnv?: PrereqEnv;
 }
 
 export const MARKET_USAGE = [
@@ -149,10 +153,13 @@ async function installOne(item: MarketItem, opts: PlanOptions, ctx: {
 }
 
 export async function cmdMarket(args: string[], deps: MarketCliDeps = {}): Promise<number> {
-  // one guard for the whole command: a filesystem error (EPERM/EBUSY on Windows, a full disk) is a
-  // sentence and an exit code, not a stack trace. The TUI path already wraps its calls; stdout did not.
-  try { return await runMarket(args, deps); }
+  // The clone cache lives exactly as long as ONE command: `update --all` out of a monorepo clones it once
+  // instead of once per item. The cache OWNS every directory in it (plugins/install.ts), so disposing it
+  // here is not tidiness — without this finally the clones outlive the process in the temp directory.
+  const cloneCache = new Map<string, string>();
+  try { return await runMarket(args, { ...deps, run: { ...deps.run, cloneCache } }); }
   catch (e) { (deps.err ?? ((l: string) => console.error(l)))(`market: ${e instanceof Error ? e.message : String(e)}`); return 1; }
+  finally { disposeCloneCache(cloneCache); }
 }
 
 async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
@@ -278,7 +285,7 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
     }
     for (const row of targets) {
       // an item is updated in the scope it is installed in, not the flag's default
-      const opts: PlanOptions = { scope: row.installed!.scope, cwd, home };
+      const opts: PlanOptions = { scope: row.installed!.scope, cwd, home, ...(deps.prereqEnv !== undefined ? { prereqEnv: deps.prereqEnv } : {}) };
       const code = await installOne(row, opts, ctx);
       if (code !== 0) worst = code;
     }
@@ -363,7 +370,8 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
     const pick = pickRaw === undefined ? undefined : Number(pickRaw);
     if (pick !== undefined && !Number.isInteger(pick)) { err(`--pick takes a number`); return 2; }
     const asName = flag("--as");
-    const opts = { scope, cwd, home, ...(pick !== undefined ? { pick } : {}), ...(asName !== undefined ? { as: asName } : {}) };
+    const opts = { scope, cwd, home, ...(pick !== undefined ? { pick } : {}), ...(asName !== undefined ? { as: asName } : {}),
+      ...(deps.prereqEnv !== undefined ? { prereqEnv: deps.prereqEnv } : {}) };
     return installOne(r.item, opts, {
       out, err, json, yes: args.includes("--yes"), tty: deps.tty ?? process.stdin.isTTY === true,
       secret: deps.secret ?? readSecret, plain: deps.plain ?? defaultPlain, verb: "install",

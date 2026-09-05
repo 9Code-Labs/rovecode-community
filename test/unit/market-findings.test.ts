@@ -39,8 +39,8 @@ function scratch(): { cwd: string; home: string; deps: RegistryDeps; cleanup: ()
   return { cwd, home, deps, cleanup: () => { rmSync(cwd, { recursive: true, force: true }); rmSync(home, { recursive: true, force: true }); } };
 }
 const find = (items: MarketItem[], id: string, kind: string): MarketItem => items.find((i) => i.id === id && i.kind === kind)!;
-const pluginClone = async (_cmd: string[], cwd: string): Promise<{ code: number; stderr: string }> => {
-  const dir = join(cwd, "src");
+const pluginClone = async (cmd: string[], cwd: string): Promise<{ code: number; stderr: string }> => {
+  const dir = join(cwd, cmd.at(-1) ?? ".");   // follow the command: addPlugin clones into "." now
   mkdirSync(dir, { recursive: true });
   // an OLDER version than the catalog's 2.0.0, so `update` sees it as stale
   writeFileSync(join(dir, "plugin.json"), JSON.stringify({ api: 1, name: "linter", version: "1.0.0", description: "Lints." }));

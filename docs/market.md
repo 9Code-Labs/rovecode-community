@@ -210,6 +210,116 @@ afterwards and the gate asks again (`rovecode mcp trust`). A project row that is
 is shown as `[installed · NOT approved on this machine]`, which is the honest state — it is on disk and it
 is not loading.
 
+## Maintaining the catalogs
+
+Everything in `src/market/catalogs/` is generated. Nothing there should ever be hand-edited — `--check`
+compares byte for byte, so an edit shows up as a failing build rather than as a surprise months later.
+
+| generator | reads | network | writes |
+|---|---|---|---|
+| `scripts/build-skill-catalog.mjs` | `anthropics/skills` — the tree, each `SKILL.md`, each `LICENSE.txt`, the publisher's `marketplace.json` | yes, ~40 requests | `skills.json` |
+| `scripts/build-plugin-catalog.mjs` | `plugins/*/plugin.json` and `plugins/*/README.md` **in this checkout** | no | `plugins.json` |
+| `scripts/build-mcp-docs.mjs` | the keys in `src/mcp/market-catalog.ts`, then each entry's README upstream | yes, ~25 requests | `mcp-docs.json` |
+
+```
+bun scripts/build-skill-catalog.mjs          # regenerate
+bun scripts/build-skill-catalog.mjs --check  # exit 1 if it would change (what CI runs)
+```
+
+`build-mcp-docs.mjs` reads the curated shelf by **parsing** it, not importing it: `market-catalog.ts` pulls
+types from the rest of the tree, and a build script that had to typecheck the application to read sixteen
+strings would be the wrong shape. It never writes to that file — the shelf stays a human document.
+
+### Where each kind's documentation comes from
+
+Skills carry their `SKILL.md` body, which the generator already has in hand for the frontmatter, so
+documentation costs the skill build no extra requests. Plugins carry `plugins/<name>/README.md` from this
+repository, and a plugin without one honestly has no documentation — the manifest's one-line description is
+already the row's description, and repeating it under a "documentation" heading would dress an empty shelf
+up as a full one. MCP entries carry their upstream README, located through the repository's own tree rather
+than by assuming a folder name (our key is `sequential-thinking`; the folder upstream is
+`sequentialthinking`). One curated entry, `deepwiki`, has no repository at all — only a homepage — so it has
+no documentation, and that is the correct answer rather than a gap to fill.
+
+### The four refusals
+
+A generator would rather write nothing than write something diminished. Each refusal leaves the shipped file
+exactly as it is, because a catalog that is a day stale is a small problem and one that has quietly lost
+half its shelf is not.
+
+1. **Produced nothing at all.**
+2. **Fewer rows than ship today** — the vanishing ids are named.
+3. **A row that has documentation today would come back without it** — the ids are named. This one is worth
+   understanding: the row count does not move, every entry is still present, and the file is structurally
+   perfect. Rule 2 would wave it through, and one rate-limited run would empty every document in the market.
+4. **Could not reach the source at all** — the run fails before any of the above is even asked.
+
+Behind all four is one distinction: a source that **answers** is not the same as a source we **could not
+reach**. A 404 is an answer and may shrink the catalog. A network error, a 403, a 5xx or a rejected token
+means we do not know what is upstream, and not knowing is never grounds for deleting anything.
+
+`--allow-shrink` overrides rules 2 and 3, and nothing else — **not rule 1**, because a run that produced
+nothing is a broken run rather than a shelf that emptied, and the flag exists to say "yes, that id really
+went", not "write whatever you have over a good catalog". It is legitimate exactly when you have opened the
+upstream repository in a browser and confirmed the loss is real: a skill was withdrawn, a README was
+deleted. It is not a way to get a red build to go green.
+
+### GITHUB_TOKEN
+
+What it is and why a bad one can never prune the catalog is above, under *Where the catalogs come from*.
+The operational part: you will rarely want one locally, and CI always sets it, because a runner's IP is
+shared with the whole internet and 40 requests against a 60-per-hour anonymous budget is choosing a flaky
+job. The workflow grants it `contents: read` and nothing else.
+
+### Which check runs where, and why they are split
+
+| job | when | red means |
+|---|---|---|
+| `ci.yml` — `build-plugin-catalog.mjs --check` | every push | a broken commit: a manifest or README changed without regenerating |
+| `ci.yml` — the docs cleaner's shape fuzzing (fixed seed, 200 rounds, inside `bun test`) | every push | a regression this commit introduced |
+| `catalogs.yml` — `build-skill-catalog.mjs --check`, `build-mcp-docs.mjs --check` | weekly + on demand | go look: upstream moved, or the run could not reach it |
+| `catalogs.yml` — the same fuzzing with a **fresh seed and 40 000 rounds** | weekly | a shape we had never generated broke it: go look |
+
+The split is the whole point, and it is the same judgement twice. A check that reaches the network can go
+red for reasons that have nothing to do with the commit in front of it; hanging pull requests off one only
+teaches people that a red mark is noise. So the deterministic, local checks guard the gate, and the ones
+that can fail for outside reasons run on a schedule where a red result is an invitation to look rather than
+an accusation.
+
+The fuzzing follows the same rule. On every push it runs with a fixed seed — a net that fails for the commit
+that broke it and for nothing else. Weekly it runs as a search: a new seed each time, so it explores shapes
+it has never tried. Both knobs are environment variables, and any failure prints the seed:
+
+```
+ROVECODE_FUZZ_SEED=12345 ROVECODE_FUZZ_ROUNDS=40000 bun test ./test/unit/market-docs.test.ts
+```
+
+A randomised test's one real cost is that a failure can be hard to reproduce; printing the seed pays it.
+
+### When you see red
+
+Read the message before doing anything — these cases want different responses, and one of them has no
+override at all.
+
+| the message says | what happened | what to do |
+|---|---|---|
+| `cannot reach the source` / `HTTP 403 (rate limited?)` / `HTTP 5xx` | we could not look. Nothing was written. | Re-run the job. If it keeps failing, check whether the host is up before touching anything. |
+| `catalog is out of date` / `sidecar is out of date` | upstream really changed. | Regenerate, read the diff, commit it: `bun scripts/build-skill-catalog.mjs` |
+| `refusing to write … missing: <id>` / `… lost docs: <id>` | this run would remove something that ships today. | Open the named item upstream and confirm. If it is genuinely gone, re-run with `--allow-shrink`. If it is still there, this was a bad fetch — run it again. |
+| `refusing to write … produced no items at all` | the run came back empty. | Nothing to confirm and **no `--allow-shrink` for this one** — an empty result is a broken run, never a shelf that legitimately emptied. Check the network and the source, then run it again. |
+| `HTTP 401 (GITHUB_TOKEN rejected…)` | the token is wrong or expired. | Fix or unset it; unset falls back to anonymous, which works at a lower rate limit. |
+
+Nothing in this table needs a hurry. Every one of these outcomes leaves the catalogs that ship exactly as
+they were.
+
+### Adding a source
+
+For a skill repository, add it to `SOURCES` in `build-skill-catalog.mjs` — the publisher must be nameable
+and the layout must be the standard `<root>/<name>/SKILL.md`. For a plugin, add its git URL and subfolder to
+`SOURCES` in `build-plugin-catalog.mjs`; the manifest it publishes fills the row, and an unreadable manifest
+drops the entry with a warning rather than guessing. In both cases run the generator, read the diff, and
+commit the catalog with the change — a catalog and its generator should never be committed apart.
+
 ## Files
 
 - `src/market/types.ts` — the item, the plan, the result unions, the caps. No I/O, so importing it is free.
@@ -217,6 +327,18 @@ is not loading.
 - `src/market/resolve.ts` — one argument → one item, or the candidates.
 - `src/market/install.ts` — `planInstall` (writes nothing) and `runInstall` (the only writer); delegates to
   `src/mcp/market-install.ts` and `src/plugins/install.ts`, and writes skills itself.
+- `src/market/prereq.ts` — is the program a launch line names on PATH? Lookup only: never runs it, never
+  reads a version, never blocks the install.
+- `src/market/catalogs/` — the generated data: `skills.json`, `plugins.json`, and the `mcp-docs.json`
+  sidecar. Read at search time, not imported, so their size does not reach startup.
+- `scripts/build-skill-catalog.mjs`, `scripts/build-plugin-catalog.mjs`, `scripts/build-mcp-docs.mjs` —
+  the three generators. Each takes `--check`; see Maintaining the catalogs above.
+- `scripts/lib/docs.mjs` — the one copy of the documentation cleaning pass all three generators share:
+  HTML stripped, links absolutised, titles re-emitted canonically, bodies capped on a line boundary.
+- `test/unit/market-docs.test.ts` — that cleaning pass, written from the attacker's side, plus the shape
+  fuzzing (`ROVECODE_FUZZ_SEED`, `ROVECODE_FUZZ_ROUNDS`).
+- `test/unit/market-prereq.test.ts` — the PATH lookup with PATH, PATHEXT and the platform all injected, so
+  it says nothing about the machine it runs on.
 - `src/cli/market-cmd.ts` — the shell face; `src/cli/main.ts` wires `case "market"` with a lazy import, so
   none of this is loaded unless you type it.
 - `test/unit/market.test.ts` — the caps, the escapes, the ambiguity, the plan-before-write rule, offline.

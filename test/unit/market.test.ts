@@ -295,8 +295,8 @@ test("a plugin install runs the real installer through an injected clone — no 
 
     // a clone that produces a real plugin folder
     const outcome = await runInstall(plan, {}, opts, {
-      spawn: async (_cmd, cwd) => {
-        const dir = join(cwd, "src");
+      spawn: async (cmd, cwd) => {
+        const dir = join(cwd, cmd.at(-1) ?? ".");   // follow the command: addPlugin clones into "." now
         mkdirSync(dir, { recursive: true });
         writeFileSync(join(dir, "plugin.json"), JSON.stringify({ api: 1, name: "linter", version: "2.0.0", description: "Lints on save." }));
         return { code: 0, stderr: "" };

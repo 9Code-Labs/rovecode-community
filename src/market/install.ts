@@ -20,8 +20,9 @@ import { dirname, join, sep, resolve as resolvePath } from "node:path";
 import { describePlan, fillPlan, namesWritten, planInstall as planMcp, removeServer, writeServer, type InstallPlan as McpPlan } from "../mcp/market-install.ts";
 import { mcpConfigFiles, parseConfigFile } from "../mcp/config.ts";
 import { mcpTrustStatus } from "../mcp/trust.ts";
-import { addPlugin, removePlugin, scopeRoot, type Spawn } from "../plugins/install.ts";
+import { addPlugin, cloneKey, removePlugin, scopeRoot, type Spawn } from "../plugins/install.ts";
 import { discoverPlugins } from "../plugins/discover.ts";
+import { prereqLine, prereqOf, type PrereqEnv } from "./prereq.ts";
 import type { InstalledState, InstallOutcome, InstallPlanView, MarketItem, MarketRow, MarketScope } from "./types.ts";
 
 export interface PlanOptions {
@@ -32,6 +33,8 @@ export interface PlanOptions {
   pick?: number;
   /** override the installed name */
   as?: string;
+  /** PATH lookup for the prerequisite line — tests inject; production reads the real environment */
+  prereqEnv?: PrereqEnv;
 }
 
 export interface RunDeps {
@@ -43,6 +46,11 @@ export interface RunDeps {
    *  cloning. `--offline` used to stop only the registry lookup, so `install --offline` still went to the
    *  network and succeeded — a flag that says "skips the network entirely" has to mean it. */
   offline?: boolean;
+  /** Clones made during THIS command, shared with plugins/install.ts (same map, same `cloneKey`). Three
+   *  plugins out of one monorepo become one clone. The CACHE owns every directory in it, so whoever
+   *  created the map must call `disposeCloneCache` in a finally — otherwise the clones outlive the
+   *  command in the temp directory. */
+  cloneCache?: Map<string, string>;
 }
 
 /** The names an item may be installed under. `--as` is human input reaching a path join, so it is checked
@@ -51,6 +59,34 @@ export interface RunDeps {
 const INSTALL_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
 export function validInstallName(name: string): boolean {
   return INSTALL_NAME.test(name) && name !== "." && name !== "..";
+}
+
+/** The prerequisite row, or nothing. Deliberately `requires`, not `needs`: `needs` was already spoken for
+ *  by "this install needs an argument from YOU", and one word doing two jobs in the same paragraph is how a
+ *  plan stops being read. `requires` is about the machine, `fill in` is about the human.
+ *
+ *  Placed right under `runs`/`connects`/`source`, because both answer the same question — what is going to
+ *  be executed or fetched — while `writes` and `fill in` are about what happens to the disk. It never
+ *  blocks: some people install the tool next, and a warning is not a gate. */
+function requiresLine(item: MarketItem, opts: PlanOptions): string[] {
+  const line = prereqLine(prereqOf(item, opts.prereqEnv));
+  return line === undefined ? [] : [`  requires   ${line}`];
+}
+
+/** describePlan's own pending rows say the same thing the market's `fill in` says, one line later and
+ *  without the file path. Drop them here rather than change describePlan, which `rovecode mcp add` still
+ *  uses and where there is no `fill in` to duplicate. */
+const PENDING_ROW = /^ {2}needs {6}/;
+
+/** put the requires row directly after the line that says what will run or be fetched */
+function withRequires(lines: string[], item: MarketItem, opts: PlanOptions): string[] {
+  const requires = requiresLine(item, opts);
+  if (requires.length === 0) return lines;
+  // `runs`/`connects` first when there is one — that is the line the requirement belongs to. `source` is
+  // only the fallback, for a skill or plugin whose plan has no launch line at all.
+  const at = lines.findIndex((l) => /^ {2}(runs|connects) {3,}/.test(l));
+  const anchor = at >= 0 ? at : lines.findIndex((l) => /^ {2}source {3,}/.test(l));
+  return anchor < 0 ? [...lines, ...requires] : [...lines.slice(0, anchor + 1), ...requires, ...lines.slice(anchor + 1)];
 }
 
 /** where a skill of this id lives under a scope */
@@ -78,7 +114,10 @@ export function planInstall(item: MarketItem, opts: PlanOptions): InstallPlanVie
     if ("error" in inner) return inner;
     const view: InstallPlanView = {
       item, target: inner.file, scope: opts.scope,
-      preview: [...describePlan(inner, opts.scope === "project" ? "env" : "prompt"), ...(item.planNote ?? [])],
+      preview: [
+        ...withRequires(describePlan(inner, opts.scope === "project" ? "env" : "prompt").filter((l) => !PENDING_ROW.test(l)), item, opts),
+        ...(item.planNote ?? []),
+      ],
       asks: inner.asks.map((a) => ({ ...a })), pending: [...inner.pending],
     };
     const existing = existingMcpNames(opts.cwd, opts.home, opts.scope);
@@ -106,7 +145,7 @@ export function planInstall(item: MarketItem, opts: PlanOptions): InstallPlanVie
       `  a plugin can add tools, hooks, commands, skills and MCP servers. Install one only from a publisher you trust.`,
       ...(item.planNote ?? []),
     ];
-    return { item, target: dir, scope: opts.scope, preview, asks: item.env.map((e) => ({ ...e })), pending: [],
+    return { item, target: dir, scope: opts.scope, preview: withRequires(preview, item, opts), asks: item.env.map((e) => ({ ...e })), pending: [],
       ...(existsSync(dir) ? { replaces: dir } : {}) };
   }
 
@@ -131,7 +170,7 @@ export function planInstall(item: MarketItem, opts: PlanOptions): InstallPlanVie
     ...(fileList.length > 8 ? [`             … and ${fileList.length - 8} more`] : []),
     ...(item.planNote ?? []),
   ];
-  return { item, target: dir, scope: opts.scope, preview, asks: item.env.map((e) => ({ ...e })), pending: [],
+  return { item, target: dir, scope: opts.scope, preview: withRequires(preview, item, opts), asks: item.env.map((e) => ({ ...e })), pending: [],
     ...(existsSync(dir) ? { replaces: dir } : {}) };
 }
 
@@ -168,6 +207,7 @@ export async function runInstall(plan: InstallPlanView, answers: Record<string, 
         cwd: opts.cwd, home: opts.home, scope: opts.scope,
         ...(deps.force === true ? { force: true } : {}), ...(deps.spawn ? { spawn: deps.spawn } : {}),
         ...(install.subfolder !== undefined ? { subfolder: install.subfolder } : {}),
+        ...(deps.cloneCache !== undefined ? { cloneCache: deps.cloneCache } : {}),
       });
       if (!r.ok) return { ok: false, error: r.error };
       return {
@@ -229,23 +269,42 @@ function isLink(p: string): boolean {
 }
 
 async function cloneSkill(source: { git: string; subfolder?: string }, dir: string, deps: RunDeps): Promise<{ ok: true } | { ok: false; error: string }> {
-  const tmp = mkdtempSync(join(tmpdir(), "rovecode-skill-"));
+  const spawn: Spawn = deps.spawn ?? (async (cmd, cwd) => {
+    const p = Bun.spawn(cmd, { cwd, stdout: "ignore", stderr: "pipe", stdin: "ignore" });
+    return { code: await p.exited, stderr: await new Response(p.stderr).text() };
+  });
+
+  // The same key and the same map as plugins/install.ts: a skill and a plugin out of one repository, or
+  // three skills out of one, are cloned once. Clone straight INTO the temp directory (`… <url> .`) so the
+  // cached value is the clone itself — a cache disposer should never have to take dirname() of what it was
+  // given and remove a directory nobody handed it.
+  const key = cloneKey(source.git);
+  const cached = deps.cloneCache?.get(key);
+  let owned: string | null = null;
+  let clone: string;
+  if (cached !== undefined) {
+    clone = cached;
+  } else {
+    owned = mkdtempSync(join(tmpdir(), "rovecode-skill-"));
+    const r = await spawn(["git", "clone", "--depth", "1", "--quiet", source.git, "."], owned);
+    if (r.code !== 0) {
+      rmSync(owned, { recursive: true, force: true });
+      return { ok: false, error: `git clone failed (exit ${r.code})${r.stderr.trim() ? `: ${r.stderr.trim().split("\n").at(-1)}` : ""}` };
+    }
+    clone = owned;
+  }
+
   try {
-    const spawn: Spawn = deps.spawn ?? (async (cmd, cwd) => {
-      const p = Bun.spawn(cmd, { cwd, stdout: "ignore", stderr: "pipe", stdin: "ignore" });
-      return { code: await p.exited, stderr: await new Response(p.stderr).text() };
-    });
-    const r = await spawn(["git", "clone", "--depth", "1", "--quiet", source.git, "src"], tmp);
-    if (r.code !== 0) return { ok: false, error: `git clone failed (exit ${r.code})${r.stderr.trim() ? `: ${r.stderr.trim().split("\n").at(-1)}` : ""}` };
-    const from = source.subfolder ? join(tmp, "src", source.subfolder) : join(tmp, "src");
-    if (!resolvePath(from).startsWith(resolvePath(join(tmp, "src")))) return { ok: false, error: `subfolder escapes the clone` };
+    const from = source.subfolder ? join(clone, source.subfolder) : clone;
+    if (!resolvePath(from).startsWith(resolvePath(clone))) return { ok: false, error: `subfolder escapes the clone` };
     if (!existsSync(join(from, "SKILL.md"))) return { ok: false, error: `no SKILL.md in ${source.subfolder ?? "the repository root"} — a skill is a folder with a SKILL.md` };
     if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
     mkdirSync(dirname(dir), { recursive: true });
-    cpSync(from, dir, { recursive: true, filter: (p) => !/(?:^|[\\/])\.git(?:[\\/]|$)/.test(p) });
+    cpSync(from, dir, { recursive: true, filter: (p) => !/(?:^|[\/])\.git(?:[\/]|$)/.test(p) && !isLink(p) });
+    if (owned !== null && deps.cloneCache !== undefined) { deps.cloneCache.set(key, owned); owned = null; }   // ownership moves to the cache
     return { ok: true };
   } finally {
-    rmSync(tmp, { recursive: true, force: true });
+    if (owned !== null) rmSync(owned, { recursive: true, force: true });
   }
 }
 

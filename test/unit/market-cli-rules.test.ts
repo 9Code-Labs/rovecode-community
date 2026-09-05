@@ -6,17 +6,19 @@
  *  Hermetic: scratch home and cwd, fixture catalogs, a spawn that FAILS the test if it is ever called. */
 
 import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MarketEntry } from "../../src/mcp/market.ts";
 import type { RegistryDeps } from "../../src/market/registry.ts";
 import { skillDir } from "../../src/market/install.ts";
 import { cmdMarket } from "../../src/cli/market-cmd.ts";
+import type { PrereqEnv } from "../../src/market/prereq.ts";
 
 const MCP_CATALOG: readonly MarketEntry[] = [
   { key: "filesystem", title: "Filesystem", source: "curated", publisher: "modelcontextprotocol", description: "Files.",
-    installs: [{ kind: "stdio", runtime: "npx", command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem"], env: [], pending: [] }] },
+    installs: [{ kind: "stdio", runtime: "npx", command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem"], env: [],
+      pending: ["<directory the server may touch>"] }] },
 ];
 const SKILLS = { version: 1, items: [
   { id: "local-skill", title: "Local skill", publisher: "rovecode", description: "Ships in the catalog.",
@@ -134,5 +136,101 @@ test("`search --json` reports 'nothing found' in its exit code, like the text fo
     out.length = 0;
     expect(await cmdMarket(["search", "local", "--json"], deps)).toBe(0);
     expect(JSON.parse(out.join("\n")).items.length).toBeGreaterThan(0);
+  } finally { s.cleanup(); }
+});
+
+test("one command, one clone: three items from the same repository are fetched once, and the clones do not outlive the command", async () => {
+  const s = scratch();
+  try {
+    // a monorepo publishing three plugins; each install used to clone the whole thing again
+    const mono = { version: 1, items: ["alpha", "beta", "gamma"].map((id) => ({
+      id, title: id, publisher: "acme", version: "2.0.0", description: `${id} plugin`,
+      install: { source: "https://example.com/mono.git", git: true, subfolder: `plugins/${id}` },
+    })) };
+    writeFileSync(join(s.home, "plugins.json"), JSON.stringify(mono));
+
+    const clonedInto: string[] = [];
+    const spawn = async (cmd: string[], cwd: string): Promise<{ code: number; stderr: string }> => {
+      clonedInto.push(cwd);
+      for (const id of ["alpha", "beta", "gamma"]) {
+        const dir = join(cwd, cmd.at(-1) ?? ".", "plugins", id);
+        mkdirSync(dir, { recursive: true });
+        // older than the catalog's 2.0.0, so `update` has something to do
+        writeFileSync(join(dir, "plugin.json"), JSON.stringify({ api: 1, name: id, version: "1.0.0", description: `${id} plugin` }));
+      }
+      return { code: 0, stderr: "" };
+    };
+    const out: string[] = [];
+    const deps = { cwd: s.cwd, home: s.home, registry: s.registry, run: { spawn }, out: (l: string) => out.push(l), err: () => {}, tty: false };
+
+    // separate commands each pay for their own clone — the cache is per command, on purpose
+    for (const id of ["alpha", "beta", "gamma"]) expect(await cmdMarket(["install", `plugin:${id}`, "--yes"], deps)).toBe(0);
+    expect(clonedInto.length).toBe(3);
+    for (const id of ["alpha", "beta", "gamma"]) expect(existsSync(join(s.home, "plugins", id, "plugin.json"))).toBe(true);
+
+    // ONE command touching all three clones once
+    clonedInto.length = 0;
+    expect(await cmdMarket(["update", "--all", "--yes", "--yes-plugins"], deps)).toBe(0);
+    expect(clonedInto.length).toBe(1);
+    for (const id of ["alpha", "beta", "gamma"]) expect(existsSync(join(s.home, "plugins", id, "plugin.json"))).toBe(true);
+
+    // the cache owns its clones, so the command has to have disposed of them
+    for (const dir of clonedInto) expect(existsSync(dir)).toBe(false);
+  } finally { s.cleanup(); }
+});
+
+test("the plan says what has to be on PATH, before the yes rather than as a clone failure after it", async () => {
+  const s = scratch();
+  try {
+    const out: string[] = [];
+    // an injected environment, never this developer's PATH: a prerequisite test that reads the real
+    // machine tells you about the machine, not about the code
+    const withoutGit: PrereqEnv = { PATH: "/nowhere", windows: false, exists: () => false };
+    const withGit: PrereqEnv = { PATH: "/usr/bin", windows: false, exists: (p: string) => p === "/usr/bin/git" };
+
+    const deps = { cwd: s.cwd, home: s.home, registry: s.registry, out: (l: string) => out.push(l), err: () => {}, tty: false };
+    expect(await cmdMarket(["install", "skill:remote-skill"], { ...deps, prereqEnv: withoutGit })).toBe(1);
+    expect(out.join("\n")).toContain("requires   git — not on PATH");
+
+    out.length = 0;
+    expect(await cmdMarket(["install", "skill:remote-skill"], { ...deps, prereqEnv: withGit })).toBe(1);
+    expect(out.join("\n")).toContain("requires   git ✓");
+
+    // a catalog skill that ships its files needs nothing, so the row is absent rather than blank
+    out.length = 0;
+    expect(await cmdMarket(["install", "skill:local-skill"], { ...deps, prereqEnv: withoutGit })).toBe(1);
+    expect(out.join("\n")).not.toContain("requires");
+
+    // and it is a warning, never a gate: the install still goes through with the tool missing
+    out.length = 0;
+    expect(await cmdMarket(["install", "skill:local-skill", "--yes"], { ...deps, prereqEnv: withoutGit })).toBe(0);
+  } finally { s.cleanup(); }
+});
+
+test("the plan uses two different words for two different things, and says each of them once", async () => {
+  const s = scratch();
+  try {
+    const out: string[] = [];
+    const noGit: PrereqEnv = { PATH: "/nowhere", windows: false, exists: () => false };
+    const deps = { cwd: s.cwd, home: s.home, registry: s.registry, out: (l: string) => out.push(l), err: () => {}, tty: false, prereqEnv: noGit };
+
+    // an MCP entry that wants an argument from the human AND a program on the machine: the two used to
+    // arrive as two `needs` rows one under the other, saying entirely different kinds of thing
+    expect(await cmdMarket(["install", "mcp:filesystem"], deps)).toBe(1);
+    const plan = out.join("\n");
+    expect(plan).toContain("requires   npx");          // about the machine
+    expect(plan).toContain("fill in    <directory");   // about the human
+    expect(plan).not.toContain("needs ");              // the overloaded word is gone entirely
+
+    // and the argument is mentioned ONCE, by the line that also gives the file path
+    const mentions = plan.split("\n").filter((l) => l.includes("<directory the server may touch>"));
+    expect(mentions.length).toBe(1);
+    expect(mentions[0]).toContain("mcp.json");   // the surviving line is the one that says WHERE
+
+    // order: what will run, then what that requires, then what lands on disk, then what is left to you
+    const at = (needle: string) => plan.split("\n").findIndex((l) => l.includes(needle));
+    expect(at("runs ")).toBeLessThan(at("requires "));
+    expect(at("requires ")).toBeLessThan(at("writes "));
+    expect(at("writes ")).toBeLessThan(at("fill in "));
   } finally { s.cleanup(); }
 });

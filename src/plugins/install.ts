@@ -26,8 +26,30 @@ export interface InstallOptions {
    *  at the clone root. Rejected rather than normalised: an absolute path, a drive letter, or any `..`
    *  segment — a subfolder that climbs out of the clone is an attempt, not a typo. */
   subfolder?: string;
+  /** Clones already made during THIS command, keyed by `cloneKey`. One monorepo publishes all three
+   *  first-party plugins, so installing them today clones the same repository three times — measured at
+   *  15.5 s per plugin install, 28.3 s for a project-scope one. The map is opened per command and disposed
+   *  with `disposeCloneCache`; nothing here caches across commands, because a clone that outlives the
+   *  command it was made for is a stale tree waiting to be installed from. */
+  cloneCache?: Map<string, string>;
   /** how `git clone` runs; default Bun.spawn — tests inject one that never touches the network */
   spawn?: Spawn;
+}
+
+/** The key a clone is cached under.
+ *
+ *  `ref` is not something `addPlugin` takes yet — pinning is not implemented — but it is part of the key
+ *  from the start, and deliberately so: a cache keyed on the URL alone hands back the wrong tree the day
+ *  two refs of one repository are in play, and that bug would appear in a feature far away from here. With
+ *  the key in one function, whoever adds pinning changes this and every caller inherits it. */
+export const cloneKey = (source: string, ref?: string): string => `${source}#${ref ?? ""}`;
+
+/** Remove every clone a command made. Call it in a `finally`: a half-written clone that outlives its
+ *  command is litter in %TEMP% that nobody will ever look at again. */
+export function disposeCloneCache(cache: Map<string, string> | undefined): void {
+  if (cache === undefined) return;
+  for (const dir of cache.values()) rmSync(dir, { recursive: true, force: true });
+  cache.clear();
 }
 export type AddResult = { ok: true; name: string; dir: string; scope: PluginScope; manifest: PluginManifest } | { ok: false; error: string };
 
@@ -54,10 +76,17 @@ export async function addPlugin(source: string, opts: InstallOptions): Promise<A
   let src = source, tmp: string | null = null;
   try {
     if (isGitSource(source)) {
-      tmp = mkdtempSync(join(tmpdir(), "rovecode-plugin-"));
-      const r = await (opts.spawn ?? defaultSpawn)(["git", "clone", "--depth", "1", "--quiet", source, "src"], tmp);
-      if (r.code !== 0) return { ok: false, error: `git clone failed (exit ${r.code})${r.stderr.trim() ? `: ${r.stderr.trim().split("\n").at(-1)}` : ""}` };
-      src = join(tmp, "src");
+      const key = cloneKey(source);
+      const cached = opts.cloneCache?.get(key);
+      if (cached !== undefined && isDir(cached)) {
+        src = cached;                       // owned by the cache, so `tmp` stays null and nothing is removed
+      } else {
+        tmp = mkdtempSync(join(tmpdir(), "rovecode-plugin-"));
+        const r = await (opts.spawn ?? defaultSpawn)(["git", "clone", "--depth", "1", "--quiet", source, "."], tmp);
+        if (r.code !== 0) return { ok: false, error: `git clone failed (exit ${r.code})${r.stderr.trim() ? `: ${r.stderr.trim().split("\n").at(-1)}` : ""}` };
+        src = tmp;
+        if (opts.cloneCache !== undefined) { opts.cloneCache.set(key, tmp); tmp = null; }   // ownership moves
+      }
     }
     src = resolve(src);
     if (opts.subfolder !== undefined && opts.subfolder !== "") {
