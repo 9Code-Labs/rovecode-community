@@ -48,7 +48,7 @@ export const MARKET_USAGE = [
   "  list [--all]                               what is installed here (--all: the whole market, with badges)",
   "  update [id] [--all] [--yes]                what is out of date; with an id or --all: plan, approve, reinstall",
   "                                             --all --yes skips plugins (new code): name one, or pass --yes-plugins",
-  "  sources                                    where rows come from right now, and whether each answered",
+  "  sources [probe]                            where rows come from right now; really asks the registry (--offline to skip)",
   "every command takes --json · --offline skips the network entirely",
   "an id is a bare slug inside its kind (filesystem); say mcp:filesystem when two kinds share a name",
 ];
@@ -180,7 +180,9 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
     const r = await searchMarket(query, registry);
     const items = kind ? r.items.filter((i) => i.kind === kind) : r.items;
     const rows = withInstalled(items, cwd, home);
-    if (json) { jsonOut(deps, { items: rows, sources: r.sources, notes: r.notes }); return 0; }
+    // exit code carries the same signal as the text form: a script piping --json must not read "no
+    // matches" as success when the human-readable run would have said otherwise
+    if (json) { jsonOut(deps, { items: rows, sources: r.sources, notes: r.notes }); return rows.length === 0 ? 1 : 0; }
     for (const n of r.notes) err(`market: ${n}`);
     if (rows.length === 0) {
       const dead = Object.entries(r.sources).filter(([, s]) => !s.ok);
@@ -194,8 +196,14 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
 
   // ---------------- sources
   if (sub === "sources") {
-    const r = await allItems(registry);
-    if (json) { jsonOut(deps, { sources: r.sources, notes: r.notes, count: r.items.length }); return 0; }
+    // `sources` exists to answer "is the registry up?", and it was the one command that never asked: it
+    // ran the empty query, which by design never leaves the machine, and then reported the registry as
+    // "not consulted". A real probe with a real term is the whole job.
+    const probe = positional.slice(1).join(" ") || "mcp";
+    const r = offline ? await allItems(registry) : await searchMarket(probe, registry);
+    if (json) { jsonOut(deps, { sources: r.sources, notes: r.notes, count: r.items.length, probe: offline ? null : probe, offline }); return Object.values(r.sources).every((x) => x.ok) ? 0 : 1; }
+    if (offline) out(`--offline: the registry was not asked`);
+    else out(`probed with "${probe}"`);
     for (const [name, s] of Object.entries(r.sources)) {
       const how = !s.ok ? `FAILED — ${s.reason}`
         : s.from === "live" ? "answered just now"
@@ -260,7 +268,8 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
 
     const ctx = {
       out, err, json, yes: args.includes("--yes"), tty: deps.tty ?? process.stdin.isTTY === true,
-      secret: deps.secret ?? readSecret, plain: deps.plain ?? defaultPlain, run: { ...deps.run, force: true }, verb: "update",
+      secret: deps.secret ?? readSecret, plain: deps.plain ?? defaultPlain, verb: "update",
+      run: { ...deps.run, force: true, ...(offline ? { offline: true } : {}) },
     };
     let worst = 0;
     if (skipped.length) {
@@ -281,7 +290,16 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
 
   // ---------------- info
   if (sub === "info") {
+    // `install` may reasonably treat an unknown dashed word as an npm package — the human is naming a
+    // package to install. `info` and `docs` must NOT: a typo would come back as a confident record for a
+    // server nobody has ever published ("runs npx -y totally-bogus-name") with exit 0, and there would be
+    // no way left to ask "does this exist?".
     const r = await resolveTarget(target!, registry);
+    if (r.ok && r.item.source === "catalog" && r.item.publisher.startsWith("unknown (") && r.item.kind === "mcp") {
+      err(`"${target}" is not in the catalog or the registry — \`market install\` would treat it as an npm package, but there is nothing here to describe`);
+      if (json) jsonOut(deps, { error: "not found", id: target });
+      return 1;
+    }
     if (!r.ok) { err(r.error); if (json) jsonOut(deps, { error: r.error, candidates: r.ambiguous ?? [] }); return r.ambiguous ? 2 : 1; }
     if (json) { jsonOut(deps, { ...r.item, installed: installedState(r.item, cwd, home) }); return 0; }
     for (const l of infoLines(r.item, cwd, home)) out(l);
@@ -291,6 +309,11 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
   // ---------------- docs
   if (sub === "docs") {
     const r = await resolveTarget(target!, registry);
+    if (r.ok && r.item.source === "catalog" && r.item.publisher.startsWith("unknown (") && r.item.kind === "mcp") {
+      err(`"${target}" is not in the catalog or the registry — nothing here has documentation`);
+      if (json) jsonOut(deps, { error: "not found", id: target });
+      return 1;
+    }
     if (!r.ok) { err(r.error); if (json) jsonOut(deps, { error: r.error, candidates: r.ambiguous ?? [] }); return r.ambiguous ? 2 : 1; }
     const d = r.item.docs;
     if (!d || d.body === undefined) {
@@ -310,6 +333,16 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
   if (sub === "remove") {
     const r = await resolveTarget(target!, registry);
     if (!r.ok) { err(r.error); return r.ambiguous ? 2 : 1; }
+    // install writes nothing without a yes; remove deleted a folder in silence. Same rule both ways.
+    const state = installedState(r.item, cwd, home, args.includes("--project") ? "project" : undefined);
+    if (state === undefined) { err(`${qualify(r.item)} is not installed here`); return 1; }
+    const tty = deps.tty ?? process.stdin.isTTY === true;
+    if (!args.includes("--yes")) {
+      if (!tty) { err(`nothing removed: ${qualify(r.item)} lives at ${state.path} — rerun on a terminal, or pass --yes`); return 1; }
+      out(`${qualify(r.item)}  ${state.path}${state.scope === "project" ? "  (this repo)" : ""}`);
+      const answer = (await (deps.plain ?? defaultPlain)("remove this? [y/N] ")).trim().toLowerCase();
+      if (answer !== "y" && answer !== "yes") { out("nothing removed"); return 1; }
+    }
     const done = removeItem(r.item, cwd, home, args.includes("--project") ? "project" : undefined);
     if (!done.ok) { err(done.error); return 1; }
     if (json) { jsonOut(deps, { removed: qualify(r.item), path: done.path }); return 0; }
@@ -336,7 +369,7 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
       secret: deps.secret ?? readSecret, plain: deps.plain ?? defaultPlain, verb: "install",
       // --force was accepted, documented, and read by nobody: the plan said "replaces …" and the write
       // then refused with "already exists (use --force to replace)" — asking for the flag the user passed.
-      run: { ...deps.run, ...(args.includes("--force") ? { force: true } : {}) },
+      run: { ...deps.run, ...(args.includes("--force") ? { force: true } : {}), ...(offline ? { offline: true } : {}) },
     });
   }
 

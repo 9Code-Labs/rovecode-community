@@ -370,7 +370,7 @@ test("the CLI: search prints rows, --json carries sources, an ambiguous install 
     expect(await cmdMarket(["list"], deps)).toBe(0);
     expect(out.join("\n")).toContain("[installed]");
     out.length = 0;
-    expect(await cmdMarket(["remove", "skill:code-review"], deps)).toBe(0);
+    expect(await cmdMarket(["remove", "skill:code-review", "--yes"], deps)).toBe(0);   // remove asks, like install
     expect(existsSync(skillDir("code-review", { scope: "user", cwd: s.cwd, home: s.home }))).toBe(false);
 
     // unknown flag and unknown subcommand are usage errors

@@ -10,7 +10,7 @@ import { afterAll, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { CACHE_TTL_MS, LIMITS, cachePath, entryFromRegistry, installLabel, marketInfo, parseRegistryPage, publisherOf, searchMarket, type MarketEntry } from "../../src/mcp/market.ts";
+import { CACHE_TTL_MS, LIMITS, cachePath, entryFromRegistry, installLabel, marketInfo, parseRegistryPage, publisherOf, searchMarket, type MarketEntry, MAX_PAGES } from "../../src/mcp/market.ts";
 import { CURATED } from "../../src/mcp/market-catalog.ts";
 import { configuredServers, defaultServerName, describePlan, fillPlan, planInstall, removeServer, writeServer, type InstallPlan } from "../../src/mcp/market-install.ts";
 import { loadMcpConfig } from "../../src/mcp/config.ts";
@@ -97,12 +97,17 @@ test("searchMarket: curated first, registry matches deduped after; the cache ans
   const deps = { fetch: net.fetch, home, now: () => clock };
   const one = await searchMarket("widgets", deps);
   expect(one.fromCache).toBe(false);
-  expect(net.urls).toEqual(["https://registry.modelcontextprotocol.io/v0/servers?search=widgets&version=latest&limit=50"]);
+  // the cursor is followed (the fixture's page always says nextCursor "x"), and the SECOND identical
+  // cursor stops the walk rather than looping the client forever
+  expect(net.urls).toEqual([
+    "https://registry.modelcontextprotocol.io/v0/servers?search=widgets&version=latest&limit=50",
+    "https://registry.modelcontextprotocol.io/v0/servers?search=widgets&version=latest&limit=50&cursor=x",
+  ]);
   expect(one.entries.map((e) => e.key)).toEqual(["io.github.acme/widgets", "com.example/py", "io.github.acme/box", "ai.smithery/remote", "io.github.acme/dotnet"]); // the registry does the name matching; we do not re-filter its page
   expect(existsSync(cachePath(home))).toBe(true);
   const two = await searchMarket("widgets", deps);
   expect(two.fromCache).toBe(true);
-  expect(net.urls.length).toBe(1);
+  expect(net.urls.length).toBe(2);   // still the first search's two pages: the cache answered, nothing new went out
   // curated rows lead and the registry's copy of a curated repo is dropped
   const gh = await searchMarket("github", { ...deps, fetch: fakeFetch().fetch });
   expect(gh.entries[0]!.key).toBe("github");
@@ -122,7 +127,7 @@ test("searchMarket: curated first, registry matches deduped after; the cache ans
   expect(short.notes).toEqual([]);
   const all = await searchMarket("", deps);
   expect(all.entries.length).toBe(CURATED.length);
-  expect(net.urls.length).toBe(1);
+  expect(net.urls.length).toBe(2);   // still the first search's two pages: the cache answered, nothing new went out
   // offline: curated + whatever the cache holds, no fetch
   const off = await searchMarket("widgets", { ...deps, offline: true, fetch: fakeFetch({ fail: true }).fetch });
   expect(off.fromCache).toBe(true);
@@ -239,4 +244,42 @@ test("writeServer/removeServer keep the rest of the file, refuse a silent overwr
   expect(removeServer(userFile, "widgets")).toBe(true);
   expect(removeServer(userFile, "widgets")).toBe(false);
   expect(Object.keys((JSON.parse(readFileSync(userFile, "utf8")) as { mcpServers: object }).mcpServers)).toEqual(["old"]);
+});
+
+test("registry pagination: a match on page two is found, the walk is bounded, and a looping cursor cannot spin us forever", async () => {
+  const official = () => ({ "io.modelcontextprotocol.registry/official": { status: "active", isLatest: true } });
+  const server = (n: string) => ({ server: { name: n, description: "d" }, _meta: official() });
+
+  // three pages, distinct cursors, the wanted server last — the single-page version reported it missing
+  const pages: Record<string, unknown> = {
+    "": { servers: [server("io.github.a/one")], metadata: { nextCursor: "c1" } },
+    c1: { servers: [server("io.github.a/two")], metadata: { nextCursor: "c2" } },
+    c2: { servers: [server("io.github.a/needle")] },   // no cursor: the end
+  };
+  const urls: string[] = [];
+  const paged = (async (input: string | URL | Request) => {
+    const url = String(input); urls.push(url);
+    const cursor = /[?&]cursor=([^&]*)/.exec(url)?.[1] ?? "";
+    return new Response(JSON.stringify(pages[decodeURIComponent(cursor)] ?? { servers: [] }), { status: 200 });
+  }) as unknown as typeof fetch;
+
+  const found = await searchMarket("needle", { fetch: paged, home: tmp("rovecode-page-home-"), now: () => 5_000_000 });
+  expect(found.entries.map((e) => e.key)).toEqual(["io.github.a/one", "io.github.a/two", "io.github.a/needle"]);
+  expect(urls.length).toBe(3);   // stopped when the registry stopped offering a cursor, not before
+
+  // a registry that keeps handing back the SAME cursor is stopped at once, not followed to MAX_PAGES
+  const loopUrls: string[] = [];
+  const looping = (async (input: string | URL | Request) => {
+    loopUrls.push(String(input));
+    return new Response(JSON.stringify({ servers: [server("io.github.a/loop")], metadata: { nextCursor: "same" } }), { status: 200 });
+  }) as unknown as typeof fetch;
+  const looped = await searchMarket("loop", { fetch: looping, home: tmp("rovecode-loop-home-"), now: () => 6_000_000 });
+  expect(loopUrls.length).toBe(2);
+  expect(looped.entries.map((e) => e.key)).toEqual(["io.github.a/loop"]);   // deduped across pages
+
+  // a registry that always advances is still bounded by MAX_PAGES
+  let n = 0;
+  const endless = (async () => new Response(JSON.stringify({ servers: [server(`io.github.a/s${n++}`)], metadata: { nextCursor: `c${n}` } }), { status: 200 })) as unknown as typeof fetch;
+  const capped = await searchMarket("endless", { fetch: endless, home: tmp("rovecode-endless-home-"), now: () => 7_000_000 });
+  expect(capped.entries.length).toBe(MAX_PAGES);
 });

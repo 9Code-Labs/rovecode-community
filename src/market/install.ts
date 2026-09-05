@@ -39,6 +39,10 @@ export interface RunDeps {
   spawn?: Spawn;
   /** replace something already installed under that name */
   force?: boolean;
+  /** no network, for real: an install whose source has to be fetched is refused rather than quietly
+   *  cloning. `--offline` used to stop only the registry lookup, so `install --offline` still went to the
+   *  network and succeeded — a flag that says "skips the network entirely" has to mean it. */
+  offline?: boolean;
 }
 
 /** The names an item may be installed under. `--as` is human input reaching a path join, so it is checked
@@ -155,6 +159,9 @@ export async function runInstall(plan: InstallPlanView, answers: Record<string, 
       };
     }
 
+    if (deps.offline === true && needsNetwork(install)) {
+      return { ok: false, error: `--offline: ${item.id} would have to be fetched (${sourceOf(install)}) and nothing local can stand in for it` };
+    }
     if (install.kind === "plugin") {
       // a monorepo plugin lives in plugins/<name>; plugins/install.ts validates the subfolder again
       const r = await addPlugin(install.source, {
@@ -202,6 +209,18 @@ export async function runInstall(plan: InstallPlanView, answers: Record<string, 
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
+}
+
+/** does installing this reach the network? A catalog's literal files and a local folder do not. */
+function needsNetwork(install: MarketItem["install"]): boolean {
+  if (install.kind === "plugin") return install.git;
+  if (install.kind === "skill") return install.source !== undefined;
+  return false;   // an MCP install writes a config entry; the server is fetched when it launches, not now
+}
+function sourceOf(install: MarketItem["install"]): string {
+  if (install.kind === "plugin") return install.source;
+  if (install.kind === "skill") return install.source?.git ?? "its catalog files";
+  return "an mcp.json entry";
 }
 
 /** true for a symbolic link (never throws: an unreadable entry is not copied either) */

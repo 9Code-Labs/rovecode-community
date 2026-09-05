@@ -1,6 +1,6 @@
 import { test, expect, beforeAll, afterAll } from "bun:test";
 import type { ToolContext } from "../../src/core/types.ts";
-import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync, readFileSync, existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -9,7 +9,9 @@ import {
 } from "../../src/skills/index.ts";
 import { createSkillTools, buildSkillsIndex, INDEX_PROMPT_LIMIT } from "../../src/skills/tools.ts";
 
-const root = join(tmpdir(), "rovecode-skills-test");
+// a per-run directory, not a shared name: bun runs test FILES concurrently, and two overlapping runs
+// on one fixed path made recursive mkdir throw EEXIST — a failure that says nothing about skills.
+const root = mkdtempSync(join(tmpdir(), "rovecode-skills-test-"));
 const projSkills = join(root, "proj", ".rovecode", "skills");
 const globalSkills = join(root, "global-skills");
 
