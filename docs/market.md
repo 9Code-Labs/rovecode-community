@@ -235,6 +235,34 @@ afterwards and the gate asks again (`rovecode mcp trust`). A project row that is
 is shown as `[installed · NOT approved on this machine]`, which is the honest state — it is on disk and it
 is not loading.
 
+## When the publisher has stopped
+
+An item whose upstream repository is archived on GitHub carries `status: "archived"`, and every place that
+shows the item says so — a `[archived]` badge in `search` and `list`, the first line of the install preview,
+and a `status` field in `--json`:
+
+```
+  !  archived on GitHub — the publisher has stopped maintaining it. It still installs; nothing here is blocked.
+```
+
+Three deliberate choices in that one line.
+
+It is **first**, above `requires` and `context`. Those rows describe what an install costs, and someone
+reading them has already decided they want the thing; "the publisher stopped maintaining this" is a reason
+not to want it, so it belongs above the decision rather than inside it.
+
+It **does not block**. An archived skill is a working skill, plenty of people install one deliberately, and
+a market that refuses is a market people route around. The word "warning" is meant literally.
+
+The wording is **the flag's own**. GitHub says `archived`, so the line says "archived on GitHub". It does
+not say "abandoned" — that is a judgement about someone else's work which nobody upstream made and which
+rovecode is in no position to make on their behalf.
+
+The value is **derived, never typed**: the generator reads `archived` from the GitHub repository, one
+request per source. A status written by hand is correct the day it is written and wrong every day after,
+and `--check` could not tell you which. If a catalog row ever carries a status the generator cannot produce,
+that is a hand edit, and a test says so.
+
 ## Maintaining the catalogs
 
 Everything in `src/market/catalogs/` is generated. Nothing there should ever be hand-edited — `--check`

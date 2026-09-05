@@ -129,6 +129,15 @@ try {
   for (const src of SOURCES) {
     const [, owner, repo] = /github\.com\/([^/]+)\/([^/]+)/.exec(src.git);
     const tree = await api(`https://api.github.com/repos/${owner}/${repo}/git/trees/${src.branch}?recursive=1`);
+
+    // Whether the publisher has stopped: read from the repository, never typed into this file. A
+    // hand-written status is correct the day it is written and wrong every day after, and this is one
+    // request per SOURCE (not per skill), so it costs nothing against the rate limit. The word follows
+    // the flag — "archived on GitHub" is what the flag says; "abandoned" is a judgement GitHub never
+    // made and we are in no position to make about someone else's work.
+    const meta = await api(`https://api.github.com/repos/${owner}/${repo}`);
+    const archived = meta.archived === true;
+    if (archived) warnings.push(`${src.git}: archived on GitHub — its rows carry status "archived"`);
     const skillFiles = tree.tree
       .filter((t) => t.type === "blob" && t.path.startsWith(`${src.root}/`) && t.path.endsWith("/SKILL.md"))
       .map((t) => t.path)
@@ -176,6 +185,7 @@ try {
         description: fm["description"].replace(/\s+/g, " ").trim().slice(0, 500),
         ...(fm["version"] ? { version: fm["version"] } : {}),   // real files rarely carry one; never invented
         license: licence ?? "unknown",
+        ...(archived ? { status: "archived" } : {}),
         tags: tagOf.get(name) ?? [],
         repository: src.git,
         homepage: src.homepage,

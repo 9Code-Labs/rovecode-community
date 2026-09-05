@@ -141,6 +141,31 @@ export function skillDir(id: string, opts: { scope: MarketScope; cwd: string; ho
 
 // ---------------------------------------------------------------- planning (writes nothing)
 
+/** The publisher's own status, said before anything else in the preview.
+ *
+ *  First line, not a row among the rows: `requires` and `context` describe what an install COSTS, and
+ *  someone reading those has already decided they want the thing. "The publisher stopped maintaining
+ *  this" is a reason not to want it, so it goes above the decision rather than inside it.
+ *
+ *  It never blocks. An archived skill is still a working skill, plenty of people install one on purpose,
+ *  and a market that refuses is a market that gets worked around. The wording is deliberately the flag's
+ *  own: GitHub says `archived`, so we say "archived on GitHub" — "abandoned" is a judgement about someone
+ *  else's work that nobody upstream made and we are in no position to make for them. */
+function statusLines(item: MarketItem): string[] {
+  const status = item.status;
+  if (status === undefined || status === "") return [];
+  const said =
+    status === "archived" ? "archived on GitHub — the publisher has stopped maintaining it"
+    : status === "deprecated" ? "marked deprecated by its publisher"
+    : `marked "${status}" by its publisher`;
+  return [`  !  ${said}. It still installs; nothing here is blocked.`];
+}
+
+/** the whole preview for one item: the publisher's status first, then what the install does */
+function previewFor(lines: string[], item: MarketItem, opts: PlanOptions): string[] {
+  return [...statusLines(item), ...withRequires(lines, item, opts)];
+}
+
 export function planInstall(item: MarketItem, opts: PlanOptions): InstallPlanView | { error: string } {
   const { install } = item;
   // checked BEFORE any path is built from it, for every kind
@@ -165,7 +190,7 @@ export function planInstall(item: MarketItem, opts: PlanOptions): InstallPlanVie
     const view: InstallPlanView = {
       item, target: inner.file, scope: opts.scope,
       preview: [
-        ...withRequires(describePlan(inner, opts.scope === "project" ? "env" : "prompt").filter((l) => !PENDING_ROW.test(l)), item, opts),
+        ...previewFor(describePlan(inner, opts.scope === "project" ? "env" : "prompt").filter((l) => !PENDING_ROW.test(l)), item, opts),
         ...(item.planNote ?? []),
       ],
       asks: inner.asks.map((a) => ({ ...a })), pending: [...inner.pending],
@@ -195,7 +220,7 @@ export function planInstall(item: MarketItem, opts: PlanOptions): InstallPlanVie
       `  a plugin can add tools, hooks, commands, skills and MCP servers. Install one only from a publisher you trust.`,
       ...(item.planNote ?? []),
     ];
-    return { item, target: dir, scope: opts.scope, preview: withRequires(preview, item, opts), asks: item.env.map((e) => ({ ...e })), pending: [],
+    return { item, target: dir, scope: opts.scope, preview: previewFor(preview, item, opts), asks: item.env.map((e) => ({ ...e })), pending: [],
       ...(existsSync(dir) ? { replaces: dir } : {}) };
   }
 
@@ -220,7 +245,7 @@ export function planInstall(item: MarketItem, opts: PlanOptions): InstallPlanVie
     ...(fileList.length > 8 ? [`             … and ${fileList.length - 8} more`] : []),
     ...(item.planNote ?? []),
   ];
-  return { item, target: dir, scope: opts.scope, preview: withRequires(preview, item, opts), asks: item.env.map((e) => ({ ...e })), pending: [],
+  return { item, target: dir, scope: opts.scope, preview: previewFor(preview, item, opts), asks: item.env.map((e) => ({ ...e })), pending: [],
     ...(existsSync(dir) ? { replaces: dir } : {}) };
 }
 
@@ -348,7 +373,7 @@ function readSha(clone: string): string | undefined {
 }
 
 /** does installing this reach the network? A catalog's literal files and a local folder do not. */
-function needsNetwork(install: MarketItem["install"]): boolean {
+export function needsNetwork(install: MarketItem["install"]): boolean {
   if (install.kind === "plugin") return install.git;
   if (install.kind === "skill") return install.source !== undefined;
   return false;   // an MCP install writes a config entry; the server is fetched when it launches, not now

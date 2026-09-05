@@ -16,7 +16,7 @@ import { readSecret, rovecodeHome } from "../providers/auth.ts";
 import { itemLine, qualify, type MarketItem, type MarketKind, type MarketRow, type MarketScope } from "../market/types.ts";
 import { allItems, searchMarket, type RegistryDeps } from "../market/registry.ts";
 import { resolveTarget } from "../market/resolve.ts";
-import { installedState, planInstall, removeItem, runInstall, withInstalled, type PlanOptions, type RunDeps } from "../market/install.ts";
+import { installedState, needsNetwork, planInstall, removeItem, runInstall, withInstalled, type PlanOptions, type RunDeps } from "../market/install.ts";
 import type { PrereqEnv } from "../market/prereq.ts";
 import { originLine, readManifest, recordFor } from "../market/manifest.ts";
 import { verifyDigest, verifyLine } from "../market/digest.ts";
@@ -54,6 +54,7 @@ export const MARKET_USAGE = [
   "  docs <id>                                  the item's own documentation, as the catalog carries it",
   "  install <id|kind:id|git-url|npm-package> [--project] [--as <name>] [--pick N] [--ref <branch|tag|commit>] [--yes] [--force]",
   "                                             shows the plan, asks (masked) for keys by name, then writes",
+  "                                             --dry-run shows the plan and stops; nothing is fetched or written",
   "  remove <id|kind:id> [--project]            undo an install of any kind",
   "  list [--all]                               what is installed here (--all: the whole market, with badges)",
   "  update [id] [--all] [--yes]                what is out of date; with an id or --all: plan, approve, reinstall",
@@ -80,10 +81,13 @@ const kb = (bytes: number): string => (bytes < 1024 ? `${bytes} B` : `${(bytes /
 const jsonOut = (deps: MarketCliDeps, value: unknown): void => (deps.out ?? console.log)(JSON.stringify(value, null, 2));
 
 function badge(row: MarketRow): string {
-  if (!row.installed) return "";
-  if (row.installed.updateAvailable) return `  [installed ${row.installed.version ?? "?"} · update ${"available"}]`;
-  if (row.installed.trusted === false) return "  [installed · NOT approved on this machine]";
-  return "  [installed]";
+  // the publisher's status rides along with the install state rather than replacing it: "installed" and
+  // "archived" are both true at once and a reader needs both — the second is why they might remove it
+  const status = row.status ? `  [${row.status}]` : "";
+  if (!row.installed) return status;
+  if (row.installed.updateAvailable) return `${status}  [installed ${row.installed.version ?? "?"} · update ${"available"}]`;
+  if (row.installed.trusted === false) return `${status}  [installed · NOT approved on this machine]`;
+  return `${status}  [installed]`;
 }
 
 /** everything about one item, in the order a person asks it */
@@ -134,13 +138,32 @@ async function askFor(plan: { asks: { name: string; secret: boolean; description
 async function installOne(item: MarketItem, opts: PlanOptions, ctx: {
   out: (l: string) => void; err: (l: string) => void; json: boolean; yes: boolean; tty: boolean;
   secret: (p: string) => Promise<string>; plain: (p: string) => Promise<string>;
-  run: RunDeps; verb: string;
+  run: RunDeps; verb: string; dryRun?: boolean;
 }): Promise<number> {
   const plan = planInstall(item, opts);
   if ("error" in plan) { ctx.err(plan.error); return 1; }
-  for (const l of plan.preview) ctx.out(l);
-  if (plan.replaces) ctx.out(`  replaces   ${plan.replaces}`);
-  for (const p of plan.pending) ctx.out(`  fill in    ${p} — after the install, in ${plan.target}`);
+  // In --json mode the plan travels as FIELDS, not as prose printed above the JSON. It used to be both,
+  // which meant `market install --json` emitted human lines and then an object on the same stream and
+  // nothing could parse the result — a flag whose whole promise is "a script reads what the terminal
+  // shows" has to produce one document. The same lines are still there, inside `preview`.
+  if (!ctx.json) {
+    for (const l of plan.preview) ctx.out(l);
+    if (plan.replaces) ctx.out(`  replaces   ${plan.replaces}`);
+    for (const p of plan.pending) ctx.out(`  fill in    ${p} — after the install, in ${plan.target}`);
+  }
+  // --dry-run stops HERE: after the plan is complete and before anything is asked for. It is a success,
+  // not a refusal — the question was "what would this do", and it has been answered. It also overrides
+  // --yes rather than arguing with it: between "show me" and "go ahead", the one that writes nothing wins.
+  //
+  // What it does NOT do is fetch. A git-sourced skill is not cloned here, so this says what would be
+  // written and where, never what is inside the repository — and the sentence below says so rather than
+  // letting the silence imply a stronger check than happened.
+  if (ctx.dryRun) {
+    if (ctx.json) { jsonOut({ out: ctx.out }, { dryRun: true, item, target: plan.target, scope: plan.scope,
+      preview: plan.preview, asks: plan.asks, pending: plan.pending, ...(plan.replaces ? { replaces: plan.replaces } : {}) }); return 0; }
+    ctx.out(`nothing written — --dry-run. ${needsNetwork(item.install) ? "The source was not fetched, so this is the plan, not its contents." : "This is the whole plan."}`);
+    return 0;
+  }
   if (!ctx.yes) {
     if (!ctx.tty) { ctx.err(`nothing written: rerun on a terminal, or pass --yes to accept this plan in a script`); return 1; }
     const answer = (await ctx.plain(`${ctx.verb} this? [y/N] `)).trim().toLowerCase();
@@ -181,7 +204,7 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
   const scope: MarketScope = args.includes("--project") ? "project" : "user";
   const registry: RegistryDeps = { ...deps.registry, ...(offline ? { offline: true } : {}) };
   const flag = (name: string): string | undefined => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
-  const KNOWN = new Set(["--json", "--offline", "--project", "--yes", "--yes-plugins", "--force", "--all", "--as", "--pick", "--kind", "--ref"]);
+  const KNOWN = new Set(["--json", "--offline", "--project", "--yes", "--yes-plugins", "--force", "--all", "--as", "--pick", "--kind", "--ref", "--dry-run"]);
   const positional = args.filter((a, i) => !a.startsWith("--") && !(i > 0 && ["--as", "--pick", "--kind", "--ref"].includes(args[i - 1]!)));
   for (const a of args) if (a.startsWith("--") && !KNOWN.has(a)) { err(`unknown flag ${a}`); err(MARKET_USAGE.join("\n")); return 2; }
 
@@ -318,7 +341,7 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
 
     const ctx = {
       out, err, json, yes: args.includes("--yes"), tty: deps.tty ?? process.stdin.isTTY === true,
-      secret: deps.secret ?? readSecret, plain: deps.plain ?? defaultPlain, verb: "update",
+      secret: deps.secret ?? readSecret, plain: deps.plain ?? defaultPlain, verb: "update", dryRun: args.includes("--dry-run"),
       run: { ...deps.run, force: true, ...(offline ? { offline: true } : {}) },
     };
     let worst = 0;
@@ -453,7 +476,7 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
       ...(model !== undefined ? { model } : {}) };
     return installOne(r.item, opts, {
       out, err, json, yes: args.includes("--yes"), tty: deps.tty ?? process.stdin.isTTY === true,
-      secret: deps.secret ?? readSecret, plain: deps.plain ?? defaultPlain, verb: "install",
+      secret: deps.secret ?? readSecret, plain: deps.plain ?? defaultPlain, verb: "install", dryRun: args.includes("--dry-run"),
       // --force was accepted, documented, and read by nobody: the plan said "replaces …" and the write
       // then refused with "already exists (use --force to replace)" — asking for the flag the user passed.
       run: { ...deps.run, ...(args.includes("--force") ? { force: true } : {}), ...(offline ? { offline: true } : {}) },

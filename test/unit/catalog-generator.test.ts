@@ -40,6 +40,13 @@ const groups = { plugins: [{ name: "example-skills", skills: rows.filter((r) => 
 globalThis.__rows = rows;
 globalThis.__serve = (url) => {
   if (url.includes("api.github.com")) {
+    // the REPOSITORY endpoint and the TREE endpoint are different questions and the fake must not answer
+    // both with the same object: "archived" is read from the first, and a fake that served a tree for it
+    // would report every repository as maintained no matter what the test set up
+    // written without a regex on purpose: this string is a template literal that becomes a script, and
+    // every backslash in it has to survive two levels of quoting to still mean what it reads as
+    const after = url.slice(url.indexOf("/repos/") + "/repos/".length);
+    if (url.includes("/repos/") && after.split("/").length === 2) return { json: { archived: globalThis.__archived === true } };
     return { json: { tree: rows.map((r) => ({ type: "blob", path: "skills/" + r.id + "/SKILL.md" })) } };
   }
   if (url.endsWith("marketplace.json")) return { text: JSON.stringify(groups) };
@@ -75,7 +82,7 @@ globalThis.fetch = async (u, init) => {
 };
 ${IMPORT}`;
 
-async function run(script: string, args: string[] = [], env: Record<string, string> = {}): Promise<{ code: number; err: string; wrote: boolean; ids: string[] }> {
+async function run(script: string, args: string[] = [], env: Record<string, string> = {}): Promise<{ code: number; err: string; wrote: boolean; ids: string[]; items: { id: string; status?: string }[] }> {
   const before = readFileSync(CATALOG, "utf8");
   const dir = mkdtempSync(join(tmpdir(), "rovecode-gen-"));
   const runner = join(dir, "run.mjs");
@@ -100,10 +107,11 @@ async function run(script: string, args: string[] = [], env: Record<string, stri
     const err = await new Response(proc.stderr).text();
     const code = await proc.exited;
     const after = readFileSync(out, "utf8");
-    const ids = (JSON.parse(after) as { items: { id: string }[] }).items.map((i) => i.id);
+    const items = (JSON.parse(after) as { items: { id: string; status?: string }[] }).items;
+    const ids = items.map((i) => i.id);
     // the tracked catalog is never in play, so this also asserts the run stayed inside its sandbox
     expect(readFileSync(CATALOG, "utf8")).toBe(before);
-    return { code, err, wrote: after !== before, ids };
+    return { code, err, wrote: after !== before, ids, items };
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
