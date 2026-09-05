@@ -9,10 +9,17 @@ import { cn } from "@/lib/utils";
 /** the display shape scripts/market.mjs writes: src/market/types.ts MarketItem, with `install` flattened to
  *  the line a visitor types and the spec summarised as `runs` / `alternatives` / `pending` */
 export interface MarketEnv { name: string; required: boolean; secret: boolean; description: string }
+/** the item's own documentation, rendered at build time by scripts/market-docs.mjs; null when the catalog
+ *  carries none — an item without docs is a quiet state, not an error */
+export interface MarketDocs {
+  html: string; toc: { id: string; text: string }[]; source: string; truncated: boolean;
+  words: number; bytes: number; shownBytes: number;
+}
 export interface MarketEntry {
   id: string; kind: "mcp" | "skill" | "plugin"; title: string; publisher: string; description: string;
   source: string; version: string; license: string; repository: string; homepage: string; tags: string[];
   env: MarketEnv[]; runs: string; alternatives: string[]; pending: string[]; install: string; from: string;
+  docs?: MarketDocs | null;
 }
 /** a detail page only ships what its sibling nav draws */
 export type MarketStub = Pick<MarketEntry, "id" | "kind" | "title">;
@@ -39,7 +46,8 @@ function Detail({ entry, base }: { entry: MarketEntry; base: string }) {
         <KindPill kind={entry.kind} />
         {entry.version && <span className="chip px-2.5 py-1 text-[11px] text-text-muted">v{entry.version}</span>}
         {entry.license && <span className="chip px-2.5 py-1 text-[11px] text-text-muted" title={t.market.licenseLabel}>{entry.license}</span>}
-        {entry.tags.map((tag) => <span key={tag} className="chip px-2.5 py-1 text-[11px] text-text-muted">{tag}</span>)}
+        {/* the licence already has its own chip; a tag repeating it is noise */}
+        {entry.tags.filter((tag) => tag !== entry.license).map((tag) => <span key={tag} className="chip px-2.5 py-1 text-[11px] text-text-muted">{tag}</span>)}
       </div>
       <h2 className="h2 mt-5 text-[1.6rem] md:text-[1.9rem]">{entry.title}</h2>
       <p className="mt-2 text-[13.5px] text-text-faint">{entry.publisher}</p>
@@ -94,15 +102,64 @@ function Detail({ entry, base }: { entry: MarketEntry; base: string }) {
 
       {(entry.repository || entry.homepage) && (
         <p className="mt-7 flex flex-wrap gap-x-6 gap-y-2 text-[13.5px]">
-          {[entry.repository, entry.homepage].filter(Boolean).map((l) => (
+          {/* a project whose homepage IS its repository gets one link, not the same one twice */}
+          {[...new Set([entry.repository, entry.homepage].filter(Boolean))].map((l) => (
             <a key={l} href={l} target="_blank" rel="noreferrer" className="text-brand underline decoration-mist underline-offset-4 hover:decoration-brand">
               {l.replace(/^https?:\/\/(www\.)?/, "").split("/")[0]} ↗
             </a>
           ))}
         </p>
       )}
+      {entry.docs && <Docs docs={entry.docs} entry={entry} />}
+
       <p className="mt-8 text-[13.5px]"><a href={base} className="text-text-muted hover:text-text">← {t.market.backToAll}</a></p>
     </div>
+  );
+}
+
+/** kB, for saying how much of a truncated document is on the page */
+const kb = (bytes: number) => `${Math.max(1, Math.round(bytes / 1024))} kB`;
+
+/** The item's own documentation, from its publisher — set in the same `prose` as /docs/ so the two read as
+ *  one product, under a line that says whose text this is and where it came from. The body is third-party:
+ *  scripts/market-docs.mjs renders it with raw HTML dropped and every link resolved outward, which is why
+ *  it can be injected here at all. */
+function Docs({ docs, entry }: { docs: MarketDocs; entry: MarketEntry }) {
+  const t = useT();
+  return (
+    <section className="mt-12 border-t border-border pt-10" aria-labelledby={`docs-${entry.id}`}>
+      <div className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-2">
+        <h2 id={`docs-${entry.id}`} className="text-[1.25rem] leading-snug">{t.market.docsTitle}</h2>
+        <p className="text-[12.5px] text-text-faint">
+          {t.market.docsBy} {entry.publisher}
+          {entry.license && <> · {entry.license}</>}
+          {docs.source && <> · <a href={docs.source} target="_blank" rel="noreferrer nofollow" className="hover:text-text">{t.market.docsSource} ↗</a></>}
+        </p>
+      </div>
+
+      {/* long documents get the same in-page index /docs/ gives its pages; short ones do not need one */}
+      {docs.toc.length >= 4 && (
+        <nav aria-label={t.market.docsOnThisPage} className="panel-2 mt-6 p-4">
+          <p className="label mb-3">{t.market.docsOnThisPage}</p>
+          <ol className="grid gap-1.5 sm:grid-cols-2">
+            {docs.toc.map((h) => (
+              <li key={h.id}><a href={`#${h.id}`} className="text-[13.5px] leading-5 text-text-muted hover:text-brand">{h.text}</a></li>
+            ))}
+          </ol>
+        </nav>
+      )}
+
+      <div className="prose mt-8" dangerouslySetInnerHTML={{ __html: docs.html }} />
+
+      {docs.truncated && (
+        <p className="mt-8 text-[13.5px] text-text-muted">
+          {docs.bytes > docs.shownBytes
+            ? `${t.market.docsTruncated} ${kb(docs.shownBytes)} / ${kb(docs.bytes)}.`
+            : `${t.market.docsTruncated}`}{" "}
+          {docs.source && <a href={docs.source} target="_blank" rel="noreferrer nofollow" className="text-brand underline decoration-mist underline-offset-4 hover:decoration-brand">{t.market.docsReadFull} →</a>}
+        </p>
+      )}
+    </section>
   );
 }
 

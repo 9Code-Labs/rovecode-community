@@ -98,14 +98,19 @@ if (marketJson.enabled && marketJson.entries.length) {
       // the index carries the whole catalog (the client filters it in place); a detail page carries only
       // what its sibling nav draws, so 21 pages × 15 locales do not each embed the catalog twice
       const slim = entries.map((e) => ({ id: e.id, kind: e.kind, title: e.title }));
+      // the page renders `docs.html`; `docs.markdown` exists for the .md mirror below and would otherwise
+      // ship the same document a second time inside every detail page
+      const forPage = (e) => (e.docs ? { ...e, docs: { ...e.docs, markdown: undefined } } : e);
+      // the index draws cards, not documents: a rendered doc belongs to its own page and nowhere else
+      const cards = entries.map(({ docs, ...rest }) => rest);
       const data = p.entry
-        ? { locale: code, home, kinds, tags, entries: slim, entry: p.entry }
-        : { locale: code, home, kinds, tags, entries };
+        ? { locale: code, home, kinds, tags, entries: slim, entry: forPage(p.entry) }
+        : { locale: code, home, kinds, tags, entries: cards };
       const { html, title, description } = await renderMarket(code, data);
       const url = siteUrl + home + p.sub;
       const alts = LOCALES.map((l) => `<link rel="alternate" hreflang="${l.code}" href="${siteUrl}${localePath(l.code)}${p.sub}" />`).concat(`<link rel="alternate" hreflang="x-default" href="${siteUrl}/${p.sub}" />`).join("\n    ");
       let page = template
-        .replace('<div id="root"></div>', `<div id="root">${html}</div>\n    <script id="market-data" type="application/json">${JSON.stringify(data).replace(/</g, "\u003c")}</script>`)
+        .replace('<div id="root"></div>', `<div id="root">${html}</div>\n    <script id="market-data" type="application/json">${JSON.stringify(data).replace(/</g, "\\u003c")}</script>`)
         .replace(/<html lang="en">/, `<html lang="${code}"${isRtl(code) ? ' dir="rtl"' : ""}>`)
         .replace(/<title>[^<]*<\/title>/, `<title>${esc(title)}</title>`)
         .replace(/<meta name="description" content="[^"]*" \/>/, `<meta name="description" content="${esc(description)}" />`)
@@ -123,7 +128,57 @@ if (marketJson.enabled && marketJson.entries.length) {
       bytes += page.length;
     }
   }
-  console.log(`market: ${pages.length} pages × ${LOCALES.length} locales`);
+  // ---- the markdown mirror ----
+  // The same catalog as plain markdown, for a reader that is a program: one file per item at
+  // /market/<id>/index.md and a one-line index at /market/index.md. English only and written once, beside
+  // the English pages — a machine reader does not need fifteen translations of the chrome, and a
+  // translated mirror would be fifteen more URLs saying the same thing. Kept OUT of sitemap.xml (it would
+  // twin every page) and not blocked in robots.txt (the point is that it can be fetched).
+  const mdEsc = (v) => String(v ?? "").replace(/\s+/g, " ").trim();
+  const indexLines = [
+    "# rovecode market",
+    "",
+    `Everything rovecode can install: ${entries.length} items — ${kinds.map((k) => `${k.count} ${k.kind}`).join(", ")}.`,
+    "Each line is: id · kind · publisher · one sentence · the command that installs it.",
+    `Full pages: ${siteUrl}/market/ · this file: ${siteUrl}/market/index.md · one file per item at ${siteUrl}/market/<id>/index.md`,
+    "",
+  ];
+  for (const e of entries) {
+    const doc = e.docs;
+    const lines = [
+      `# ${mdEsc(e.title)}`,
+      "",
+      `- id: \`${e.kind}:${e.id}\``,
+      `- publisher: ${mdEsc(e.publisher)}`,
+      ...(e.version ? [`- version: ${mdEsc(e.version)}`] : []),
+      ...(e.license ? [`- licence: ${mdEsc(e.license)}`] : []),
+      `- install: \`${e.install}\``,
+      ...(e.runs ? [`- runs: \`${mdEsc(e.runs)}\``] : []),
+      ...(e.env.length ? [`- environment: ${e.env.map((v) => `\`${v.name}\`${v.secret ? " (secret)" : ""}${v.required ? "" : " (optional)"}`).join(", ")}`] : ["- environment: none"]),
+      ...(e.repository ? [`- repository: ${e.repository}`] : []),
+      `- source in this repository: \`${e.from}\``,
+      `- page: ${siteUrl}/market/${e.id}/`,
+      "",
+      mdEsc(e.description),
+      "",
+    ];
+    if (doc?.markdown) {
+      lines.push(
+        "## Documentation",
+        "",
+        `From ${mdEsc(e.publisher)}${e.license ? ` · ${mdEsc(e.license)}` : ""} · source: ${doc.source}${doc.truncated ? " · truncated" : ""}`,
+        "",
+        doc.markdown,
+        "",
+      );
+    }
+    const dir = join(DIST, "market", e.id);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "index.md"), lines.join("\n"));
+    indexLines.push(`- \`${e.kind}:${e.id}\` · ${mdEsc(e.publisher)} · ${mdEsc(e.description)} · install: \`${e.install}\`${doc ? ` · docs: ${siteUrl}/market/${e.id}/index.md` : ""}`);
+  }
+  writeFileSync(join(DIST, "market", "index.md"), `${indexLines.join("\n")}\n`);
+  console.log(`market: ${pages.length} pages × ${LOCALES.length} locales, markdown mirror ${entries.length + 1} files`);
 }
 
 const today = new Date().toISOString().slice(0, 10);

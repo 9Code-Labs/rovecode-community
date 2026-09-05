@@ -19,6 +19,7 @@
  *  is written with `enabled: false` and prerender.mjs builds no market pages. */
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { renderItemDocs } from "./market-docs.mjs";
 
 const SITE = join(import.meta.dirname, "..");
 const REPO = join(SITE, "..");
@@ -31,8 +32,23 @@ const clean = (s) => (s ?? "").replace(/\s*\n\s*/g, " ").replace(/\[([^\]]+)\]\(
 const install = (kind, id) => `rovecode market install ${kind}:${id}`;
 const env = (v) => ({ name: v.name, required: !!v.required, secret: !!v.secret, description: clean(v.description) });
 
+/** the MCP documentation sidecar (nimbus-24's mcp-docs.json), keyed by the curated entry's key. The CLI
+ *  gets these attached by src/market/registry.ts; the site reads the same file directly, because it builds
+ *  from the catalogs rather than through the registry. A missing file is simply no MCP documentation. */
+function mcpDocsIndex() {
+  const file = join(REPO, "src", "market", "catalogs", "mcp-docs.json");
+  if (!existsSync(file)) return {};
+  try {
+    const raw = JSON.parse(readFileSync(file, "utf8"));
+    return raw && typeof raw.docs === "object" && raw.docs !== null ? raw.docs : {};
+  } catch {
+    return {};
+  }
+}
+
 async function mcpItems() {
   const { CURATED } = await import(join(REPO, "src", "mcp", "market-catalog.ts"));
+  const mcpDocs = mcpDocsIndex();
   return CURATED.map((e) => {
     // a curated entry can offer more than one way in (a remote endpoint and a local runtime); the first is
     // the one `mcp add` prefers, so it is the headline and the rest are named under it
@@ -57,6 +73,7 @@ async function mcpItems() {
       pending: (first?.pending ?? []).map(clean),
       install: install("mcp", e.key),
       from: "src/mcp/market-catalog.ts",
+      docs: docsFor({ docs: mcpDocs[e.key] }),
     };
   });
 }
@@ -90,7 +107,28 @@ function catalogItems(kind) {
     pending: (i.planNote ?? []).map(clean),
     install: install(kind, i.id),
     from: `src/market/catalogs/${kind === "skill" ? "skills" : "plugins"}.json`,
+    // the item's own documentation, when the catalog carries one: rendered here (third-party markdown,
+    // no raw HTML, links resolved against their source) and shipped as HTML for the page plus safe lines
+    // for the terminal overlay. An item with no `docs` field simply has none — that is a quiet state.
+    docs: docsFor(i),
   }));
+}
+
+/** the rendered documentation for one catalog item, or null when it carries none */
+function docsFor(i) {
+  const rendered = renderItemDocs(i.docs);
+  if (!rendered) return null;
+  return {
+    html: rendered.html,
+    markdown: rendered.markdown,
+    toc: rendered.toc,
+    source: rendered.source,
+    truncated: rendered.truncated,
+    words: rendered.words,
+    /** the size before truncation, so the page can say how much is missing */
+    bytes: typeof i.docs?.bytes === "number" ? i.docs.bytes : 0,
+    shownBytes: typeof i.docs?.body === "string" ? Buffer.byteLength(i.docs.body, "utf8") : 0,
+  };
 }
 
 /** name + description from a SKILL.md frontmatter block */
@@ -151,6 +189,7 @@ function repoPlugins() {
           pending: [],
           install: install("skill", fm.name ?? s),
           from: `plugins/${name}/${m.skills}/${s}/SKILL.md`,
+          docs: null,
         });
       }
       if (count) carries.push(count === 1 ? "1 skill" : `${count} skills`);
@@ -173,6 +212,7 @@ function repoPlugins() {
       pending: [],
       install: install("plugin", m.name ?? name),
       from: `plugins/${name}/plugin.json`,
+      docs: null,
     });
   }
   return { plugins, skills };

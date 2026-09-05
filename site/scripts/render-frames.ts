@@ -8,7 +8,7 @@
  *
  *  Everything outside site/ is imported read-only. */
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { renderFrame } from "../../src/sextant/frame.ts";
 import { GridScreen } from "../../src/sextant/grid.ts";
@@ -19,6 +19,7 @@ import { drawMessages } from "../../src/sextant/draw-messages.ts";
 import { drawPet } from "../../src/sextant/draw-pet.ts";
 import { drawPalette, openPalette } from "../../src/sextant/overlays.ts";
 import { drawMarket, openMarket, type MarketViewRow } from "../../src/sextant/draw-market.ts";
+import { docLines } from "../../src/sextant/market-source.ts";
 import { tokenize } from "../../src/sextant/engine.ts";
 import { createPet, type Pet } from "../../src/sextant/pet.ts";
 import { buildTheme, hex } from "../../src/sextant/theme.ts";
@@ -269,7 +270,17 @@ const market: Builder = () => {
   return sc;
 };
 
-const SCENARIOS: Record<string, Builder> = { editing, diff, approval, tests, agents, denied, compact, rmrf, rewind, market };
+/** the same overlay with an item's own documentation open (`d`): a real SKILL.md, flattened to lines a
+ *  terminal can draw and stripped of anything it would obey */
+const marketDocs: Builder = () => {
+  const sc = editing();
+  openMarket(sc.s, MARKET_ROWS, { kind: "ready" });
+  sc.s.market!.sel = 3; // the skill, the one row with docs
+  sc.s.market!.docs = true;
+  return sc;
+};
+
+const SCENARIOS: Record<string, Builder> = { editing, diff, approval, tests, agents, denied, compact, rmrf, rewind, market, marketDocs };
 
 // ---------- paint ----------
 
@@ -286,9 +297,11 @@ const MARKET_ROWS: MarketViewRow[] = [
   { id: "playwright", kind: "mcp", title: "Playwright", publisher: "Microsoft",
     description: "Drive a real browser through accessibility snapshots: navigate, click, type, screenshot.",
     runs: "npx -y @playwright/mcp@latest", env: [] },
-  { id: "conventional-commits", kind: "skill", title: "conventional-commits", publisher: "plugin: conventional-commits",
+  { id: "conventional-commits", kind: "skill", title: "conventional-commits", publisher: "Anthropic",
     description: "Conventional Commits: types, one scope, imperative subject.",
-    runs: "a SKILL.md the model reads when it matches", env: [] },
+    runs: "clone https://github.com/anthropics/skills (skills/conventional-commits)", env: [],
+    docs: { source: "https://github.com/9Code-Labs/rovecode/blob/main/plugins/conventional-commits/skills/conventional-commits/SKILL.md", truncated: false,
+      lines: docLines(readFileSync(join(import.meta.dirname, "..", "..", "plugins", "conventional-commits", "skills", "conventional-commits", "SKILL.md"), "utf8")) } },
   { id: "safety-net", kind: "plugin", title: "safety-net", publisher: "rovecode", version: "0.1.0",
     description: "A second look before a destructive shell command, and a nudge when a test run prints FAIL.",
     runs: "copy plugins/safety-net", env: [],

@@ -15,7 +15,8 @@
     "live-check": "node scripts/live-check.mjs",
     "browsers-check": "node scripts/browsers-check.mjs",
     "build:docs": "cross-env VITE_DOCS=1 bun run build",
-    "build:all": "cross-env VITE_DOCS=1 VITE_MARKET=1 bun run build"
+    "build:all": "cross-env VITE_DOCS=1 VITE_MARKET=1 bun run build",
+    "test:market-docs": "bun test scripts/market-docs.test.mjs"
   },
   "dependencies": {
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
