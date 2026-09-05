@@ -319,6 +319,17 @@ async function cmdModel(words: string[]): Promise<void> {
     const r = await reg.models(id);
     if (!r.ok) { console.error(`error: ${r.error}`); process.exit(1); }
     const cur = reg.defaultRef();
+    // --json: `market` has promised this on every subcommand for a while and a caller reasonably tries
+    // it here too. It was accepted and ignored, which is the worst of the three options — a script got
+    // prose where it asked for data, with no error to notice. The `*` the terminal draws is `default`
+    // here, so the two surfaces carry the same fact rather than one of them carrying less.
+    if (words.includes("--json")) {
+      console.log(JSON.stringify({
+        provider: id,
+        models: r.models.map((m) => ({ id: m, ref: `${id}/${m}`, default: cur?.provider === id && cur.model === m })),
+      }, null, 2));
+      return;
+    }
     if (r.models.length === 0) console.log(`${id}: the endpoint listed no models (no /models route?) — pass one directly: rovecode model use ${id}/<model>`);
     for (const m of r.models) console.log(`${cur?.provider === id && cur.model === m ? "*" : " "} ${id}/${m}`);
     return;
