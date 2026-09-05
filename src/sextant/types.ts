@@ -356,6 +356,8 @@ export interface PaletteState {
   title?: string;
 }
 
+import type { MarketState } from "./draw-market.ts";
+
 /** the whole surface state — owned by model.ts (pure `applyEvent`) and mutated by keys.ts */
 export interface SextantState {
   cwd: string;
@@ -376,6 +378,8 @@ export interface SextantState {
   /** the panel in the main slot on a narrow terminal (see Page); "code" on a wide one */
   page: Page;
   palette: PaletteState | null;
+  /** the market overlay (/market, ⌃m); null when it is closed — see draw-market.ts */
+  market: MarketState | null;
   help: boolean;
   toasts: Toast[];
   /** the notification history behind the toasts (Notice); newest last */

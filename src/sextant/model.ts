@@ -41,7 +41,7 @@ export function initialState(o: InitOptions): SextantState {
     plan: { todos: [] }, crew: [],
     usage: { provider: o.model?.provider ?? "", model: o.model?.model ?? "", turns: 0, tokensIn: 0, tokensOut: 0, contextPct: null, costUsd: null },
     input: { text: "", cur: 0, history: [], histIdx: -1, sgSel: 0 },
-    focus: "messages", page: "code", palette: null, help: false, toasts: [], notices: [], staged: [], escUntil: 0,
+    focus: "messages", page: "code", palette: null, market: null, help: false, toasts: [], notices: [], staged: [], escUntil: 0,
     running: false, mode: o.mode, yolo: o.yolo, theme: o.theme, bootAt: o.now, commands: o.commands, version: o.version,
   };
 }

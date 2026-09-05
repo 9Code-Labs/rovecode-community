@@ -103,6 +103,7 @@ export const LOCAL_COMMANDS: readonly (CommandInfo & { options?: (s: SextantStat
     options: (_s, q, fz) => rank(q, ["messages", "code", "files"], fz).map((f) => ({ label: f, hint: "" })) },
   { name: "agents", description: "the crew board (code panel ∷)", local: true },
   { name: "notices", description: "notification history (⌃b)", local: true },
+  { name: "market", description: "install MCP servers, skills, plugins (⌃m)", local: true },
 ];
 
 const THEME_HINT: Record<ThemeName, string> = { night: "night + mint", ember: "ink + ember", contrast: "pure contrast" };
@@ -142,8 +143,10 @@ export interface Suggestion {
   enter: "submit" | "complete";
 }
 
-/** rows the box can show — keys.ts wraps ↑↓ over exactly these, so the cap lives here alone */
-export const MAX_SUGGESTIONS = 8;
+/** rows the box can show — keys.ts wraps ↑↓ over exactly these, so the cap lives here alone.
+ *  Raised from 8 when /market made the local list eight long: at 8 a bare `/` showed nothing BUT the
+ *  renderer-local commands, and the app's own (/exit, /model, /effort…) fell off the box entirely. */
+export const MAX_SUGGESTIONS = 10;
 
 /** the dropdown above the prompt, at most MAX_SUGGESTIONS rows; [] when nothing applies
  *  (overlays, cards, empty or free text) */
@@ -357,6 +360,7 @@ export const HELP_KEYS: readonly (readonly [string, string])[] = [
   ["⌃e", "files panel"],
   ["⌃o", "next tab (narrow terminal)"],
   ["⌃b", "notifications"],
+  ["⌃m", "market (install servers, skills, plugins)"],
   ["⌃v", "paste image · drop a file to attach"],
   ["⌃t", "next theme"],
   ["⌃n", "new session (/new)"],

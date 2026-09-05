@@ -16,7 +16,7 @@ export function makeState(over: Partial<SextantState> = {}): SextantState {
     messages: [], msgScroll: 0, stick: true, card: null, plan: { todos: [] }, crew: [],
     usage: { provider: "p", model: "m", turns: 0, tokensIn: 0, tokensOut: 0, contextPct: null, costUsd: null },
     input: { text: "", cur: 0, history: [], histIdx: -1, sgSel: 0 },
-    focus: "messages", page: "code", palette: null, help: false, toasts: [], notices: [], staged: [], escUntil: 0, running: false, mode: "act", yolo: false,
+    focus: "messages", page: "code", palette: null, market: null, help: false, toasts: [], notices: [], staged: [], escUntil: 0, running: false, mode: "act", yolo: false,
     theme: "night", bootAt: 0,
     commands: [{ name: "help", description: "Show commands" }, { name: "exit", description: "Quit rovecode" }, { name: "new", description: "Branch back to session start" }, { name: "hello", description: "custom greeting" }],
     version: "0.2.0", ...over,
@@ -35,14 +35,19 @@ export function makeLayout(w: number, h: number): Layout {
 }
 
 /** every hook / local call, recorded: `n` holds the counters (mutated in place by the hooks) */
-export interface Spy { ctx: KeyCtx; submits: string[]; themes: string[]; modes: string[]; opened: string[]; toasts: string[]; n: { interrupts: number; exits: number } }
+export interface Spy { ctx: KeyCtx; submits: string[]; themes: string[]; modes: string[]; opened: string[]; toasts: string[]; market: string[]; n: { interrupts: number; exits: number } }
 
 export function spyCtx(layout: Layout = makeLayout(160, 44)): Spy {
-  const spy: Spy = { submits: [], themes: [], modes: [], opened: [], toasts: [], n: { interrupts: 0, exits: 0 }, ctx: null as unknown as KeyCtx };
+  const spy: Spy = { submits: [], themes: [], modes: [], opened: [], toasts: [], market: [], n: { interrupts: 0, exits: 0 }, ctx: null as unknown as KeyCtx };
   spy.ctx = {
     layout,
     hooks: { onSubmit: (t) => { spy.submits.push(t); }, onInterrupt: () => { spy.n.interrupts++; }, onExit: () => { spy.n.exits++; } },
-    local: { setTheme: (n) => { spy.themes.push(n); }, setMode: (m) => { spy.modes.push(m); }, openFile: (p) => { spy.opened.push(p); }, toast: (t) => { spy.toasts.push(t); } },
+    local: {
+      setTheme: (n) => { spy.themes.push(n); }, setMode: (m) => { spy.modes.push(m); }, openFile: (p) => { spy.opened.push(p); }, toast: (t) => { spy.toasts.push(t); },
+      openMarket: () => { spy.market.push("open"); },
+      marketPlan: (row) => { spy.market.push(`plan:${row.kind}:${row.id}`); },
+      marketInstall: (row) => { spy.market.push(`install:${row.kind}:${row.id}`); },
+    },
     hits: [], rows: [], drag: { zone: null, y0: 0 },
   };
   return spy;

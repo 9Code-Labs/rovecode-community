@@ -15,12 +15,15 @@
  *  I/O: the terminal through TerminalIO; git/fs through sextant-repo.ts (RepoWatcher: scheduled OFF
  *  the frame loop from the tick and run async, so a slow `git status` never freezes a frame). */
 
+import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import pkg from "../../package.json";
 import type { RunEvent } from "../core/types.ts";
 import { loadTodos } from "../tools/todo.ts";
 import type { ApprovalAnswer, AssistantView, PickItem, QuestionAnswer, QuestionPrompt, Renderer, RendererHooks, SlashCommand, StatusInfo } from "../tui/renderer.ts";
 import { drawAgents } from "./draw-agents.ts";
+import { openMarket } from "./draw-market.ts";
+import { install, loadMarket, planFor } from "./market-source.ts";
 import { hunksFromUnified, setAgentsPainter } from "./draw-code.ts";
 import { fuzzy } from "./engine.ts";
 import { spawnGitAsync, toAsync, type GitRunner, type GitRunnerAsync } from "./git-status.ts";
@@ -342,6 +345,34 @@ export class SextantRenderer implements Renderer {
     setMode: (mode) => { if (mode === "diff" && this.state.code.file) this.repo.loadDiff(this.state.code.file); },
     openFile: (path) => { this.state.code.content = readFileBounded(this.state.cwd, path); this.state.code.hl = null; this.loadedFile = path; },
     toast: (text) => this.toast(text),
+    // the market: the overlay is opened at once in its loading state so the frame after ⌃m already shows
+    // the box, and the catalog is joined in when the module answers (it may touch the network)
+    openMarket: () => {
+      openMarket(this.state, [], { kind: "loading" });
+      this.loop.markDirty();
+      void loadMarket(this.state.cwd, homedir())
+        .then((load) => { if (this.state.market) { this.state.market.rows = load.rows; this.state.market.status = load.status; this.state.market.notes = load.notes; this.loop.markDirty(); } })
+        .catch((e: unknown) => { if (this.state.market) { this.state.market.status = { kind: "error", reason: e instanceof Error ? e.message : String(e) }; this.loop.markDirty(); } });
+    },
+    marketPlan: (row) => {
+      void planFor(row, { scope: "user", cwd: this.state.cwd, home: homedir() })
+        .then((plan) => {
+          const m = this.state.market;
+          if (!m) return;
+          if ("error" in plan) { this.toast(plan.error); return; }
+          m.plan = plan;
+          this.loop.markDirty();
+        });
+    },
+    marketInstall: (row) => {
+      void install(row, { scope: "user", cwd: this.state.cwd, home: homedir() }).then((outcome) => {
+        const m = this.state.market;
+        if (!m?.plan) return;
+        m.plan.running = false;
+        m.plan.outcome = outcome;
+        this.loop.markDirty();
+      });
+    },
   };
 
   /** renderer-level intercepts: the picker's Enter/Esc, and the two-press ⌃c guarantee (a ⌃c while busy

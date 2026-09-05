@@ -134,15 +134,15 @@ test("drawSuggest: a box above the prompt with the title, the selected row marke
   expect(e.toText().trim()).toBe("");
 });
 
-test("suggestions caps at MAX_SUGGESTIONS = 8 rows in one place (17 slash candidates → the 8 best; '/' → 8)", () => {
+test("suggestions caps at MAX_SUGGESTIONS rows in one place (17 slash candidates → the best MAX_SUGGESTIONS; '/' → the same cap)", () => {
   const s = makeState();
   s.commands.push(...Array.from({ length: 16 }, (_, i) => ({ name: `c${i}`, description: `command ${i}` })));
   s.input = { ...s.input, text: "/c", cur: 2 };
-  expect(MAX_SUGGESTIONS).toBe(8);
+  expect(MAX_SUGGESTIONS).toBe(10); // raised from 8 when /market made the local list eight long
   const sugs = suggestions(s, s.files.paths);
-  expect(sugs.map((x) => x.label)).toEqual(["/c0", "/c1", "/c2", "/c3", "/c4", "/c5", "/c6", "/c7"]);
+  expect(sugs.map((x) => x.label)).toEqual(Array.from({ length: MAX_SUGGESTIONS }, (_, i) => `/c${i}`));
   s.input = { ...s.input, text: "/", cur: 1 };
-  expect(suggestions(s, s.files.paths).length).toBe(8);
+  expect(suggestions(s, s.files.paths).length).toBe(MAX_SUGGESTIONS);
 });
 
 test("drawSuggest never writes the state: a frozen input paints, sgSel past the rows is clamped for the highlight only, the box holds the capped rows", () => {
@@ -155,9 +155,9 @@ test("drawSuggest never writes the state: a frozen input paints, sgSel past the 
   expect(() => drawSuggest(scr, L.messages, s, sugs, THEME)).not.toThrow();
   expect(s.input).toEqual(before);
   expect(s.input.sgSel).toBe(20);
-  expect(scr.toText()).toMatch(/▸ \/c7/); // the last drawn row carries the highlight
+  expect(scr.toText()).toMatch(new RegExp(`▸ /c${MAX_SUGGESTIONS - 1}`)); // the last drawn row carries the highlight
   const top = scr.cells.findIndex((r) => r.includes("╭")), bottom = scr.cells.findIndex((r) => r.includes("╰"));
-  expect(bottom - top + 1).toBe(8 + 3); // 8 rows + title + borders: the box height follows the cap
+  expect(bottom - top + 1).toBe(MAX_SUGGESTIONS + 3); // rows + title + borders: the box height follows the cap
   expect(top).toBe(L.messages.y + 1); // 11 rows do not fit above the prompt of a 14-row panel: clamped to the first inner row
 });
 

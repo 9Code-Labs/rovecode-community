@@ -32,6 +32,7 @@ import {
   type Rect, type SextantState, type ThemeName, type TreeRow,
 } from "./types.ts";
 import { type Fuzzy, type Suggestion, onPaletteKey, openPalette, parseInput, resolveFile, suggestions } from "./overlays.ts";
+import { marketVisible, onMarketKey, type MarketViewRow } from "./draw-market.ts";
 import { dispatch, openFile, runAction, setFocus, setMode, setTheme, showAgents } from "./local-commands.ts";
 import { dismissCard, onCardKey } from "./card-keys.ts";
 import { gridFor } from "./draw-agents.ts";
@@ -49,7 +50,15 @@ export interface KeyCtx {
   /** rovecode RendererHooks (tui/renderer.ts): the controller's submit / interrupt / exit */
   hooks: { onSubmit(text: string): void; onInterrupt(): void; onExit(): void };
   /** renderer-owned effects; the state field is already written when these fire */
-  local: { setTheme(name: ThemeName): void; setMode(mode: CodeMode): void; openFile(path: string): void; toast(text: string): void };
+  local: {
+    setTheme(name: ThemeName): void; setMode(mode: CodeMode): void; openFile(path: string): void; toast(text: string): void;
+    /** open /market: the renderer loads the catalog (async) and fills s.market when it answers */
+    openMarket(): void;
+    /** the human pressed Enter on a row: build the plan and write it into s.market.plan */
+    marketPlan(row: MarketViewRow): void;
+    /** the human confirmed the plan card: run it and write the outcome back onto the card */
+    marketInstall(row: MarketViewRow): void;
+  };
   /** click zones the drawers registered while painting the current frame */
   hits: readonly HitZone[];
   /** the zone grabbed by the last click that had an onDrag (a scrollbar thumb); owned by the frame loop
@@ -91,6 +100,17 @@ export function handleInput(s: SextantState, ev: InputEvent, ctx: KeyCtx, now: n
     onPaletteKey(s, ev, (a) => runAction(s, a, ctx), ctx.fuzzy);
     return R();
   }
+  if (s.market) {
+    if (ev.ctrl && ev.name === "c") return ctrlC(s, ctx);
+    const req = onMarketKey(s, ev, ctx.fuzzy);
+    // the overlay decides WHAT should happen; the renderer owns the market module and does it
+    if (req.kind === "plan") ctx.local.marketPlan(req.row);
+    else if (req.kind === "install") {
+      const row = marketVisible(s.market, ctx.fuzzy)[s.market.sel];
+      if (row) ctx.local.marketInstall(row);
+    }
+    return R();
+  }
   if (s.help) { // app.js:1488 — the card swallows every key; the usual closers dismiss it
     const closer = ev.name === "escape" || ev.name === "enter" || ev.name === "space" || (ev.ctrl && ev.name === "c");
     if (closer || (ev.ch && !ev.ctrl)) s.help = false;
@@ -126,6 +146,7 @@ function onCtrl(s: SextantState, ev: KeyEvent, ctx: KeyCtx): KeyEffect[] {
       return R();
     }
     case "b": openNotices(s); return R(); // the notification history (overlays.ts openNotices)
+    case "m": ctx.local.openMarket(); return R(); // the market overlay (draw-market.ts)
     // ⌃v with an IMAGE on the clipboard: the terminal sends no paste for it, only this key — ask the
     // OS for the image through /paste (tui/attach.ts cmdPasteImage). Text pastes never arrive here.
     case "v": ctx.hooks.onSubmit("/paste"); return R();

@@ -79,6 +79,10 @@ export function runLocal(s: SextantState, cmd: string, arg: string, ctx: KeyCtx)
     case "notices":
       openNotices(s);
       return true;
+    case "market":
+      // the overlay opens empty with a "loading" status; the renderer fills it when the catalog answers
+      ctx.local.openMarket();
+      return true;
     case "theme":
       if (isTheme(arg)) setTheme(s, ctx, arg);
       else ctx.local.toast(`unknown theme "${arg}" · night, ember or contrast`);

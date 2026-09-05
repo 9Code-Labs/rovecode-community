@@ -592,10 +592,10 @@ test("the suggestion box holds at most 8 rows and ↓/↑ wrap inside them (17 c
   s.commands.push(...Array.from({ length: 16 }, (_, i) => ({ name: `c${i}`, description: `command ${i}` })));
   type(s, spy, "/c");
   expect(suggestions(s, s.files.paths).length).toBe(MAX_SUGGESTIONS);
-  for (let i = 0; i < 9; i++) press(s, spy, key("down"));
-  expect(s.input.sgSel).toBe(1);
+  for (let i = 0; i < MAX_SUGGESTIONS + 1; i++) press(s, spy, key("down"));
+  expect(s.input.sgSel).toBe(1); // wrapped past the last row
   press(s, spy, key("up")); press(s, spy, key("up"));
-  expect(s.input.sgSel).toBe(7);
+  expect(s.input.sgSel).toBe(MAX_SUGGESTIONS - 1);
 });
 
 test("⌃c with a pending card while running denies the card AND interrupts once, no exit (documented deviation)", () => {

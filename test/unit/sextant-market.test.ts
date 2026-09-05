@@ -1,0 +1,257 @@
+/** The market overlay: what it shows, what the keys do, and — the part that matters — that the three
+ *  not-ready states never read alike and that nothing installs without the plan card being confirmed. */
+
+import { describe, expect, test } from "bun:test";
+import {
+  closeMarket, drawMarket, marketCounts, marketVisible, onMarketKey, openMarket, rowBadge, statusLine, wrap,
+  type MarketPlan, type MarketStatus, type MarketViewRow,
+} from "../../src/sextant/draw-market.ts";
+import { statusFrom, toViewRow } from "../../src/sextant/market-source.ts";
+import { key, makeLayout, spyCtx } from "../helpers/sextant-fixtures-keys.ts";
+import { GridScreen, THEME, baseState } from "../helpers/sextant-grid.ts";
+import { handleInput } from "../../src/sextant/keys.ts";
+import type { HitZone, SextantState } from "../../src/sextant/types.ts";
+
+const L = makeLayout(150, 40);
+/** paint the overlay onto a grid and read it back as text */
+function render(s: SextantState, hits?: HitZone[]): string {
+  const g = new GridScreen(L.w, L.h, " ");
+  drawMarket(g, L, THEME, s, undefined, hits);
+  return g.toText();
+}
+
+const row = (over: Partial<MarketViewRow> = {}): MarketViewRow => ({
+  id: "filesystem", kind: "mcp", title: "Filesystem", publisher: "modelcontextprotocol (Anthropic)",
+  description: "Read, write, search and move files under the directories you name.",
+  runs: "npx -y @modelcontextprotocol/server-filesystem", env: [], ...over,
+});
+
+const ROWS: MarketViewRow[] = [
+  row(),
+  row({ id: "github", title: "GitHub", publisher: "GitHub", description: "Issues, pull requests and code search.", runs: "remote https://api.githubcopilot.com/mcp/", env: [{ name: "Authorization", required: true, secret: true, description: "a GitHub personal access token" }] }),
+  row({ id: "conventional-commits", kind: "skill", title: "conventional-commits", publisher: "plugin: conventional-commits", description: "Conventional Commits: types, one scope, imperative subject.", runs: "a SKILL.md the model reads when it matches" }),
+  row({ id: "notes", kind: "plugin", title: "notes", publisher: "rovecode", description: "A scratchpad that survives the session.", runs: "copy plugins/notes", installed: { path: "~/.rovecode/plugins/notes", scope: "user", version: "0.1.0" } }),
+];
+
+function open(rows = ROWS, status: MarketStatus = { kind: "ready" }) {
+  const s = baseState();
+  openMarket(s, rows, status);
+  return s;
+}
+
+describe("market overlay · rows", () => {
+  test("the tab strip counts the whole catalog, not the filtered list", () => {
+    const s = open();
+    s.market!.query = "github";
+    expect(marketCounts(s.market!)).toEqual({ all: 4, mcp: 2, skill: 1, plugin: 1 });
+  });
+
+  test("a tab narrows to its kind and the query ranks inside it", () => {
+    const s = open();
+    s.market!.tab = "mcp";
+    expect(marketVisible(s.market!).map((r) => r.id)).toEqual(["filesystem", "github"]);
+    s.market!.query = "github";
+    expect(marketVisible(s.market!).map((r) => r.id)).toEqual(["github"]);
+  });
+
+  test("the badge comes from `installed` alone, and says which kind of installed", () => {
+    expect(rowBadge(row())).toBeNull();
+    expect(rowBadge(row({ installed: { path: "p", scope: "user" } }))?.text).toBe("installed");
+    expect(rowBadge(row({ installed: { path: "p", scope: "user", updateAvailable: true } }))?.text).toBe("update");
+    expect(rowBadge(row({ installed: { path: "p", scope: "project", trusted: false } }))?.text).toBe("not approved");
+  });
+});
+
+describe("market overlay · the three not-ready states", () => {
+  test("empty, offline and error are three different sentences", () => {
+    const empty = statusLine({ ...open([]).market!, status: { kind: "ready" } }, 0);
+    const offline = statusLine(open(ROWS, { kind: "offline", note: "showing cached results, 4m old" }).market!, 4);
+    const error = statusLine(open([], { kind: "error", reason: "mcp:registry: connect ETIMEDOUT" }).market!, 0);
+    expect(empty?.text).toBe("the catalog is empty");
+    expect(offline?.text).toContain("cached");
+    expect(error?.text).toContain("ETIMEDOUT");
+    expect(new Set([empty?.tone, offline?.tone, error?.tone]).size).toBe(3);
+  });
+
+  test("no matches is not the same as an empty catalog", () => {
+    const s = open();
+    s.market!.query = "zzzz";
+    expect(statusLine(s.market!, 0)?.text).toContain('nothing matches "zzzz"');
+  });
+
+  test("a source that failed is an error even when other sources produced rows", () => {
+    expect(statusFrom({ "mcp:curated": { ok: true, from: "curated" }, "mcp:registry": { ok: false, reason: "connect ETIMEDOUT" } }))
+      .toEqual({ kind: "error", reason: "mcp:registry: connect ETIMEDOUT" });
+  });
+
+  test("a cache hit is offline with its age; a skipped source says why, verbatim", () => {
+    const cached = statusFrom({ "mcp:registry": { ok: true, from: "cache", ageMs: 240_000 } });
+    expect(cached).toEqual({ kind: "offline", note: "showing cached results, 4m old" });
+    const skipped = statusFrom({ "mcp:registry": { ok: true, from: "skipped", why: "an empty query does not ask the registry" } });
+    expect(skipped).toEqual({ kind: "offline", note: "an empty query does not ask the registry" });
+  });
+
+  test("every source ok and nothing skipped is simply ready", () => {
+    expect(statusFrom({ skills: { ok: true, from: "curated" }, plugins: { ok: true, from: "curated" } })).toEqual({ kind: "ready" });
+  });
+});
+
+describe("market overlay · keys", () => {
+  test("↑↓ wrap, ⇥ cycles the kinds, typing filters and resets the selection", () => {
+    const s = open();
+    onMarketKey(s, key("down"));
+    expect(s.market!.sel).toBe(1);
+    onMarketKey(s, key("up"));
+    onMarketKey(s, key("up"));
+    expect(s.market!.sel).toBe(3); // wrapped to the end
+    onMarketKey(s, key("tab"));
+    expect(s.market!.tab).toBe("mcp");
+    expect(s.market!.sel).toBe(0);
+    onMarketKey(s, key("shift-tab"));
+    expect(s.market!.tab).toBe("all");
+    for (const ch of "git") onMarketKey(s, key(ch));
+    expect(s.market!.query).toBe("git");
+    expect(marketVisible(s.market!)[0]!.id).toBe("github");
+    onMarketKey(s, key("backspace"));
+    expect(s.market!.query).toBe("gi");
+  });
+
+  test("Enter asks for a plan — it does not install", () => {
+    const s = open();
+    const req = onMarketKey(s, key("enter"));
+    expect(req).toEqual({ kind: "plan", row: ROWS[0]! });
+    expect(s.market!.plan).toBeNull();
+  });
+
+  test("nothing installs until the plan card is confirmed, and esc backs out of it", () => {
+    const s = open();
+    const plan: MarketPlan = { title: "mcp:filesystem — Filesystem", target: "~/.rovecode/mcp.json", scope: "user", preview: ["writes one server entry"], asks: [], pending: [] };
+    s.market!.plan = plan;
+    expect(onMarketKey(s, key("escape"))).toEqual({ kind: "none" });
+    expect(s.market!.plan).toBeNull();
+    s.market!.plan = { ...plan };
+    const req = onMarketKey(s, key("enter"));
+    expect(req.kind).toBe("install");
+    expect(s.market!.plan!.running).toBe(true);
+    // a second Enter while it runs must not start a second install
+    expect(onMarketKey(s, key("enter"))).toEqual({ kind: "none" });
+  });
+
+  test("Enter on a finished plan dismisses the card", () => {
+    const s = open();
+    s.market!.plan = { title: "t", target: "p", scope: "user", preview: [], asks: [], pending: [], outcome: { ok: true, text: "installed into ~/.rovecode/mcp.json" } };
+    onMarketKey(s, key("enter"));
+    expect(s.market!.plan).toBeNull();
+  });
+
+  test("esc closes the overlay when no card is open", () => {
+    const s = open();
+    onMarketKey(s, key("escape"));
+    expect(s.market).toBeNull();
+  });
+
+  test("the overlay swallows keys through handleInput and asks the renderer for the plan", () => {
+    const s = open();
+    const spy = spyCtx();
+    handleInput(s, key("down"), spy.ctx, 0);
+    handleInput(s, key("enter"), spy.ctx, 0);
+    expect(spy.market).toEqual(["plan:mcp:github"]);
+    expect(spy.submits).toEqual([]); // nothing reached the agent
+  });
+
+  test("closeMarket clears the state", () => {
+    const s = open();
+    closeMarket(s);
+    expect(s.market).toBeNull();
+  });
+});
+
+describe("market overlay · painting", () => {
+  test("the frame carries the title, the tabs with counts, the selected row and its detail", () => {
+    const s = open();
+    const text = render(s);
+    expect(text).toContain("market");
+    expect(text).toContain("all 4");
+    expect(text).toContain("mcp 2");
+    expect(text).toContain("Filesystem");
+    expect(text).toContain("npx -y @modelcontextprotocol/server-filesystem");
+    expect(text).toContain("what it runs");
+    expect(text).toContain("esc closes");
+  });
+
+  test("a secret variable is drawn with its lock and its sentence", () => {
+    const s = open();
+    s.market!.sel = 1;
+    const text = render(s);
+    expect(text).toContain("Authorization");
+    expect(text).toContain("Authorization · secret");
+    expect(text).toContain("personal access token");
+  });
+
+  test("an installed row shows its badge and where it landed", () => {
+    const s = open();
+    s.market!.sel = 3;
+    const text = render(s);
+    expect(text).toContain("installed");
+    expect(text).toContain("~/.rovecode/plugins/notes");
+  });
+
+  test("the plan card covers the list and says what confirming does", () => {
+    const s = open();
+    s.market!.plan = { title: "mcp:filesystem — Filesystem", target: "~/.rovecode/mcp.json", scope: "user", preview: ["writes one server entry", "runs npx on launch"], asks: [{ name: "TOKEN", required: true, secret: true }], pending: ["<directory the server may touch>"] };
+    const text = render(s);
+    expect(text).toContain("install plan");
+    expect(text).toContain("user scope · ~/.rovecode/mcp.json");
+    expect(text).toContain("writes one server entry");
+    expect(text).toContain("asks TOKEN (secret, masked)");
+    expect(text).toContain("you supply <directory the server may touch>");
+    expect(text).toContain("⏎ install");
+    expect(text).toContain("esc cancel");
+  });
+
+  test("the error state names the source and still offers the way out", () => {
+    const s = open([], { kind: "error", reason: "mcp:registry: connect ETIMEDOUT" });
+    const text = render(s);
+    expect(text).toContain("connect ETIMEDOUT");
+    expect(text).toContain("the curated shelf still works offline");
+  });
+
+  test("a click on a row selects it and carries Enter; a click outside closes", () => {
+    const s = open();
+    const hits: HitZone[] = [];
+    render(s, hits);
+    const rowHit = hits.filter((h) => h.key?.name === "enter").at(-1)!;
+    rowHit.onClick();
+    expect(s.market!.sel).toBeGreaterThan(0);
+    hits[0]!.onClick(); // the full-screen zone, registered first
+    expect(s.market).toBeNull();
+  });
+});
+
+describe("market overlay · helpers", () => {
+  test("wrap breaks on words and cuts a word longer than the column", () => {
+    expect(wrap("one two three", 9)).toEqual(["one two", "three"]);
+    expect(wrap("supercalifragilistic", 6)).toEqual(["superc"]);
+    expect(wrap("", 10)).toEqual([]);
+  });
+
+  test("toViewRow flattens an mcp item's first install form and names the rest", () => {
+    const view = toViewRow({
+      id: "github", kind: "mcp", title: "GitHub", publisher: "GitHub", description: "d", tags: [], env: [],
+      install: { kind: "mcp", entry: { installs: [
+        { kind: "http", url: "https://api.githubcopilot.com/mcp/" },
+        { kind: "stdio", runtime: "docker", command: "docker", args: ["run", "ghcr.io/github/github-mcp-server"] },
+      ] } },
+    } as Parameters<typeof toViewRow>[0]);
+    expect(view.runs).toBe("remote https://api.githubcopilot.com/mcp/");
+    expect(view.alternatives).toEqual(["docker: docker run ghcr.io/github/github-mcp-server"]);
+  });
+
+  test("toViewRow keeps a skill's honest 'runs nothing' line", () => {
+    const view = toViewRow({
+      id: "s", kind: "skill", title: "s", publisher: "p", description: "d", tags: [], env: [],
+      install: { kind: "skill", files: [{ path: "SKILL.md", text: "" }] },
+    } as Parameters<typeof toViewRow>[0]);
+    expect(view.runs).toContain("runs nothing");
+  });
+});
