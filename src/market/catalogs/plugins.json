@@ -1,0 +1,90 @@
+{
+  "version": 1,
+  "generatedBy": "scripts/build-plugin-catalog.mjs",
+  "sources": [
+    "https://github.com/9Code-Labs/rovecode"
+  ],
+  "items": [
+    {
+      "id": "conventional-commits",
+      "title": "Conventional Commits",
+      "publisher": "9Code Labs",
+      "description": "/commit writes a Conventional Commits message for the staged diff; the skill teaches the format and this project's scopes.",
+      "version": "0.1.0",
+      "apiVersion": 1,
+      "license": "AGPL-3.0-only",
+      "contributes": [
+        "commands",
+        "skills"
+      ],
+      "tags": [
+        "first-party"
+      ],
+      "repository": "https://github.com/9Code-Labs/rovecode",
+      "homepage": "https://github.com/9Code-Labs/rovecode",
+      "install": {
+        "source": "https://github.com/9Code-Labs/rovecode",
+        "git": true,
+        "subfolder": "plugins/conventional-commits"
+      },
+      "planNote": [
+        "no entry module: this plugin contributes files only (commands, skills), nothing is imported",
+        "contributes: commands, skills"
+      ]
+    },
+    {
+      "id": "notes",
+      "title": "Notes",
+      "publisher": "9Code Labs",
+      "description": "Two tools: notes_add appends a dated line to .rovecode/notes.md, notes_list reads it back — a scratchpad that survives the session.",
+      "version": "0.1.0",
+      "apiVersion": 1,
+      "license": "AGPL-3.0-only",
+      "contributes": [
+        "tools",
+        "hooks"
+      ],
+      "tags": [
+        "first-party"
+      ],
+      "repository": "https://github.com/9Code-Labs/rovecode",
+      "homepage": "https://github.com/9Code-Labs/rovecode",
+      "install": {
+        "source": "https://github.com/9Code-Labs/rovecode",
+        "git": true,
+        "subfolder": "plugins/notes"
+      },
+      "planNote": [
+        "runs code: this plugin ships an entry module that rovecode imports in-process",
+        "contributes: tools, hooks"
+      ]
+    },
+    {
+      "id": "safety-net",
+      "title": "Safety Net",
+      "publisher": "9Code Labs",
+      "description": "A second look before a destructive shell command, and a nudge when a test run prints FAIL.",
+      "version": "0.1.0",
+      "apiVersion": 1,
+      "license": "AGPL-3.0-only",
+      "contributes": [
+        "tools",
+        "hooks"
+      ],
+      "tags": [
+        "first-party"
+      ],
+      "repository": "https://github.com/9Code-Labs/rovecode",
+      "homepage": "https://github.com/9Code-Labs/rovecode",
+      "install": {
+        "source": "https://github.com/9Code-Labs/rovecode",
+        "git": true,
+        "subfolder": "plugins/safety-net"
+      },
+      "planNote": [
+        "runs code: this plugin ships an entry module that rovecode imports in-process",
+        "contributes: tools, hooks"
+      ]
+    }
+  ]
+}

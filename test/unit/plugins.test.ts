@@ -255,3 +255,55 @@ test("loadPlugins end to end + the boot summary line", async () => {
     expect(l.warnings.some((w) => w.includes("not valid JSON"))).toBe(true);
   } finally { r.done(); }
 });
+
+/** Every real plugin lives in a subfolder of a repository that publishes several: rovecode's own three
+ *  are `plugins/safety-net`, `plugins/notes` and `plugins/conventional-commits`. While `add` looked only
+ *  at the clone root, a catalog could not install any of them — which is why the plugin catalog stayed
+ *  empty until this landed. */
+test("install --subfolder: takes the plugin out of a monorepo, and refuses one that climbs out of it", async () => {
+  const r = rig();
+  const src = mkdtempSync(join(tmpdir(), "rovecode-plug-mono-"));
+  try {
+    // a repo that ships two plugins, neither at the root
+    mkdirSync(join(src, "plugins"), { recursive: true });
+    plugin(join(src, "plugins"), "alpha", { version: "2.0.0" });
+    plugin(join(src, "plugins"), "beta");
+    writeFileSync(join(src, "README.md"), "a monorepo, no manifest at the root");
+
+    // without a subfolder the root has no manifest — the old behaviour, unchanged
+    expect(await addPlugin(src, { cwd: r.cwd, home: r.home, scope: "user" }))
+      .toMatchObject({ ok: false, error: expect.stringContaining("no plugin.json") });
+
+    const ok = await addPlugin(src, { cwd: r.cwd, home: r.home, scope: "user", subfolder: "plugins/alpha" });
+    expect(ok).toMatchObject({ ok: true, name: "alpha" });
+    // it lands under its own name, not the repository's, and carries the subfolder's manifest
+    expect(existsSync(join(userRoot(r), "alpha", "plugin.json"))).toBe(true);
+    expect(existsSync(join(userRoot(r), "plugins"))).toBe(false);
+    expect((ok as { manifest: { version: string } }).manifest.version).toBe("2.0.0");
+    // and only that one: a sibling in the same repo is not dragged along
+    expect(existsSync(join(userRoot(r), "beta"))).toBe(false);
+
+    // a subfolder is a path inside the source, and nothing else
+    for (const bad of ["../outside", "plugins/../../etc", "/etc", "C:\\Windows"]) {
+      expect(await addPlugin(src, { cwd: r.cwd, home: r.home, scope: "user", subfolder: bad }))
+        .toMatchObject({ ok: false, error: expect.stringContaining("escapes the source") });
+    }
+    // a subfolder that is simply not there says so, rather than falling back to the root
+    expect(await addPlugin(src, { cwd: r.cwd, home: r.home, scope: "user", subfolder: "plugins/nope" }))
+      .toMatchObject({ ok: false, error: expect.stringContaining('no folder "plugins/nope"') });
+
+    // the same through a git source: clone, then take the subfolder out of the clone
+    const spawn = async (cmd: string[], cwd: string) => {
+      const dir = join(cwd, cmd[cmd.length - 1]!);
+      mkdirSync(join(dir, "plugins"), { recursive: true });
+      plugin(join(dir, "plugins"), "remote", { version: "3.1.0" });
+      return { code: 0, stderr: "" };
+    };
+    const g = await addPlugin("https://github.com/x/mono.git", { cwd: r.cwd, home: r.home, scope: "user", subfolder: "plugins/remote", spawn });
+    expect(g).toMatchObject({ ok: true, name: "remote" });
+    expect(existsSync(join(userRoot(r), "remote", "plugin.json"))).toBe(true);
+  } finally {
+    rmSync(src, { recursive: true, force: true });
+    r.done();
+  }
+});

@@ -16,7 +16,10 @@ export type SkillScope = "project" | "global";
 
 export interface Skill {
   name: string;
+  /** one line for the system-prompt index: clipped to MAX_DESCRIPTION_CHARS on a word boundary */
   description: string;
+  /** the description as written, however long — what `skill_view` and the market show */
+  fullDescription: string;
   version: string;
   /** absolute path of the SKILL.md */
   path: string;
@@ -61,7 +64,16 @@ export interface SkillStoreOptions {
 
 // ---------- Frontmatter ----------
 
-/** Split `---\nkey: value` frontmatter from body. Returns null when no block. */
+/** Split `---\nkey: value` frontmatter from body. Returns null when no block.
+ *
+ *  Values may be a plain scalar, or a YAML block scalar — `key: >` / `|` / `>-` / `|-` followed by
+ *  more-indented lines, which real SKILL.md files use for anything longer than a phrase. Measured on
+ *  anthropics/skills (2026-09-05): 3 of 19 skills write their description that way, and reading only
+ *  the header line gave `description: ">"` — not an error, just a skill whose one-line summary is a
+ *  punctuation mark, with its continuation lines mistaken for keys of their own. That is worse than
+ *  rejecting it, because nothing says anything went wrong. Folded (`>`) joins its lines with a space,
+ *  literal (`|`) keeps the newlines, a trailing `-` strips the final newline. The rest of YAML —
+ *  anchors, nested maps, lists — is still out of scope: this is a frontmatter reader, not a parser. */
 export function parseFrontmatter(text: string): { fm: Record<string, string>; body: string } | null {
   if (!text.startsWith("---")) return null;
   const end = text.indexOf("\n---", 3);
@@ -70,14 +82,38 @@ export function parseFrontmatter(text: string): { fm: Record<string, string>; bo
   const block = text.slice(4, end); // skip leading `---\n`
   const body = text.slice(closeEnd).replace(/^\r?\n/, "");
   const fm: Record<string, string> = {};
-  for (const line of block.split(/\r?\n/)) {
-    const i = line.indexOf(":");
-    if (i === -1) continue;
-    const k = line.slice(0, i).trim();
-    const v = line.slice(i + 1).trim().replace(/^["']|["']$/g, "");
-    if (k) fm[k] = v;
+  const lines = block.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] as string;
+    if (/^\s/.test(line)) continue;                 // an orphan continuation is not a key of its own
+    const c = line.indexOf(":");
+    if (c === -1) continue;
+    const k = line.slice(0, c).trim();
+    if (!k) continue;
+    const rest = line.slice(c + 1).trim();
+    const m = /^([|>])([+-]?)$/.exec(rest);
+    if (m === null) { fm[k] = rest.replace(/^["']|["']$/g, ""); continue; }
+    const folded = m[1] === ">";
+    const owned: string[] = [];
+    while (i + 1 < lines.length) {
+      const next = lines[i + 1] as string;
+      if (next.trim() !== "" && !/^\s/.test(next)) break;   // back to column 0: the block ended
+      owned.push(next.replace(/^\s+/, ""));
+      i++;
+    }
+    while (owned.length > 0 && owned[owned.length - 1] === "") owned.pop();
+    fm[k] = folded ? owned.join(" ").replace(/\s+/g, " ").trim() : owned.join("\n");
   }
   return { fm, body };
+}
+
+/** Clip to the index budget on a word boundary, with an ellipsis so a reader can tell it was cut. */
+export function clipDescription(text: string): string {
+  const one = text.replace(/\s+/g, " ").trim();
+  if (one.length <= MAX_DESCRIPTION_CHARS) return one;
+  const cut = one.slice(0, MAX_DESCRIPTION_CHARS - 1);
+  const sp = cut.lastIndexOf(" ");
+  return `${(sp > MAX_DESCRIPTION_CHARS / 2 ? cut.slice(0, sp) : cut).replace(/[,;:.]$/, "")}…`;
 }
 
 function parseSkillFile(path: string, scope: SkillScope): { skill: Skill } | { invalid: InvalidSkill } {
@@ -93,13 +129,18 @@ function parseSkillFile(path: string, scope: SkillScope): { skill: Skill } | { i
   const description = parsed.fm["description"] ?? "";
   if (!name) return { invalid: { path, reason: "frontmatter missing name" } };
   if (!description) return { invalid: { path, reason: "frontmatter missing description" } };
-  if (description.length > MAX_DESCRIPTION_CHARS) {
-    return { invalid: { path, reason: `description is ${description.length} chars (max ${MAX_DESCRIPTION_CHARS})` } };
-  }
+  // A long description is CLIPPED for the index, never a reason to reject the skill. The cap exists to
+  // protect the system prompt (50 skills x a 950-char description is 47 KB of prefix), and clipping
+  // protects it just as well while a hard reject throws away a working skill for being wordy. Measured
+  // on anthropics/skills (2026-09-05): 16 of 19 real skills are over the cap, median 319 chars, longest
+  // 950 — the whole public corpus would have been unusable. The two other places rovecode reads a
+  // description already clip (plugins/manifest.ts, tui/commands.ts); this was the outlier.
   const st = statSync(path);
   return {
     skill: {
-      name, description,
+      name,
+      description: clipDescription(description),
+      fullDescription: description,
       version: parsed.fm["version"] ?? "0.0.0",
       path, body: parsed.body, scope,
       mtimeMs: st.mtimeMs, size: st.size,

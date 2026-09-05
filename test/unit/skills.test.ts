@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   SkillStore, parseFrontmatter, skillLifecycle, readUsage, usagePath,
-  touchSkillFile, STALE_AFTER_MS,
+  touchSkillFile, STALE_AFTER_MS, MAX_DESCRIPTION_CHARS,
 } from "../../src/skills/index.ts";
 import { createSkillTools, buildSkillsIndex, INDEX_PROMPT_LIMIT } from "../../src/skills/tools.ts";
 
@@ -67,14 +67,42 @@ test("scan finds project and global skills, parses frontmatter", () => {
 test("scan reports invalid skills without failing the whole scan", () => {
   mkdirSync(join(projSkills, "nodesc"), { recursive: true });
   writeFileSync(join(projSkills, "nodesc", "SKILL.md"), "---\nname: nodesc\n---\nbody\n");
-  mkdirSync(join(projSkills, "toolong"), { recursive: true });
-  writeFileSync(join(projSkills, "toolong", "SKILL.md"), `---\nname: toolong\ndescription: ${"x".repeat(61)}\n---\n`);
   const store = new SkillStore(join(root, "proj"), { globalDir: globalSkills });
   const r = store.scan();
-  expect(r.invalid.length).toBe(2);
+  expect(r.invalid.length).toBe(1);           // a missing name or description is still fatal
   expect(r.invalid.map((i) => i.path).some((p) => p.includes("nodesc"))).toBe(true);
-  expect(r.invalid.map((i) => i.path).some((p) => p.includes("toolong"))).toBe(true);
   expect(r.skills.some((s) => s.name === "alpha")).toBe(true); // valid ones still listed
+});
+
+/** A wordy description is not a broken skill. 16 of the 19 skills in anthropics/skills are over the
+ *  60-char cap (median 319, longest 950), so rejecting them would have made the only real public
+ *  corpus unusable; the cap exists to protect the system-prompt index, and clipping protects it just
+ *  as well. The two other places rovecode reads a description already clip. */
+test("a long description is clipped for the index, not a reason to reject the skill", () => {
+  mkdirSync(join(projSkills, "wordy"), { recursive: true });
+  const long = "Use this skill any time a spreadsheet file is the primary input or output of the task, including reading data and writing formulas.";
+  writeFileSync(join(projSkills, "wordy", "SKILL.md"), `---\nname: wordy\ndescription: ${long}\n---\nbody\n`);
+  const store = new SkillStore(join(root, "proj"), { globalDir: globalSkills });
+  const r = store.scan();
+  expect(r.invalid.map((i) => i.path).some((p) => p.includes("wordy"))).toBe(false);
+  const s = store.get("wordy")!;
+  expect(s.description.length).toBeLessThanOrEqual(MAX_DESCRIPTION_CHARS);
+  expect(s.description.endsWith("…")).toBe(true);        // the cut is visible, not silent
+  expect(s.description).not.toContain("formulas");            // really clipped
+  expect(s.fullDescription).toBe(long);                       // and the whole thing is still there
+});
+
+/** Real SKILL.md files write a long description as a YAML block scalar. Read line by line it came out
+ *  as `">"`, and the indented continuation lines became keys of their own — a skill that loads fine
+ *  and tells the model nothing about itself. */
+test("a block-scalar description is folded, and its continuation lines are not keys", () => {
+  const fm = parseFrontmatter("---\nname: folded\ndescription: >\n  first line\n  second line\nlicense: MIT\n---\n\nbody\n");
+  expect(fm!.fm["description"]).toBe("first line second line");
+  expect(fm!.fm["license"]).toBe("MIT");
+  expect(Object.keys(fm!.fm).sort()).toEqual(["description", "license", "name"]);
+
+  const lit = parseFrontmatter("---\nname: literal\ndescription: |\n  line one\n  line two\n---\n\nbody\n");
+  expect(lit!.fm["description"]).toBe("line one\nline two");   // literal keeps the newline
 });
 
 test("missing dirs scan to empty without throwing", () => {

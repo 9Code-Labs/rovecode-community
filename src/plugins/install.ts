@@ -7,7 +7,7 @@
 
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { pluginRoots, type PluginScope } from "./discover.ts";
 import { MANIFEST_FILE, parseManifest, type PluginManifest } from "./manifest.ts";
 import { isDir, loadState, pluginDigest, saveState, trustKey } from "./state.ts";
@@ -19,6 +19,13 @@ export interface InstallOptions {
   scope: PluginScope;
   /** replace an existing plugin of the same name */
   force?: boolean;
+  /** the plugin's folder INSIDE the source, when the source is a repository that publishes several.
+   *
+   *  Every real plugin is one: rovecode's own three live in `plugins/safety-net`, `plugins/notes` and
+   *  `plugins/conventional-commits`, and a catalog could not install any of them while `add` only looked
+   *  at the clone root. Rejected rather than normalised: an absolute path, a drive letter, or any `..`
+   *  segment — a subfolder that climbs out of the clone is an attempt, not a typo. */
+  subfolder?: string;
   /** how `git clone` runs; default Bun.spawn — tests inject one that never touches the network */
   spawn?: Spawn;
 }
@@ -48,6 +55,17 @@ export async function addPlugin(source: string, opts: InstallOptions): Promise<A
       src = join(tmp, "src");
     }
     src = resolve(src);
+    if (opts.subfolder !== undefined && opts.subfolder !== "") {
+      const sub = opts.subfolder.split("\\").join("/");
+      if (sub.startsWith("/") || /^[A-Za-z]:/.test(sub) || sub.split("/").includes("..")) {
+        return { ok: false, error: `subfolder "${opts.subfolder}" escapes the source` };
+      }
+      const inner = resolve(join(src, sub));
+      // resolve() alone is not the check: it happily returns a path outside src for a crafted input
+      if (inner !== src && !inner.startsWith(src + sep)) return { ok: false, error: `subfolder "${opts.subfolder}" escapes the source` };
+      if (!isDir(inner)) return { ok: false, error: `${source}: no folder "${opts.subfolder}" inside it` };
+      src = inner;
+    }
     if (!isDir(src)) return { ok: false, error: `${source}: not a directory` };
     const file = join(src, MANIFEST_FILE);
     if (!existsSync(file)) return { ok: false, error: `${source}: no ${MANIFEST_FILE} — a plugin is a folder with a manifest` };

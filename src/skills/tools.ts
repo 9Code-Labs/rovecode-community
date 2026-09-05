@@ -40,7 +40,9 @@ export function createSkillTools(store: SkillStore): Tool[] {
       const skill = store.get(name);
       if (!skill) return Promise.resolve({ ok: false, output: `no skill named '${name}'` });
       const usage = store.bumpUsage(skill);
-      const header = `# ${skill.name} (v${skill.version})\n\n`;
+      // the FULL description, not the index's clipped line: the model opened this skill to read it, so
+      // the sentence saying when to use it belongs here in one piece
+      const header = `# ${skill.name} (v${skill.version})\n\n${skill.fullDescription}\n\n`;
       return Promise.resolve({ ok: true, output: header + skill.body, data: usage });
     },
   };
