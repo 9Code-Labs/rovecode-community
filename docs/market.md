@@ -9,11 +9,14 @@ events when something is installed.
 rovecode market search [query] [--kind mcp|skill|plugin]
 rovecode market info <id>
 rovecode market docs <id>
-rovecode market install <id | kind:id | git-url | npm-package> [--project] [--as name] [--pick N] [--yes] [--force]
+rovecode market install <id | kind:id | git-url | npm-package> [--project] [--as name] [--pick N]
+                        [--ref <branch|tag|commit>] [--yes] [--force]
 rovecode market remove <id | kind:id>
 rovecode market list [--all]
-rovecode market update [id] [--all] [--yes]
-rovecode market sources
+rovecode market update [id] [--all] [--yes] [--yes-plugins]
+rovecode market sources [probe]
+rovecode market verify [id]
+rovecode market validate <path|url> [--kind skill|plugin]
 ```
 
 Every command takes `--json` (a script and the TUI read exactly what the terminal shows) and `--offline`
@@ -155,7 +158,7 @@ installs and runs.
 there is any:
 
 ```
-docs       82.0 KB from https://github.com/anthropics/skills/blob/main/skills/claude-api/SKILL.md (truncated)
+docs       82.5 KB from https://raw.githubusercontent.com/anthropics/skills/main/skills/claude-api/SKILL.md (truncated) — rovecode market docs skill:claude-api
 docs       none — try https://github.com/modelcontextprotocol/servers
 ```
 
@@ -176,8 +179,8 @@ Bodies are capped at 24 KB, which is its own limit and not the 300-character one
 run a document through the general validator and it comes back silently cut to a label, still a valid
 string, with nobody the wiser. `bytes` is the size **upstream, before truncation**, so a reader can be told
 how much is missing; when it is absent or junk it is replaced by the size of what we actually carry rather
-than trusted. Two of the current skills are cut this way (`claude-api` at 84 KB and `skill-creator` at
-32 KB) and both say so.
+than trusted. Two of the current skills are cut this way — `claude-api` and `skill-creator`, the 82.5 KB and
+31.5 KB above — and both say so.
 
 Search does not carry bodies. `market search` and `market list` read the metadata — the size, the source,
 whether it was truncated — but leave the ~200 KB of markdown alone, since no search ever reads it; asking
@@ -203,6 +206,28 @@ saying why it cannot be compared and that updating reinstalls it. Then `market u
 becomes a quieter install; it goes through the identical preview and the identical yes, and it reinstalls in
 the scope the item already lives in rather than the flag's default. Installing over something by hand still
 needs `--force`.
+
+`--all --yes` deliberately **skips plugins**. A plugin is code rovecode loads and runs, and "yes to
+everything out of date" is not consent to run a new version of somebody's code — so an unattended update
+leaves plugins alone and says which ones it left. Naming one (`market update notes --yes`) updates it, and
+`--yes-plugins` says the quiet part out loud for all of them. The flag exists so that the safe default does
+not become an obstacle you route around by scripting `--force`.
+
+`market list` says where each installed thing came from, on the line beneath it:
+
+```
+  skill:pdf              installed
+         from anthropics/skills@main a1b2c3d, 2026-09-05
+```
+
+That record lives beside the disk rather than instead of it (`src/market/manifest.ts`): whether something
+is installed is decided by looking for the folder, so a skill deleted by hand stops being installed
+immediately. The record only carries what the disk cannot know — which row, which source, which commit it
+resolved to. A missing record is not an error; the origin reads as unknown.
+
+`market verify [id]` re-hashes what is on disk and reports what has changed since it was installed
+(`src/market/digest.ts`). A digest detects drift; it does not prove provenance, and nothing in this space
+signs anything, so the wording says the first and never the second.
 
 Project scope (`--project`) is the trusted scope: an MCP file or a plugin folder installed this way records
 that exact content as approved on this machine, because you just read the plan and said yes. Edit the file
@@ -280,6 +305,13 @@ job. The workflow grants it `contents: read` and nothing else.
 | `catalogs.yml` — `build-skill-catalog.mjs --check`, `build-mcp-docs.mjs --check` | weekly + on demand | go look: upstream moved, or the run could not reach it |
 | `catalogs.yml` — the same fuzzing with a **fresh seed and 40 000 rounds** | weekly | a shape we had never generated broke it: go look |
 
+**None of the scheduled half has ever run.** Actions billing is off for this repository, so `catalogs.yml`
+has never executed a single time — the table above describes what is committed and ready, not something
+that has been happening weekly in the background. Read it as a design, and do not read a green repository
+as evidence that upstream still matches: until billing is on, the only thing that has actually checked
+these catalogs is someone running `--check` by hand. `docs/deploy.md` says the same about `site.yml`, and
+for the same reason.
+
 The split is the whole point, and it is the same judgement twice. A check that reaches the network can go
 red for reasons that have nothing to do with the commit in front of it; hanging pull requests off one only
 teaches people that a red mark is noise. So the deterministic, local checks guard the gate, and the ones
@@ -329,6 +361,15 @@ commit the catalog with the change — a catalog and its generator should never 
   `src/mcp/market-install.ts` and `src/plugins/install.ts`, and writes skills itself.
 - `src/market/prereq.ts` — is the program a launch line names on PATH? Lookup only: never runs it, never
   reads a version, never blocks the install.
+- `src/market/context-cost.ts` — what an item adds to the prompt: the index line every turn, the body only
+  if the model opens it. Scaled by the measured factor in `src/core/token-scale.ts`.
+- `src/market/manifest.ts` — where an installed thing came from, recorded beside the disk, with clone URLs
+  scrubbed of any credential before they are written.
+- `src/market/digest.ts` — what landed on disk as one number, so `verify` can answer "has this changed?"
+- `src/market/clone.ts` — cloning at a `--ref`: a branch or tag clones directly, a bare commit needs
+  `init` + `fetch` + `checkout`, and which one it is is never guessed from the string's shape.
+- `src/market/validate.ts` — the checker behind `market validate`, and the rule that it may never call a
+  row valid that `registry.ts` would drop.
 - `src/market/catalogs/` — the generated data: `skills.json`, `plugins.json`, and the `mcp-docs.json`
   sidecar. Read at search time, not imported, so their size does not reach startup.
 - `scripts/build-skill-catalog.mjs`, `scripts/build-plugin-catalog.mjs`, `scripts/build-mcp-docs.mjs` —

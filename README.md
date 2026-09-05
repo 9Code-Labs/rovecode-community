@@ -586,8 +586,9 @@ tokens, cache hits, and catalog-priced spend.
   with it is listed but never connected until you trust it: `mcp show` prints every configured file and what it would
   run, `mcp trust` records the project files' content digest in your home (`--yes` to skip the prompt; an edit to
   either file asks again) and `mcp untrust` revokes it. User-scope servers need no gate.
-- **Market** (`src/market`, `docs/market.md`): one shelf over all three — `rovecode market search|info|install|
-  remove|list|update|sources` (each with `--json`) and `/market` in the TUI find MCP servers, skills and plugins
+- **Market** (`src/market`, `docs/market.md`): one shelf over all three — `rovecode market search|info|docs|
+  install|remove|list|update|sources|verify|validate` (each with `--json`) and `/market` in the TUI find MCP
+  servers, skills and plugins
   and install any of them with one command. A single argument resolves five shapes (bare id, `kind:id`, a git URL,
   an npm package, a local folder) and prints the candidates rather than guessing when two kinds share a name.
   Installing is always resolve → plan without touching the disk → show exactly what will be written → write, and

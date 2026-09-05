@@ -94,8 +94,12 @@ const ADVANCED = `advanced — the full command reference
                             approval — until trusted nothing in them loads; your own add --project is trusted as you approve it
   rovecode market search [query] [--kind mcp|skill|plugin]  one shelf over MCP servers, skills and plugins
   rovecode market info <id>     publisher, licence, version, exactly what an install would write
-  rovecode market install <id|kind:id|git-url|npm-pkg> [--project] [--yes]  plan first, write only after you agree
+  rovecode market docs <id>     the item's own documentation, as the catalog carries it — no network
+  rovecode market install <id|kind:id|git-url|npm-pkg> [--project] [--ref <branch|tag|commit>] [--yes]
+                            plan first, write only after you agree
   rovecode market list|remove|update|sources   what is installed, what is behind, where each shelf came from
+  rovecode market verify [id]   re-hash what is installed and say what has changed since
+  rovecode market validate <path|url> [--kind skill|plugin]   check a catalog before anyone trusts it
                             (docs/market.md; /market does the same inside the TUI; every subcommand takes --json)
   rovecode context [session] [--json]  what fills the window, item by item, and how far our estimate is from
                             the provider's own count of the same prompt (cache reads included — they are the prompt too)
