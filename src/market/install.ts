@@ -20,7 +20,7 @@ import { dirname, join, sep, resolve as resolvePath } from "node:path";
 import { describePlan, fillPlan, namesWritten, planInstall as planMcp, removeServer, writeServer, type InstallPlan as McpPlan } from "../mcp/market-install.ts";
 import { mcpConfigFiles, parseConfigFile } from "../mcp/config.ts";
 import { mcpTrustStatus } from "../mcp/trust.ts";
-import { addPlugin, cloneKey, removePlugin, scopeRoot, type Spawn } from "../plugins/install.ts";
+import { addPlugin, cloneKey, removePlugin, scopeRoot, type CopyTree, type Spawn } from "../plugins/install.ts";
 import { discoverPlugins } from "../plugins/discover.ts";
 import { prereqLine, prereqOf, type PrereqEnv } from "./prereq.ts";
 import { buildRecord, forgetInstall, recordInstall } from "./manifest.ts";
@@ -62,6 +62,9 @@ export interface RunDeps {
    *  created the map must call `disposeCloneCache` in a finally — otherwise the clones outlive the
    *  command in the temp directory. */
   cloneCache?: Map<string, string>;
+  /** the copy step. Real installs leave it alone; a test injects one that fails part way through, which is
+   *  the only way to observe that the staging directory actually protects the previous install. */
+  copy?: CopyTree;
 }
 
 /** The names an item may be installed under. `--as` is human input reaching a path join, so it is checked
@@ -367,35 +370,47 @@ async function cloneSkill(source: { git: string; subfolder?: string }, dir: stri
     const p = Bun.spawn(cmd, { cwd, stdout: "ignore", stderr: "pipe", stdin: "ignore" });
     return { code: await p.exited, stderr: await new Response(p.stderr).text() };
   });
+  const copy: CopyTree = deps.copy ?? ((from, to, filter) => cpSync(from, to, { recursive: true, filter }));
 
   // The same key and the same map as plugins/install.ts: a skill and a plugin out of one repository, or
   // three skills out of one, are cloned once. Clone straight INTO the temp directory (`… <url> .`) so the
   // cached value is the clone itself — a cache disposer should never have to take dirname() of what it was
   // given and remove a directory nobody handed it.
   const key = cloneKey(source.git, ref);
-  const cached = deps.cloneCache?.get(key);
   let owned: string | null = null;
-  let clone: string;
-  if (cached !== undefined) {
-    clone = cached;
-  } else {
-    owned = mkdtempSync(join(tmpdir(), "rovecode-skill-"));
-    const r = await cloneAtRef(spawn, source.git, owned, ref);
-    if (!r.ok) {
-      rmSync(owned, { recursive: true, force: true });
-      return { ok: false, error: r.error };
-    }
-    resolvedBy = r.resolvedBy;
-    clone = owned;
-  }
 
+  // the clone itself is INSIDE the try: `spawn` does not only return a non-zero code, it can throw
+  // outright — no git on PATH is an ENOENT, not an exit status — and a temp directory created one line
+  // earlier would otherwise be left behind on the one failure a user is most likely to hit.
   try {
+    const cached = deps.cloneCache?.get(key);
+    let clone: string;
+    if (cached !== undefined) {
+      clone = cached;
+    } else {
+      owned = mkdtempSync(join(tmpdir(), "rovecode-skill-"));
+      const r = await cloneAtRef(spawn, source.git, owned, ref);
+      if (!r.ok) return { ok: false, error: r.error };   // the finally clears `owned`
+      resolvedBy = r.resolvedBy;
+      clone = owned;
+    }
+
     const from = source.subfolder ? join(clone, source.subfolder) : clone;
     if (!resolvePath(from).startsWith(resolvePath(clone))) return { ok: false, error: `subfolder escapes the clone` };
     if (!existsSync(join(from, "SKILL.md"))) return { ok: false, error: `no SKILL.md in ${source.subfolder ?? "the repository root"} — a skill is a folder with a SKILL.md` };
-    if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+    // built beside the target and swapped in, never written over the top: `rmSync` then `cpSync` means a
+    // failure half way through (full disk, a locked file on Windows, the process killed during
+    // `update --all`) has already destroyed the working copy and leaves a partial tree in its place.
+    // The catalog-files path below learned this the hard way; this is the same fix for the clone path.
     mkdirSync(dirname(dir), { recursive: true });
-    cpSync(from, dir, { recursive: true, filter: (p) => !/(?:^|[\/])\.git(?:[\/]|$)/.test(p) && !isLink(p) });
+    const staging = mkdtempSync(join(dirname(dir), `.rovecode-clone-`));
+    try {
+      copy(from, staging, (p) => !/(?:^|[\\/])\.git(?:[\\/]|$)/.test(p) && !isLink(p));
+      if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
+      renameSync(staging, dir);
+    } finally {
+      rmSync(staging, { recursive: true, force: true });   // a no-op once it has been renamed into place
+    }
     // the commit this actually resolved to, for the record. Best effort: a clone whose HEAD cannot be
     // read still installed fine, and a made-up sha would be worse than none.
     const head = await spawn(["git", "rev-parse", "HEAD"], clone).catch(() => ({ code: 1, stderr: "" }));

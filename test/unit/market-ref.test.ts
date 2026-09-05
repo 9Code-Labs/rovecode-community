@@ -30,13 +30,13 @@ const isFetch = (c: string[]): boolean => c[1] === "fetch";
 test("no ref: one plain shallow clone, and the result says it was the default", async () => {
   const { spawn, ran } = scripted(() => ({ code: 0 }));
   expect(await cloneAtRef(spawn, "https://example.com/r.git", "/tmp/x")).toEqual({ ok: true, resolvedBy: "default" });
-  expect(ran).toEqual([["git", "clone", "--depth", "1", "--quiet", "https://example.com/r.git", "."]]);
+  expect(ran).toEqual([["git", "clone", "--depth", "1", "--quiet", "--", "https://example.com/r.git", "."]]);
 });
 
 test("a ref is tried as a branch or tag FIRST, and that is the whole command when it works", async () => {
   const { spawn, ran } = scripted(() => ({ code: 0 }));
   expect(await cloneAtRef(spawn, "https://example.com/r.git", "/tmp/x", "v2.1")).toEqual({ ok: true, resolvedBy: "branch" });
-  expect(ran).toEqual([["git", "clone", "--depth", "1", "--quiet", "--branch", "v2.1", "https://example.com/r.git", "."]]);
+  expect(ran).toEqual([["git", "clone", "--depth", "1", "--quiet", "--branch", "v2.1", "--", "https://example.com/r.git", "."]]);
 });
 
 test("a ref that is not a branch falls through to the commit path, and says so", async () => {
@@ -44,7 +44,7 @@ test("a ref that is not a branch falls through to the commit path, and says so",
   const { spawn, ran } = scripted((c) => (isClone(c) ? { code: 128, stderr: "warning: Could not find remote branch" } : { code: 0 }));
   expect(await cloneAtRef(spawn, "https://example.com/r.git", "/tmp/x", sha)).toEqual({ ok: true, resolvedBy: "commit" });
   expect(ran.map((c) => c[1])).toEqual(["clone", "init", "fetch", "checkout"]);
-  expect(ran[2]).toEqual(["git", "fetch", "--depth", "1", "--quiet", "https://example.com/r.git", sha]);
+  expect(ran[2]).toEqual(["git", "fetch", "--depth", "1", "--quiet", "--", "https://example.com/r.git", sha]);
   expect(ran[3]).toEqual(["git", "checkout", "--quiet", "FETCH_HEAD"]);
 });
 
@@ -61,6 +61,28 @@ test("a server that refuses a bare commit is reported, NOT answered by cloning t
   expect(ran.some((c) => c.includes("--depth") && c.includes("50"))).toBe(false);
   expect(ran.filter(isClone).length).toBe(1);
   expect(ran.some((c) => c[1] === "checkout")).toBe(false);
+});
+
+test("a value that looks like an option stays a value: `--` sits before every positional", async () => {
+  // git parses options by shape, not by position, so `--upload-pack=...` in the ref or url slot is an
+  // instruction unless something says otherwise. Catalog data never arrives in that shape, but `--ref` and
+  // `market install <git-url>` are command-line input, and this is one argument's worth of certainty.
+  const evil = "--upload-pack=touch /tmp/pwned";
+  const { spawn, ran } = scripted((c) => (isClone(c) ? { code: 128, stderr: "Remote branch not found" } : { code: 0 }));
+  await cloneAtRef(spawn, "https://example.com/r.git", "/tmp/x", evil);
+
+  for (const cmd of ran) {
+    const end = cmd.indexOf("--");
+    if (!cmd.includes(evil) && !cmd.includes("https://example.com/r.git")) continue;
+    expect(end).toBeGreaterThan(-1);
+    // every argument git could read as an option comes BEFORE the marker, and the untrusted ones after it
+    for (const arg of cmd.slice(end + 1)) expect(cmd.indexOf(arg)).toBeGreaterThan(end);
+  }
+  // and the ref never appears in a slot where it could act: --branch takes it as a VALUE, or it follows `--`
+  const branchClone = ran.find(isClone)!;
+  expect(branchClone[branchClone.indexOf(evil) - 1]).toBe("--branch");
+  const fetch = ran.find(isFetch)!;
+  expect(fetch.indexOf("--")).toBeLessThan(fetch.indexOf(evil));
 });
 
 test("a ref that exists nowhere reports both attempts rather than only the second", async () => {

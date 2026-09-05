@@ -5,7 +5,7 @@
  *  folder without a usable manifest never lands in ~/.rovecode/plugins). Adding into the project scope
  *  records the folder's digest as trusted: the human ran the command, that is the yes. */
 
-import { cpSync, existsSync, lstatSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { pluginRoots, type PluginScope } from "./discover.ts";
@@ -13,6 +13,10 @@ import { MANIFEST_FILE, parseManifest, type PluginManifest } from "./manifest.ts
 import { isDir, loadState, pluginDigest, saveState, trustKey } from "./state.ts";
 
 export type Spawn = (cmd: string[], cwd: string) => Promise<{ code: number; stderr: string }>;
+/** the copy step, injectable for one reason: a test cannot otherwise arrange a copy that fails PART WAY
+ *  through, which is the only failure the staging directory exists to survive. A real half-copy needs a
+ *  full disk or a locked file; a fake one needs three lines. */
+export type CopyTree = (from: string, to: string, filter: (path: string) => boolean) => void;
 export interface InstallOptions {
   cwd: string;
   home: string;
@@ -26,6 +30,8 @@ export interface InstallOptions {
    *  at the clone root. Rejected rather than normalised: an absolute path, a drive letter, or any `..`
    *  segment — a subfolder that climbs out of the clone is an attempt, not a typo. */
   subfolder?: string;
+  /** see {@link CopyTree} — real installs never pass this */
+  copy?: CopyTree;
   /** Clones already made during THIS command, keyed by `cloneKey`. One monorepo publishes all three
    *  first-party plugins, so installing them today clones the same repository three times — measured at
    *  15.5 s per plugin install, 28.3 s for a project-scope one. The map is opened per command and disposed
@@ -74,6 +80,7 @@ function isSymlink(p: string): boolean {
 
 export async function addPlugin(source: string, opts: InstallOptions): Promise<AddResult> {
   let src = source, tmp: string | null = null;
+  const copy: CopyTree = opts.copy ?? ((from, to, filter) => cpSync(from, to, { recursive: true, filter }));
   try {
     if (isGitSource(source)) {
       const key = cloneKey(source);
@@ -82,7 +89,7 @@ export async function addPlugin(source: string, opts: InstallOptions): Promise<A
         src = cached;                       // owned by the cache, so `tmp` stays null and nothing is removed
       } else {
         tmp = mkdtempSync(join(tmpdir(), "rovecode-plugin-"));
-        const r = await (opts.spawn ?? defaultSpawn)(["git", "clone", "--depth", "1", "--quiet", source, "."], tmp);
+        const r = await (opts.spawn ?? defaultSpawn)(["git", "clone", "--depth", "1", "--quiet", "--", source, "."], tmp);
         if (r.code !== 0) return { ok: false, error: `git clone failed (exit ${r.code})${r.stderr.trim() ? `: ${r.stderr.trim().split("\n").at(-1)}` : ""}` };
         src = tmp;
         if (opts.cloneCache !== undefined) { opts.cloneCache.set(key, tmp); tmp = null; }   // ownership moves
@@ -109,11 +116,25 @@ export async function addPlugin(source: string, opts: InstallOptions): Promise<A
     const root = scopeRoot(opts.scope, opts.cwd, opts.home);
     const dest = join(root, manifest.name);
     if (resolve(dest) === src) return { ok: false, error: `${source} is already the installed copy` };
-    if (existsSync(dest)) {
-      if (!opts.force) return { ok: false, error: `plugin "${manifest.name}" already exists at ${dest} (use --force to replace)` };
-      rmSync(dest, { recursive: true, force: true });
+    if (existsSync(dest) && !opts.force) return { ok: false, error: `plugin "${manifest.name}" already exists at ${dest} (use --force to replace)` };
+    // Copied beside the target and swapped in. `rmSync(dest)` then `cpSync` reads naturally and is wrong:
+    // between those two lines the plugin does not exist, and anything that ends the copy early — a full
+    // disk, a file another process holds open on Windows, ^C during `market update --all` — has already
+    // deleted a working plugin and leaves a half-written folder wearing its name. Rename is the one step
+    // the filesystem will not perform half way.
+    mkdirSync(root, { recursive: true });
+    const staging = mkdtempSync(join(root, `.rovecode-add-${manifest.name}-`));
+    try {
+      copy(src, staging, (p) => !/(?:^|[\\/])(?:node_modules|\.git)(?:[\\/]|$)/.test(p) && !isSymlink(p));
+      if (existsSync(dest)) rmSync(dest, { recursive: true, force: true });
+      renameSync(staging, dest);
+    } catch (e) {
+      // a returned error, not a thrown one: every other way this function fails is a value, and `market
+      // install a b c` should report which one could not be copied and carry on with the rest
+      return { ok: false, error: `could not install "${manifest.name}" into ${dest}: ${e instanceof Error ? e.message : String(e)}` };
+    } finally {
+      rmSync(staging, { recursive: true, force: true });   // already gone once the rename succeeded
     }
-    cpSync(src, dest, { recursive: true, filter: (p) => !/(?:^|[\\/])(?:node_modules|\.git)(?:[\\/]|$)/.test(p) });
     if (opts.scope === "project") { // the human installed it: trust this exact content on this machine
       const state = loadState(opts.home);
       state.trusted[trustKey(dest)] = pluginDigest(dest);

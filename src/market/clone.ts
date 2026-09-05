@@ -40,21 +40,26 @@ function refusesBareSha(stderr: string): boolean {
 }
 
 /** Clone `url` into `dir` (which must exist and be empty), optionally at `ref`. */
+/** `--` before every positional, on purpose. git parses options wherever it finds them, so a value that
+ *  begins with a dash is read as an option no matter which slot it sits in: a ref or a URL spelled
+ *  `--upload-pack=...` becomes an instruction rather than a name. Catalog data cannot reach here in that
+ *  shape (`url()` filters it), but `market install <git-url>` and `--ref` come straight from a command
+ *  line. The marker costs one argument and says "what follows is a value", which is the claim we mean. */
 export async function cloneAtRef(spawn: Spawn, url: string, dir: string, ref?: string): Promise<CloneOutcome> {
   if (ref === undefined || ref.trim() === "") {
-    const r = await spawn(["git", "clone", "--depth", "1", "--quiet", url, "."], dir);
+    const r = await spawn(["git", "clone", "--depth", "1", "--quiet", "--", url, "."], dir);
     return r.code === 0 ? { ok: true, resolvedBy: "default" } : { ok: false, error: `git clone failed (exit ${r.code})${lastLine(r.stderr) ? `: ${lastLine(r.stderr)}` : ""}` };
   }
 
   // 1. a branch or a tag — the common case, and the winner when a name is both
-  const branch = await spawn(["git", "clone", "--depth", "1", "--quiet", "--branch", ref, url, "."], dir);
+  const branch = await spawn(["git", "clone", "--depth", "1", "--quiet", "--branch", ref, "--", url, "."], dir);
   if (branch.code === 0) return { ok: true, resolvedBy: "branch" };
 
   // 2. a commit. Not a fallback for "anything went wrong": if the failure was the network or auth, the
   //    fetch will fail the same way and we report THAT, not a misleading "no such ref".
   const init = await spawn(["git", "init", "--quiet"], dir);
   if (init.code !== 0) return { ok: false, error: `git init failed (exit ${init.code})${lastLine(init.stderr) ? `: ${lastLine(init.stderr)}` : ""}` };
-  const fetch = await spawn(["git", "fetch", "--depth", "1", "--quiet", url, ref], dir);
+  const fetch = await spawn(["git", "fetch", "--depth", "1", "--quiet", "--", url, ref], dir);
   if (fetch.code !== 0) {
     if (refusesBareSha(fetch.stderr)) {
       return { ok: false, error: `${url} will not serve the single commit ${ref} (the server has uploadpack.allowReachableSHA1InWant off) — give a branch or tag instead, or ask the host to enable it` };

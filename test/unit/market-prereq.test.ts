@@ -128,7 +128,13 @@ test("a skill that ships its files, or a plugin from a local folder, needs nothi
 
 test("the line reads as a statement about PATH, never as a verdict on the machine", () => {
   expect(prereqLine(checkPrereq("npx", machine(["/usr/bin/npx"])))).toBe("npx ✓");
-  expect(prereqLine(checkPrereq("uvx", machine([])))).toBe("uvx — not on PATH (install: pipx install uv — astral.sh/uv)");
+  // the SHAPE, not the sentence: which command installs uv and where it is documented belongs to the hint
+  // table, and pinning it here breaks this test the day someone corrects a URL that has nothing to do with
+  // what is under test. What must hold is that a known tool names itself, says PATH, and offers a way out.
+  const uvx = prereqLine(checkPrereq("uvx", machine([])))!;
+  expect(uvx.startsWith("uvx — not on PATH")).toBe(true);
+  expect(uvx).toMatch(/\(install: .+\)$/);
+  // a tool with no hint gets the bare line rather than an empty pair of brackets
   expect(prereqLine(checkPrereq("weird-tool", machine([])))).toBe("weird-tool — not on PATH");
   // "not on PATH" and not "not installed": someone may have it where PATH does not reach
   expect(prereqLine(checkPrereq("uvx", machine([])))).not.toContain("not installed");
