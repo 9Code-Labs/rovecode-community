@@ -3,6 +3,9 @@ import { REPO, README } from "@/content";
 import { useT } from "@/i18n";
 import { cn } from "@/lib/utils";
 import { LanguagePicker } from "./LanguagePicker";
+import marketData from "@/generated/market.json";
+
+const MARKET_ON: boolean = marketData.enabled === true;
 
 /** true once the page has scrolled past the top of the hero */
 function useScrolled(): boolean {
@@ -19,7 +22,8 @@ function useScrolled(): boolean {
 /** a thin bar on a light mist with a hairline under it once the page moves; the word mark, a few small links,
  *  GitHub as a filled pill. No blur. */
 /** `home` is the page the section anchors live on: "" on the landing page itself, the locale root ("/", "/tr/") on a docs page */
-export function Header({ home = "" }: { home?: string } = {}) {
+/** `market` adds the market link; it is off unless the build made those pages (VITE_MARKET=1) */
+export function Header({ home = "", market = MARKET_ON }: { home?: string; market?: boolean } = {}) {
   const t = useT();
   const scrolled = useScrolled();
   const nav = [
@@ -45,6 +49,12 @@ export function Header({ home = "" }: { home?: string } = {}) {
               {label}
             </a>
           ))}
+          {market && (
+            // a page, not an anchor: its href is absolute in every locale
+            <a href={`${home || "/"}market/`} className="truncate rounded-full text-[13.5px] font-medium text-text-muted transition-colors duration-150 hover:text-text">
+              {t.nav.market}
+            </a>
+          )}
         </nav>
         <div className="flex shrink-0 items-center gap-4 text-[13.5px]">
           <LanguagePicker />

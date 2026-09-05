@@ -13,7 +13,7 @@ const SITE = join(import.meta.dirname, "..");
 const DIST = join(SITE, "dist");
 const ssr = join(SITE, "dist-ssr", "entry-server.js");
 
-const { render, renderDocs, LOCALES, isRtl, localePath } = await import(pathToFileURL(ssr).href);
+const { render, renderDocs, renderMarket, LOCALES, isRtl, localePath } = await import(pathToFileURL(ssr).href);
 const template = readFileSync(join(DIST, "index.html"), "utf8");
 if (!template.includes('<div id="root"></div>')) throw new Error("dist/index.html has no empty #root to fill");
 
@@ -72,7 +72,8 @@ if (docsJson.enabled && docsJson.docs.length) {
         .replace(/<meta property="og:description" content="[^"]*" \/>/, `<meta property="og:description" content="${esc(description)}" />`)
         .replace(/<link rel="canonical" href="[^"]*" \/>/, `<link rel="canonical" href="${url}" />\n    ${alts}`)
         .replace(/<meta property="og:url" content="[^"]*" \/>/, `<meta property="og:url" content="${url}" />\n    <meta property="og:locale" content="${OG_LOCALE[code] ?? code}" />`);
-      if (css && cssMatch) page = page.replace(cssMatch[0], css);
+      // docs and market pages LINK the stylesheet: it is one cached file, and inlining it into every
+      // one of them would put 45 kB of duplicated CSS into each of ~690 released pages
       const dir = join(code === "en" ? DIST : join(DIST, code), p.sub);
       mkdirSync(dir, { recursive: true });
       writeFileSync(join(dir, "index.html"), page);
@@ -80,6 +81,49 @@ if (docsJson.enabled && docsJson.docs.length) {
     }
   }
   console.log(`docs: ${pages.length} pages × ${LOCALES.length} locales`);
+}
+
+// ---- /market/ (behind VITE_MARKET=1; scripts/market.mjs leaves the list empty otherwise) ----
+const marketFile = join(SITE, "src", "generated", "market.json");
+const marketJson = existsSync(marketFile) ? JSON.parse(readFileSync(marketFile, "utf8")) : { enabled: false, entries: [] };
+if (marketJson.enabled && marketJson.entries.length) {
+  const { kinds, tags, entries } = marketJson;
+  // one page per item at /market/<id>/ — ids are unique across the catalog, and market.mjs fails the
+  // build if two kinds ever claim the same one, so the URL carries no kind segment
+  const pages = [{ sub: "market/", entry: undefined }, ...entries.map((e) => ({ sub: `market/${e.id}/`, entry: e }))];
+  for (const p of pages) docPaths.push(p.sub);
+  for (const { code } of LOCALES) {
+    for (const p of pages) {
+      const home = localePath(code);
+      // the index carries the whole catalog (the client filters it in place); a detail page carries only
+      // what its sibling nav draws, so 21 pages × 15 locales do not each embed the catalog twice
+      const slim = entries.map((e) => ({ id: e.id, kind: e.kind, title: e.title }));
+      const data = p.entry
+        ? { locale: code, home, kinds, tags, entries: slim, entry: p.entry }
+        : { locale: code, home, kinds, tags, entries };
+      const { html, title, description } = await renderMarket(code, data);
+      const url = siteUrl + home + p.sub;
+      const alts = LOCALES.map((l) => `<link rel="alternate" hreflang="${l.code}" href="${siteUrl}${localePath(l.code)}${p.sub}" />`).concat(`<link rel="alternate" hreflang="x-default" href="${siteUrl}/${p.sub}" />`).join("\n    ");
+      let page = template
+        .replace('<div id="root"></div>', `<div id="root">${html}</div>\n    <script id="market-data" type="application/json">${JSON.stringify(data).replace(/</g, "\u003c")}</script>`)
+        .replace(/<html lang="en">/, `<html lang="${code}"${isRtl(code) ? ' dir="rtl"' : ""}>`)
+        .replace(/<title>[^<]*<\/title>/, `<title>${esc(title)}</title>`)
+        .replace(/<meta name="description" content="[^"]*" \/>/, `<meta name="description" content="${esc(description)}" />`)
+        .replace(/<meta property="og:title" content="[^"]*" \/>/, `<meta property="og:title" content="${esc(title)}" />`)
+        .replace(/<meta property="og:description" content="[^"]*" \/>/, `<meta property="og:description" content="${esc(description)}" />`)
+        .replace(/<link rel="canonical" href="[^"]*" \/>/, `<link rel="canonical" href="${url}" />
+    ${alts}`)
+        .replace(/<meta property="og:url" content="[^"]*" \/>/, `<meta property="og:url" content="${url}" />
+    <meta property="og:locale" content="${OG_LOCALE[code] ?? code}" />`);
+      // docs and market pages LINK the stylesheet: it is one cached file, and inlining it into every
+      // one of them would put 45 kB of duplicated CSS into each of ~690 released pages
+      const dir = join(code === "en" ? DIST : join(DIST, code), p.sub);
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "index.html"), page);
+      bytes += page.length;
+    }
+  }
+  console.log(`market: ${pages.length} pages × ${LOCALES.length} locales`);
 }
 
 const today = new Date().toISOString().slice(0, 10);

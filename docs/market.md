@@ -120,6 +120,23 @@ The plugin catalog has its own generator (`build-plugin-catalog.mjs`) that never
 reads `plugins/*/plugin.json` from this checkout, takes the licence from `package.json`, and derives what
 each plugin contributes from its manifest rather than guessing.
 
+A generator that fetches has to tell "there is nothing here" apart from "I could not look", and the skill
+one does: only a 404 — an answer — may shrink the catalog, while a network error or a rate limit fails the
+run and leaves the file in the tree untouched. That distinction is not theoretical. GitHub allows an
+anonymous client 60 requests an hour and a build makes about 40, so being cut off half way is ordinary; the
+naive version would quietly write a 4-skill file over a 19-skill one and the diff would look deliberate. Two
+more rules follow from the same idea: a catalog that would **shrink** is refused with the disappearing ids
+named, and `--allow-shrink` is the only way to say "yes, they really are gone"; and the write is atomic
+(temp file, then rename), so a half-written catalog cannot exist. A 404 on a `LICENSE.txt` is an answer, so
+that skill stays on the shelf with its licence recorded as unknown. Setting `GITHUB_TOKEN` only raises the
+rate limit — every URL fetched is public — and a wrong token reads as "could not look", which refuses rather
+than prunes.
+
+The two `--check`s run in different places on purpose. The plugin one is deterministic and local, so it runs
+in CI on every push and a red build really means a broken commit. The skill one goes to the network, so it
+runs on a weekly cron and by hand instead: hanging pull requests off a check that can fail for reasons with
+nothing to do with the change would only teach people to ignore a red mark.
+
 The plugin catalog holds three entries, and that is the honest number rather than a small one. rovecode's
 plugin format is new: a plugin is a folder with `plugin.json` **at its root** carrying `api: 1`, and its
 `entry` is an in-process module contract (`export default { api: 1, tools?, hooks? }`). Claude Code's

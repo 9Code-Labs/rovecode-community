@@ -18,6 +18,7 @@ import { drawAgents } from "../../src/sextant/draw-agents.ts";
 import { drawMessages } from "../../src/sextant/draw-messages.ts";
 import { drawPet } from "../../src/sextant/draw-pet.ts";
 import { drawPalette, openPalette } from "../../src/sextant/overlays.ts";
+import { drawMarket, openMarket, type MarketViewRow } from "../../src/sextant/draw-market.ts";
 import { tokenize } from "../../src/sextant/engine.ts";
 import { createPet, type Pet } from "../../src/sextant/pet.ts";
 import { buildTheme, hex } from "../../src/sextant/theme.ts";
@@ -259,9 +260,40 @@ const rewind: Builder = () => {
   return sc;
 };
 
-const SCENARIOS: Record<string, Builder> = { editing, diff, approval, tests, agents, denied, compact, rmrf, rewind };
+/** the market overlay (/market, ⌃m) over a live cockpit: the tab strip with counts, a row selected, its
+ *  detail on the right. Real rows — the curated MCP shelf as the catalog ships it — never invented ones. */
+const market: Builder = () => {
+  const sc = editing();
+  openMarket(sc.s, MARKET_ROWS, { kind: "ready" });
+  sc.s.market!.sel = 1;
+  return sc;
+};
+
+const SCENARIOS: Record<string, Builder> = { editing, diff, approval, tests, agents, denied, compact, rmrf, rewind, market };
 
 // ---------- paint ----------
+
+/** the first rows of the curated shelf, as src/mcp/market-catalog.ts has them */
+const MARKET_ROWS: MarketViewRow[] = [
+  { id: "filesystem", kind: "mcp", title: "Filesystem", publisher: "modelcontextprotocol (Anthropic)",
+    description: "Read, write, search and move files under the directories you name.",
+    runs: "npx -y @modelcontextprotocol/server-filesystem", env: [], pending: ["<directory the server may touch>"] },
+  { id: "github", kind: "mcp", title: "GitHub", publisher: "GitHub",
+    description: "Issues, pull requests, code search and Actions on GitHub.",
+    runs: "remote https://api.githubcopilot.com/mcp/",
+    env: [{ name: "Authorization", required: true, secret: true, description: "a GitHub personal access token" }],
+    alternatives: ["docker: docker run -i --rm ghcr.io/github/github-mcp-server"] },
+  { id: "playwright", kind: "mcp", title: "Playwright", publisher: "Microsoft",
+    description: "Drive a real browser through accessibility snapshots: navigate, click, type, screenshot.",
+    runs: "npx -y @playwright/mcp@latest", env: [] },
+  { id: "conventional-commits", kind: "skill", title: "conventional-commits", publisher: "plugin: conventional-commits",
+    description: "Conventional Commits: types, one scope, imperative subject.",
+    runs: "a SKILL.md the model reads when it matches", env: [] },
+  { id: "safety-net", kind: "plugin", title: "safety-net", publisher: "rovecode", version: "0.1.0",
+    description: "A second look before a destructive shell command, and a nudge when a test run prints FAIL.",
+    runs: "copy plugins/safety-net", env: [],
+    installed: { path: "~/.rovecode/plugins/safety-net", scope: "user", version: "0.1.0" } },
+];
 
 function paint(sc: Scenario): GridScreen {
   setAgentsPainter(drawAgents);
@@ -276,6 +308,7 @@ function paint(sc: Scenario): GridScreen {
     },
   });
   if (sc.s.palette) drawPalette(scr, L, theme, sc.s);
+  if (sc.s.market) drawMarket(scr, L, theme, sc.s);
   return scr;
 }
 

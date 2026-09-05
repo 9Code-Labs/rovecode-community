@@ -7,13 +7,26 @@ import { I18nProvider, initialLocale, isCode, loadDict, localeFromPath, type Loc
 // a docs page carries its data inline (scripts/prerender.mjs), and its locale is in the path: /docs/… or /tr/docs/…
 const docsMatch = /^\/(?:([a-z]{2})\/)?docs\//.exec(window.location.pathname);
 const docsData = docsMatch ? document.getElementById("docs-data")?.textContent : null;
+// the market page carries its catalog the same way: /market/… or /tr/market/…
+const marketMatch = /^\/(?:([a-z]{2})\/)?market\//.exec(window.location.pathname);
+const marketData = marketMatch ? document.getElementById("market-data")?.textContent : null;
 
-const locale: LocaleCode = docsMatch ? (isCode(docsMatch[1]) ? docsMatch[1] : "en") : initialLocale();
+const page = docsMatch ?? marketMatch;
+const locale: LocaleCode = page ? (isCode(page[1]) ? page[1] : "en") : initialLocale();
 await loadDict(locale);
 
 const root = document.getElementById("root")!;
 let app: ReactNode;
-if (docsData) {
+if (marketData) {
+  const { MarketPage } = await import("./pages/MarketPage.tsx");
+  app = (
+    <StrictMode>
+      <I18nProvider initial={locale} manageMeta={false}>
+        <MarketPage data={JSON.parse(marketData)} />
+      </I18nProvider>
+    </StrictMode>
+  );
+} else if (docsData) {
   const { DocsPage } = await import("./pages/DocsPage.tsx");
   app = (
     <StrictMode>
@@ -37,7 +50,7 @@ if (docsData) {
 // every page arrives prerendered in its own language. When the prerendered language is the one we are about to
 // show, the DOM is hydrated and kept — the static and live trees are identical (src/lib/boot.ts STATIC), so
 // nothing repaints. Only the root page with a non-English browser replaces its tree, in one frame.
-const prerendered = docsMatch ? locale : (localeFromPath(window.location.pathname) ?? "en");
+const prerendered = page ? locale : (localeFromPath(window.location.pathname) ?? "en");
 if (locale === prerendered && root.childElementCount > 0) {
   hydrateRoot(root, app);
 } else {
