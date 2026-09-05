@@ -14,7 +14,7 @@
  *  recorded as trusted, because the human just approved the exact content. Skills are files, never code —
  *  they carry no trust gate, and the preview says so. */
 
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, sep, resolve as resolvePath } from "node:path";
 import { describePlan, fillPlan, namesWritten, planInstall as planMcp, removeServer, writeServer, type InstallPlan as McpPlan } from "../mcp/market-install.ts";
@@ -24,6 +24,8 @@ import { addPlugin, cloneKey, removePlugin, scopeRoot, type Spawn } from "../plu
 import { discoverPlugins } from "../plugins/discover.ts";
 import { prereqLine, prereqOf, type PrereqEnv } from "./prereq.ts";
 import { buildRecord, forgetInstall, recordInstall } from "./manifest.ts";
+import { cloneAtRef, type ResolvedBy } from "./clone.ts";
+import { contextCostLines, contextCostOf } from "./context-cost.ts";
 import type { InstalledState, InstallOutcome, InstallPlanView, MarketItem, MarketRow, MarketScope } from "./types.ts";
 
 export interface PlanOptions {
@@ -36,6 +38,13 @@ export interface PlanOptions {
   as?: string;
   /** PATH lookup for the prerequisite line — tests inject; production reads the real environment */
   prereqEnv?: PrereqEnv;
+  /** pin a git source to a branch, tag or commit (`--ref`). clone.ts tells the three apart by asking git
+   *  rather than by looking at the string, and records which one answered. */
+  ref?: string;
+  /** the model the plan is being drawn for, so the token estimate can be scaled to its tokenizer. Left
+   *  undefined when nothing is configured — an unscaled number that says so beats one scaled to a model
+   *  the person is not running. */
+  model?: { provider: string; model: string };
 }
 
 export interface RunDeps {
@@ -79,9 +88,36 @@ function requiresLine(item: MarketItem, opts: PlanOptions): string[] {
  *  uses and where there is no `fill in` to duplicate. */
 const PENDING_ROW = /^ {2}needs {6}/;
 
+/** How many skills this machine already has, for the "past 50 the index leaves the prompt" warning.
+ *
+ *  Counted from the two folders the market installs into. That UNDERCOUNTS: a plugin can contribute skills
+ *  too, and those are not visible without loading the plugin. Undercounting is the safe direction — it can
+ *  only make the warning silent, never make it wrong — and a warning that fires with a made-up number is
+ *  worth less than no warning at all. */
+function installedSkillCount(cwd: string, home: string): number {
+  let n = 0;
+  for (const root of [join(home, "skills"), join(cwd, ".rovecode", "skills")]) {
+    if (!existsSync(root)) continue;
+    try {
+      for (const name of readdirSync(root)) if (existsSync(join(root, name, "SKILL.md"))) n += 1;
+    } catch { /* unreadable folder: count what we could */ }
+  }
+  return n;
+}
+
+/** What this adds to every prompt, and what it adds only when the model opens it. Two numbers rather than
+ *  one because a skill's index line and its body differ by roughly thirty times — a single "per turn"
+ *  figure would overstate an unopened skill by that much. */
+function contextLines(item: MarketItem, opts: PlanOptions): string[] {
+  const installed = installedSkillCount(opts.cwd, opts.home);
+  const cost = contextCostOf(item, { installedSkills: installed, ...(opts.model ? { model: opts.model } : {}) });
+  const lines = contextCostLines(cost);
+  return lines.length === 0 ? [] : lines.map((l, i) => (i === 0 ? `  context    ${l}` : `             ${l}`));
+}
+
 /** put the requires row directly after the line that says what will run or be fetched */
 function withRequires(lines: string[], item: MarketItem, opts: PlanOptions): string[] {
-  const requires = requiresLine(item, opts);
+  const requires = [...requiresLine(item, opts), ...contextLines(item, opts)];
   if (requires.length === 0) return lines;
   // `runs`/`connects` first when there is one — that is the line the requirement belongs to. `source` is
   // only the fallback, for a skill or plugin whose plan has no launch line at all.
@@ -104,6 +140,15 @@ export function skillDir(id: string, opts: { scope: MarketScope; cwd: string; ho
 export function planInstall(item: MarketItem, opts: PlanOptions): InstallPlanView | { error: string } {
   const { install } = item;
   // checked BEFORE any path is built from it, for every kind
+  // `--ref` is only wired through the skill cloner. Accepting it for a plugin and ignoring it would be
+  // the exact failure this feature exists to prevent: the human believes they pinned, and something else
+  // is installed. Refuse until plugins/install.ts takes a ref.
+  if (opts.ref !== undefined && item.install.kind === "plugin") {
+    return { error: `--ref is not wired for plugins yet — it would be accepted and ignored, which is worse than not having it` };
+  }
+  if (opts.ref !== undefined && item.install.kind === "mcp") {
+    return { error: `--ref applies to something that is cloned; an MCP entry is a config line, and its package version belongs in the entry itself` };
+  }
   if (opts.as !== undefined && !validInstallName(opts.as)) {
     return { error: `"${opts.as}" is not a usable name — letters, digits, dot, dash and underscore only, and it must not be a path` };
   }
@@ -225,10 +270,12 @@ export async function runInstall(plan: InstallPlanView, answers: Record<string, 
     const dir = plan.target;
     if (existsSync(dir) && deps.force !== true) return { ok: false, error: `${dir} already exists (use --force to replace)` };
     let clonedSha: string | undefined;
+    let clonedBy: ResolvedBy | undefined;
     if (install.source) {
-      const r = await cloneSkill(install.source, dir, deps);
+      const r = await cloneSkill(install.source, dir, deps, opts.ref);
       if (!r.ok) return { ok: false, error: r.error };
       clonedSha = r.sha;
+      clonedBy = r.resolvedBy;
     } else {
       // Build the whole thing beside the target and swap at the end. Writing in place meant deleting the
       // installed copy FIRST and then failing half way through the loop — the caller saw a clean
@@ -250,7 +297,10 @@ export async function runInstall(plan: InstallPlanView, answers: Record<string, 
       }
     }
     recordInstall(buildRecord(item, { scope: opts.scope, target: dir,
-      ...(install.source ? { git: { source: install.source.git, ...(clonedSha !== undefined ? { sha: clonedSha } : {}) } } : {}) }),
+      ...(install.source ? { git: { source: install.source.git,
+        ...(clonedSha !== undefined ? { sha: clonedSha } : {}),
+        ...(opts.ref !== undefined ? { ref: opts.ref } : {}),
+        ...(clonedBy !== undefined ? { resolvedBy: clonedBy } : {}) } } : {}) }),
       { cwd: opts.cwd, home: opts.home, stillInstalled: recordStillInstalled(opts.cwd, opts.home) });
     return {
       ok: true, item, target: dir, scope: opts.scope, envNames: [],
@@ -308,7 +358,8 @@ function isLink(p: string): boolean {
   try { return lstatSync(p).isSymbolicLink(); } catch { return true; }
 }
 
-async function cloneSkill(source: { git: string; subfolder?: string }, dir: string, deps: RunDeps): Promise<{ ok: true; sha?: string } | { ok: false; error: string }> {
+async function cloneSkill(source: { git: string; subfolder?: string }, dir: string, deps: RunDeps, ref?: string): Promise<{ ok: true; sha?: string; resolvedBy?: ResolvedBy } | { ok: false; error: string }> {
+  let resolvedBy: ResolvedBy | undefined;
   const spawn: Spawn = deps.spawn ?? (async (cmd, cwd) => {
     const p = Bun.spawn(cmd, { cwd, stdout: "ignore", stderr: "pipe", stdin: "ignore" });
     return { code: await p.exited, stderr: await new Response(p.stderr).text() };
@@ -318,7 +369,7 @@ async function cloneSkill(source: { git: string; subfolder?: string }, dir: stri
   // three skills out of one, are cloned once. Clone straight INTO the temp directory (`… <url> .`) so the
   // cached value is the clone itself — a cache disposer should never have to take dirname() of what it was
   // given and remove a directory nobody handed it.
-  const key = cloneKey(source.git);
+  const key = cloneKey(source.git, ref);
   const cached = deps.cloneCache?.get(key);
   let owned: string | null = null;
   let clone: string;
@@ -326,11 +377,12 @@ async function cloneSkill(source: { git: string; subfolder?: string }, dir: stri
     clone = cached;
   } else {
     owned = mkdtempSync(join(tmpdir(), "rovecode-skill-"));
-    const r = await spawn(["git", "clone", "--depth", "1", "--quiet", source.git, "."], owned);
-    if (r.code !== 0) {
+    const r = await cloneAtRef(spawn, source.git, owned, ref);
+    if (!r.ok) {
       rmSync(owned, { recursive: true, force: true });
-      return { ok: false, error: `git clone failed (exit ${r.code})${r.stderr.trim() ? `: ${r.stderr.trim().split("\n").at(-1)}` : ""}` };
+      return { ok: false, error: r.error };
     }
+    resolvedBy = r.resolvedBy;
     clone = owned;
   }
 
@@ -346,7 +398,7 @@ async function cloneSkill(source: { git: string; subfolder?: string }, dir: stri
     const head = await spawn(["git", "rev-parse", "HEAD"], clone).catch(() => ({ code: 1, stderr: "" }));
     const sha = head.code === 0 ? readSha(clone) : undefined;
     if (owned !== null && deps.cloneCache !== undefined) { deps.cloneCache.set(key, owned); owned = null; }   // ownership moves to the cache
-    return { ok: true, ...(sha !== undefined ? { sha } : {}) };
+    return { ok: true, ...(sha !== undefined ? { sha } : {}), ...(resolvedBy !== undefined ? { resolvedBy } : {}) };
   } finally {
     if (owned !== null) rmSync(owned, { recursive: true, force: true });
   }

@@ -41,6 +41,8 @@ export interface MarketCliDeps {
   tty?: boolean;
   /** PATH lookup for the plan's prerequisite row — tests inject a fixed environment */
   prereqEnv?: PrereqEnv;
+  /** the model to scale the plan's token estimate for; tests inject, production reads the configured one */
+  model?: { provider: string; model: string };
 }
 
 export const MARKET_USAGE = [
@@ -49,7 +51,7 @@ export const MARKET_USAGE = [
   "                                             rovecode's skill and plugin catalogs (skills/plugins work offline)",
   "  info <id>                                  one item in full: publisher, version, what it installs, what it asks",
   "  docs <id>                                  the item's own documentation, as the catalog carries it",
-  "  install <id|kind:id|git-url|npm-package> [--project] [--as <name>] [--pick N] [--yes] [--force]",
+  "  install <id|kind:id|git-url|npm-package> [--project] [--as <name>] [--pick N] [--ref <branch|tag|commit>] [--yes] [--force]",
   "                                             shows the plan, asks (masked) for keys by name, then writes",
   "  remove <id|kind:id> [--project]            undo an install of any kind",
   "  list [--all]                               what is installed here (--all: the whole market, with badges)",
@@ -177,8 +179,8 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
   const scope: MarketScope = args.includes("--project") ? "project" : "user";
   const registry: RegistryDeps = { ...deps.registry, ...(offline ? { offline: true } : {}) };
   const flag = (name: string): string | undefined => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
-  const KNOWN = new Set(["--json", "--offline", "--project", "--yes", "--yes-plugins", "--force", "--all", "--as", "--pick", "--kind"]);
-  const positional = args.filter((a, i) => !a.startsWith("--") && !(i > 0 && ["--as", "--pick", "--kind"].includes(args[i - 1]!)));
+  const KNOWN = new Set(["--json", "--offline", "--project", "--yes", "--yes-plugins", "--force", "--all", "--as", "--pick", "--kind", "--ref"]);
+  const positional = args.filter((a, i) => !a.startsWith("--") && !(i > 0 && ["--as", "--pick", "--kind", "--ref"].includes(args[i - 1]!)));
   for (const a of args) if (a.startsWith("--") && !KNOWN.has(a)) { err(`unknown flag ${a}`); err(MARKET_USAGE.join("\n")); return 2; }
 
   const sub = positional[0];
@@ -413,8 +415,14 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
     const pick = pickRaw === undefined ? undefined : Number(pickRaw);
     if (pick !== undefined && !Number.isInteger(pick)) { err(`--pick takes a number`); return 2; }
     const asName = flag("--as");
+    // the configured default model, so the estimate is scaled to the tokenizer the person actually runs.
+    // Nothing configured → undefined, and the line says the numbers are unscaled rather than guessing.
+    const model = deps.model ?? (await defaultModelRef());
+    const ref = flag("--ref");
+    if (ref !== undefined && ref.trim() === "") { err(`--ref needs a branch, tag or commit`); return 2; }
     const opts = { scope, cwd, home, ...(pick !== undefined ? { pick } : {}), ...(asName !== undefined ? { as: asName } : {}),
-      ...(deps.prereqEnv !== undefined ? { prereqEnv: deps.prereqEnv } : {}) };
+      ...(ref !== undefined ? { ref } : {}), ...(deps.prereqEnv !== undefined ? { prereqEnv: deps.prereqEnv } : {}),
+      ...(model !== undefined ? { model } : {}) };
     return installOne(r.item, opts, {
       out, err, json, yes: args.includes("--yes"), tty: deps.tty ?? process.stdin.isTTY === true,
       secret: deps.secret ?? readSecret, plain: deps.plain ?? defaultPlain, verb: "install",
@@ -427,6 +435,19 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
   err(`unknown command "${sub}"`);
   err(MARKET_USAGE.join("\n"));
   return 2;
+}
+
+/** The configured default provider/model, or undefined. Imported lazily: `market search` has no business
+ *  loading the provider stack, and this is only wanted while drawing an install plan. Never throws — a
+ *  broken provider config must not stop an install. */
+async function defaultModelRef(): Promise<{ provider: string; model: string } | undefined> {
+  try {
+    const { resolveProvider } = await import("../providers/stream.ts");
+    const cfg = resolveProvider();
+    if (!cfg) return undefined;
+    const model = process.env.ROVECODE_MODEL ?? cfg.defaultModel;
+    return model ? { provider: cfg.id, model } : undefined;
+  } catch { return undefined; }
 }
 
 async function defaultPlain(prompt: string): Promise<string> {

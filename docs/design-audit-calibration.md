@@ -218,7 +218,7 @@ hits too. So an element floor is **not** the fix f9's Device.tsx case suggests.
 
 Threshold and floor sweeps (files ≥ 10 els; good = expressive + sober):
 
-| | T=0.3 | T=0.4 (now) | T=0.5 | T=0.6 | T=0.8 |
+| what fires | T=0.3 | T=0.4 (now) | T=0.5 | T=0.6 | T=0.8 |
 |---|---|---|---|---|---|
 | good fires | 5/189 | 4/189 | 3/189 | 1/189 | 1/189 |
 | slop fires | 22/366 | 12/366 | 5/366 | 1/366 | 0/366 |

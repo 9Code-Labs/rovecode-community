@@ -37,7 +37,11 @@ export interface InstallRecord {
   /** the catalog row's own version at the time, when it stated one */
   catalogVersion?: string;
   /** for anything cloned: the URL as it was fetched (scrubbed) and the commit it resolved to */
-  git?: { source: string; sha?: string; ref?: string };
+  git?: {
+    source: string; sha?: string; ref?: string;
+    /** which command produced the tree — so "was that ref a branch or a commit?" has an answer */
+    resolvedBy?: "branch" | "commit" | "default";
+  };
 }
 
 interface ManifestFile { version: number; installs: InstallRecord[] }
@@ -121,7 +125,8 @@ export function recordFor(item: Pick<MarketItem, "kind" | "id">, scope: MarketSc
 /** Build the record for an install that just happened. `sha` is filled by the caller when a clone
  *  resolved one; nothing here invents it, because an unverified commit id is worse than no commit id. */
 export function buildRecord(item: MarketItem, opts: {
-  scope: MarketScope; target: string; now?: () => Date; git?: { source: string; sha?: string; ref?: string };
+  scope: MarketScope; target: string; now?: () => Date;
+  git?: { source: string; sha?: string; ref?: string; resolvedBy?: "branch" | "commit" | "default" };
 }): InstallRecord {
   const record: InstallRecord = {
     kind: item.kind, id: item.id, source: item.source, scope: opts.scope,
@@ -132,7 +137,8 @@ export function buildRecord(item: MarketItem, opts: {
   if (opts.git) {
     record.git = { source: scrubUrl(opts.git.source),
       ...(opts.git.sha !== undefined ? { sha: opts.git.sha } : {}),
-      ...(opts.git.ref !== undefined ? { ref: opts.git.ref } : {}) };
+      ...(opts.git.ref !== undefined ? { ref: opts.git.ref } : {}),
+      ...(opts.git.resolvedBy !== undefined ? { resolvedBy: opts.git.resolvedBy } : {}) };
   }
   return record;
 }
@@ -142,6 +148,9 @@ export function buildRecord(item: MarketItem, opts: {
 export function originLine(r: InstallRecord | undefined): string {
   if (r === undefined) return "origin unknown — installed before rovecode kept a record, or by hand";
   const when = r.installedAt.slice(0, 10);
-  if (r.git) return `${r.git.source}${r.git.sha ? ` @ ${r.git.sha.slice(0, 12)}` : ""} · ${when}`;
+  if (r.git) {
+    const pin = r.git.ref !== undefined ? ` (${r.git.resolvedBy === "commit" ? "commit" : "branch/tag"} ${r.git.ref})` : "";
+    return `${r.git.source}${pin}${r.git.sha ? ` @ ${r.git.sha.slice(0, 12)}` : ""} · ${when}`;
+  }
   return `${r.source} · ${when}`;
 }
