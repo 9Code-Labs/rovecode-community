@@ -18,8 +18,8 @@ start here
 everyday
   rovecode run "<prompt>" --yolo  one task in ${MODE_AUTO} mode
   rovecode run "<prompt>" --output json   machine-readable result (ndjson: one line per event)
-  rovecode model               pick the default from a numbered menu (rovecode models lists them)
-  rovecode model use <provider/model>     set it directly · --project pins it to this repo
+  rovecode model               pick the default from a menu · model use <provider/model> sets it (--project pins it here)
+  rovecode market search <q>   MCP servers, skills and plugins on one shelf; install any with market install <id>
   --effort auto|off|low|medium|high  how hard I think before answering (/effort in the TUI, ROVECODE_EFFORT=…)
   rovecode provider list|add|remove|test  endpoints in ~/.rovecode/providers.json — live, no restart
   rovecode auth set <id>          store an API key (hidden prompt) · auth list · auth remove <id>
@@ -36,7 +36,7 @@ safety
 
 more
   rovecode help env               every ROVECODE_* setting (incl. the bash sandbox rungs)
-  rovecode help advanced          acp · serve · gauntlet · bench · trace · tools · smoke-tui · output modes
+  rovecode help advanced          market · context · mcp · plugins · acp · serve · gauntlet · bench · trace · tools
   rovecode help all               everything on one page`;
 
 const ADVANCED = `advanced — the full command reference
@@ -92,6 +92,13 @@ const ADVANCED = `advanced — the full command reference
   rovecode mcp show             this repo's .rovecode/mcp.json + .mcp.json: exact commands/URLs, env names, trusted or not
   rovecode mcp trust [--yes] · rovecode mcp untrust   approve those files as they are now, or withdraw that
                             approval — until trusted nothing in them loads; your own add --project is trusted as you approve it
+  rovecode market search [query] [--kind mcp|skill|plugin]  one shelf over MCP servers, skills and plugins
+  rovecode market info <id>     publisher, licence, version, exactly what an install would write
+  rovecode market install <id|kind:id|git-url|npm-pkg> [--project] [--yes]  plan first, write only after you agree
+  rovecode market list|remove|update|sources   what is installed, what is behind, where each shelf came from
+                            (docs/market.md; /market does the same inside the TUI; every subcommand takes --json)
+  rovecode context [session] [--json]  what fills the window, item by item, and how far our estimate is from
+                            the provider's own count of the same prompt (cache reads included — they are the prompt too)
   rovecode auth set <provider> [--key <name>]  store an API key (prompts on stdin; ~/.rovecode/credentials.json)
   rovecode auth list            stored providers + key names (values redacted)
   rovecode auth remove <provider>  delete a stored credential

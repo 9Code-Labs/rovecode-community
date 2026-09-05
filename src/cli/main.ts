@@ -341,7 +341,7 @@ async function cmdModel(words: string[]): Promise<void> {
     return;
   }
   if (action === "show") {
-    const { ModelCatalog } = await import("../providers/catalog.ts");
+    const { ModelCatalog, describePricing } = await import("../providers/catalog.ts");
     const { thinkingReport } = await import("../providers/thinking.ts");
     const ref = arg !== undefined ? reg.resolveSelector(arg, reg.defaultRef()?.provider ?? "") : reg.defaultRef();
     if (ref === null) { console.error("error: no default model — rovecode model use <provider/model>"); process.exit(1); }
@@ -352,6 +352,8 @@ async function cmdModel(words: string[]): Promise<void> {
     const catalogLine = info === undefined ? "unpriced — not in models.dev, not in rovecode's own table (/cost shows tokens only)"
       : info.source === "local" ? `priced from rovecode's own table, not models.dev (${info.sourceNote})` : "models.dev";
     for (const l of thinkingReport(model, p?.protocol ?? "openai", { source: arg !== undefined ? "as named" : "the default", catalog: catalogLine })) console.log(l);
+    // the numbers themselves, and anything that changes them: a prompt-size threshold, a dated increase
+    if (info !== undefined) for (const l of describePricing(info)) console.log(`            ${l}`);
     return;
   }
   console.error("usage: rovecode model list [provider] | rovecode model use <provider/model> [--project] | rovecode model show [provider/model]");
@@ -407,7 +409,7 @@ async function cmdTrace(sessionId: string): Promise<void> {
   }
 }
 
-const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "plugin", "mcp", "market", "auth", "provider", "model", "models", "setup", "connect", "trace", "help", "chat", "repl", "smoke-tui", "acp", "serve", "export"]);
+const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "plugin", "mcp", "market", "context", "auth", "provider", "model", "models", "setup", "connect", "trace", "help", "chat", "repl", "smoke-tui", "acp", "serve", "export"]);
 const rIx = process.argv.indexOf("--resume");
 const rArg = rIx !== -1 ? process.argv[rIx + 1] : undefined;
 const resumeId = rArg !== undefined && !rArg.startsWith("-") ? rArg : undefined;
@@ -434,6 +436,7 @@ if (cmd === "" || cmd === "chat" || cmd === "repl") {
     case "plugin": process.exitCode = await (await import("../plugins/cli.ts")).cmdPlugin(argvAfter("plugin")); break;
     case "mcp": process.exitCode = await (await import("./mcp-market-cmd.ts")).cmdMcp(argvAfter("mcp")); break;
     case "market": process.exitCode = await (await import("./market-cmd.ts")).cmdMarket(argvAfter("market")); break;
+    case "context": process.exitCode = await (await import("./context-cmd.ts")).cmdContext(argvAfter("context")); break;
     case "setup": {
       const { runSetup } = await import("./setup.ts");
       const { ProviderRegistry } = await import("../providers/registry.ts");
