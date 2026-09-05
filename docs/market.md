@@ -22,7 +22,7 @@ same code.
 
 ## The three kinds, and what installing one means
 
-| | MCP server | skill | plugin |
+| the three kinds | MCP server | skill | plugin |
 |---|---|---|---|
 | what it is | a process rovecode launches; the model gets its tools | a `SKILL.md` the model reads | a folder of code rovecode loads and **runs** |
 | installing writes | an entry in `mcp.json` | files under `skills/<id>/` | a folder under `plugins/<id>/` |
