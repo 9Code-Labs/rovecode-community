@@ -93,7 +93,7 @@ test("buildCfg gated: repl defaults with memory/skill allows and prompt gates", 
   // estimate our tokenizer produces and this model's own tokenizer counts more (core/token-scale.ts).
   const ref = rt.providers.defaultRef() ?? { provider: "mock", model: "default" };
   expect(cfg.contextBudgetTokens).toBe(
-    contextBudgetFor({ window: 1_000_000, maxOutput: 128_000, scale: tokenScaleFor(ref).scale }),
+    contextBudgetFor({ window: 1_000_000, maxOutput: 128_000, scale: tokenScaleFor(ref).charScale }),
   );
   expect(cfg.contextBudgetTokens).toBeGreaterThan(200_000);
   expect(cfg.compactionThreshold).toBe(0.8);

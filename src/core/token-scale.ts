@@ -36,8 +36,15 @@
  *  budget by an amount whose provenance no one can explain, and hides the fact that the number is unknown. */
 
 export interface TokenScale {
-  /** multiply an estimate by this to approximate what the provider will count; 1 when unmeasured */
+  /** multiply an o200k estimate (`countTokens`) by this to approximate what the provider will count;
+   *  1 when unmeasured */
   scale: number;
+  /** the same for the OTHER estimator, `estimateTokens` (chars/4), which is what compaction and context
+   *  assembly measure with. It is a different approximation with a different error, so it needs its own
+   *  number: on Claude 4.5 the o200k figure is 1.29x while chars/4 needs 1.46x, and using the first to
+   *  size a budget the second is compared against under-corrects by an eighth — which is the direction
+   *  that overflows the window. Measured in the same run, from the same samples. */
+  charScale: number;
   /** true when the number came from a measurement rather than from the default */
   measured: boolean;
   /** one line for the reader: where the number is from, or that there is none */
@@ -46,17 +53,22 @@ export interface TokenScale {
 
 const UNMEASURED: TokenScale = {
   scale: 1,
+  charScale: 1,
   measured: false,
   note: "no measurement for this model — the estimate is used as-is; bun scripts/measure-tokenizer.ts measures it",
 };
 
+/** o200k is OpenAI's own tokenizer, so `scale` is exactly 1 — but chars/4 is nobody's tokenizer, and
+ *  the budget is compared against chars/4. Left at 1 because it has not been measured against an
+ *  OpenAI model, and an unmeasured number is what this file refuses to invent. */
 const EXACT: TokenScale = {
   scale: 1,
+  charScale: 1,
   measured: true,
   note: "o200k is this vendor's own tokenizer — the estimate is exact",
 };
 
-interface Row { provider: string; match: RegExp; scale: number; note: string }
+interface Row { provider: string; match: RegExp; scale: number; charScale: number; note: string }
 
 const MEASURED: Row[] = [
   {
@@ -64,12 +76,14 @@ const MEASURED: Row[] = [
     // the 5 generation: opus-5, sonnet-5, fable-5.x, and the dated snapshots of each
     match: /(opus-5|sonnet-5|fable-5|mythos-5)/,
     scale: 1.80,
+    charScale: 1.82,
     note: "measured 2026-09-05 against /v1/messages/count_tokens over 20 samples — o200k reads up to 1.79× low on Claude 5",
   },
   {
     provider: "anthropic",
     match: /(haiku-4-5|opus-4-5|sonnet-4-6)/,
     scale: 1.29,
+    charScale: 1.46,
     note: "measured 2026-09-05 against /v1/messages/count_tokens over 20 samples — o200k reads up to 1.29× low on Claude 4.5/4.6",
   },
 ];
@@ -84,7 +98,7 @@ export function tokenScaleFor(ref: { provider: string; model: string }): TokenSc
   const model = ref.model.toLowerCase();
   if (EXACT_PROVIDERS.has(provider)) return EXACT;
   const row = MEASURED.find((r) => r.provider === provider && r.match.test(model));
-  return row ? { scale: row.scale, measured: true, note: row.note } : UNMEASURED;
+  return row ? { scale: row.scale, charScale: row.charScale, measured: true, note: row.note } : UNMEASURED;
 }
 
 /** An estimate corrected towards what the provider will count. Rounds up: a token of slack costs

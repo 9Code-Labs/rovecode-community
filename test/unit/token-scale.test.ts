@@ -55,6 +55,36 @@ describe("tokenScaleFor", () => {
   });
 });
 
+describe("charScale — the other estimator's number", () => {
+  it("is what the budget uses, because the budget is compared against chars/4, not o200k", () => {
+    // this is the whole reason the field exists: one scale for two different approximations would be
+    // right for at most one of them, and wrong in the direction that overflows the window
+    const ref = { provider: "anthropic", model: "claude-haiku-4-5" };
+    const s = tokenScaleFor(ref);
+    expect(s.charScale).toBeGreaterThan(s.scale);
+    const budget = contextBudgetFor({ window: 200_000, maxOutput: 8_000, scale: s.charScale });
+    expect(budget).toBeLessThan(contextBudgetFor({ window: 200_000, maxOutput: 8_000, scale: s.scale }));
+  });
+
+  it("is present on every row, measured or not — a caller never has to check which", () => {
+    for (const ref of [
+      { provider: "anthropic", model: "claude-opus-5" },
+      { provider: "anthropic", model: "claude-haiku-4-5" },
+      { provider: "openai", model: "gpt-5.5" },
+      { provider: "google", model: "gemini-3.1-pro-preview" },
+    ]) {
+      const s = tokenScaleFor(ref);
+      expect(s.charScale).toBeGreaterThanOrEqual(1);
+      expect(Number.isFinite(s.charScale)).toBe(true);
+    }
+  });
+
+  it("leaves an unmeasured model at 1 on both scales rather than borrowing one for the other", () => {
+    const s = tokenScaleFor({ provider: "deepseek", model: "deepseek-v4-pro" });
+    expect(s).toMatchObject({ scale: 1, charScale: 1, measured: false });
+  });
+});
+
 describe("scaleEstimate", () => {
   it("rounds up — a token of slack costs nothing, a token of shortfall loses the turn", () => {
     const { scale } = tokenScaleFor({ provider: "anthropic", model: "claude-opus-5" });

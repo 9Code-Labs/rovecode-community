@@ -521,9 +521,10 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
         ...(cur?.contextWindow !== undefined ? { window: cur.contextWindow } : {}),
         ...(cur?.maxOutput !== undefined ? { maxOutput: cur.maxOutput } : {}),
         ...(positiveInt(process.env.ROVECODE_CONTEXT_BUDGET) !== undefined ? { override: positiveInt(process.env.ROVECODE_CONTEXT_BUDGET) as number } : {}),
-        // our estimator is not this model's tokenizer: on Claude 5 it reads up to 1.58x low, so a
-        // budget taken at face value compacts too late and the request that follows is rejected
-        scale: tokenScaleFor(ref).scale,
+        // our estimator is not this model's tokenizer, so a budget taken at face value compacts too
+        // late and the request that follows is rejected. charScale, not scale: what this budget is
+        // compared against is estimateTokens (chars/4) in loop.ts and compaction.ts, never countTokens.
+        scale: tokenScaleFor(ref).charScale,
       });
     })(),
     compactionThreshold: 0.8,
