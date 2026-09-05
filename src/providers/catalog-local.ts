@@ -65,6 +65,17 @@ export const PRICE_TIERS: Readonly<Record<string, Readonly<Record<string, PriceT
     "grok-4.3": { thresholdTokens: 200_000, mode: "per-request", above: { input: 2.5, output: 5, cacheRead: 0.4 },
       source: "docs.x.ai/developers/pricing — over 200k prompt tokens the whole request bills at the high rate", checked: "2026-09-05 (fetched)" },
   },
+  // OpenAI, developers.openai.com/api/docs/models/gpt-5.4 and /gpt-5.5: "Prompts with >272K input tokens
+  // are priced at 2x input and 1.5x output for the full session." The multipliers are ASYMMETRIC — input
+  // doubles, output goes up by half — so these are written out rather than derived from one rate.
+  // The -pro tiers are NOT given this: their own pages do not carry the sentence, and inventing a
+  // threshold for a $30/1M model is the expensive kind of guess.
+  openai: {
+    "gpt-5.4": { thresholdTokens: 272_000, mode: "per-request", above: { input: 5, output: 22.5, cacheRead: 0.5 },
+      source: "developers.openai.com/api/docs/models/gpt-5.4 — >272K input tokens: 2x input, 1.5x output for the full session", checked: "2026-09-05 (fetched)" },
+    "gpt-5.5": { thresholdTokens: 272_000, mode: "per-request", above: { input: 10, output: 45, cacheRead: 1 },
+      source: "developers.openai.com/api/docs/models/gpt-5.5 — >272K input tokens: 2x input, 1.5x output for the full session", checked: "2026-09-05 (fetched)" },
+  },
   // Google prices by PROMPT SIZE, not by overflow: the page's own columns read "prompts <= 200k tokens"
   // and "prompts > 200k tokens" for BOTH input and output, so a 201k prompt bills every token — and that
   // request's output — at the upper rate. Same shape as xAI, which is why neither is "marginal".
@@ -83,8 +94,23 @@ export const PRICE_NOTES: Readonly<Record<string, Readonly<Record<string, string
   google: {
     "gemini-3.8-flash": "promotional pricing through 2026-12-31: ai.google.dev/gemini-api/docs/pricing says it doubles to $1.50 in / $7.50 out starting 2027-01-01 (checked 2026-09-05)",
   },
+  mistral: {
+    // Checked against mistral.ai/pricing/api on 2026-09-05: the table publishes ONLY `-latest` aliases
+    // (mistral-medium-latest $1.5/$7.5, mistral-small-latest $0.15/$0.6, mistral-large-latest $0.5/$1.5).
+    // No dated id appears — not the snapshot's `mistral-medium-2604`, and not `mistral-medium-3-5` or
+    // `ministral-8b-2512` either. The prices match, the ids are unverifiable, so nothing is renamed here.
+    "mistral-medium-latest": "mistral.ai/pricing/api publishes only `-latest` aliases and NO maximum output for any model — the catalog's maxOutput equalling the context window is filler, not a vendor figure (checked 2026-09-05)",
+    "mistral-medium-2604": "this dated id is not on mistral.ai/pricing/api, which lists only `-latest` aliases; the price matches mistral-medium-latest but the id itself is unverified (checked 2026-09-05)",
+  },
+  groq: {
+    // Not "unverified" — UNPUBLISHED. Groq's docs table says "Contact Sales" for the Llama models and
+    // console.groq.com/pricing is a 404, so any number here came from a third party, not from Groq.
+    "llama-3.3-70b-versatile": "Groq does not publish a price for this model — its docs table says \"Contact Sales\" and there is no public pricing page; the catalog's figure is models.dev's, not the vendor's (checked 2026-09-05)",
+  },
   anthropic: {
     // true of every Anthropic row; recorded on the one most runs use
+    "claude-mythos-5-1": "invite-only access (platform.claude.com/docs/en/models/mythos-5-1/overview); outside the Batches 300k beta, which covers Opus 5/4.8/4.7/4.6 and Sonnet 5/4.6 only (checked 2026-09-05)",
+    "claude-fable-5-1": "outside the Batches 300k beta, which covers Opus 5/4.8/4.7/4.6 and Sonnet 5/4.6 only (checked 2026-09-05)",
     "claude-opus-5": "thinking tokens bill as OUTPUT and count inside max_tokens; from Opus 4.5 / Sonnet 4.6 / Fable 5.x earlier thinking blocks are preserved and bill as INPUT on the next turn (platform.claude.com/docs, checked 2026-09-05)",
   },
 } as const;
@@ -100,13 +126,13 @@ export const LOCAL_MODELS: Readonly<Record<string, Readonly<Record<string, Local
     // on that wording until the page is unambiguous.
     "deepseek-v4-flash": { context: 1_000_000, output: 384_000, reasoning: true, toolCall: true, override: true,
       cost: { input: 0.44, output: 1.32, cacheRead: 0.014 },
-      source: "api-docs.deepseek.com/quick_start/pricing (peak rates; models.dev carries ~1/3 of these)", checked: "2026-09-05 (fetched)" },
+      source: "api-docs.deepseek.com/quick_start/pricing (peak rate — off-peak is half, we do not model time-of-day; models.dev carries ~1/3 of these)", checked: "2026-09-05 (fetched)" },
     "deepseek-v4-pro": { context: 1_000_000, output: 384_000, reasoning: true, toolCall: true, override: true,
       cost: { input: 1.32, output: 3.96, cacheRead: 0.044 },
-      source: "api-docs.deepseek.com/quick_start/pricing (peak rates; models.dev carries ~1/3 of these)", checked: "2026-09-05 (fetched)" },
+      source: "api-docs.deepseek.com/quick_start/pricing (peak rate — off-peak is half, we do not model time-of-day; models.dev carries ~1/3 of these)", checked: "2026-09-05 (fetched)" },
     "deepseek-v4-flash-vision-exp": { context: 1_000_000, output: 384_000, reasoning: true, toolCall: true, image: true, override: true,
       cost: { input: 0.44, output: 1.32, cacheRead: 0.014 },
-      source: "api-docs.deepseek.com/quick_start/pricing (peak rates; models.dev carries ~1/3 of these)", checked: "2026-09-05 (fetched)" },
+      source: "api-docs.deepseek.com/quick_start/pricing (peak rate — off-peak is half, we do not model time-of-day; models.dev carries ~1/3 of these)", checked: "2026-09-05 (fetched)" },
     // The two API aliases. The pricing page lists only the v4-* ids, so nothing here is verified: the
     // numbers are the last ones DeepSeek published for them and are marked as such rather than being
     // quietly refreshed to a v4 price they may not be billed at.

@@ -80,6 +80,13 @@ async function run(script: string, args: string[] = [], env: Record<string, stri
   const dir = mkdtempSync(join(tmpdir(), "rovecode-gen-"));
   const runner = join(dir, "run.mjs");
   writeFileSync(runner, script);
+  // The run writes a THROWAWAY copy, seeded with what ships so the refusal rules still compare against a
+  // real baseline. Writing the tracked file and restoring it afterwards is correct in isolation and wrong
+  // in a suite: bun runs test files concurrently, and plugin-subfolder-install.test.ts read skills.json
+  // during the --allow-shrink case — when xlsx is deliberately gone — and failed for our reasons, not its
+  // own. A test that mutates a tracked file is a test that can fail any other test.
+  const out = join(dir, "skills.json");
+  writeFileSync(out, before);
   try {
     // the ambient environment is scrubbed of both token names: a developer who happens to export one
     // must not change what these tests observe
@@ -88,12 +95,14 @@ async function run(script: string, args: string[] = [], env: Record<string, stri
     delete clean["GITHUB_TOKEN"];
     delete clean["GH_TOKEN"];
     Object.assign(clean, env);
+    clean["ROVECODE_CATALOG_OUT"] = out;
     const proc = Bun.spawn(["bun", runner, ...args], { cwd: ROOT, env: clean, stdout: "pipe", stderr: "pipe" });
     const err = await new Response(proc.stderr).text();
     const code = await proc.exited;
-    const after = readFileSync(CATALOG, "utf8");
+    const after = readFileSync(out, "utf8");
     const ids = (JSON.parse(after) as { items: { id: string }[] }).items.map((i) => i.id);
-    if (after !== before) writeFileSync(CATALOG, before);        // never leave the repo changed
+    // the tracked catalog is never in play, so this also asserts the run stayed inside its sandbox
+    expect(readFileSync(CATALOG, "utf8")).toBe(before);
     return { code, err, wrote: after !== before, ids };
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }

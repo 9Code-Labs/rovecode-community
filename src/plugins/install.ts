@@ -5,7 +5,7 @@
  *  folder without a usable manifest never lands in ~/.rovecode/plugins). Adding into the project scope
  *  records the folder's digest as trusted: the human ran the command, that is the yes. */
 
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { pluginRoots, type PluginScope } from "./discover.ts";
@@ -43,6 +43,11 @@ const defaultSpawn: Spawn = async (cmd, cwd) => {
 /** the folder a scope's plugins live in */
 export function scopeRoot(scope: PluginScope, cwd: string, home: string): string {
   return pluginRoots(cwd, home).find(([s]) => s === scope)?.[1] ?? join(home, "plugins");
+}
+
+/** true for a symbolic link; an entry we cannot stat is treated as one and skipped */
+function isSymlink(p: string): boolean {
+  try { return lstatSync(p).isSymbolicLink(); } catch { return true; }
 }
 
 export async function addPlugin(source: string, opts: InstallOptions): Promise<AddResult> {

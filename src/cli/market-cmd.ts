@@ -47,10 +47,19 @@ export const MARKET_USAGE = [
   "  remove <id|kind:id> [--project]            undo an install of any kind",
   "  list [--all]                               what is installed here (--all: the whole market, with badges)",
   "  update [id] [--all] [--yes]                what is out of date; with an id or --all: plan, approve, reinstall",
+  "                                             --all --yes skips plugins (new code): name one, or pass --yes-plugins",
   "  sources                                    where rows come from right now, and whether each answered",
   "every command takes --json · --offline skips the network entirely",
   "an id is a bare slug inside its kind (filesystem); say mcp:filesystem when two kinds share a name",
 ];
+
+/** C0/C1 control characters, minus the three that are legitimately part of a text file (tab, newline,
+ *  carriage return). A catalog body is UNTRUSTED text from a third party: printed raw it can clear the
+ *  screen, retitle the window, or hide itself with ESC[8m. The TUI already strips this (sextant/
+ *  market-source.ts, and again in screen.ts); stdout had no such pass. */
+const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g;
+/** what `market docs` is allowed to put on a terminal */
+export const safeForTerminal = (text: string): string => text.replace(/\r\n?/g, "\n").replace(CONTROL, "");
 
 /** a size a person reads, from a byte count */
 const kb = (bytes: number): string => (bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`);
@@ -140,6 +149,13 @@ async function installOne(item: MarketItem, opts: PlanOptions, ctx: {
 }
 
 export async function cmdMarket(args: string[], deps: MarketCliDeps = {}): Promise<number> {
+  // one guard for the whole command: a filesystem error (EPERM/EBUSY on Windows, a full disk) is a
+  // sentence and an exit code, not a stack trace. The TUI path already wraps its calls; stdout did not.
+  try { return await runMarket(args, deps); }
+  catch (e) { (deps.err ?? ((l: string) => console.error(l)))(`market: ${e instanceof Error ? e.message : String(e)}`); return 1; }
+}
+
+async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
   const out = deps.out ?? console.log;
   const err = deps.err ?? ((l: string) => console.error(l));
   const cwd = deps.cwd ?? process.cwd();
@@ -149,7 +165,7 @@ export async function cmdMarket(args: string[], deps: MarketCliDeps = {}): Promi
   const scope: MarketScope = args.includes("--project") ? "project" : "user";
   const registry: RegistryDeps = { ...deps.registry, ...(offline ? { offline: true } : {}) };
   const flag = (name: string): string | undefined => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
-  const KNOWN = new Set(["--json", "--offline", "--project", "--yes", "--force", "--all", "--as", "--pick", "--kind"]);
+  const KNOWN = new Set(["--json", "--offline", "--project", "--yes", "--yes-plugins", "--force", "--all", "--as", "--pick", "--kind"]);
   const positional = args.filter((a, i) => !a.startsWith("--") && !(i > 0 && ["--as", "--pick", "--kind"].includes(args[i - 1]!)));
   for (const a of args) if (a.startsWith("--") && !KNOWN.has(a)) { err(`unknown flag ${a}`); err(MARKET_USAGE.join("\n")); return 2; }
 
@@ -226,6 +242,10 @@ export async function cmdMarket(args: string[], deps: MarketCliDeps = {}): Promi
       return 0;
     }
 
+    // `--all --yes` must not silently re-clone every PLUGIN from whatever its source's HEAD says today and
+    // re-record project trust for the result: that is running new code with no question asked. A skill is
+    // text and a server entry is config, so those go; plugins need `--yes-plugins` or a named update.
+    const skipPlugins = all && args.includes("--yes") && !args.includes("--yes-plugins");
     let targets = stale;
     if (which !== undefined) {
       const pick = await resolveTarget(which, registry);
@@ -234,13 +254,19 @@ export async function cmdMarket(args: string[], deps: MarketCliDeps = {}): Promi
       if (row === undefined) { err(`${qualify(pick.item)} is not installed here — rovecode market install ${qualify(pick.item)}`); return 1; }
       targets = [row];
     }
-    if (targets.length === 0) { out("everything installed is at the catalog's version"); return 0; }
+    const skipped = skipPlugins ? targets.filter((r) => r.kind === "plugin") : [];
+    if (skipped.length) targets = targets.filter((r) => r.kind !== "plugin");
+    if (targets.length === 0 && skipped.length === 0) { out("everything installed is at the catalog's version"); return 0; }
 
     const ctx = {
       out, err, json, yes: args.includes("--yes"), tty: deps.tty ?? process.stdin.isTTY === true,
       secret: deps.secret ?? readSecret, plain: deps.plain ?? defaultPlain, run: { ...deps.run, force: true }, verb: "update",
     };
     let worst = 0;
+    if (skipped.length) {
+      out(`${skipped.length} plugin${skipped.length > 1 ? "s" : ""} skipped — a plugin update runs new code: ${skipped.map(qualify).join(", ")}`);
+      out(`  rovecode market update <id> --yes   ·   or --yes-plugins to take them all`);
+    }
     for (const row of targets) {
       // an item is updated in the scope it is installed in, not the flag's default
       const opts: PlanOptions = { scope: row.installed!.scope, cwd, home };
@@ -275,7 +301,7 @@ export async function cmdMarket(args: string[], deps: MarketCliDeps = {}): Promi
       return 1;
     }
     if (json) { jsonOut(deps, { id: qualify(r.item), docs: d }); return 0; }
-    out(d.body);
+    out(safeForTerminal(d.body));
     if (d.truncated) err(`— truncated: ${kb(d.bytes)} upstream, read the rest at ${d.source}`);
     return 0;
   }
@@ -284,7 +310,7 @@ export async function cmdMarket(args: string[], deps: MarketCliDeps = {}): Promi
   if (sub === "remove") {
     const r = await resolveTarget(target!, registry);
     if (!r.ok) { err(r.error); return r.ambiguous ? 2 : 1; }
-    const done = removeItem(r.item, cwd, home);
+    const done = removeItem(r.item, cwd, home, args.includes("--project") ? "project" : undefined);
     if (!done.ok) { err(done.error); return 1; }
     if (json) { jsonOut(deps, { removed: qualify(r.item), path: done.path }); return 0; }
     out(`removed ${qualify(r.item)} from ${done.path}`);
@@ -307,7 +333,10 @@ export async function cmdMarket(args: string[], deps: MarketCliDeps = {}): Promi
     const opts = { scope, cwd, home, ...(pick !== undefined ? { pick } : {}), ...(asName !== undefined ? { as: asName } : {}) };
     return installOne(r.item, opts, {
       out, err, json, yes: args.includes("--yes"), tty: deps.tty ?? process.stdin.isTTY === true,
-      secret: deps.secret ?? readSecret, plain: deps.plain ?? defaultPlain, run: deps.run ?? {}, verb: "install",
+      secret: deps.secret ?? readSecret, plain: deps.plain ?? defaultPlain, verb: "install",
+      // --force was accepted, documented, and read by nobody: the plan said "replaces …" and the write
+      // then refused with "already exists (use --force to replace)" — asking for the flag the user passed.
+      run: { ...deps.run, ...(args.includes("--force") ? { force: true } : {}) },
     });
   }
 

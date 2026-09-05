@@ -12,6 +12,7 @@
 
 import { parseQualifiedId, qualify, type InstallSpec, type MarketItem, type MarketKind } from "./types.ts";
 import { findItem, searchMarket, type RegistryDeps } from "./registry.ts";
+import { defaultServerName } from "../mcp/market-install.ts";
 
 export type Resolution =
   /** exactly one item: install it */
@@ -38,25 +39,32 @@ function directItem(kind: MarketKind, id: string, install: InstallSpec, descript
 
 export function resolveDirect(text: string, kind?: MarketKind): MarketItem | null {
   const s = text.trim();
-  if (kind === "skill" && looksLikeGit(s)) {
-    return directItem("skill", skillIdFromUrl(s), { kind: "skill", source: { git: s } }, `a skill cloned from ${s}`);
-  }
+  // The requested kind is honoured FIRST, every time. Ordering this by shape instead let
+  // `resolveDirect("./my-skill", "skill")` fall into the local-folder branch and come back as a PLUGIN:
+  // the human asks for a skill (text, nothing runs) and is handed code that rovecode loads into its own
+  // process — and, in project scope, records as trusted. A kind that cannot serve the source says no.
   if (looksLikeGit(s)) {
-    return directItem("plugin", skillIdFromUrl(s), { kind: "plugin", source: s, git: true }, `a plugin cloned from ${s}`);
+    if (kind === "mcp") return null;   // an MCP server is a package or a URL, not a repo to clone
+    return kind === "skill"
+      ? directItem("skill", skillIdFromUrl(s), { kind: "skill", source: { git: s } }, `a skill cloned from ${s}`)
+      : directItem("plugin", skillIdFromUrl(s), { kind: "plugin", source: s, git: true }, `a plugin cloned from ${s}`);
   }
   if (looksLikeLocalPath(s)) {
+    // only a plugin can be installed from a local folder: a skill's install spec carries a git source or
+    // literal files, and an MCP server is launched, not copied. Saying no is the honest answer.
+    if (kind !== undefined && kind !== "plugin") return null;
     return directItem("plugin", s.split(/[\\/]/).filter(Boolean).pop() ?? "plugin", { kind: "plugin", source: s, git: false }, `a plugin copied from ${s}`);
   }
-  if (kind === undefined || kind === "mcp") {
-    if (looksLikeNpm(s)) {
-      const name = (s.split("/").pop() ?? s).replace(/^server-/, "");
-      const entry = {
-        key: s, title: s, description: `an MCP server run with npx ${s}`, source: "registry" as const,
-        publisher: s.startsWith("@") ? s.slice(1).split("/")[0]! : "unknown",
-        installs: [{ kind: "stdio" as const, runtime: "npx" as const, command: "npx", args: ["-y", s], env: [], pending: [] }],
-      };
-      return directItem("mcp", name, { kind: "mcp", entry }, `an MCP server run with npx ${s}`);
-    }
+  if ((kind === undefined || kind === "mcp") && looksLikeNpm(s)) {
+    // The id MUST be the name the server is written under, or nothing lines up afterwards: `market list`
+    // would report it missing and `market remove <id>` would either refuse or delete a DIFFERENT curated
+    // server that happens to own the shortened name. defaultServerName() is that name.
+    const entry = {
+      key: s, title: s, description: `an MCP server run with npx ${s}`, source: "registry" as const,
+      publisher: s.startsWith("@") ? s.slice(1).split("/")[0]! : "unknown",
+      installs: [{ kind: "stdio" as const, runtime: "npx" as const, command: "npx", args: ["-y", s], env: [], pending: [] }],
+    };
+    return directItem("mcp", defaultServerName(s), { kind: "mcp", entry }, `an MCP server run with npx ${s}`);
   }
   return null;
 }

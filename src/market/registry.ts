@@ -98,6 +98,15 @@ function envList(v: unknown): MarketEnv[] {
   return out;
 }
 
+/** One definition of "this path leaves the folder", used by BOTH arms. They had drifted — one split on
+ *  `[/]` and the other on `[\/]`, so `..\..\evil` passed the plugin check and failed the skill one.
+ *  Two layers disagreeing about the same rule is how a hole opens later, even when today something
+ *  downstream happens to catch it. */
+function escapes(sub: string): boolean {
+  const parts = sub.split(/[\/]/);
+  return parts.includes("..") || sub.startsWith("/") || sub.startsWith("\\") || /^[A-Za-z]:/.test(sub);
+}
+
 /** the install arm for a catalog row, or null when the row describes nothing installable */
 function catalogInstall(kind: "skill" | "plugin", raw: Record<string, unknown>, notes: string[], id: string): InstallSpec | null {
   const spec = isRecord(raw.install) ? raw.install : raw;
@@ -111,9 +120,7 @@ function catalogInstall(kind: "skill" | "plugin", raw: Record<string, unknown>, 
     }
     const sub = str(spec.subfolder, 200);
     // a subfolder that climbs out of the clone is a path-traversal attempt, not a typo (same rule as a skill's)
-    if (sub !== undefined && (sub.split(/[\/]/).includes("..") || sub.startsWith("/") || sub.startsWith("\\") || /^[A-Za-z]:/.test(sub))) {
-      notes.push(`plugins catalog: "${id}" subfolder escapes the clone (${sub}) — skipped`); return null;
-    }
+    if (sub !== undefined && escapes(sub)) { notes.push(`plugins catalog: "${id}" subfolder escapes the clone (${sub}) — skipped`); return null; }
     return { kind: "plugin", source, git, ...(sub !== undefined ? { subfolder: sub } : {}) };
   }
   const files: { path: string; text: string }[] = [];
@@ -144,6 +151,24 @@ function catalogInstall(kind: "skill" | "plugin", raw: Record<string, unknown>, 
   return { kind: "skill", files };
 }
 
+/** Truncate to a BYTE budget, not a character count. `LIMITS.docs` is 24 KB and `.slice()` counts UTF-16
+ *  units, so a body of astral characters — emoji, CJK extensions, mathematical symbols — could be 24576
+ *  units and roughly four times that many bytes, sailing straight through the cap it was supposed to hit.
+ *  The generator measures in bytes (scripts/lib/docs.mjs), so this second line of defence has to as well.
+ *  Cuts on a character boundary: never half a surrogate pair. */
+export function capBytes(text: string, maxBytes: number): string {
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
+  let lo = 0, hi = text.length;
+  while (lo < hi) {
+    const mid = Math.ceil((lo + hi) / 2);
+    if (Buffer.byteLength(text.slice(0, mid), "utf8") <= maxBytes) lo = mid; else hi = mid - 1;
+  }
+  // a lone leading surrogate at the cut would be an unpaired code unit: step back one
+  const cut = text.slice(0, lo);
+  const last = cut.charCodeAt(cut.length - 1);
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut;
+}
+
 /** The item's own documentation, or undefined. A BROKEN doc drops the doc, never the row — the same rule
  *  as "a doc we could not reach is not an error": a shelf entry whose README moved is still installable.
  *  `withBody: false` keeps the ~200 KB of markdown out of the search path; the metadata still comes, so a
@@ -155,7 +180,7 @@ function docsOf(raw: unknown, notes: string[], id: string, withBody: boolean): I
   if (raw.format !== "markdown") { notes.push(`${id}: documentation format ${JSON.stringify(raw.format)} is not "markdown" — docs dropped, the row stays`); return undefined; }
   // NOT str(): that trims, and a document is a body rather than a label — trailing newlines and leading
   // indentation are part of markdown. Only the cap and the "is there anything here at all" check apply.
-  const body = typeof raw.body === "string" && raw.body.trim().length > 0 ? raw.body.slice(0, LIMITS.docs) : undefined;
+  const body = typeof raw.body === "string" && raw.body.trim().length > 0 ? capBytes(raw.body, LIMITS.docs) : undefined;
   if (body === undefined) { notes.push(`${id}: documentation body is empty — docs dropped, the row stays`); return undefined; }
   // `bytes` is the size upstream, before truncation, so it is normally LARGER than the body we carry.
   // A number that is missing or junk is replaced by what we can actually see rather than trusted.

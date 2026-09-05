@@ -194,8 +194,9 @@ test("a git URL, an npm package and a local folder resolve without a catalog; a 
     expect(git.ok && git.item).toMatchObject({ kind: "plugin", id: "thing", install: { kind: "plugin", git: true } });
     const skill = await resolveTarget("skill:https://example.com/thing.git", s.deps);
     expect(skill.ok && skill.item.kind).toBe("skill");
+    // the id is the name the server is WRITTEN under, or list/remove would look for the wrong entry
     const npm = resolveDirect("@modelcontextprotocol/server-github");
-    expect(npm).toMatchObject({ kind: "mcp", id: "github" });
+    expect(npm).toMatchObject({ kind: "mcp", id: "server-github" });
     expect(npm!.install.kind === "mcp" && npm!.install.entry.installs[0]).toMatchObject({ command: "npx", args: ["-y", "@modelcontextprotocol/server-github"] });
     // "filesystem" is a curated MCP id and must stay that, not become an npm package
     const named = await resolveTarget("filesystem", s.deps);
