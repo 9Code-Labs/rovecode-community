@@ -27,6 +27,8 @@ export const tr: PartialDict = {
     alsoLabel: "ayrıca:",
     envLabel: "ortam",
     envNone: "hiçbir şey — anahtar istemez.",
+    needsKey: "anahtar gerekiyor",
+    noKey: "anahtar gerekmiyor",
     required: "zorunlu",
     optional: "isteğe bağlı",
     secret: "gizli",
@@ -123,6 +125,7 @@ export const tr: PartialDict = {
     title: "On yetenek; her biri file:line iziyle bir aktarım.",
     lead: "Rovecode; pi, opencode, codex, cline, aider, gemini-cli ve diğerlerinden kanıta dayalı desenler aktarır. Bir aktarım ancak temiz bağlamlı bir eleştirmen onu işe başlamadan yazılmış bir çıtaya karşı doğruladıktan sonra iner.",
     surfaceLabel: "yüzey",
+    surfaceTitle: "sextant kokpiti",
     surfaceBody:
       "En az 100×30 truecolor bir TTY'de 6 panel: git durumuyla dosyalar, vurgu bandı ve ± fark ile kod, tek satırlık araç çağrıları, plan, kullanım, maskot. 3 palet, /theme canlı değiştirir; --classic pi-tui sohbetini korur.",
     surfaceAlt: "Sextant karesinden kırpma: dosya ağacı ve düzenleme vurgu bantlı kod paneli",

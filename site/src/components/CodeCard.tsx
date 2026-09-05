@@ -16,7 +16,8 @@ export function CodeCard({ file, lines, highlight = [], className, size = "md" }
       <div className="flex items-center border-b border-border/70 px-4 py-2.5">
         <span className="mono text-[11px] text-text-muted">{file}</span>
       </div>
-      <pre className={cn("mono overflow-x-auto px-1.5 py-3 [scrollbar-width:thin]", size === "md" ? "text-[12.5px] leading-[1.7]" : "text-[11px] leading-[1.65]")}>
+      {/* source and its line-number gutter are code: left to right, whatever the page direction is */}
+      <pre dir="ltr" className={cn("mono overflow-x-auto px-1.5 py-3 [scrollbar-width:thin]", size === "md" ? "text-[12.5px] leading-[1.7]" : "text-[11px] leading-[1.65]")}>
         {lines.map((l, i) => {
           const hot = highlight.includes(i);
           return (

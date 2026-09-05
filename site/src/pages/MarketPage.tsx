@@ -233,7 +233,9 @@ export function MarketPage({ data }: { data: MarketData }) {
     return (
       <Shell home={data.home}>
         <div className="grid gap-10 lg:grid-cols-12">
-          <nav aria-label={t.market.title} className="lg:col-span-3">
+          {/* below lg the two columns stack, and the list of everything ELSE in this kind must not stand
+              between the visitor and the item they clicked: at 390 it was 822px of other names first */}
+          <nav aria-label={t.market.title} className="order-last lg:order-first lg:col-span-3">
             <p className="label mb-4"><a href={base} className="hover:text-text">market</a></p>
             <ol className="grid gap-1">
               {siblings.map((e) => (
@@ -245,7 +247,10 @@ export function MarketPage({ data }: { data: MarketData }) {
               ))}
             </ol>
           </nav>
-          <article className="panel px-6 py-8 lg:col-span-9 lg:max-w-[46rem] md:px-10 md:py-10">
+          {/* min-w-0: a grid item defaults to min-content width, so a wide table inside resolved its
+              width:100% against the TABLE and overflow-x:auto never engaged — the columns past the fold
+              were unreachable, with no scrollbar, on every screen under 1024px */}
+          <article className="panel min-w-0 px-6 py-8 lg:col-span-9 lg:max-w-[46rem] md:px-10 md:py-10">
             <h1 id="market-title" className="sr-only">{data.entry.title} — {t.market.title}</h1>
             <Detail entry={data.entry} base={base} />
           </article>
@@ -279,6 +284,10 @@ export function MarketPage({ data }: { data: MarketData }) {
               </h2>
               <p className="mt-1 text-[13px] text-text-faint">{e.publisher}</p>
               <p className="mt-3 text-[14.5px] leading-6 text-text-muted">{e.description}</p>
+              {/* the two facts someone picks an item on, both already in the catalog: what it runs, and
+                  whether it will ask for a key. The detail page spelled them out; the card said nothing. */}
+              <p className="mono mt-4 truncate text-[12px] text-text-faint" dir="ltr" title={e.runs}>{e.runs}</p>
+              <p className="mt-1.5 text-[12.5px] text-text-faint">{e.env.some((v) => v.required) ? t.market.needsKey : t.market.noKey}</p>
               <p className="mt-auto pt-6 text-[14px] font-semibold text-brand">{t.market.installCta} →</p>
             </li>
           ))}

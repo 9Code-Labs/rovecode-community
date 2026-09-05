@@ -39,6 +39,9 @@ export const en = {
     alsoLabel: "also:",
     envLabel: "environment",
     envNone: "nothing — it needs no key.",
+    /** on a card, where there is room for three words: the two facts a reader picks an item on */
+    needsKey: "needs a key",
+    noKey: "no key",
     required: "required",
     optional: "optional",
     secret: "secret",

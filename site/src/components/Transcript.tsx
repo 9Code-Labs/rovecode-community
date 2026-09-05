@@ -63,10 +63,12 @@ export function Transcript({ className }: { className?: string }) {
   const status = step < 1 ? "" : step < 5 ? "thinking" : step < 7 ? "editing callback.ts" : t.status;
   const live = step >= 0 && step < DONE;
 
+  // a terminal transcript is code: dir="ltr" keeps it reading left to right on an RTL page
   return (
     <div
       ref={root}
       className={cn("terminal mono overflow-hidden text-[13px] leading-6", className)}
+      dir="ltr"
       role="img"
       aria-label={`The messages panel of a real rovecode run. You: ${t.user}. Rovecode: ${t.note} Tool rows: read callback.ts, 16 lines; edit callback.ts, plus 4 minus 1. Then an approval card: ${t.approval.title}, ${t.approval.argv}, with allow selected.`}
     >

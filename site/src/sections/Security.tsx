@@ -27,7 +27,7 @@ export function Security({ n }: { n: string }) {
               </div>
               <p className="text-[15px] leading-7 text-text md:col-span-5">{l.decides}</p>
               <p className="text-[15px] leading-7 text-text-muted md:col-span-5">
-                <span className="label mr-3 md:hidden">{t.security.cols[2]}</span>
+                <span className="label me-3 md:hidden">{t.security.cols[2]}</span>
                 {l.limit}
               </p>
             </Item>
