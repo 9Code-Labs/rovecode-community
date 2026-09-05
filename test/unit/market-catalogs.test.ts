@@ -182,3 +182,34 @@ test("mcp-docs.json is keyed by keys the curated shelf actually has", () => {
     expect(Buffer.byteLength(d.body, "utf8")).toBeLessThanOrEqual(LIMITS.docs);
   }
 });
+
+/** `contributes` is the structured half of the sentence the approval preview prints. The generator has
+ *  always written the array; until it was read, a caller choosing between two plugins had to parse
+ *  English out of `planNote`. These pin that the two stay the same fact — a plugin whose prose says it
+ *  brings skills while its array does not is a catalog lying to one of its two readers. */
+test("a plugin's contributes array reaches the reader, and agrees with the sentence", () => {
+  const raw = JSON.parse(readFileSync(join(CATALOGS, "plugins.json"), "utf8")) as { items: Record<string, unknown>[] };
+  let checked = 0;
+  for (const row of raw.items) {
+    const item = itemFromCatalog("plugin", row, []);
+    if (!item) continue;
+    const declared = (row["contributes"] as string[] | undefined) ?? [];
+    if (declared.length === 0) {
+      expect(item.contributes).toBeUndefined(); // absent, not an empty array nobody can distinguish
+      continue;
+    }
+    checked += 1;
+    expect(item.contributes).toEqual(declared);
+    // the prose is built from the array at generation time; if they diverge, one of the two is stale
+    const sentence = (item.planNote ?? []).find((l) => l.startsWith("contributes:"));
+    if (sentence) for (const kind of declared) expect(sentence).toContain(kind);
+  }
+  expect(checked).toBeGreaterThan(0); // a green test over zero rows proves nothing
+});
+
+test("contributes is capped and re-typed like every other untrusted list", () => {
+  const item = itemFromCatalog("plugin", { id: "x", title: "X", description: "d", install: { source: "https://example.com/r", git: true }, contributes: [...Array(40)].map((_, i) => `k${i}`) }, []);
+  expect(item?.contributes?.length).toBeLessThanOrEqual(12);
+  const junk = itemFromCatalog("plugin", { id: "y", title: "Y", description: "d", install: { source: "https://example.com/r", git: true }, contributes: [1, null, { a: 1 }] }, []);
+  expect(junk?.contributes).toBeUndefined(); // nothing survived the retyping, so the field is absent
+});

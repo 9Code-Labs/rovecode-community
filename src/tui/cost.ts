@@ -10,18 +10,20 @@
 import { partsTokenText } from "../core/loop.ts";
 import { ModelCatalog, ratesFor } from "../providers/catalog.ts";
 import { contextHealth, costUsdTiered, countTokens } from "../core/usage.ts";
+import { tokenScaleFor } from "../core/token-scale.ts";
 import type { Message } from "../core/types.ts";
 
 export interface UsageSummary {
   inTok: number; outTok: number; cacheRead: number; cacheWrite: number;
   /** USD over the priced messages; `priced`/`unpriced`/`noOrigin` say how much of the transcript it covers */
   cost: number; priced: number; unpriced: number; noOrigin: number;
-  /** estimated prompt tokens (o200k over every part) and the current model's window when the catalog knows it */
-  est: number; window?: number;
+  /** estimated prompt tokens, corrected towards the current model's own tokenizer, and the catalog's
+   *  window when it knows one. `estRaw` is the uncorrected o200k count the correction was applied to. */
+  est: number; estRaw: number; scale: { scale: number; measured: boolean; note: string }; window?: number;
 }
 
 export function summarizeUsage(messages: Message[], catalog: ModelCatalog, current: { provider: string; model: string }): UsageSummary {
-  const u: UsageSummary = { inTok: 0, outTok: 0, cacheRead: 0, cacheWrite: 0, cost: 0, priced: 0, unpriced: 0, noOrigin: 0, est: 0 };
+  const u: UsageSummary = { inTok: 0, outTok: 0, cacheRead: 0, cacheWrite: 0, cost: 0, priced: 0, unpriced: 0, noOrigin: 0, est: 0, estRaw: 0, scale: { scale: 1, measured: false, note: "" } };
   for (const m of messages) {
     const usage = m.usage;
     if (!usage) continue;
@@ -42,7 +44,14 @@ export function summarizeUsage(messages: Message[], catalog: ModelCatalog, curre
   }
   const window = catalog.lookup(current.provider, current.model)?.contextWindow;
   if (window) u.window = window;
-  u.est = countTokens(messages.map((m) => partsTokenText(m.parts)).join("\n"));
+  const raw = countTokens(messages.map((m) => partsTokenText(m.parts)).join("\n"));
+  // o200k is not this model's tokenizer. `rovecode context` has corrected for that since the factors
+  // were measured; this panel had not, so the live meter a user actually watches read up to 1.8x low
+  // on Claude 5 — the worst place for it, because this is the number you look at to decide whether
+  // there is room for another turn.
+  u.estRaw = raw;
+  u.scale = tokenScaleFor(current);
+  u.est = Math.ceil(raw * u.scale.scale);
   return u;
 }
 
@@ -68,6 +77,8 @@ export function buildCostNote(messages: Message[], catalog: ModelCatalog, curren
     health
       ? `context: ~${u.est} of ${u.window} (${Math.round(health.fraction * 100)}%${health.nearLimit ? " — near limit" : ""})`
       : `context: ~${u.est} tokens (window unknown)`,
+    // a corrected number that does not say it was corrected is indistinguishable from a wrong one
+    ...(u.scale.scale !== 1 ? [`  o200k counted ${u.estRaw}, scaled ${u.scale.scale}× for ${current.model}`] : []),
     costLine,
   ].join("\n");
 }

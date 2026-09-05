@@ -124,6 +124,13 @@ export interface MarketItem {
    *  nothing"). install.ts writes the standard plan from `install`; these are appended verbatim, capped
    *  like every other list. A catalog that has nothing special to say omits them. */
   planNote?: string[];
+  /** what a plugin brings, as data rather than as a sentence: "commands", "skills", "agents", "hooks",
+   *  "mcpServers", "tools". The catalog has carried this since the generator was written, but only the
+   *  prose form ("contributes: commands, skills") ever reached a reader — so a caller wanting to filter
+   *  on it had to parse English. The prose stays for the approval preview, which is written for a
+   *  person; this is the same fact for anything that has to choose between two candidates. It describes
+   *  what the catalog CLAIMS, exactly like every other field here, and is no more verified than they are. */
+  contributes?: string[];
 }
 
 /** Local truth about one item, computed from disk (never from a catalog). Kept apart from `MarketItem`

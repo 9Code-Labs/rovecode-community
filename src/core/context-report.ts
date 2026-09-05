@@ -20,7 +20,9 @@
 import { partsTokenText } from "./loop.ts";
 import type { Message, MessagePart } from "./types.ts";
 import { tokenScaleFor } from "./token-scale.ts";
-import { contextHealth, costUsd, countTokens, type NormalizedUsage, type PricingRow } from "./usage.ts";
+import { contextHealth, costUsdTiered, countTokens, type NormalizedUsage, type PricingRow } from "./usage.ts";
+import { ratesFor } from "../providers/catalog.ts";
+import type { PriceTier } from "../providers/catalog-local.ts";
 
 /** past this the estimate is misleading enough to name — the compaction trigger reads the estimate */
 export const DRIFT_TOLERANCE = 0.05;
@@ -105,7 +107,7 @@ export interface ReportInput {
   /** the current model, used for the window and for turns with no origin */
   current: { provider: string; model: string };
   /** window + pricing for a model, however the caller gets them (catalog, overlay, a test double) */
-  lookup: (ref: { provider: string; model: string }) => { contextWindow?: number; pricing?: PricingRow } | undefined;
+  lookup: (ref: { provider: string; model: string }) => { contextWindow?: number; pricing?: PricingRow; tier?: PriceTier } | undefined;
   /** the system prompt that will be sent, when the caller has it */
   system?: string;
   /** the serialized tool schemas that will be sent, when the caller has them */
@@ -156,8 +158,14 @@ export function contextReport(input: ReportInput): ContextReport {
     const n: NormalizedUsage = { input: u.input, output: u.output, cacheRead: u.cacheRead ?? 0, cacheWrite: u.cacheWrite ?? 0 };
     totals.input += n.input; totals.output += n.output; totals.cacheRead += n.cacheRead; totals.cacheWrite += n.cacheWrite;
     if (n.input === 0 && n.output === 0 && n.cacheRead === 0 && n.cacheWrite === 0) continue;
-    const pricing = lookup(m.origin ?? current)?.pricing;
-    const c = pricing ? costUsd(n, pricing) : undefined;
+    const info = lookup(m.origin ?? current);
+    // The prompt this turn carried decides the rate on a tiered model: xAI and Google bill a prompt
+    // over 200k at the upper rate, and xAI applies it to the whole request. Pricing a tiered turn at
+    // the base rate printed roughly HALF the real cost, with no caveat saying so — the TUI's /cost had
+    // this right and this report did not, which is the worst arrangement of the two.
+    const c = info?.pricing
+      ? costUsdTiered(n, ratesFor({ ...(m.origin ?? current), pricing: info.pricing, ...(info.tier ? { tier: info.tier } : {}) }, n.input + n.cacheRead + n.cacheWrite))
+      : undefined;
     if (c === undefined) unpricedTurns += 1;
     else { cost += c; priced += 1; }
   }
@@ -185,7 +193,9 @@ export function contextReport(input: ReportInput): ContextReport {
     report.nearLimit = health.nearLimit;
     report.remaining = Math.max(0, info.contextWindow - corrected);
   }
-  const d = drift(messages);
+  // the two rows the provider counted and the transcript never stored — see drift()
+  const fixedTokens = (slices.find((x) => x.label === "system prompt")?.tokens ?? 0) + (slices.find((x) => x.label === "tool schemas")?.tokens ?? 0);
+  const d = drift(messages, fixedTokens);
   if (d) report.drift = d;
   return report;
 }
@@ -193,15 +203,23 @@ export function contextReport(input: ReportInput): ContextReport {
 /** Our estimate against the provider's own count, measured at the last turn that reported one.
  *  The comparison point matters: a turn's usage describes the prompt BEFORE that turn, so the
  *  estimate is taken over everything up to it, exclusive. Returns undefined when no turn reported
- *  a prompt (a fresh session, or a provider that sends no usage). */
-export function drift(messages: readonly Message[]): ContextDrift | undefined {
+ *  a prompt (a fresh session, or a provider that sends no usage).
+ *
+ *  `fixedTokens` is the system prompt plus the tool schemas. They must be included or the comparison
+ *  is not a comparison: neither is ever stored in a transcript — the system message is appended to the
+ *  wire payload and never to history, and tool schemas are a separate wire field entirely — while the
+ *  provider's `reported` count is of a request that always carried both. Leaving them out made every
+ *  session look like it drifted by roughly the size of the fixed prompt, which on a fresh session is
+ *  most of it, and did so even for OpenAI models where the estimator is exact by construction. That is
+ *  a false signal on the one line whose whole job is to say whether the meter can be trusted. */
+export function drift(messages: readonly Message[], fixedTokens = 0): ContextDrift | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const u = messages[i]?.usage;
     if (!u) continue;
     const reported = u.input + (u.cacheRead ?? 0) + (u.cacheWrite ?? 0);
     if (reported <= 0) continue;
     const before = messages.slice(0, i);
-    const estimated = before.length === 0 ? 0 : tokensOf(before.map((m) => partsTokenText(m.parts)).join("\n"));
+    const estimated = fixedTokens + (before.length === 0 ? 0 : tokensOf(before.map((m) => partsTokenText(m.parts)).join("\n")));
     const delta = reported - estimated;
     const fraction = reported > 0 ? Math.abs(delta) / reported : 0;
     return { estimated, reported, delta, fraction, beyondTolerance: fraction > DRIFT_TOLERANCE };

@@ -163,6 +163,8 @@ export async function cmdContext(args: string[], deps: ContextCliDeps = {}): Pro
       return {
         ...(info.contextWindow !== undefined ? { contextWindow: info.contextWindow } : {}),
         ...(info.pricing ? { pricing: info.pricing } : {}),
+        // the tier travels with the pricing or the report bills a 250k-token xAI turn at half rate
+        ...(info.tier ? { tier: info.tier } : {}),
       };
     },
   });

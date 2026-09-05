@@ -212,6 +212,8 @@ export function itemFromCatalog(kind: "skill" | "plugin", raw: unknown, notes: s
   const status = str(raw.status, 64); if (status !== undefined) item.status = status;
   const license = str(raw.license, 120); if (license !== undefined) item.license = license;
   const planNote = strList(raw.planNote, 8, LIMITS.desc); if (planNote.length) item.planNote = planNote;
+  // the generator has always written this array; until now only the sentence built from it was read
+  const contributes = strList(raw.contributes, 12, 32); if (contributes.length) item.contributes = contributes;
   const docs = docsOf(raw.docs, notes, id, withDocs); if (docs) item.docs = docs;
   return item;
 }
