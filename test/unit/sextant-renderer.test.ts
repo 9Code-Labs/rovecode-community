@@ -548,3 +548,29 @@ test("frame budget: a 200-message transcript (user, assistant, tool rows) paints
   expect(median).toBeLessThan(40);
   renderer.stop();
 });
+
+test("a keystroke paints without waiting for the frame timer — the echo must not depend on a tick", async () => {
+  // Input was always HANDLED on the stdin event; only the paint waited for the next 40 ms tick. That is
+  // invisible on an idle machine and it is the whole symptom on a loaded one, where setInterval is
+  // starved: the prompt looks like it has stopped accepting input while the state behind it is fine.
+  // So this drives the renderer the way a starved loop sees it — feed bytes, never tick — and requires
+  // the screen to have been written.
+  const { renderer, io } = make();
+  for (let i = 0; i < 50; i++) renderer.addUser(`question ${i}`);
+  renderer.tick();
+
+  let paints = 0;
+  const write = (io as unknown as { write(s: string): void }).write.bind(io);
+  (io as unknown as { write(s: string): void }).write = (s: string) => { if (s.length > 0) paints += 1; write(s); };
+
+  for (const ch of "hello") io.feed(ch);            // no flushInput, no tick
+  expect(renderer.state.input.text).toBe("hello");
+  expect(paints).toBeGreaterThanOrEqual(5);          // one per keystroke, not zero
+
+  // ...and a paste arriving as ONE chunk still paints once, so the saving is not undone by echoing
+  // every character of a two-hundred-character paste separately
+  paints = 0;
+  io.feed("a paste of many characters arriving together");
+  expect(paints).toBe(1);
+  renderer.stop();
+});

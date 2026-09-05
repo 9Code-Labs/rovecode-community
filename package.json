@@ -26,8 +26,9 @@
   },
   "scripts": {
     "build": "bun run scripts/build.ts",
-    "build:cli": "bun build --target=bun --sourcemap=external src/cli/main.ts --outdir dist/cli",
+    "build:cli": "bun build --target=bun --sourcemap=external src/cli/main.ts --outdir dist/cli && bun run smoke:dist",
     "smoke:cli": "bun dist/cli/main.js --version",
+    "smoke:dist": "bun dist/cli/main.js smoke-tui --sextant",
     "test": "bun test",
     "gauntlet": "bun src/cli/main.ts gauntlet",
     "typecheck": "tsc --noEmit",

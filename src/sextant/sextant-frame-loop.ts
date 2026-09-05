@@ -136,6 +136,13 @@ export class FrameLoop {
     const r = parseInput(data, this.carry);
     this.carry = r.rest;
     for (const ev of r.events) this.dispatch(ev);
+    // Paint the result of this chunk NOW rather than waiting for the next 40 ms tick. A keystroke was
+    // always handled immediately, but its echo waited for the timer — invisible on an idle machine, and
+    // on a loaded one, where setInterval is starved, it is the difference between a responsive prompt
+    // and one that appears to have stopped accepting input. This costs no extra frame: the tick would
+    // have painted the same state a moment later, and it clears `dirty` so the tick then skips.
+    // Once per CHUNK, not once per event, so a paste of two hundred characters still paints once.
+    if (this.screen && r.events.length > 0) this.render(this.d.clock());
   }
 
   dispatch(ev: InputEvent): void {
