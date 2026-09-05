@@ -38,7 +38,7 @@ import { dismissCard, onCardKey } from "./card-keys.ts";
 import { gridFor } from "./draw-agents.ts";
 import { mouseKind } from "./input.ts";
 import { mainPage, nextPage } from "./draw-tabs.ts";
-import { openNotices } from "./overlays.ts";
+import { openNotices, openOverlays } from "./overlays.ts";
 
 // ------------------------------------------------------------------ contract
 
@@ -132,7 +132,15 @@ export function handleInput(s: SextantState, ev: InputEvent, ctx: KeyCtx, now: n
 
 // ------------------------------------------------------------------ ctrl map (app.js:1489-1502)
 
+/** The chords that put an overlay on the screen. A card is modal, and an overlay painted over it also
+ *  registers its hit zones first — so the card underneath stops answering the mouse and the tool call
+ *  waiting on it is stuck until the user finds their way back out. ⌃c was special-cased for this from
+ *  the start; the rest fell through by omission. Typing still reaches the prompt while a card waits
+ *  (onCardKey returning false is deliberate) — this only stops a second surface from covering it. */
+const OPENS_OVERLAY = new Set(["k", "p", "b", "m"]);
+
 function onCtrl(s: SextantState, ev: KeyEvent, ctx: KeyCtx): KeyEffect[] {
+  if (s.card && ev.name !== undefined && OPENS_OVERLAY.has(ev.name)) return R();
   switch (ev.name) {
     case "c": return ctrlC(s, ctx);
     case "k": case "p": openPalette(s); return R();
@@ -421,7 +429,11 @@ function onMouse(s: SextantState, ev: MouseEvent, ctx: KeyCtx, now: number): Key
     if (z.key) handleInput(s, z.key, ctx, now);
     return R();
   }
-  if (s.palette || s.help) return NONE();
+  // ANY open overlay swallows the fall-through, not just the two that existed when this was written:
+  // `market` and `context` were added later and never added here, so a click that missed every hit
+  // zone still moved focus in the cockpit behind the box. openOverlays is the invariant table — asking
+  // it means the next overlay is covered on the day it is added rather than the day someone notices.
+  if (openOverlays(s).length > 0) return NONE();
   // the main slot is code unless the layout hid the paged panel and it is showing there instead
   const main = mainPage(L, s);
   const panels: [Focus, Rect | null][] = [
@@ -442,7 +454,10 @@ function onMouse(s: SextantState, ev: MouseEvent, ctx: KeyCtx, now: number): Key
  *  tree — in its panel, or paged into the main slot on a narrow terminal — clamps to its rows here and
  *  pulls the cursor along, because drawFiles snaps the window back to the cursor otherwise. */
 function onWheel(s: SextantState, ev: MouseEvent, L: Layout, d: -1 | 1, ctx: KeyCtx): KeyEffect[] {
-  if (s.palette || s.help) return NONE();
+  // the wheel never reaches the hit zones at all — it does its own rect maths against the panels — so
+  // with the market open, scrolling over the box scrolled the transcript UNDERNEATH it, invisibly.
+  // Same fix as onMouse: ask the overlay table rather than naming two of the four by hand.
+  if (openOverlays(s).length > 0) return NONE();
   if (inRect(ev.x, ev.y, L.messages)) {
     s.msgScroll = Math.max(0, s.msgScroll + d * 2);
     if (d < 0) s.stick = false;

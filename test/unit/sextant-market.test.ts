@@ -3,11 +3,11 @@
 
 import { describe, expect, test } from "bun:test";
 import {
-  closeMarket, drawMarket, marketCounts, marketVisible, onMarketKey, openMarket, rowBadge, statusLine, wrap,
+  closeMarket, drawMarket, marketCounts, marketVisible, onMarketKey, openMarket, rewrap, rowBadge, statusLine, wrap,
   type MarketPlan, type MarketStatus, type MarketViewRow,
 } from "../../src/sextant/draw-market.ts";
 import { statusFrom, toViewRow } from "../../src/sextant/market-source.ts";
-import { key, makeLayout, spyCtx } from "../helpers/sextant-fixtures-keys.ts";
+import { key, makeLayout, mouse, spyCtx } from "../helpers/sextant-fixtures-keys.ts";
 import { GridScreen, THEME, baseState } from "../helpers/sextant-grid.ts";
 import { handleInput } from "../../src/sextant/keys.ts";
 import type { HitZone, SextantState } from "../../src/sextant/types.ts";
@@ -303,5 +303,75 @@ describe("market overlay · the plan card is the decision", () => {
     for (const ch of "docker") onMarketKey(s, key(ch));
     expect(s.market!.query).toBe("docker");
     expect(s.market!.docs).toBe(false);
+  });
+});
+
+/** Four defects an independent audit reproduced against this code. Each is pinned by what a user would
+ *  notice, not by the line that changed — the point is that the surface stays honest however the
+ *  routing is refactored later. */
+describe("market overlay · what the audit found", () => {
+  const withCard = (s: SextantState) => {
+    s.card = { kind: "approval", tool: "write", detail: "", verdicts: ["allow", "deny"], sel: 0, resolve: () => {} } as unknown as SextantState["card"];
+    return s;
+  };
+
+  test("a ctrl chord does not open an overlay on top of a live card", () => {
+    // a card is a decision a tool is blocked on. An overlay painted over it registers its hit zones
+    // first, so the card stops answering the mouse and the caller waits on a surface nobody can reach.
+    for (const name of ["m", "k", "p", "b"]) {
+      const s = withCard(baseState());
+      handleInput(s, { ...key(name), ctrl: true }, spyCtx(L).ctx, 0);
+      expect(s.market).toBeNull();
+      expect(s.palette).toBeNull();
+      expect(s.card).not.toBeNull(); // and the card is still there to be answered
+    }
+  });
+
+  test("ctrl-c still reaches the card — the guard is about overlays, not about ctrl", () => {
+    const s = withCard(baseState());
+    handleInput(s, { ...key("c"), ctrl: true }, spyCtx(L).ctx, 0);
+    expect(s.card).toBeNull();
+  });
+
+  test("clicking the backdrop cannot walk away from an install that is already running", () => {
+    // esc has refused this since the plan card was written; the mouse had its own way out, and the
+    // outcome that arrived afterwards was then discarded — the user never learned what happened
+    const s = open();
+    s.market!.plan = { row: ROWS[0]!, title: "t", target: "p", scope: "user", preview: [], asks: [], pending: [], running: true };
+    const hits: HitZone[] = [];
+    renderWith(s, hits);
+    hits[0]!.onClick();   // the full-screen backdrop is registered first
+    expect(s.market).not.toBeNull();
+
+    s.market!.plan!.running = false;
+    const after: HitZone[] = [];
+    renderWith(s, after);
+    after[0]!.onClick();
+    expect(s.market).toBeNull(); // once nothing is in flight it closes as it always did
+  });
+
+  test("the wheel does not scroll the transcript hidden behind an open overlay", () => {
+    const s = open();
+    s.msgScroll = 0;
+    handleInput(s, mouse(65, L.messages.x + 1, L.messages.y + 1), spyCtx(L).ctx, 0);
+    expect(s.msgScroll).toBe(0);
+  });
+
+  test("the docs pane wraps to the column it is drawn in, losing no words", () => {
+    // docLines wraps at a fixed 96 and the detail column never exceeds ~65, so every longer line was
+    // hard-clipped by scr.clip and the clipped part was simply gone — on every terminal, not a corner
+    const sentence = "the quick brown fox jumps over the lazy dog and keeps running well past any sensible column";
+    const wrapped = rewrap([{ kind: "text", text: sentence }], 40);
+    expect(wrapped.length).toBeGreaterThan(1);
+    for (const l of wrapped) expect(l.text.length).toBeLessThanOrEqual(40);
+    expect(wrapped.map((l) => l.text).join(" ")).toBe(sentence); // every word survived, in order
+  });
+
+  test("a code line is chunked, not word-wrapped", () => {
+    // breaking a command on a space would show a reader something copyable the document never said
+    const cmd = "npx -y @modelcontextprotocol/server-filesystem /a/very/long/path/that/keeps/going";
+    const out = rewrap([{ kind: "code", text: cmd }], 30);
+    expect(out.every((l) => l.kind === "code")).toBe(true);
+    expect(out.map((l) => l.text).join("")).toBe(cmd); // reassembles exactly
   });
 });

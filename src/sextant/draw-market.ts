@@ -232,8 +232,40 @@ export function docMaxScroll(r: MarketViewRow | undefined, rows: number): number
   return Math.max(0, (r?.docs?.lines.length ?? 0) - Math.max(1, rows));
 }
 
+/** Re-wrap the document to the column it is actually drawn in.
+ *
+ *  `docLines` wraps at a fixed 96 columns, but the detail column is `w = x + boxW - 2 - detailX` and
+ *  tops out around 65 even on the widest box the overlay will draw — so every prose line longer than
+ *  the column was hard-clipped by `scr.clip`, and the clipped part was simply gone. Not a narrow-
+ *  terminal corner case: it fired on every terminal, for most paragraphs of a real README.
+ *
+ *  Wrapping belongs here rather than at fetch time for a second reason — the terminal can be resized
+ *  while the pane is open, and a width decided when the document was read is wrong the moment it is.
+ *  Prose re-wraps on words; code is chunked instead, because breaking a command on a space would show
+ *  the reader something they could copy and run that is not what the document said. */
+export function rewrap(lines: readonly MarketDocLine[], w: number): MarketDocLine[] {
+  if (w < 8) return [...lines];
+  const out: MarketDocLine[] = [];
+  for (const line of lines) {
+    if (line.kind === "text") {
+      if (line.text.length <= w) { out.push(line); continue; }
+      let cur = "";
+      for (const word of line.text.split(/\s+/).filter(Boolean)) {
+        const piece = word.length > w ? word.slice(0, w) : word;
+        if (!cur) { cur = piece; continue; }
+        if (cur.length + 1 + piece.length <= w) cur += ` ${piece}`;
+        else { out.push({ kind: "text", text: cur }); cur = piece; }
+      }
+      if (cur) out.push({ kind: "text", text: cur });
+    } else if (line.kind === "code" && line.text.length > w) {
+      for (let i = 0; i < line.text.length; i += w) out.push({ kind: "code", text: line.text.slice(i, i + w) });
+    } else out.push(line);
+  }
+  return out;
+}
+
 function drawDocs(scr: ScreenLike, x: number, y: number, w: number, h: number, C: Theme, r: MarketViewRow, scroll: number): number {
-  const lines = r.docs?.lines ?? [];
+  const lines = rewrap(r.docs?.lines ?? [], w);
   if (lines.length === 0) {
     scr.clip(x, y, `documentation · ${r.title}`, st(C.fg, C.bg2, ATTR.BOLD), w);
     scr.clip(x, y + 2, "reading…", st(C.muted, C.bg2), w);
@@ -280,7 +312,12 @@ export function wrap(text: string, w: number): string[] {
 export function drawMarket(scr: ScreenLike, L: Layout, C: Theme, s: SextantState, fz: Fuzzy = defaultFuzzy, hits?: HitZone[]): { x: number; y: number } | null {
   const m = s.market;
   if (!m) return null;
-  hits?.push({ rect: { x: 0, y: 0, w: L.w, h: L.h }, onClick: () => closeMarket(s) });
+  // Clicking the backdrop closes the overlay — except while an install is running. The keyboard has
+  // refused that since the plan card was written ("an install in flight cannot be dismissed"), but the
+  // guard lived only in the key handler, so a click anywhere outside the plan box walked away from a
+  // write that was still happening, and the outcome was then discarded on arrival. Same rule, both
+  // input devices: the write is happening whatever the surface does, so the surface stays.
+  hits?.push({ rect: { x: 0, y: 0, w: L.w, h: L.h }, onClick: () => { if (!m.plan?.running) closeMarket(s); } });
 
   // the box follows its content: a five-row catalog does not need thirty rows of empty night. The floor
   // keeps the detail column readable, the ceiling keeps the cockpit visible behind it.
