@@ -1,5 +1,5 @@
-import { test, expect } from "bun:test";
-import { countTokens, normalizeUsage, costUsd, contextHealth } from "../../src/core/usage.ts";
+import { describe, test, expect } from "bun:test";
+import { contextHealth, costUsd, costUsdTiered, countTokens, normalizeUsage } from "../../src/core/usage.ts";
 
 // ---------- countTokens (gpt-tokenizer o200k_base, sync) ----------
 
@@ -158,4 +158,38 @@ test("contextHealth: degenerate window reports full (compact rather than overflo
 test("contextHealth: negative/NaN usedTokens counts as 0", () => {
   expect(contextHealth(-50, 100)).toEqual({ fraction: 0, nearLimit: false });
   expect(contextHealth(Number.NaN, 100)).toEqual({ fraction: 0, nearLimit: false });
+});
+
+describe("costUsdTiered", () => {
+  const base = { inputPerMTok: 1.25, outputPerMTok: 2.5, cacheReadPerMTok: 0.2, cacheWritePerMTok: 1 };
+  const above = { inputPerMTok: 2.5, outputPerMTok: 5, cacheReadPerMTok: 0.4, cacheWritePerMTok: 2 };
+
+  test("prices a flat model exactly like costUsd", () => {
+    const u = { input: 1_000, output: 500, cacheRead: 10_000, cacheWrite: 100 };
+    const flat = costUsd(u, base);
+    expect(costUsdTiered(u, { promptBase: 11_100, promptAbove: 0, base, request: base })).toBeCloseTo(flat!, 12);
+  });
+
+  test("bills the WHOLE request at the upper rate when a per-request tier applies", () => {
+    // xAI: a prompt over the threshold re-prices every token of the request, output included
+    const u = { input: 250_000, output: 1_000, cacheRead: 0, cacheWrite: 0 };
+    const tiered = costUsdTiered(u, { promptBase: 0, promptAbove: 250_000, base, above, request: above });
+    expect(tiered).toBeCloseTo((250_000 * 2.5 + 1_000 * 5) / 1e6, 12);
+    expect(tiered).toBeGreaterThan(costUsd(u, base)!); // the old flat math under-charged
+  });
+
+  test("splits the prompt in proportion for a marginal tier and leaves output on the request table", () => {
+    const u = { input: 100_000, output: 1_000, cacheRead: 100_000, cacheWrite: 0 };
+    // half the prompt over the threshold
+    const c = costUsdTiered(u, { promptBase: 100_000, promptAbove: 100_000, base, above, request: above });
+    const expected = (50_000 * 1.25 + 50_000 * 2.5 + 50_000 * 0.2 + 50_000 * 0.4 + 1_000 * 5) / 1e6;
+    expect(c).toBeCloseTo(expected, 12);
+  });
+
+  test("returns undefined when a rate a nonzero component needs is missing", () => {
+    const u = { input: 10, output: 0, cacheRead: 5, cacheWrite: 0 };
+    expect(costUsdTiered(u, { promptBase: 15, promptAbove: 0, base: { inputPerMTok: 1 }, request: { inputPerMTok: 1 } })).toBeUndefined();
+    // zero components never need a rate
+    expect(costUsdTiered({ input: 10, output: 0, cacheRead: 0, cacheWrite: 0 }, { promptBase: 10, promptAbove: 0, base: { inputPerMTok: 1 }, request: {} })).toBeCloseTo(1e-5, 12);
+  });
 });

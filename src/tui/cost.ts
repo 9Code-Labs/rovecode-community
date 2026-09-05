@@ -8,8 +8,8 @@
  *  Port #44: the same math feeds the sextant usage panel through sessionUsage(). */
 
 import { partsTokenText } from "../core/loop.ts";
-import { ModelCatalog } from "../providers/catalog.ts";
-import { costUsd, contextHealth, countTokens } from "../core/usage.ts";
+import { ModelCatalog, ratesFor } from "../providers/catalog.ts";
+import { contextHealth, costUsdTiered, countTokens } from "../core/usage.ts";
 import type { Message } from "../core/types.ts";
 
 export interface UsageSummary {
@@ -31,8 +31,11 @@ export function summarizeUsage(messages: Message[], catalog: ModelCatalog, curre
     if (!m.origin) u.noOrigin += 1;
     const origin = m.origin ?? current;
     const info = catalog.lookup(origin.provider, origin.model);
+    const n = { input: usage.input, output: usage.output, cacheRead: usage.cacheRead ?? 0, cacheWrite: usage.cacheWrite ?? 0 };
+    // the prompt this turn actually carried decides the rate on a tiered model: xAI and Google bill a
+    // prompt over 200k at the upper rate — xAI for the whole request. A flat model's breakdown is trivial.
     const c = info?.pricing
-      ? costUsd({ input: usage.input, output: usage.output, cacheRead: usage.cacheRead ?? 0, cacheWrite: usage.cacheWrite ?? 0 }, info.pricing)
+      ? costUsdTiered(n, ratesFor(info, n.input + n.cacheRead + n.cacheWrite))
       : undefined;
     if (c === undefined) u.unpriced += 1;
     else { u.cost += c; u.priced += 1; }

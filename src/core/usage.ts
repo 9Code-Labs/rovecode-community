@@ -112,6 +112,51 @@ export function normalizeUsage(raw: unknown): NormalizedUsage {
  *  Returns undefined when a rate needed for a NONZERO component is missing — an honest "unknown"
  *  beats silently under-billing (e.g. pricing cache reads at 0) or over-billing (at the full
  *  input rate). Zero components never require a rate; an all-zero usage costs 0. */
+/** A prompt-size-dependent rate table, structurally what providers/catalog.ts `ratesFor()` returns.
+ *  Declared here rather than imported so this module stays free of the catalog (and of its snapshot):
+ *  a caller that knows the model builds the breakdown, this one only multiplies. */
+export interface TieredRates {
+  /** prompt tokens billed at `base` */
+  promptBase: number;
+  /** prompt tokens billed at `above` */
+  promptAbove: number;
+  base: PricingRow;
+  above?: PricingRow;
+  /** the rates for everything that is not the prompt on this request — both vendors that tier also
+   *  select the OUTPUT price by prompt size */
+  request: PricingRow;
+}
+
+/** USD for one turn under a tiered rate table. The prompt's three components (base input, cache reads,
+ *  cache writes) are split in the same proportion as `promptBase`/`promptAbove`, which is exact for the
+ *  two shapes that exist today — flat (everything base) and per-request (everything above) — and a
+ *  documented approximation for a marginal tier, where no shipping provider states how a partly cached
+ *  prompt divides across the threshold. Same honesty rule as costUsd: a missing rate for a nonzero
+ *  component returns undefined rather than a wrong number. */
+export function costUsdTiered(u: NormalizedUsage, r: TieredRates): number | undefined {
+  const promptTotal = r.promptBase + r.promptAbove;
+  const aboveShare = promptTotal > 0 ? r.promptAbove / promptTotal : 0;
+  const above = r.above ?? r.base;
+  const split = (count: number): readonly (readonly [number, PricingRow])[] =>
+    aboveShare <= 0 ? [[count, r.base]]
+    : aboveShare >= 1 ? [[count, above]]
+    : [[count * (1 - aboveShare), r.base], [count * aboveShare, above]];
+
+  let total = 0;
+  for (const [count, row] of [
+    ...split(u.input).map(([c, p]) => [c, p.inputPerMTok] as const),
+    ...split(u.cacheRead).map(([c, p]) => [c, p.cacheReadPerMTok] as const),
+    ...split(u.cacheWrite).map(([c, p]) => [c, p.cacheWritePerMTok] as const),
+    [u.output, r.request.outputPerMTok] as const,
+  ]) {
+    const c = nz(count);
+    if (c === 0) continue;
+    if (typeof row !== "number" || !Number.isFinite(row)) return undefined;
+    total += (c / 1_000_000) * row;
+  }
+  return total;
+}
+
 export function costUsd(u: NormalizedUsage, p: PricingRow): number | undefined {
   const parts: readonly (readonly [number, number | undefined])[] = [
     [u.input, p.inputPerMTok],
