@@ -18,7 +18,10 @@ import { allItems, searchMarket, type RegistryDeps } from "../market/registry.ts
 import { resolveTarget } from "../market/resolve.ts";
 import { installedState, planInstall, removeItem, runInstall, withInstalled, type PlanOptions, type RunDeps } from "../market/install.ts";
 import type { PrereqEnv } from "../market/prereq.ts";
+import { originLine, recordFor } from "../market/manifest.ts";
 import { disposeCloneCache } from "../plugins/install.ts";
+import { reportLines, validateCatalog } from "../market/validate.ts";
+import { readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 
 export interface MarketCliDeps {
@@ -53,6 +56,8 @@ export const MARKET_USAGE = [
   "  update [id] [--all] [--yes]                what is out of date; with an id or --all: plan, approve, reinstall",
   "                                             --all --yes skips plugins (new code): name one, or pass --yes-plugins",
   "  sources [probe]                            where rows come from right now; really asks the registry (--offline to skip)",
+  "  validate <path|url> [--kind skill|plugin]  check a catalog you wrote before anyone trusts it: what would",
+  "                                             load, what would be dropped, and which fields will not survive",
   "every command takes --json · --offline skips the network entirely",
   "an id is a bare slug inside its kind (filesystem); say mcp:filesystem when two kinds share a name",
 ];
@@ -228,9 +233,17 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
     const all = args.includes("--all");
     const r = await allItems(registry);
     const rows = withInstalled(r.items, cwd, home).filter((row) => all || row.installed);
-    if (json) { jsonOut(deps, rows); return 0; }
+    // where each installed row came from: the catalog row, the clone URL, the commit. The disk still says
+    // WHETHER it is installed; the manifest says where it came from, and says so honestly when it cannot.
+    const withOrigin = rows.map((row) => row.installed
+      ? { ...row, origin: recordFor(row, row.installed.scope, cwd, home) ?? null }
+      : row);
+    if (json) { jsonOut(deps, withOrigin); return 0; }
     if (rows.length === 0) { out(all ? "the market is empty" : "nothing installed here yet — `rovecode market search` to look around"); return 0; }
-    for (const row of rows) out(`${itemLine(row)}${badge(row)}`);
+    for (const row of rows) {
+      out(`${itemLine(row)}${badge(row)}`);
+      if (row.installed) out(`         from ${originLine(recordFor(row, row.installed.scope, cwd, home))}`);
+    }
     return 0;
   }
 
@@ -334,6 +347,36 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
     out(safeForTerminal(d.body));
     if (d.truncated) err(`— truncated: ${kb(d.bytes)} upstream, read the rest at ${d.source}`);
     return 0;
+  }
+
+  // ---------------- validate
+  if (sub === "validate") {
+    if (target === undefined) { err("usage: rovecode market validate <path|url> [--kind skill|plugin]"); return 2; }
+    const kindFlag = flag("--kind");
+    if (kindFlag !== undefined && kindFlag !== "skill" && kindFlag !== "plugin") { err("validate takes --kind skill or --kind plugin"); return 2; }
+
+    let text: string;
+    const isUrl = /^https?:\/\//i.test(target);
+    if (isUrl) {
+      // a URL is the network, so --offline means it: the flag says "skips the network entirely"
+      if (offline) { err(`--offline and a URL cannot both be meant — give a local path, or drop --offline`); return 2; }
+      try {
+        const res = await fetch(target, { headers: { "user-agent": "rovecode-market-validate" } });
+        if (!res.ok) { err(`${target}: HTTP ${res.status}`); return 1; }
+        text = await res.text();
+      } catch (e) { err(`${target}: ${e instanceof Error ? e.message : String(e)}`); return 1; }
+    } else {
+      try { text = readFileSync(target, "utf8"); }
+      catch (e) { err(`${target}: ${e instanceof Error ? e.message : String(e)}`); return 1; }
+    }
+
+    const report = validateCatalog(text, {
+      ...(kindFlag ? { kind: kindFlag as "skill" | "plugin" } : {}),
+      filename: target,
+    });
+    if (json) { jsonOut(deps, report); return report.ok ? 0 : 1; }
+    for (const line of reportLines(report, target)) out(line);
+    return report.ok ? 0 : 1;
   }
 
   // ---------------- remove

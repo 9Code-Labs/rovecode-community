@@ -23,6 +23,7 @@ import { mcpTrustStatus } from "../mcp/trust.ts";
 import { addPlugin, cloneKey, removePlugin, scopeRoot, type Spawn } from "../plugins/install.ts";
 import { discoverPlugins } from "../plugins/discover.ts";
 import { prereqLine, prereqOf, type PrereqEnv } from "./prereq.ts";
+import { buildRecord, forgetInstall, recordInstall } from "./manifest.ts";
 import type { InstalledState, InstallOutcome, InstallPlanView, MarketItem, MarketRow, MarketScope } from "./types.ts";
 
 export interface PlanOptions {
@@ -191,6 +192,7 @@ export async function runInstall(plan: InstallPlanView, answers: Record<string, 
         ...(deps.force === true ? { replace: true } : {}),
         ...(opts.scope === "project" ? { trustHome: opts.home } : {}),
       });
+      recordInstall(buildRecord(item, { scope: opts.scope, target: inner.file }), { cwd: opts.cwd, home: opts.home, stillInstalled: recordStillInstalled(opts.cwd, opts.home) });
       return {
         ok: true, item, target: inner.file, scope: opts.scope, envNames: namesWritten(inner, raw),
         ...(written.trusted !== undefined ? { trusted: written.trusted } : {}),
@@ -210,6 +212,9 @@ export async function runInstall(plan: InstallPlanView, answers: Record<string, 
         ...(deps.cloneCache !== undefined ? { cloneCache: deps.cloneCache } : {}),
       });
       if (!r.ok) return { ok: false, error: r.error };
+      recordInstall(buildRecord(item, { scope: opts.scope, target: r.dir,
+        ...(install.git ? { git: { source: install.source } } : {}) }),
+        { cwd: opts.cwd, home: opts.home, stillInstalled: recordStillInstalled(opts.cwd, opts.home) });
       return {
         ok: true, item, target: r.dir, scope: opts.scope, envNames: item.env.filter((e) => e.required).map((e) => e.name),
         ...(opts.scope === "project" ? { trusted: true } : {}),
@@ -219,9 +224,11 @@ export async function runInstall(plan: InstallPlanView, answers: Record<string, 
 
     const dir = plan.target;
     if (existsSync(dir) && deps.force !== true) return { ok: false, error: `${dir} already exists (use --force to replace)` };
+    let clonedSha: string | undefined;
     if (install.source) {
       const r = await cloneSkill(install.source, dir, deps);
       if (!r.ok) return { ok: false, error: r.error };
+      clonedSha = r.sha;
     } else {
       // Build the whole thing beside the target and swap at the end. Writing in place meant deleting the
       // installed copy FIRST and then failing half way through the loop — the caller saw a clean
@@ -242,6 +249,9 @@ export async function runInstall(plan: InstallPlanView, answers: Record<string, 
         rmSync(staging, { recursive: true, force: true }); // no-op once it has been renamed into place
       }
     }
+    recordInstall(buildRecord(item, { scope: opts.scope, target: dir,
+      ...(install.source ? { git: { source: install.source.git, ...(clonedSha !== undefined ? { sha: clonedSha } : {}) } } : {}) }),
+      { cwd: opts.cwd, home: opts.home, stillInstalled: recordStillInstalled(opts.cwd, opts.home) });
     return {
       ok: true, item, target: dir, scope: opts.scope, envNames: [],
       next: "restart rovecode — skills are indexed at startup",
@@ -249,6 +259,36 @@ export async function runInstall(plan: InstallPlanView, answers: Record<string, 
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
+}
+
+/** Is what this record describes still on disk? Used to prune orphans on every write — a record whose
+ *  thing was deleted by hand is ignored anyway, and dropping it keeps the file from growing forever.
+ *  Asked through `installedState`, so it answers the same question `list` does rather than a second
+ *  approximation of it (an MCP record's target is the shared mcp.json, which exists whether or not the
+ *  entry inside it does — `existsSync` would be wrong here). */
+function recordStillInstalled(cwd: string, home: string) {
+  return (r: { kind: MarketItem["kind"]; id: string; scope: MarketScope }): boolean =>
+    installedState({ kind: r.kind, id: r.id } as MarketItem, cwd, home, r.scope) !== undefined;
+}
+
+/** The commit a clone is sitting on, read from the git directory rather than from stdout — `Spawn` gives
+ *  us an exit code and stderr, not stdout, and adding a channel to that seam for one string is not worth
+ *  it. Undefined when it cannot be read; provenance is best-effort. */
+function readSha(clone: string): string | undefined {
+  try {
+    const head = readFileSync(join(clone, ".git", "HEAD"), "utf8").trim();
+    const ref = /^ref:\s*(.+)$/.exec(head)?.[1];
+    if (ref === undefined) return /^[0-9a-f]{40}$/i.test(head) ? head : undefined;
+    const direct = join(clone, ".git", ...ref.split("/"));
+    if (existsSync(direct)) { const v = readFileSync(direct, "utf8").trim(); return /^[0-9a-f]{40}$/i.test(v) ? v : undefined; }
+    const packed = join(clone, ".git", "packed-refs");
+    if (!existsSync(packed)) return undefined;
+    for (const line of readFileSync(packed, "utf8").split("\n")) {
+      const m = /^([0-9a-f]{40})\s+(.+)$/i.exec(line.trim());
+      if (m && m[2] === ref) return m[1]!;
+    }
+    return undefined;
+  } catch { return undefined; }
 }
 
 /** does installing this reach the network? A catalog's literal files and a local folder do not. */
@@ -268,7 +308,7 @@ function isLink(p: string): boolean {
   try { return lstatSync(p).isSymbolicLink(); } catch { return true; }
 }
 
-async function cloneSkill(source: { git: string; subfolder?: string }, dir: string, deps: RunDeps): Promise<{ ok: true } | { ok: false; error: string }> {
+async function cloneSkill(source: { git: string; subfolder?: string }, dir: string, deps: RunDeps): Promise<{ ok: true; sha?: string } | { ok: false; error: string }> {
   const spawn: Spawn = deps.spawn ?? (async (cmd, cwd) => {
     const p = Bun.spawn(cmd, { cwd, stdout: "ignore", stderr: "pipe", stdin: "ignore" });
     return { code: await p.exited, stderr: await new Response(p.stderr).text() };
@@ -301,8 +341,12 @@ async function cloneSkill(source: { git: string; subfolder?: string }, dir: stri
     if (existsSync(dir)) rmSync(dir, { recursive: true, force: true });
     mkdirSync(dirname(dir), { recursive: true });
     cpSync(from, dir, { recursive: true, filter: (p) => !/(?:^|[\/])\.git(?:[\/]|$)/.test(p) && !isLink(p) });
+    // the commit this actually resolved to, for the record. Best effort: a clone whose HEAD cannot be
+    // read still installed fine, and a made-up sha would be worse than none.
+    const head = await spawn(["git", "rev-parse", "HEAD"], clone).catch(() => ({ code: 1, stderr: "" }));
+    const sha = head.code === 0 ? readSha(clone) : undefined;
     if (owned !== null && deps.cloneCache !== undefined) { deps.cloneCache.set(key, owned); owned = null; }   // ownership moves to the cache
-    return { ok: true };
+    return { ok: true, ...(sha !== undefined ? { sha } : {}) };
   } finally {
     if (owned !== null) rmSync(owned, { recursive: true, force: true });
   }
@@ -386,15 +430,18 @@ export function removeItem(item: MarketItem, cwd: string, home: string, scope?: 
     // `trustHome` is not optional bookkeeping: removeServer re-records the file's trust after the edit, and
     // without it every OTHER server in a project file silently drops to "not approved" for having changed.
     const ok = removeServer(state.path, item.id, { trustHome: home });
+    if (ok) forgetInstall(item.kind, item.id, state.scope, { cwd, home });
     return ok ? { ok: true, path: state.path } : { ok: false, error: `no server "${item.id}" in ${state.path}` };
   }
   if (item.kind === "plugin") {
     // through the plugin remover, which also drops the folder's trust entry — a plain rmSync leaves a
     // recorded digest pointing at a directory that no longer exists, and the next install is compared to it
     const r = removePlugin(item.id, { cwd, home, scope: state.scope });
+    if (r.ok) forgetInstall(item.kind, item.id, state.scope, { cwd, home });
     return r.ok ? { ok: true, path: r.dir } : { ok: false, error: r.error };
   }
   rmSync(state.path, { recursive: true, force: true });
+  forgetInstall(item.kind, item.id, state.scope, { cwd, home });
   return { ok: true, path: state.path };
 }
 
