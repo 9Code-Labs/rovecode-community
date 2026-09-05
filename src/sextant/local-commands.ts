@@ -11,7 +11,7 @@
 import type { KeyCtx } from "./keys.ts";
 import { parseInput, resolveFile } from "./overlays.ts";
 import { THEME_ORDER, type CodeMode, type Focus, type SextantState, type ThemeName } from "./types.ts";
-import { openNotices } from "./overlays.ts";
+import { openHelp, openNotices } from "./overlays.ts";
 
 /** prototype commands with an rovecode equivalent: a toast instead of a submission — unless
  *  setCommands lists a custom command of that name, which then runs like any other */
@@ -74,7 +74,7 @@ export function dispatch(s: SextantState, text: string, ctx: KeyCtx): void {
 export function runLocal(s: SextantState, cmd: string, arg: string, ctx: KeyCtx): boolean {
   switch (cmd) {
     case "help":
-      s.help = true;
+      openHelp(s);
       return false; // the card opens AND /help reaches the transcript
     case "notices":
       openNotices(s);

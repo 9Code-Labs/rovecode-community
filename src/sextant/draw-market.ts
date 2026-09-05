@@ -18,7 +18,7 @@
 
 import { st } from "./draw-util.ts";
 import { strWidth } from "./screen.ts";
-import { fuzzy as defaultFuzzy, type Fuzzy } from "./overlays.ts";
+import { fuzzy as defaultFuzzy, openOverlay, type Fuzzy } from "./overlays.ts";
 import { ATTR, type HitZone, type KeyEvent, type Layout, type ScreenLike, type SextantState, type Theme } from "./types.ts";
 
 /** the synthetic key a click carries, as overlays.ts does it */
@@ -48,7 +48,14 @@ export interface MarketViewRow {
   pending?: string[];
   /** present when it is on this machine — MarketRow.installed, flattened */
   installed?: { path: string; scope: "user" | "project"; version?: string; updateAvailable?: boolean; trusted?: boolean };
+  /** the item's own documentation, already made safe for a terminal: no escape sequences, no control
+   *  characters, markdown flattened to kinds a cockpit can draw. Absent = the catalog carries none, which
+   *  is a quiet state and not an error. */
+  docs?: { source: string; truncated: boolean; lines: MarketDocLine[] };
 }
+
+/** one line of a document as the overlay draws it */
+export interface MarketDocLine { kind: "head" | "text" | "code" | "blank" | "rule"; text: string }
 
 /** why the list is what it is; the three not-ready states are drawn differently on purpose */
 export type MarketStatus =
@@ -61,6 +68,8 @@ export type MarketStatus =
 
 /** the plan the human must see before anything is written (InstallPlanView, flattened) */
 export interface MarketPlan {
+  /** the row this plan was built for — the installer uses THIS, never the current selection */
+  row: MarketViewRow;
   title: string;
   target: string;
   scope: "user" | "project";
@@ -84,10 +93,16 @@ export interface MarketState {
   notes: string[];
   /** the plan card, open over the list until it is confirmed or dismissed */
   plan: MarketPlan | null;
+  /** alt+d opens the selected row's documentation in the detail column; ↑↓ then scroll it */
+  docs: boolean;
+  docScroll: number;
+  /** body rows the pane last painted, so the keys can clamp the scroll to what actually fits */
+  docRows: number;
 }
 
 export function openMarket(s: SextantState, rows: MarketViewRow[], status: MarketStatus = { kind: "ready" }, notes: string[] = []): void {
-  s.market = { tab: "all", query: "", sel: 0, rows, status, notes, plan: null };
+  openOverlay(s, "market"); // one overlay at a time; the transition lives in overlays.ts
+  s.market = { tab: "all", query: "", sel: 0, rows, status, notes, plan: null, docs: false, docScroll: 0, docRows: 12 };
 }
 export function closeMarket(s: SextantState): void { s.market = null; }
 
@@ -210,6 +225,42 @@ function drawDetail(scr: ScreenLike, x: number, y: number, w: number, h: number,
   if (r.installed) line(`${r.installed.scope} scope${r.installed.version ? ` · ${r.installed.version}` : ""}${r.installed.trusted === false ? " · not approved here" : ""}`, st(C.muted, C.bg2));
 }
 
+/** The documentation pane: the item's own text, scrolled in the detail column. Every line was made safe at
+ *  build time (market-docs.mjs docsToLines) — no escape sequences, no control characters — so a document
+ *  cannot paint the cockpit. Headings and code keep their shape; nothing else is interpreted. */
+export function docMaxScroll(r: MarketViewRow | undefined, rows: number): number {
+  return Math.max(0, (r?.docs?.lines.length ?? 0) - Math.max(1, rows));
+}
+
+function drawDocs(scr: ScreenLike, x: number, y: number, w: number, h: number, C: Theme, r: MarketViewRow, scroll: number): number {
+  const lines = r.docs?.lines ?? [];
+  if (lines.length === 0) {
+    scr.clip(x, y, `documentation · ${r.title}`, st(C.fg, C.bg2, ATTR.BOLD), w);
+    scr.clip(x, y + 2, "reading…", st(C.muted, C.bg2), w);
+    return 0;
+  }
+  // two rows of heading above, one row of position below: the body gets what is left
+  const body = Math.max(1, h - 4);
+  const max = Math.max(0, lines.length - body);
+  const off = Math.max(0, Math.min(scroll, max));
+  scr.clip(x, y, `documentation · ${r.title}`, st(C.fg, C.bg2, ATTR.BOLD), w);
+  scr.clip(x, y + 1, r.docs?.source ?? "", st(C.dim, C.bg2), w);
+  for (let i = 0; i < body; i++) {
+    const line = lines[off + i];
+    if (!line) break;
+    const yy = y + 2 + i;
+    if (line.kind === "head") scr.clip(x, yy, line.text, st(C.accent, C.bg2, ATTR.BOLD), w);
+    else if (line.kind === "code") scr.clip(x, yy, line.text, st(C.fg2, C.selBg), w);
+    else if (line.kind === "rule") scr.hline(x, yy, Math.min(w, 24), st(C.rule2, C.bg2), "╌");
+    else if (line.kind === "text") scr.clip(x, yy, line.text, st(C.fg2, C.bg2), w);
+  }
+  // where you are, and whether there is more of it upstream
+  const more = off < max ? `${off + body}/${lines.length}` : `${lines.length}/${lines.length}`;
+  const tail = r.docs?.truncated ? `${more} · the rest is at the source` : more;
+  scr.clip(x, y + h - 1, tail, st(C.dim, C.bg2), w);
+  return max;
+}
+
 /** greedy word wrap; a word longer than the column is cut rather than allowed to overflow */
 export function wrap(text: string, w: number): string[] {
   if (w <= 0) return [];
@@ -302,18 +353,24 @@ export function drawMarket(scr: ScreenLike, L: Layout, C: Theme, s: SextantState
     ], listW - badgeW);
     if (badge) scr.put(x + 3 + listW - badgeW, yy, badge.text, st(badge.tone === "ok" ? C.ok : badge.tone === "warn" ? C.warn : C.info, sel ? C.selBg : C.bg2));
     const idx = off + i;
-    hits?.push({ rect: { x: x + 2, y: yy, w: listW + 2, h: 1 }, onClick: () => { m.sel = idx; }, key: ENTER });
+    // a click may not reach a row while the plan card is up: the card is a decision, not a backdrop
+    if (!m.plan) hits?.push({ rect: { x: x + 2, y: yy, w: listW + 2, h: 1 }, onClick: () => { m.sel = idx; }, key: ENTER });
   }
 
   scr.vline(detailX - 2, listY, rowsH, st(C.rule2, C.bg2), "│");
   const current = vis[m.sel];
-  if (current) drawDetail(scr, detailX, listY, detailW, y + h - 2 - listY, C, current);
+  const detailH = y + h - 2 - listY;
+  if (current && m.docs && current.docs) { m.docRows = Math.max(1, detailH - 4); drawDocs(scr, detailX, listY, detailW, detailH, C, current, m.docScroll); }
+  else if (current) drawDetail(scr, detailX, listY, detailW, detailH, C, current);
 
   // the foot: what Enter will do, said before it is pressed
+  const docsKey = current?.docs ? (m.docs ? " · d closes the docs" : " · ⌥d docs") : "";
   const foot = current
-    ? current.installed && !current.installed.updateAvailable
-      ? "⏎ install again · ↑↓ move · ⇥ next kind · esc closes"
-      : "⏎ install · ↑↓ move · ⇥ next kind · esc closes"
+    ? m.docs
+      ? `↑↓ scroll${docsKey} · esc closes`
+      : current.installed && !current.installed.updateAvailable
+        ? `⏎ install again · ↑↓ move · ⇥ next kind${docsKey} · esc closes`
+        : `⏎ install · ↑↓ move · ⇥ next kind${docsKey} · esc closes`
     : "↑↓ move · ⇥ next kind · esc closes";
   scr.clip(x + 3, y + h - 1, foot, st(C.dim), w - 6);
 
@@ -328,6 +385,8 @@ export function drawMarket(scr: ScreenLike, L: Layout, C: Theme, s: SextantState
 export type MarketRequest =
   | { kind: "plan"; row: MarketViewRow }
   | { kind: "install"; plan: MarketPlan }
+  /** the pane opened on a row whose body has not been read yet (search carries metadata, not bodies) */
+  | { kind: "docs"; row: MarketViewRow }
   | { kind: "none" };
 
 /** Esc closes (the plan card first), ↑↓ move, ⇥/⇧⇥ cycle the kind, Enter asks for the plan and then
@@ -339,8 +398,10 @@ export function onMarketKey(s: SextantState, ev: KeyEvent, fz: Fuzzy = defaultFu
 
   if (m.plan) {
     const p = m.plan;
-    if (name === "escape" || (ctrl && name === "c")) { m.plan = null; return { kind: "none" }; }
+    // an install in flight cannot be dismissed: the write is happening whatever the card does, and a
+    // card that vanishes mid-write tells the human "nothing happened" while something did. Wait for it.
     if (p.running) return { kind: "none" };
+    if (name === "escape" || (ctrl && name === "c")) { m.plan = null; return { kind: "none" }; }
     if (name === "enter") {
       if (p.outcome) { m.plan = null; return { kind: "none" }; } // a finished plan: Enter just dismisses it
       p.running = true;
@@ -349,22 +410,54 @@ export function onMarketKey(s: SextantState, ev: KeyEvent, fz: Fuzzy = defaultFu
     return { kind: "none" };
   }
 
-  if (name === "escape" || (ctrl && name === "m")) { closeMarket(s); return { kind: "none" }; }
+  if (name === "escape" || (ctrl && name === "m")) {
+    // esc backs out of the documentation first, then closes the overlay — one step at a time
+    if (m.docs) { m.docs = false; m.docScroll = 0; return { kind: "none" }; }
+    closeMarket(s);
+    return { kind: "none" };
+  }
   const vis = marketVisible(m, fz);
   const n = Math.max(1, vis.length);
+  const current = vis[m.sel];
+  // `d` opens the selected row's documentation, and closes it again; a row without docs says so once
+  // the docs key is alt+d, not a bare d: d is the first letter of "docker", "deepwiki" and "docs",
+  // and a shortcut that eats a search letter is a shortcut in the wrong place
+  if (ch === "d" && alt && !ctrl) {
+    if (m.docs) { m.docs = false; m.docScroll = 0; return { kind: "none" }; }
+    if (!current?.docs) return { kind: "none" };
+    m.docs = true;
+    m.docScroll = 0;
+    // the list knows a document EXISTS; the body is read on demand, so ask for it the first time
+    return current.docs.lines.length === 0 ? { kind: "docs", row: current } : { kind: "none" };
+  }
+  // ⇥ means "next kind" everywhere, so it closes an open document rather than doing nothing inside it
+  if (name === "tab" || name === "shift-tab") {
+    const i = MARKET_TABS.indexOf(m.tab);
+    const step = name === "tab" ? 1 : MARKET_TABS.length - 1;
+    m.tab = MARKET_TABS[(i + step) % MARKET_TABS.length]!;
+    m.sel = 0;
+    m.docs = false;
+    m.docScroll = 0;
+    return { kind: "none" };
+  }
+  if (m.docs) {
+    if (ch === "d" && !ctrl && !alt) { m.docs = false; m.docScroll = 0; return { kind: "none" }; }
+    // the pane owns the arrows while it is open; the list selection stays where it was
+    if (name === "up") { m.docScroll = Math.max(0, m.docScroll - 1); return { kind: "none" }; }
+    if (name === "down") { m.docScroll = Math.min(m.docScroll + 1, docMaxScroll(current, m.docRows)); return { kind: "none" }; }
+    if (name === "pageup") { m.docScroll = Math.max(0, m.docScroll - 12); return { kind: "none" }; }
+    if (name === "pagedown") { m.docScroll = Math.min(m.docScroll + 12, docMaxScroll(current, m.docRows)); return { kind: "none" }; }
+    if (name === "home") { m.docScroll = 0; return { kind: "none" }; }
+    if (name === "end") { m.docScroll = docMaxScroll(current, m.docRows); return { kind: "none" }; }
+    if (name === "enter") return current ? { kind: "plan", row: current } : { kind: "none" };
+    return { kind: "none" }; // typing does not filter while a document is being read
+  }
   if (name === "up") { m.sel = (m.sel - 1 + n) % n; return { kind: "none" }; }
   if (name === "down") { m.sel = (m.sel + 1) % n; return { kind: "none" }; }
   if (name === "pageup") { m.sel = Math.max(0, m.sel - 10); return { kind: "none" }; }
   if (name === "pagedown") { m.sel = Math.min(n - 1, m.sel + 10); return { kind: "none" }; }
   if (name === "home") { m.sel = 0; return { kind: "none" }; }
   if (name === "end") { m.sel = n - 1; return { kind: "none" }; }
-  if (name === "tab" || name === "shift-tab") {
-    const i = MARKET_TABS.indexOf(m.tab);
-    const step = name === "tab" ? 1 : MARKET_TABS.length - 1;
-    m.tab = MARKET_TABS[(i + step) % MARKET_TABS.length]!;
-    m.sel = 0;
-    return { kind: "none" };
-  }
   if (name === "enter") {
     const row = vis[m.sel];
     return row ? { kind: "plan", row } : { kind: "none" };

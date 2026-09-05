@@ -32,7 +32,7 @@ import {
   type Rect, type SextantState, type ThemeName, type TreeRow,
 } from "./types.ts";
 import { type Fuzzy, type Suggestion, onPaletteKey, openPalette, parseInput, resolveFile, suggestions } from "./overlays.ts";
-import { marketVisible, onMarketKey, type MarketViewRow } from "./draw-market.ts";
+import { onMarketKey, type MarketViewRow } from "./draw-market.ts";
 import { dispatch, openFile, runAction, setFocus, setMode, setTheme, showAgents } from "./local-commands.ts";
 import { dismissCard, onCardKey } from "./card-keys.ts";
 import { gridFor } from "./draw-agents.ts";
@@ -58,6 +58,8 @@ export interface KeyCtx {
     marketPlan(row: MarketViewRow): void;
     /** the human confirmed the plan card: run it and write the outcome back onto the card */
     marketInstall(row: MarketViewRow): void;
+    /** the docs pane opened on a row whose body has not been read: fetch it and fill the row's lines */
+    marketDocs(row: MarketViewRow): void;
   };
   /** click zones the drawers registered while painting the current frame */
   hits: readonly HitZone[];
@@ -105,10 +107,11 @@ export function handleInput(s: SextantState, ev: InputEvent, ctx: KeyCtx, now: n
     const req = onMarketKey(s, ev, ctx.fuzzy);
     // the overlay decides WHAT should happen; the renderer owns the market module and does it
     if (req.kind === "plan") ctx.local.marketPlan(req.row);
-    else if (req.kind === "install") {
-      const row = marketVisible(s.market, ctx.fuzzy)[s.market.sel];
-      if (row) ctx.local.marketInstall(row);
-    }
+    else if (req.kind === "docs") ctx.local.marketDocs(req.row);
+    // the plan card names an item; installing re-read the SELECTION instead, and the two can differ —
+    // the plan arrives asynchronously, so an arrow key (or a click on a list row that outlived the card)
+    // moved the selection while the card still showed the first item. Install what the human approved.
+    else if (req.kind === "install") ctx.local.marketInstall(req.plan.row);
     return R();
   }
   if (s.help) { // app.js:1488 — the card swallows every key; the usual closers dismiss it

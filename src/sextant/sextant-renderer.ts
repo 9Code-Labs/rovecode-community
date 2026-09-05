@@ -23,7 +23,7 @@ import { loadTodos } from "../tools/todo.ts";
 import type { ApprovalAnswer, AssistantView, PickItem, QuestionAnswer, QuestionPrompt, Renderer, RendererHooks, SlashCommand, StatusInfo } from "../tui/renderer.ts";
 import { drawAgents } from "./draw-agents.ts";
 import { openMarket } from "./draw-market.ts";
-import { install, loadMarket, planFor } from "./market-source.ts";
+import { docsFor, install, loadMarket, planFor } from "./market-source.ts";
 import { hunksFromUnified, setAgentsPainter } from "./draw-code.ts";
 import { fuzzy } from "./engine.ts";
 import { spawnGitAsync, toAsync, type GitRunner, type GitRunnerAsync } from "./git-status.ts";
@@ -363,6 +363,16 @@ export class SextantRenderer implements Renderer {
           m.plan = plan;
           this.loop.markDirty();
         });
+    },
+    marketDocs: (row) => {
+      void docsFor(row).then((docs) => {
+        const m = this.state.market;
+        if (!m || !docs) return;
+        // write onto the row the list holds, so closing and reopening the pane costs nothing
+        const target = m.rows.find((r) => r.kind === row.kind && r.id === row.id);
+        if (target) target.docs = docs;
+        this.loop.markDirty();
+      });
     },
     marketInstall: (row) => {
       void install(row, { scope: "user", cwd: this.state.cwd, home: homedir() }).then((outcome) => {

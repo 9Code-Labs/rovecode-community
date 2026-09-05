@@ -12,7 +12,7 @@
  *  while src/market/ is being written (types.ts landed first), an absent registry.ts must read as "the
  *  market module is not wired yet", not as a crash in the middle of a frame. */
 
-import type { MarketPlan, MarketStatus, MarketViewRow } from "./draw-market.ts";
+import type { MarketDocLine, MarketPlan, MarketStatus, MarketViewRow } from "./draw-market.ts";
 
 /** what the overlay needs to open: the rows, why they are what they are, and anything worth saying once */
 export interface MarketLoad {
@@ -28,6 +28,8 @@ interface Item {
   id: string; kind: "mcp" | "skill" | "plugin"; title: string; publisher: string; description: string;
   version?: string; repository?: string; homepage?: string; tags: string[]; status?: string;
   env: Env[]; install: unknown; planNote?: string[];
+  /** the item's own documentation, as the catalog carries it (nimbus-24's writer): third-party markdown */
+  docs?: { source: string; format: string; bytes: number; truncated: boolean; body: string };
 }
 interface Row extends Item {
   installed?: { path: string; scope: "user" | "project"; version?: string; updateAvailable?: boolean; trusted?: boolean };
@@ -51,7 +53,10 @@ type Outcome =
 /** the module's public surface, as much of it as the overlay uses (src/market/registry.ts + install.ts;
  *  there is no barrel file, so the two are imported separately) */
 interface RegistryModule {
-  searchMarket(query: string, deps?: { offline?: boolean }): Promise<Result>;
+  searchMarket(query: string, deps?: { offline?: boolean; withDocs?: boolean }): Promise<Result>;
+  /** one item WITH its documentation body: search and list deliberately leave the bodies out (they are
+   *  hundreds of kilobytes the list never reads), so the docs pane asks for the row it is about to show */
+  findItem(kind: "mcp" | "skill" | "plugin", id: string, deps?: { offline?: boolean }): Promise<{ item?: Item; notes: string[] }>;
 }
 interface InstallModule {
   planInstall(item: Item, opts: { scope: "user" | "project"; cwd: string; home: string }): PlanView | { error: string };
@@ -114,7 +119,47 @@ export function toViewRow(row: Row): MarketViewRow {
     alternatives: alternatives(row),
     pending: row.planNote ?? [],
     ...(row.installed ? { installed: row.installed } : {}),
+    // search carries the metadata, not the body: the pane fills `lines` from docsFor() when it opens
+    ...(row.docs ? { docs: { source: row.docs.source, truncated: row.docs.truncated === true, lines: typeof row.docs.body === "string" && row.docs.body !== "" ? docLines(row.docs.body) : [] } } : {}),
   };
+}
+
+/** ESC and the rest of C0 (tab and newline excepted), DEL, and the C1 range some terminals still read
+ *  as CSI — a document must not be able to move the cursor, change a colour or clear the screen */
+// eslint-disable-next-line no-control-regex
+const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/g;
+
+/** A document, flattened to lines a cockpit can draw and stripped of everything a terminal would obey.
+ *  The body is third-party text, so escape sequences and control characters go before anything else; then
+ *  markdown is flattened rather than rendered — headings and fenced code keep their shape, and the rest is
+ *  prose wrapped to a column. A README must not be able to move the cursor or repaint the screen. */
+export function docLines(body: string, width = 96): MarketDocLine[] {
+  const safe = body
+    .replace(/\r\n?/g, "\n")
+    .replace(/<(script|style|iframe|object|embed|template|noscript)\b[\s\S]*?<\/\1\s*>/gi, "")
+    .replace(/<\/?[a-zA-Z][^>]*>/g, "")
+    .replace(CONTROL, "")
+    .replace(/\t/g, "  ")
+    .replace(/^---\n[\s\S]*?\n---\n/, "");
+  const out: MarketDocLine[] = [];
+  let fence = false;
+  for (const raw of safe.split("\n")) {
+    if (/^\s*```/.test(raw)) { fence = !fence; out.push({ kind: "rule", text: "" }); continue; }
+    if (fence) { out.push({ kind: "code", text: raw.slice(0, width) }); continue; }
+    const h = /^(#{1,6})\s+(.*)$/.exec(raw);
+    if (h) { out.push({ kind: "head", text: h[2]!.replace(/[`*]/g, "").slice(0, width) }); continue; }
+    const text = raw.replace(/\[([^\]]+)\]\([^)]*\)/g, "$1").replace(/[`*]/g, "");
+    if (text.trim() === "") { out.push({ kind: "blank", text: "" }); continue; }
+    let line = "";
+    for (const word of text.split(/\s+/).filter(Boolean)) {
+      const piece = word.length > width ? word.slice(0, width) : word;
+      if (!line) { line = piece; continue; }
+      if (line.length + 1 + piece.length <= width) line += ` ${piece}`;
+      else { out.push({ kind: "text", text: line }); line = piece; }
+    }
+    if (line) out.push({ kind: "text", text: line });
+  }
+  return out;
 }
 
 /** the three drawn states, decided from the sources the module consulted — never from an empty list */
@@ -148,6 +193,20 @@ export async function loadMarket(cwd: string, home: string, opts: { offline?: bo
   return { rows: rows.map(toViewRow), status: statusFrom(result.sources), notes: result.notes };
 }
 
+/** The documentation for one row, fetched when the reader asks for it.
+ *
+ *  `searchMarket` carries docs METADATA but not the bodies — they are ~400 KB nobody reads while browsing —
+ *  so the list cannot fill this in advance. `findItem` reads the one row with its body, and the body is
+ *  flattened to terminal-safe lines here, once, at the moment the pane opens. */
+export async function docsFor(row: MarketViewRow): Promise<{ source: string; truncated: boolean; lines: MarketDocLine[] } | null> {
+  const mod = await load();
+  if (!mod || typeof mod.registry.findItem !== "function") return null;
+  const { item } = await mod.registry.findItem(row.kind, row.id, { offline: true });
+  const docs = item?.docs;
+  if (!docs || typeof docs.body !== "string" || docs.body.trim() === "") return null;
+  return { source: docs.source, truncated: docs.truncated === true, lines: docLines(docs.body) };
+}
+
 /** the plan for one row, or the reason there is none. Writes nothing. */
 export async function planFor(row: MarketViewRow, ctx: { scope: "user" | "project"; cwd: string; home: string }): Promise<MarketPlan | { error: string }> {
   const mod = await load();
@@ -158,6 +217,7 @@ export async function planFor(row: MarketViewRow, ctx: { scope: "user" | "projec
   const plan = mod.install.planInstall(item, ctx);
   if ("error" in plan) return { error: plan.error };
   return {
+    row,
     title: `${plan.item.kind}:${plan.item.id} — ${plan.item.title}`,
     target: plan.target,
     scope: plan.scope,

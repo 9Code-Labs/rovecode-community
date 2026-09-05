@@ -236,7 +236,43 @@ export function paletteItems(s: SextantState): PaletteItem[] {
   return items;
 }
 
+/** The overlays that can be on screen, and the one rule about them: at most one at a time.
+ *
+ *  Nothing enforced that before — help, the palette and the market each wrote their own field, so ⌃m with
+ *  the help card up left BOTH set and help painted over a market nobody could reach. The fix is one
+ *  transition instead of three closers: every opener calls `openOverlay` first, and an opener that forgets
+ *  is caught by the invariant test rather than by a reader six months later.
+ *
+ *  ADDING A FOURTH: add its field to `closeOthers` below and its name here. That is the whole contract —
+ *  do not write closing lines into your own opener, or the next one will forget one of them. */
+export type OverlayKind = "palette" | "market" | "help" | "context";
+
+/** close every overlay except `keep` (pass null to close them all). The single place that knows the set. */
+export function openOverlay(s: SextantState, keep: OverlayKind | null): void {
+  if (keep !== "palette") s.palette = null;
+  if (keep !== "market") s.market = null;
+  if (keep !== "help") s.help = false;
+  if (keep !== "context") s.context = null;
+}
+
+/** which overlays are currently set — the invariant test asserts this is never longer than one */
+export function openOverlays(s: SextantState): OverlayKind[] {
+  const out: OverlayKind[] = [];
+  if (s.palette) out.push("palette");
+  if (s.market) out.push("market");
+  if (s.help) out.push("help");
+  if (s.context) out.push("context");
+  return out;
+}
+
+/** the help card, through the one transition (local-commands /help and anything else that opens it) */
+export function openHelp(s: SextantState): void {
+  openOverlay(s, "help");
+  s.help = true;
+}
+
 export function openPalette(s: SextantState, items: PaletteItem[] = paletteItems(s), title?: string): void {
+  openOverlay(s, "palette");
   s.palette = { query: "", sel: 0, items, ...(title !== undefined ? { title } : {}) };
 }
 export function closePalette(s: SextantState): void { s.palette = null; }
@@ -361,6 +397,7 @@ export const HELP_KEYS: readonly (readonly [string, string])[] = [
   ["⌃o", "next tab (narrow terminal)"],
   ["⌃b", "notifications"],
   ["⌃m", "market (install servers, skills, plugins)"],
+  ["⌥d", "market: the selected item's documentation"],
   ["⌃v", "paste image · drop a file to attach"],
   ["⌃t", "next theme"],
   ["⌃n", "new session (/new)"],

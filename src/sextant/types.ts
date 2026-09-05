@@ -357,6 +357,7 @@ export interface PaletteState {
 }
 
 import type { MarketState } from "./draw-market.ts";
+import type { ContextState } from "./draw-context.ts";
 
 /** the whole surface state — owned by model.ts (pure `applyEvent`) and mutated by keys.ts */
 export interface SextantState {
@@ -380,6 +381,8 @@ export interface SextantState {
   palette: PaletteState | null;
   /** the market overlay (/market, ⌃m); null when it is closed — see draw-market.ts */
   market: MarketState | null;
+  /** the context overlay (/context); null when it is closed — see draw-context.ts */
+  context: ContextState | null;
   help: boolean;
   toasts: Toast[];
   /** the notification history behind the toasts (Notice); newest last */

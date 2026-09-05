@@ -20,6 +20,11 @@ function render(s: SextantState, hits?: HitZone[]): string {
   return g.toText();
 }
 
+/** paint and keep the click zones the frame registered */
+function renderWith(s: SextantState, hits: HitZone[]): void {
+  drawMarket(new GridScreen(L.w, L.h, " "), L, THEME, s, undefined, hits);
+}
+
 const row = (over: Partial<MarketViewRow> = {}): MarketViewRow => ({
   id: "filesystem", kind: "mcp", title: "Filesystem", publisher: "modelcontextprotocol (Anthropic)",
   description: "Read, write, search and move files under the directories you name.",
@@ -125,7 +130,7 @@ describe("market overlay · keys", () => {
 
   test("nothing installs until the plan card is confirmed, and esc backs out of it", () => {
     const s = open();
-    const plan: MarketPlan = { title: "mcp:filesystem — Filesystem", target: "~/.rovecode/mcp.json", scope: "user", preview: ["writes one server entry"], asks: [], pending: [] };
+    const plan: MarketPlan = { row: ROWS[0]!, title: "mcp:filesystem — Filesystem", target: "~/.rovecode/mcp.json", scope: "user", preview: ["writes one server entry"], asks: [], pending: [] };
     s.market!.plan = plan;
     expect(onMarketKey(s, key("escape"))).toEqual({ kind: "none" });
     expect(s.market!.plan).toBeNull();
@@ -139,7 +144,7 @@ describe("market overlay · keys", () => {
 
   test("Enter on a finished plan dismisses the card", () => {
     const s = open();
-    s.market!.plan = { title: "t", target: "p", scope: "user", preview: [], asks: [], pending: [], outcome: { ok: true, text: "installed into ~/.rovecode/mcp.json" } };
+    s.market!.plan = { row: ROWS[0]!, title: "t", target: "p", scope: "user", preview: [], asks: [], pending: [], outcome: { ok: true, text: "installed into ~/.rovecode/mcp.json" } };
     onMarketKey(s, key("enter"));
     expect(s.market!.plan).toBeNull();
   });
@@ -199,7 +204,7 @@ describe("market overlay · painting", () => {
 
   test("the plan card covers the list and says what confirming does", () => {
     const s = open();
-    s.market!.plan = { title: "mcp:filesystem — Filesystem", target: "~/.rovecode/mcp.json", scope: "user", preview: ["writes one server entry", "runs npx on launch"], asks: [{ name: "TOKEN", required: true, secret: true }], pending: ["<directory the server may touch>"] };
+    s.market!.plan = { row: ROWS[0]!, title: "mcp:filesystem — Filesystem", target: "~/.rovecode/mcp.json", scope: "user", preview: ["writes one server entry", "runs npx on launch"], asks: [{ name: "TOKEN", required: true, secret: true }], pending: ["<directory the server may touch>"] };
     const text = render(s);
     expect(text).toContain("install plan");
     expect(text).toContain("user scope · ~/.rovecode/mcp.json");
@@ -254,5 +259,49 @@ describe("market overlay · helpers", () => {
       install: { kind: "skill", files: [{ path: "SKILL.md", text: "" }] },
     } as Parameters<typeof toViewRow>[0]);
     expect(view.runs).toContain("runs nothing");
+  });
+});
+
+describe("market overlay · the plan card is the decision", () => {
+  test("installing runs the plan the human approved, not whatever is selected now", () => {
+    // the plan arrives asynchronously: an arrow key after Enter used to move the selection under the card,
+    // and the install then wrote the OTHER item
+    const s = open();
+    const spy = spyCtx();
+    handleInput(s, key("enter"), spy.ctx, 0); // asks for a plan for row 0
+    s.market!.plan = { row: ROWS[0]!, title: "mcp:filesystem — Filesystem", target: "~/.rovecode/mcp.json", scope: "user", preview: ["writes one server entry"], asks: [], pending: [] };
+    s.market!.sel = 2; // the human moved on while the card was opening
+    handleInput(s, key("enter"), spy.ctx, 0);
+    expect(spy.market).toEqual(["plan:mcp:filesystem", "install:mcp:filesystem"]);
+  });
+
+  test("a list row takes no clicks while the card is up", () => {
+    const s = open();
+    s.market!.plan = { row: ROWS[0]!, title: "t", target: "p", scope: "user", preview: [], asks: [], pending: [] };
+    const hits: HitZone[] = [];
+    renderWith(s, hits);
+    // the only zones left are the overlay's own backdrop and the card; no row may move the selection
+    const before = s.market!.sel;
+    for (const h of hits) if (h.key?.name === "enter") h.onClick();
+    expect(s.market!.sel).toBe(before);
+  });
+
+  test("esc cannot walk away from an install that is already running", () => {
+    const s = open();
+    s.market!.plan = { row: ROWS[0]!, title: "t", target: "p", scope: "user", preview: [], asks: [], pending: [], running: true };
+    onMarketKey(s, key("escape"));
+    expect(s.market!.plan).not.toBeNull(); // the write is happening; the card stays until it answers
+    expect(s.market!.plan!.running).toBe(true);
+    s.market!.plan!.running = false;
+    s.market!.plan!.outcome = { ok: true, text: "installed into ~/.rovecode/mcp.json" };
+    onMarketKey(s, key("escape"));
+    expect(s.market!.plan).toBeNull(); // once it has answered, esc dismisses it
+  });
+
+  test("a bare d is a search letter, not a shortcut", () => {
+    const s = open();
+    for (const ch of "docker") onMarketKey(s, key(ch));
+    expect(s.market!.query).toBe("docker");
+    expect(s.market!.docs).toBe(false);
   });
 });
