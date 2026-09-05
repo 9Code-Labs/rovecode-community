@@ -165,6 +165,16 @@ async function installOne(item: MarketItem, opts: PlanOptions, ctx: {
     return 0;
   }
   if (!ctx.yes) {
+    // --json never prompts, terminal or not. A y/N is a question for a person, and in --json mode the
+    // preview that would let a person answer it is inside the document rather than on the screen — so
+    // asking would mean asking someone to approve a plan they were not shown. The plan is returned with
+    // `needsApproval` and exit 1; rerun with --yes, or --dry-run if reading it was the whole point.
+    if (ctx.json) {
+      jsonOut({ out: ctx.out }, { ok: false, needsApproval: true, item, target: plan.target, scope: plan.scope,
+        preview: plan.preview, asks: plan.asks, pending: plan.pending, ...(plan.replaces ? { replaces: plan.replaces } : {}) });
+      ctx.err(`nothing written: pass --yes to accept this plan, or --dry-run to read it`);
+      return 1;
+    }
     if (!ctx.tty) { ctx.err(`nothing written: rerun on a terminal, or pass --yes to accept this plan in a script`); return 1; }
     const answer = (await ctx.plain(`${ctx.verb} this? [y/N] `)).trim().toLowerCase();
     if (answer !== "y" && answer !== "yes") { ctx.out("nothing written"); return 1; }
@@ -270,7 +280,14 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
           : verifyDigest(record.digest, record.target) });
       }
     }
-    if (json) { jsonOut(deps, rows); return rows.some((r) => r.result.state === "changed" || r.result.state === "missing") ? 1 : 0; }
+    // the same exit rule as the text path below, including the one that is easy to lose here: naming an id
+    // that has no record is a 1. An empty array with a 0 reads as "checked it, all fine", which is the
+    // opposite of what happened — nothing was checked, because nothing was found.
+    if (json) {
+      jsonOut(deps, rows);
+      if (rows.length === 0) return which !== undefined ? 1 : 0;
+      return rows.some((r) => r.result.state === "changed" || r.result.state === "missing") ? 1 : 0;
+    }
     if (rows.length === 0) {
       out(which !== undefined ? `nothing recorded for "${which}"` : "nothing installed through the market yet");
       return which !== undefined ? 1 : 0;
@@ -434,21 +451,35 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
 
   // ---------------- remove
   if (sub === "remove") {
+    // every exit from here is a document in --json mode, including the ones that only used to write to
+    // stderr. A script that asks to remove something it already removed gets an answer it can read, not
+    // an empty stdout and a number
     const r = await resolveTarget(target!, registry);
-    if (!r.ok) { err(r.error); return r.ambiguous ? 2 : 1; }
+    if (!r.ok) { err(r.error); if (json) jsonOut(deps, { ok: false, error: r.error, candidates: r.ambiguous ?? [] }); return r.ambiguous ? 2 : 1; }
     // install writes nothing without a yes; remove deleted a folder in silence. Same rule both ways.
     const state = installedState(r.item, cwd, home, args.includes("--project") ? "project" : undefined);
-    if (state === undefined) { err(`${qualify(r.item)} is not installed here`); return 1; }
+    if (state === undefined) {
+      const msg = `${qualify(r.item)} is not installed here`;
+      err(msg); if (json) jsonOut(deps, { ok: false, error: msg, id: qualify(r.item), installed: false });
+      return 1;
+    }
     const tty = deps.tty ?? process.stdin.isTTY === true;
     if (!args.includes("--yes")) {
+      // --json never prompts, for the same reason install does not: the line that tells you WHAT you are
+      // about to delete belongs in the document, and a y/N without it is a question nobody can answer
+      if (json) {
+        const msg = `nothing removed: pass --yes to confirm`;
+        jsonOut(deps, { ok: false, needsApproval: true, id: qualify(r.item), path: state.path, scope: state.scope });
+        err(msg); return 1;
+      }
       if (!tty) { err(`nothing removed: ${qualify(r.item)} lives at ${state.path} — rerun on a terminal, or pass --yes`); return 1; }
       out(`${qualify(r.item)}  ${state.path}${state.scope === "project" ? "  (this repo)" : ""}`);
       const answer = (await (deps.plain ?? defaultPlain)("remove this? [y/N] ")).trim().toLowerCase();
       if (answer !== "y" && answer !== "yes") { out("nothing removed"); return 1; }
     }
     const done = removeItem(r.item, cwd, home, args.includes("--project") ? "project" : undefined);
-    if (!done.ok) { err(done.error); return 1; }
-    if (json) { jsonOut(deps, { removed: qualify(r.item), path: done.path }); return 0; }
+    if (!done.ok) { err(done.error); if (json) jsonOut(deps, { ok: false, error: done.error, id: qualify(r.item) }); return 1; }
+    if (json) { jsonOut(deps, { ok: true, removed: qualify(r.item), path: done.path }); return 0; }
     out(`removed ${qualify(r.item)} from ${done.path}`);
     return 0;
   }

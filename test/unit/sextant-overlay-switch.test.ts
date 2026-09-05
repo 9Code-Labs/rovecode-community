@@ -24,6 +24,7 @@ const ROWS: MarketViewRow[] = [
 /** a minimal report for the context overlay: the numbers do not matter here, only that it opens */
 const CONTEXT = {
   model: "anthropic/claude-opus-5", window: 1_000_000, estimated: 1_000, remaining: 999_000, fraction: 0.001,
+  raw: 826, scale: { factor: 1.21, measured: true, note: "measured on Claude 4.5" },
   slices: [{ label: "your messages", tokens: 1_000, share: 1 }], images: 0,
   billed: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, unpricedTurns: 0, live: true, tolerance: 0.05,
 };

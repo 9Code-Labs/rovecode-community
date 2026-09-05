@@ -511,7 +511,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   };
   // port #44: a renderer with panels (sextant) reads the runtime through this handle — once, before start()
   _trace("renderer.attach");
-  renderer.attach?.(buildSextantAttach({ cwd: rt.cwd, sessionsDir, store: () => store, tasks: rt.tasks, model: () => modes.modelFor(), catalog, petName: opts.pet }));
+  renderer.attach?.(buildSextantAttach({ cwd: rt.cwd, sessionsDir, store: () => store, tasks: rt.tasks, model: () => modes.modelFor(), catalog, runtime: () => rt, petName: opts.pet }));
   // /model suggestions: the ids of every configured provider's models, fetched off the boot path and again
   // whenever the registry changes; the sextant reads the list at suggestion time (SlashCommand.choices)
   const modelChoices: string[] = [];

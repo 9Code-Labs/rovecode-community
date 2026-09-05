@@ -136,26 +136,29 @@ test("drawSuggest: a box above the prompt with the title, the selected row marke
 
 test("suggestions caps at MAX_SUGGESTIONS rows in one place (17 slash candidates → the best MAX_SUGGESTIONS; '/' → the same cap)", () => {
   const s = makeState();
-  s.commands.push(...Array.from({ length: 16 }, (_, i) => ({ name: `c${i}`, description: `command ${i}` })));
-  s.input = { ...s.input, text: "/c", cur: 2 };
+  // `zz`, not `c`: this test is about the CAP, and a prefix that a real command also matches makes it
+  // about ranking instead — it broke the day /context was added, for a reason that had nothing to do
+  // with what it checks. A synthetic fixture should not compete with the real command list.
+  s.commands.push(...Array.from({ length: 16 }, (_, i) => ({ name: `zz${i}`, description: `command ${i}` })));
+  s.input = { ...s.input, text: "/zz", cur: 3 };
   expect(MAX_SUGGESTIONS).toBe(10); // raised from 8 when /market made the local list eight long
   const sugs = suggestions(s, s.files.paths);
-  expect(sugs.map((x) => x.label)).toEqual(Array.from({ length: MAX_SUGGESTIONS }, (_, i) => `/c${i}`));
+  expect(sugs.map((x) => x.label)).toEqual(Array.from({ length: MAX_SUGGESTIONS }, (_, i) => `/zz${i}`));
   s.input = { ...s.input, text: "/", cur: 1 };
   expect(suggestions(s, s.files.paths).length).toBe(MAX_SUGGESTIONS);
 });
 
 test("drawSuggest never writes the state: a frozen input paints, sgSel past the rows is clamped for the highlight only, the box holds the capped rows", () => {
   const s = makeState(), L = makeLayout(160, 44), scr = new GridScreen(160, 44);
-  s.commands.push(...Array.from({ length: 16 }, (_, i) => ({ name: `c${i}`, description: `command ${i}` })));
-  s.input = { ...s.input, text: "/c", cur: 2, sgSel: 20 };
+  s.commands.push(...Array.from({ length: 16 }, (_, i) => ({ name: `zz${i}`, description: `command ${i}` })));
+  s.input = { ...s.input, text: "/zz", cur: 3, sgSel: 20 };
   const sugs = suggestions(s, s.files.paths);
   Object.freeze(s.input);
   const before = structuredClone(s.input);
   expect(() => drawSuggest(scr, L.messages, s, sugs, THEME)).not.toThrow();
   expect(s.input).toEqual(before);
   expect(s.input.sgSel).toBe(20);
-  expect(scr.toText()).toMatch(new RegExp(`▸ /c${MAX_SUGGESTIONS - 1}`)); // the last drawn row carries the highlight
+  expect(scr.toText()).toMatch(new RegExp(`▸ /zz${MAX_SUGGESTIONS - 1}`)); // the last drawn row carries the highlight
   const top = scr.cells.findIndex((r) => r.includes("╭")), bottom = scr.cells.findIndex((r) => r.includes("╰"));
   expect(bottom - top + 1).toBe(MAX_SUGGESTIONS + 3); // rows + title + borders: the box height follows the cap
   expect(top).toBe(L.messages.y + 1); // 11 rows do not fit above the prompt of a 14-row panel: clamped to the first inner row

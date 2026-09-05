@@ -24,6 +24,8 @@ import type { ApprovalAnswer, AssistantView, PickItem, QuestionAnswer, QuestionP
 import { drawAgents } from "./draw-agents.ts";
 import { openMarket } from "./draw-market.ts";
 import { docsFor, install, loadMarket, planFor } from "./market-source.ts";
+import { openContext } from "./draw-context.ts";
+import { fixedFrom, loadContext } from "./context-source.ts";
 import { hunksFromUnified, setAgentsPainter } from "./draw-code.ts";
 import { fuzzy } from "./engine.ts";
 import { spawnGitAsync, toAsync, type GitRunner, type GitRunnerAsync } from "./git-status.ts";
@@ -353,6 +355,30 @@ export class SextantRenderer implements Renderer {
       void loadMarket(this.state.cwd, homedir())
         .then((load) => { if (this.state.market) { this.state.market.rows = load.rows; this.state.market.status = load.status; this.state.market.notes = load.notes; this.loop.markDirty(); } })
         .catch((e: unknown) => { if (this.state.market) { this.state.market.status = { kind: "error", reason: e instanceof Error ? e.message : String(e) }; this.loop.markDirty(); } });
+    },
+    // /context (⌃g). The panel opens on the NEXT frame with what we already have — the model and an
+    // empty count — so the chord feels instant, and the real numbers are joined in when counting is
+    // done. Counting is synchronous but not free on a long transcript, so it happens off the frame.
+    openContext: () => {
+      const ref = this.ctx?.model() ?? { provider: "unknown", model: "unknown" };
+      const inputs = this.ctx?.contextInputs?.();
+      openContext(this.state, {
+        model: `${ref.provider}/${ref.model}`, raw: 0, estimated: 0,
+        scale: { factor: 1, measured: false, note: "counting…" },
+        slices: [], images: 0, billed: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        unpricedTurns: 0, live: false, tolerance: 0.05,
+      });
+      this.loop.markDirty();
+      if (!inputs) return;   // the panel stays in its "not counted" state and says so
+      void loadContext({
+        messages: inputs.messages, current: ref, lookup: inputs.lookup,
+        fixed: fixedFrom(inputs.runtime, ref),
+      }).then((state) => {
+        // the human may have closed it while we counted; writing into a closed panel would reopen it
+        if (!this.state.context) return;
+        this.state.context = { ...state, scroll: this.state.context.scroll };
+        this.loop.markDirty();
+      }).catch(() => { /* loadContext does not reject; this is belt and braces on the dynamic import */ });
     },
     marketPlan: (row) => {
       void planFor(row, { scope: "user", cwd: this.state.cwd, home: homedir() })

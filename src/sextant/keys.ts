@@ -33,6 +33,7 @@ import {
 } from "./types.ts";
 import { type Fuzzy, type Suggestion, onPaletteKey, openPalette, parseInput, resolveFile, suggestions } from "./overlays.ts";
 import { onMarketKey, type MarketViewRow } from "./draw-market.ts";
+import { onContextKey } from "./draw-context.ts";
 import { dispatch, openFile, runAction, setFocus, setMode, setTheme, showAgents } from "./local-commands.ts";
 import { dismissCard, onCardKey } from "./card-keys.ts";
 import { gridFor } from "./draw-agents.ts";
@@ -54,6 +55,9 @@ export interface KeyCtx {
     setTheme(name: ThemeName): void; setMode(mode: CodeMode): void; openFile(path: string): void; toast(text: string): void;
     /** open /market: the renderer loads the catalog (async) and fills s.market when it answers */
     openMarket(): void;
+    /** open /context: the renderer asks the LIVE runtime for the system prompt and tool schemas — the two
+     *  rows a transcript cannot know — and fills s.context when the count is done */
+    openContext(): void;
     /** the human pressed Enter on a row: build the plan and write it into s.market.plan */
     marketPlan(row: MarketViewRow): void;
     /** the human confirmed the plan card: run it and write the outcome back onto the card */
@@ -114,6 +118,12 @@ export function handleInput(s: SextantState, ev: InputEvent, ctx: KeyCtx, now: n
     else if (req.kind === "install") ctx.local.marketInstall(req.plan.row);
     return R();
   }
+  if (s.context) {
+    if (ev.ctrl && ev.name === "c") return ctrlC(s, ctx);
+    // a page is the drawn body height; the panel is centred and capped, so this matches drawContext
+    onContextKey(s, ev, Math.max(4, Math.min(ctx.layout.h - 4, 24)));
+    return R();
+  }
   if (s.help) { // app.js:1488 — the card swallows every key; the usual closers dismiss it
     const closer = ev.name === "escape" || ev.name === "enter" || ev.name === "space" || (ev.ctrl && ev.name === "c");
     if (closer || (ev.ch && !ev.ctrl)) s.help = false;
@@ -137,13 +147,14 @@ export function handleInput(s: SextantState, ev: InputEvent, ctx: KeyCtx, now: n
  *  waiting on it is stuck until the user finds their way back out. ⌃c was special-cased for this from
  *  the start; the rest fell through by omission. Typing still reaches the prompt while a card waits
  *  (onCardKey returning false is deliberate) — this only stops a second surface from covering it. */
-const OPENS_OVERLAY = new Set(["k", "p", "b", "m"]);
+const OPENS_OVERLAY = new Set(["k", "p", "b", "m", "g"]);
 
 function onCtrl(s: SextantState, ev: KeyEvent, ctx: KeyCtx): KeyEffect[] {
   if (s.card && ev.name !== undefined && OPENS_OVERLAY.has(ev.name)) return R();
   switch (ev.name) {
     case "c": return ctrlC(s, ctx);
     case "k": case "p": openPalette(s); return R();
+    case "g": ctx.local.openContext(); return R();
     case "t": {
       const next: ThemeName = THEME_ORDER[(THEME_ORDER.indexOf(s.theme) + 1) % THEME_ORDER.length]!;
       setTheme(s, ctx, next);

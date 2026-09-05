@@ -18,6 +18,7 @@ import { layout as layoutFn } from "./layout.ts";
 import { treeRows } from "./model.ts";
 import { drawHelp, drawPalette, drawSuggest, suggestions } from "./overlays.ts";
 import { drawMarket } from "./draw-market.ts";
+import { drawContext } from "./draw-context.ts";
 import { petEnabled, type Pet } from "./pet.ts";
 import { Screen } from "./screen.ts";
 import { cardHits } from "./card-hits.ts";
@@ -220,13 +221,14 @@ export class FrameLoop {
     drawSuggest(scr, L.messages, s, suggestions(s, s.files.paths, fuzzy).slice(0, MAX_SUGGESTIONS), theme, hits);
     const paletteCursor = drawPalette(scr, L, theme, s, fuzzy, hits);
     const marketCursor = drawMarket(scr, L, theme, s, fuzzy, hits);
+    const contextCursor = drawContext(scr, L, theme, s, hits);
     if (s.help) drawHelp(scr, L, theme, s, hits);
     this.hits = hits;
     // the #42/#46 seams: the painters are pure, so the effective scroll positions are written back here
     // (codeScrollTop counts 0 rows in agents mode and would pin the open lane to its top)
     s.code.scroll = s.code.mode === "agents" ? agentsScrollTop(body, s) : codeScrollTop(L.code, s);
     s.msgScroll = messagesScroll(L.messages, s, theme, now).offset;
-    scr.flush(s.palette ? paletteCursor : s.market ? marketCursor : s.help ? null : promptCursor(L.messages, s));
+    scr.flush(s.palette ? paletteCursor : s.market ? marketCursor : s.context ? contextCursor : s.help ? null : promptCursor(L.messages, s));
     this.dirty = false;
     this.lastRender = now;
     this.frames++;

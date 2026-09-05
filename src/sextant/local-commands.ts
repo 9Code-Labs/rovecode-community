@@ -83,6 +83,10 @@ export function runLocal(s: SextantState, cmd: string, arg: string, ctx: KeyCtx)
       // the overlay opens empty with a "loading" status; the renderer fills it when the catalog answers
       ctx.local.openMarket();
       return true;
+    case "context":
+      // counting is synchronous but not free on a long transcript, so the renderer does it off the frame
+      ctx.local.openContext();
+      return true;
     case "theme":
       if (isTheme(arg)) setTheme(s, ctx, arg);
       else ctx.local.toast(`unknown theme "${arg}" · night, ember or contrast`);

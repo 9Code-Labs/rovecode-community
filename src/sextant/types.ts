@@ -358,6 +358,7 @@ export interface PaletteState {
 
 import type { MarketState } from "./draw-market.ts";
 import type { ContextState } from "./draw-context.ts";
+import type { LiveRuntime } from "./context-source.ts";
 
 /** the whole surface state — owned by model.ts (pure `applyEvent`) and mutated by keys.ts */
 export interface SextantState {
@@ -426,6 +427,18 @@ export interface SextantAttach {
   /** session accounting for the usage panel (tui/cost.ts math over the ACTIVE store): cost priced
    *  per message at its origin model (null = unpriced), context = estimated prompt tokens */
   usage?(): { costUsd: number | null; contextTokens: number };
+  /** Everything /context needs and no other panel does: the transcript to count, the catalog to look a
+   *  model's window and pricing up in, and the LIVE runtime.
+   *
+   *  The runtime is the point. `rovecode context` on a shell has to BUILD one to learn the system prompt
+   *  and the tool schemas, and in a fresh session those two are most of the window; here they already
+   *  exist. Optional all the same — a surface that cannot supply this (a headless dump, a test) still
+   *  opens the panel, and the panel says its total is a floor rather than under-reporting in silence. */
+  contextInputs?(): {
+    messages: readonly unknown[];
+    lookup: (r: { provider: string; model: string }) => unknown;
+    runtime: LiveRuntime | null;
+  };
   /** `--pet <name>`; the renderer's own option is the fallback */
   petName?: string;
   /** names of the images staged for the NEXT user message (tui/attach.ts stage on the active store),

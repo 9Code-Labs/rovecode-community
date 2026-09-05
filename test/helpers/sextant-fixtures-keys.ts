@@ -35,16 +35,17 @@ export function makeLayout(w: number, h: number): Layout {
 }
 
 /** every hook / local call, recorded: `n` holds the counters (mutated in place by the hooks) */
-export interface Spy { ctx: KeyCtx; submits: string[]; themes: string[]; modes: string[]; opened: string[]; toasts: string[]; market: string[]; n: { interrupts: number; exits: number } }
+export interface Spy { ctx: KeyCtx; submits: string[]; themes: string[]; modes: string[]; opened: string[]; toasts: string[]; market: string[]; context: string[]; n: { interrupts: number; exits: number } }
 
 export function spyCtx(layout: Layout = makeLayout(160, 44)): Spy {
-  const spy: Spy = { submits: [], themes: [], modes: [], opened: [], toasts: [], market: [], n: { interrupts: 0, exits: 0 }, ctx: null as unknown as KeyCtx };
+  const spy: Spy = { submits: [], themes: [], modes: [], opened: [], toasts: [], market: [], context: [], n: { interrupts: 0, exits: 0 }, ctx: null as unknown as KeyCtx };
   spy.ctx = {
     layout,
     hooks: { onSubmit: (t) => { spy.submits.push(t); }, onInterrupt: () => { spy.n.interrupts++; }, onExit: () => { spy.n.exits++; } },
     local: {
       setTheme: (n) => { spy.themes.push(n); }, setMode: (m) => { spy.modes.push(m); }, openFile: (p) => { spy.opened.push(p); }, toast: (t) => { spy.toasts.push(t); },
       openMarket: () => { spy.market.push("open"); },
+      openContext: () => { spy.context.push("open"); },
       marketPlan: (row) => { spy.market.push(`plan:${row.kind}:${row.id}`); },
       marketInstall: (row) => { spy.market.push(`install:${row.kind}:${row.id}`); },
       marketDocs: (row) => { spy.market.push(`docs:${row.kind}:${row.id}`); },

@@ -70,8 +70,15 @@ Secrets are asked by name through the masked prompt: never echoed, never passed 
 written into a project file. In a project scope a secret is written as `${NAME}` and read from your
 environment when the server launches, so the file can be committed.
 
-Every `--json` output is **one document**. The human preview is not printed above it — the same lines are
-inside the object, as `preview`.
+Every `--json` output is **one document**, on every subcommand and every exit code. The human preview is
+not printed above it — the same lines are inside the object, as `preview` — and a failure is a document
+too, so a script that names a missing id gets something it can read rather than an empty stdout and a
+number. Prose may still go to stderr; stderr is not the document.
+
+`--json` also **never prompts**, terminal or not. The line that would let a person answer "install this?"
+or "remove this?" is inside the object rather than on the screen, so asking would mean asking someone to
+approve something they were not shown. Instead you get the plan with `needsApproval: true` and exit 1 —
+rerun with `--yes`, or `--dry-run` if reading it was the point.
 
 ## What you can name
 

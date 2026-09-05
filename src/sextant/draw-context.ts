@@ -18,7 +18,7 @@
 import { st } from "./draw-util.ts";
 import { strWidth } from "./screen.ts";
 import { openOverlay } from "./overlays.ts";
-import { ATTR, type HitZone, type Layout, type ScreenLike, type SextantState, type Theme } from "./types.ts";
+import { ATTR, type HitZone, type KeyEvent, type Layout, type ScreenLike, type SextantState, type Theme } from "./types.ts";
 
 export interface ContextSliceRow {
   label: string;
@@ -41,6 +41,12 @@ export interface ContextDriftRow {
 
 export interface ContextState {
   model: string;
+  /** what o200k actually counted, BEFORE the per-model correction. Kept beside `estimated` rather than
+   *  replaced by it: a silently corrected number is not a measurement, and someone comparing this panel
+   *  with `rovecode context` or with a provider dashboard needs to know which of the two they are reading. */
+  raw: number;
+  /** the correction applied to `raw` to get `estimated`, and where its factor came from */
+  scale: { factor: number; measured: boolean; note: string };
   /** the catalog's window; absent when the model is not in the catalog */
   window?: number;
   estimated: number;
@@ -104,7 +110,16 @@ export function contextLines(s: ContextState, width: number): ContextLine[] {
   } else {
     out.push({ text: `~${n(s.estimated)} tokens — this model's window is not in the catalog`, tone: "dim" });
   }
+  // what the number IS, before anything else is said about it. o200k is our stand-in for every tokenizer
+  // that is not OpenAI's, and the factor is measured per model generation — so the panel names both the
+  // count and the correction rather than presenting one number as if nothing happened to it.
+  if (s.scale.factor !== 1) {
+    out.push({ text: `o200k counted ${n(s.raw)}, scaled ${s.scale.factor}× for this model — ${s.scale.note}`, tone: "dim" });
+  } else {
+    out.push({ text: `o200k counted ${n(s.raw)} — ${s.scale.note}`, tone: "dim" });
+  }
   if (!s.live) out.push({ text: "system prompt and tool schemas are not counted — this total is a floor", tone: "warn" });
+  else out.push({ text: "MCP tools are not counted — their schemas exist only once a server is connected", tone: "dim" });
   out.push({ text: "", tone: "dim" });
 
   const rows = [...s.slices].sort((a, b) => b.tokens - a.tokens);
@@ -121,7 +136,7 @@ export function contextLines(s: ContextState, width: number): ContextLine[] {
   out.push({ text: "", tone: "dim" });
   if (s.drift) {
     const d = s.drift;
-    out.push({ text: `drift    provider counted ${n(d.reported)}, we estimated ${n(d.estimated)}`, tone: d.beyondTolerance ? "warn" : "normal" });
+    out.push({ text: `drift    provider counted ${n(d.reported)} for the last turn's prompt, we estimated ${n(d.estimated)}`, tone: d.beyondTolerance ? "warn" : "normal" });
     out.push({
       text: `         ${n(Math.abs(d.delta))} ${d.delta > 0 ? "more" : "less"} than we estimate (${pct(d.fraction)})${d.beyondTolerance ? ` — beyond the ${pct(s.tolerance)} tolerance; the meter reads ${d.delta > 0 ? "LOW" : "HIGH"} here` : ""}`,
       tone: d.beyondTolerance ? "warn" : "dim",
@@ -185,4 +200,23 @@ export function drawContext(scr: ScreenLike, L: Layout, C: Theme, s: SextantStat
     scr.put(x + w - 22, y + h - 1, ` ${top + rows} of ${lines.length} lines `, st(C.dim, C.bg2));
   }
   return null; // no caret: the overlay takes no typed input
+}
+
+/** Keys, while the panel is up. It is a reader, not a chooser: there is nothing to select and nothing to
+ *  confirm, so the whole map is "move through it" and "leave". Anything else is swallowed rather than
+ *  falling through to the prompt — an overlay that lets keystrokes reach the composer behind it types
+ *  into a message the human cannot see. */
+export function onContextKey(s: SextantState, ev: KeyEvent, page: number): void {
+  const c = s.context;
+  if (!c) return;
+  const { name, ctrl } = ev;
+  if (name === "escape" || name === "enter" || (ctrl && name === "g")) { closeContext(s); return; }
+  const step = Math.max(1, page - 1);
+  if (name === "up" || name === "k") c.scroll -= 1;
+  else if (name === "down" || name === "j") c.scroll += 1;
+  else if (name === "pageup") c.scroll -= step;
+  else if (name === "pagedown" || name === "space") c.scroll += step;
+  else if (name === "home") c.scroll = 0;
+  else if (name === "end") c.scroll = Number.MAX_SAFE_INTEGER;
+  c.scroll = Math.max(0, c.scroll);
 }

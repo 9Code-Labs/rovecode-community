@@ -12,6 +12,7 @@ import { fmtK, planCounts } from "./model.ts";
 import { crewSummary, laneGlyph, laneStatus, laneTone } from "./draw-agents.ts";
 import { panel } from "./layout.ts";
 import { st } from "./theme.ts";
+import { driftRow } from "./draw-context.ts";
 
 const CREW_MAX = 5;
 export const STEP_GLYPH: Record<TodoItem["status"], string> = { completed: "◆", in_progress: "◈", pending: "◇" };
@@ -141,4 +142,18 @@ export function drawUsage(scr: ScreenLike, R: Rect, s: SextantState, theme: Them
   const cost = u.costUsd === null ? "—" : `$${u.costUsd.toFixed(3)}`;
   const model = u.model ? fitText([u.provider ? `  ${u.provider}/${u.model}` : `  ${u.model}`, `  ${u.model}`], B.w - 10 - cost.length) : "";
   scr.text(B.x, B.y + 2, [label("cost"), [cost, st(theme.fg)], [model, st(theme.dim)]], B.w);
+
+  // How far the bar above is from what the provider actually counted. It matters here rather than only
+  // inside /context because compaction fires on OUR estimate: a model whose real prompt is a fifth bigger
+  // than the bar says gets compacted late, and the bar is the thing the human is looking at when they
+  // decide whether one more turn fits.
+  //
+  // Drawn only once /context has been opened, and silent otherwise. The number comes from comparing our
+  // count with a turn that reported usage, which the cockpit does not do on its own — and inventing a
+  // placeholder ("drift —") would take a row to say nothing. `driftRow` returns undefined when there is
+  // nothing honest to say, so this is one condition rather than a special case.
+  const d = s.context ? driftRow(s.context.drift, s.context.tolerance) : undefined;
+  if (d && B.h > 3) {
+    scr.text(B.x, B.y + 3, [label("drift"), [fitText([d.text, ""], B.w - 10), st(d.warn ? theme.warn : theme.dim)]], B.w);
+  }
 }

@@ -104,6 +104,7 @@ export const LOCAL_COMMANDS: readonly (CommandInfo & { options?: (s: SextantStat
   { name: "agents", description: "the crew board (code panel ∷)", local: true },
   { name: "notices", description: "notification history (⌃b)", local: true },
   { name: "market", description: "install MCP servers, skills, plugins (⌃m)", local: true },
+  { name: "context", description: "what is in the window right now, item by item (⌃g)", local: true },
 ];
 
 const THEME_HINT: Record<ThemeName, string> = { night: "night + mint", ember: "ink + ember", contrast: "pure contrast" };
@@ -397,6 +398,7 @@ export const HELP_KEYS: readonly (readonly [string, string])[] = [
   ["⌃o", "next tab (narrow terminal)"],
   ["⌃b", "notifications"],
   ["⌃m", "market (install servers, skills, plugins)"],
+  ["⌃g", "context (what is in the window, and how far our count is from the provider’s)"],
   ["⌥d", "market: the selected item's documentation"],
   ["⌃v", "paste image · drop a file to attach"],
   ["⌃t", "next theme"],
@@ -421,7 +423,14 @@ export function drawHelp(scr: ScreenLike, L: Layout, C: Theme, s: SextantState, 
   const w = Math.min(L.w - 8, 112), wide = w >= 110;
   const maxRows = Math.max(1, L.h - 8);
   const shown = rows.length > maxRows ? [...rows.slice(0, maxRows - 1), ["…", `${rows.length - maxRows + 1} more · /help lists all`, ""] as [string, string, string]] : rows;
-  const h = Math.max(shown.length, HELP_KEYS.length) + 6, x = Math.floor((L.w - w) / 2), y = Math.max(1, Math.floor((L.h - h) / 2));
+  // the KEYS column is capped by the same rule as the commands column. It used not to be, because it was
+  // shorter than every terminal anyone tried — and then the box height took the max of the two, so adding
+  // one chord pushed the bottom border past the frame on a 30-row terminal. A list that grows is a list
+  // that has to be cut somewhere.
+  const keys: (readonly [string, string])[] = HELP_KEYS.length > maxRows
+    ? [...HELP_KEYS.slice(0, maxRows - 1), ["…", `${HELP_KEYS.length - maxRows + 1} more`] as [string, string]]
+    : [...HELP_KEYS];
+  const h = Math.max(shown.length, keys.length) + 6, x = Math.floor((L.w - w) / 2), y = Math.max(1, Math.floor((L.h - h) / 2));
   scr.box(x, y, w, h, st(C.accent), C.bg2);
   scr.text(x + 2, y, [[" help ", st(C.accent, -1, ATTR.BOLD)]]);
   scr.put(x + w - 14, y, " esc closes ", st(C.dim));
@@ -432,7 +441,7 @@ export function drawHelp(scr: ScreenLike, L: Layout, C: Theme, s: SextantState, 
     scr.put(x + 3, yy, name, st(C.accent, C.bg2), 13); scr.put(x + 17, yy, desc, st(C.fg2, C.bg2), wide ? 28 : 30);
     if (wide && arg) scr.put(x + 46, yy, arg, st(C.dim, C.bg2), 22);
   });
-  HELP_KEYS.forEach(([a, b], i) => {
+  keys.forEach(([a, b], i) => {
     const yy = y + 3 + i;
     scr.put(kx, yy, a, st(C.fg, C.bg2, ATTR.BOLD), 10); scr.put(kx + 11, yy, b, st(C.fg2, C.bg2), w - (kx - x) - 13);
   });
