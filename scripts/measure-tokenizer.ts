@@ -50,8 +50,27 @@ function fixedRows(): { system: string; schemas: string } {
 
 const { system, schemas } = fixedRows();
 
-// The kinds of text a session is actually made of. Prose, code, JSON and diffs tokenize differently —
-// a single ratio measured on one of them would be a fact about that sample, not about the tokenizer.
+/** Market and skill documentation: headings, bullets, fenced code and tables in one document. This is
+ *  the text that actually lands in a window when a model opens a skill, and it tokenizes worse than
+ *  either prose or code alone — nimbus-24 measured 19 skill bodies and found ratios above the ceiling
+ *  the first six samples produced. A sample set that omits the most common content is not conservative,
+ *  it is simply wrong in the expensive direction. */
+function marketDocs(count: number): { name: string; text: string }[] {
+  try {
+    const cat = JSON.parse(read("site/src/generated/market.json")) as { entries?: { id: string; docs?: { markdown?: string } }[] };
+    return (cat.entries ?? [])
+      .filter((e): e is { id: string; docs: { markdown: string } } => typeof e.docs?.markdown === "string" && e.docs.markdown.length > 4_000)
+      .sort((a, b) => b.docs.markdown.length - a.docs.markdown.length)
+      .slice(0, count)
+      .map((e) => ({ name: `market doc: ${e.id}`, text: e.docs.markdown }));
+  } catch {
+    return []; // the catalog is a build artefact; measuring without it is worse than measuring wrong
+  }
+}
+
+// The kinds of text a session is actually made of. Prose, code, JSON, markdown documentation and diffs
+// tokenize differently — a single ratio measured on one of them would be a fact about that sample,
+// not about the tokenizer.
 const SAMPLES: { name: string; text: string }[] = [
   { name: "system prompt", text: system },
   { name: "tool schemas (json)", text: schemas },
@@ -59,6 +78,7 @@ const SAMPLES: { name: string; text: string }[] = [
   { name: "english prose (docs)", text: read("docs/context.md") },
   { name: "turkish prose (readme)", text: read("README.md").slice(0, 20_000) },
   { name: "tool result (file listing)", text: read("package.json") + "\n" + read("tsconfig.json") },
+  ...marketDocs(14),
 ];
 
 const provider = new ProviderRegistry(cwd).get(providerId);

@@ -54,9 +54,10 @@ the two rows below are most of a fresh window.
 ## The correction, and why it is measured
 
 `--exact` produced a number, and the number had a consequence: our estimate was not a little low, it was
-low by half again. `bun scripts/measure-tokenizer.ts` turns that observation into a table by sending real
-samples — the system prompt, the tool schemas, a TypeScript file, English prose, Turkish prose, a JSON
-tool result — to the counting endpoint and dividing. Measured 2026-09-05 against claude-opus-5:
+low by three quarters in the worst case. `bun scripts/measure-tokenizer.ts` turns that observation into a
+table by sending real samples — the system prompt, the tool schemas, a TypeScript file, English prose,
+Turkish prose, a JSON tool result and fourteen market documentation bodies — to the counting endpoint and
+dividing. Measured 2026-09-05 against claude-opus-5, the extremes of twenty samples:
 
 | sample | chars/4 | o200k | actual | o200k needs |
 |---|---|---|---|---|
@@ -64,20 +65,28 @@ tool result — to the counting endpoint and dividing. Measured 2026-09-05 again
 | tool schemas (json) | 4,610 | 4,329 | 6,574 | 1.519× |
 | typescript source | 5,964 | 5,999 | 9,489 | 1.582× |
 | english prose | 2,330 | 2,362 | 3,417 | 1.447× |
-| turkish prose | 5,000 | 5,088 | 7,678 | 1.509× |
-| json tool result | 807 | 970 | 1,461 | 1.506× |
+| market doc: github | 5,481 | 5,067 | 8,590 | 1.695× |
+| market doc: cloudflare-docs | 2,390 | 1,785 | 3,174 | 1.778× |
+| market doc: mcp-builder | 2,354 | 2,016 | 3,611 | 1.791× |
 
-Three things that table settles. Sonnet 5 returns **identical** counts to Opus 5 on all six samples, so
-the factor belongs to a generation rather than to a model name. Haiku 4.5 is a different, older
-tokenizer at 1.08–1.21×, so the 5-generation figure must not be applied to it. And the spread across
-content kinds is real but small next to the error it corrects: a single factor is wrong by a few points,
-using none is wrong by fifty.
+The market documents belong in that list for a reason. The first run used six samples of prose, code and
+JSON and produced a 1.58× ceiling; nimbus-24, measuring 19 skill bodies independently, found ratios above
+it. Markdown documentation — headings, bullets, fenced code and tables in one file — tokenizes worse than
+either prose or code alone, and it is exactly what lands in a window when a model opens a skill. Their
+worst case reproduces here at 1.791. A sample set that omits the commonest content is not conservative;
+it is wrong in the expensive direction.
 
-`src/core/token-scale.ts` holds the factors. Each is the **maximum** ratio across the samples, not the
-mean, because the two errors are not symmetric — a budget that reads high leaves some window unused,
-while one that reads low sends a request the provider refuses. A model nobody has measured gets 1 and
-says so; a borrowed multiplier would move the budget by an amount whose provenance no one could explain.
-OpenAI models get 1 because o200k *is* their tokenizer.
+Three further things the table settles. Sonnet 5 returns **identical** counts to Opus 5 on every sample,
+so the factor belongs to a generation rather than to a model name. Haiku 4.5 is a different, older
+tokenizer at 1.08–1.29×, so the 5-generation figure must not be applied to it. And OpenAI models need no
+correction at all, because o200k *is* their tokenizer — a blanket multiplier would have broken the one
+case that was already exact.
+
+`src/core/token-scale.ts` holds the factors: 1.80× for Claude 5, 1.29× for Claude 4.5/4.6. Each is the
+**maximum** ratio across the samples, not the mean, because the two errors are not symmetric — a budget
+that reads high leaves some window unused, while one that reads low sends a request the provider refuses.
+A model nobody has measured gets 1 and says so; a borrowed multiplier would move the budget by an amount
+whose provenance no one could explain.
 
 The correction is applied in exactly one place: `contextBudgetFor` divides the budget by the scale, which
 is arithmetically the same as inflating every estimate at every call site, and there is one of it. That
@@ -85,12 +94,15 @@ is what makes compaction fire on time. `rovecode context` shows the raw estimate
 and names the factor — a number that has been silently adjusted is not a measurement:
 
 ```
-context  ~12,387 of 1,000,000 (1.2%)
-         o200k counted 7,790, scaled by 1.59× — measured 2026-09-05 against /v1/messages/count_tokens
+context  ~14,022 of 1,000,000 (1.4%)
+         o200k counted 7,790, scaled by 1.8× — measured 2026-09-05 against /v1/messages/count_tokens
 exact    the provider counted 12,283 for this prompt
 ```
 
-12,387 against an actual 12,283: the corrected estimate lands within 1% on the case that started this.
+Note what that shows about the trade. On *this* prompt the corrected estimate reads 14,022 against an
+actual 12,283 — 14% high, because 1.80× is the worst case across the samples and a system prompt is not
+the worst case. The uncorrected estimate was 37% low. Both are wrong; only one of them loses the turn.
+`--exact` is there for when you want the actual number rather than the safe one.
 
 ## What counts against the window
 
