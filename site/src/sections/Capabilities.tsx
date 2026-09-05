@@ -1,15 +1,18 @@
 import { CodeCard } from "@/components/CodeCard";
 import { Pic } from "@/components/Pic";
 import { Item, Reveal, Stagger } from "@/components/Motion";
-import { Section } from "@/components/Section";
+import { Section, SectionIndex } from "@/components/Section";
 import { useT } from "@/i18n";
 import { BENTO_MEDIUM, BENTO_SMALL, LADDER, PROVIDERS_JSON, PROVIDERS_JSON_HL } from "@/content";
 
 /** ten capabilities: two lead cards with their evidence, then eight smaller cards in three columns */
 export function Capabilities({ n }: { n: string }) {
   const t = useT();
+  // the space beside the shifted heading is filled by the section's own contents: the ten names,
+  // in the order the cards below use. Every string here is already on a card.
+  const names = [t.capabilities.surfaceTitle, t.capabilities.providersTitle, ...t.capabilities.medium.map((m) => m.title), ...t.capabilities.small.map((m) => m.title)];
   return (
-    <Section id="capabilities" n={n} eyebrow={t.capabilities.eyebrow} title={t.capabilities.title} lead={t.capabilities.lead} shift>
+    <Section id="capabilities" n={n} eyebrow={t.capabilities.eyebrow} title={t.capabilities.title} lead={t.capabilities.lead} shift aside={<SectionIndex items={names} />}>
       <div className="grid gap-6 lg:grid-cols-2">
         <Reveal className="panel panel-hover flex flex-col p-6 md:p-8">
           <p className="label">{t.capabilities.surfaceLabel}</p>

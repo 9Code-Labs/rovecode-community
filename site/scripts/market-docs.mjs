@@ -25,6 +25,10 @@ const slugify = (s) =>
 const ESCAPES = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => ESCAPES[c]);
 
+/** a CommonMark autolink — `<https://example.com/a>`, `<mailto:x@e.com>`, `<x@e.com>` — which is markdown
+ *  that happens to look like a tag. It survives the strip below and is rendered as a link like any other. */
+const AUTOLINK = /^<(?:[a-zA-Z][\w+.-]{1,31}:[^<>\s]*|[^<>\s@]+@[^<>\s@]+\.[^<>\s@]+)>$/;
+
 /** strip anything that would reach the renderer as html: the elements whose CONTENT is code (script,
  *  style and friends go body and all — leaving `alert(1)` as a paragraph is inert but reads like a bug),
  *  then comments, then every remaining tag */
@@ -33,7 +37,7 @@ function stripHtml(md) {
     .replace(/<(script|style|iframe|object|embed|template|noscript)\b[\s\S]*?<\/\1\s*>/gi, "")
     .replace(/<(script|style|iframe|object|embed|template|noscript)\b[^>]*>/gi, "")
     .replace(/<!--[\s\S]*?-->/g, "")
-    .replace(/<\/?[a-zA-Z][^>]*>/g, "");
+    .replace(/<\/?[a-zA-Z][^>]*>/g, (tag) => (AUTOLINK.test(tag) ? tag : ""));
 }
 
 /** resolve a link inside someone else's document: absolute stays, relative is rebuilt against their source,
@@ -100,13 +104,17 @@ export function renderItemDocs(docs) {
     prev = level;
     // the top two levels the document uses are navigation; deeper ones are structure
     if (level <= 4) toc.push({ id, text: plain, depth: level });
-    return `<h${level} id="${id}"><a href="#${id}">${marked.parseInline(text)}</a></h${level}>\n`;
+    const inner = renderer.parser.parseInline(tokens);
+    // the heading is its own permalink — unless it already contains a link, because an <a> inside an <a>
+    // is not markup a browser can nest and the outer one would have no text of its own
+    const body = /<a\b/i.test(inner) ? inner : `<a href="#${id}">${inner}</a>`;
+    return `<h${level} id="${id}">${body}</h${level}>\n`;
   };
   renderer.link = ({ href, title, tokens }) => {
     // a bare URL arrives as a link whose only child is that URL as text; re-parsing it inline would
     // autolink it a second time and nest one <a> inside another
     const plain = tokens.length === 1 && tokens[0]?.type === "text";
-    const inner = plain ? escapeHtml(tokens[0].text) : marked.parseInline(tokens.map((x) => x.raw).join(""), { renderer });
+    const inner = plain ? escapeHtml(tokens[0].text) : renderer.parser.parseInline(tokens);
     const h = resolveLink(href, source);
     if (!h) return inner; // unresolvable: keep the words, drop the link
     // a link whose whole label was an image (an install badge, a shields.io button) has no words left

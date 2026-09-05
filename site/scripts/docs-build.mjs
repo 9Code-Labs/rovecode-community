@@ -31,8 +31,12 @@ const known = new Set(SOURCES.map((s) => s.slug));
 const slugOf = (mdPath) => mdPath.replace(/^.*\//, "").replace(/\.md$/, "");
 
 function build(src) {
-  let md = readFileSync(join(REPO, src.file), "utf8");
-  md = md.replace(/\r\n?/g, "\n"); // Windows checkouts: CRLF hides the h1 from the strip below and reaches marked
+  return renderDoc(readFileSync(join(REPO, src.file), "utf8"), src);
+}
+
+/** markdown → the page record, with nothing read and nothing written: the part worth testing */
+export function renderDoc(source, src) {
+  let md = source.replace(/\r\n?/g, "\n"); // Windows checkouts: CRLF hides the h1 from the strip below and reaches marked
   if (src.from) {
     const a = md.indexOf(src.from), b = md.indexOf(src.to, a + 1);
     md = md.slice(a, b < 0 ? undefined : b);
@@ -48,10 +52,16 @@ function build(src) {
     const plain = tokens.map((t) => (t.type === "codespan" || t.type === "text" ? t.text : t.raw ?? "")).join("").replace(/[`*]/g, "");
     let id = slugify(plain); const n = seen.get(id) ?? 0; seen.set(id, n + 1); if (n) id = `${id}-${n}`;
     if (depth <= 3) toc.push({ id, text: plain, depth });
-    return `<h${depth} id="${id}"><a href="#${id}">${marked.parseInline(text)}</a></h${depth}>\n`;
+    const inner = renderer.parser.parseInline(tokens);
+    // the heading links to itself, unless it already holds a link: <a> inside <a> is not nestable markup
+    const body = /<a\b/i.test(inner) ? inner : `<a href="#${id}">${inner}</a>`;
+    return `<h${depth} id="${id}">${body}</h${depth}>\n`;
   };
   renderer.link = ({ href, title: t, tokens }) => {
-    const inner = marked.parseInline(tokens.map((x) => x.raw).join(""));
+    // the child tokens are already parsed: re-tokenizing their raw text autolinks a bare URL a second
+    // time and nests one <a> inside another (axe link-name, the outer anchor has no text of its own).
+    // `<https://example.com>` is valid CommonMark and documents do use it, so the fix belongs here.
+    const inner = renderer.parser.parseInline(tokens);
     let h = href;
     if (/^(\.\.?\/)?[\w./-]+\.md(#.*)?$/.test(href) && !/^https?:/.test(href)) {
       const [path, hash = ""] = href.split("#");
@@ -74,7 +84,10 @@ function build(src) {
   return { slug: src.slug, title, source: src.file, summary, toc, html, words: md.split(/\s+/).length };
 }
 
-mkdirSync(join(SITE, "src", "generated"), { recursive: true });
-const docs = ON ? SOURCES.filter((s) => existsSync(join(REPO, s.file))).map(build) : [];
-writeFileSync(OUT, JSON.stringify({ enabled: ON, docs }, null, 1) + "\n");
-console.log(ON ? `docs: ${docs.length} pages (${docs.map((d) => `${d.slug} ${d.words}w`).join(", ")})` : "docs: off (set VITE_DOCS=1)");
+// only when this file IS the script: a test may import renderDoc without writing anything
+if (import.meta.main) {
+  mkdirSync(join(SITE, "src", "generated"), { recursive: true });
+  const docs = ON ? SOURCES.filter((s) => existsSync(join(REPO, s.file))).map(build) : [];
+  writeFileSync(OUT, JSON.stringify({ enabled: ON, docs }, null, 1) + "\n");
+  console.log(ON ? `docs: ${docs.length} pages (${docs.map((d) => `${d.slug} ${d.words}w`).join(", ")})` : "docs: off (set VITE_DOCS=1)");
+}

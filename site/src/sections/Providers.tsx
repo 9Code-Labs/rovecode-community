@@ -8,6 +8,18 @@ import { PROVIDERS_HOSTED, PROVIDERS_JSON, PROVIDERS_JSON_HL, PROVIDERS_LOCAL } 
 /** sixteen names as pills in a white card; the live-registry example in a second card beside them */
 export function Providers({ n }: { n: string }) {
   const t = useT();
+  // beside the shifted heading: how many of each kind there are. The card below used to print the same
+  // two numbers in its header a few hundred pixels lower; they live here now and the header keeps the words.
+  const counts = (
+    <dl className="flex gap-10 md:block md:space-y-6">
+      {([[PROVIDERS_HOSTED.length, t.providers.hosted], [PROVIDERS_LOCAL.length, t.providers.local]] as const).map(([count, word]) => (
+        <div key={word}>
+          <dt className="text-[2rem] leading-none text-text" dir="ltr">{count}</dt>
+          <dd className="label mt-2">{word}</dd>
+        </div>
+      ))}
+    </dl>
+  );
   const code = (s: string) => <code className="mono text-[0.92em] text-text" dir="ltr">{s}</code>;
   return (
     <Section
@@ -17,12 +29,13 @@ export function Providers({ n }: { n: string }) {
       title={t.providers.title}
       lead={<>{t.providers.leadA}{code("<NAME>_API_KEY")}{t.providers.leadB}{code("ROVECODE_BASE_URL")} / {code("ROVECODE_API_KEY")}{t.providers.leadC}</>}
       shift
+      aside={counts}
     >
       <div className="grid gap-6 lg:grid-cols-12">
         <div className="panel p-6 lg:col-span-7 md:p-8">
           <div className="flex items-baseline justify-between gap-6">
-            <p className="label">{t.providers.hosted} · {PROVIDERS_HOSTED.length}</p>
-            <p className="label">{t.providers.local} · {PROVIDERS_LOCAL.length}</p>
+            <p className="label">{t.providers.hosted}</p>
+            <p className="label">{t.providers.local}</p>
           </div>
           <Stagger as="ul" className="mt-6 flex flex-wrap gap-2">
             {[...PROVIDERS_HOSTED, ...PROVIDERS_LOCAL].map((p, i) => (
