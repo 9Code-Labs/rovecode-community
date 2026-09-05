@@ -586,6 +586,20 @@ tokens, cache hits, and catalog-priced spend.
   with it is listed but never connected until you trust it: `mcp show` prints every configured file and what it would
   run, `mcp trust` records the project files' content digest in your home (`--yes` to skip the prompt; an edit to
   either file asks again) and `mcp untrust` revokes it. User-scope servers need no gate.
+- **Market** (`src/market`, `docs/market.md`): one shelf over all three — `rovecode market search|info|install|
+  remove|list|update|sources` (each with `--json`) and `/market` in the TUI find MCP servers, skills and plugins
+  and install any of them with one command. A single argument resolves five shapes (bare id, `kind:id`, a git URL,
+  an npm package, a local folder) and prints the candidates rather than guessing when two kinds share a name.
+  Installing is always resolve → plan without touching the disk → show exactly what will be written → write, and
+  the preview says what each kind actually is: a skill is files that are never executed, a plugin is code rovecode
+  will load and run. The skill and plugin shelves are generated from their sources (`scripts/build-*-catalog.mjs`,
+  idempotent under `--check`), so "is this real?" is answered by re-running them.
+- **Context and cost** (`src/core/context-report.ts`, `docs/context.md`): `rovecode context` breaks the window into
+  the rows a reader thinks in and prints the provider's own count of the same prompt beside our estimate, naming
+  the gap past 5% — compaction fires on the estimate, so a meter that reads low compacts too late. Cache reads and
+  writes are counted as the prompt they are. Cost follows the vendors' prompt-size tiers: over xAI's or Google's
+  200k threshold the whole request bills at the upper rate. The history budget is derived from the model's window
+  rather than a flat 200k (`ROVECODE_CONTEXT_BUDGET` overrides).
 - **Interface design** (`src/design`, `docs/design.md`): no default palette, typeface or layout ships — instead a
   protocol (propose three distinct directions, the human picks, `design_direction` records it in
   `.rovecode/design.json`) and `design_audit`, which counts template patterns in source and reports them as
