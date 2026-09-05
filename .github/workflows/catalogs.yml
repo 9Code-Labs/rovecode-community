@@ -61,6 +61,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: bun scripts/build-mcp-docs.mjs --check
+      # The docs cleaner's shape fuzzing, run as a SEARCH rather than as the regression net ci.yml runs on
+      # every push: a fresh seed each week and 200x the rounds. It belongs here for the same reason the
+      # skills --check does — a red result means "a shape we had never generated broke it, go look", not
+      # "this branch is broken". The seed is printed in the failure message, so any hit replays locally
+      # with ROVECODE_FUZZ_SEED=<n>.
+      - name: docs cleaner, deep shape search
+        if: always()
+        env:
+          ROVECODE_FUZZ_ROUNDS: "40000"
+        run: |
+          seed=$RANDOM
+          echo "seed $seed — replay a failure with ROVECODE_FUZZ_SEED=$seed"
+          ROVECODE_FUZZ_SEED=$seed bun test ./test/unit/market-docs.test.ts
       - name: what to do if that failed
         if: failure()
         run: |

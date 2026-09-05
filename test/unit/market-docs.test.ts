@@ -166,18 +166,25 @@ test("bytes counts bytes, not UTF-16 units, so the cap means what it says", () =
 test("the cap is never exceeded, whatever the shape of the input", () => {
   const pieces = ["# Heading", "", "some prose with a [link](./a.md)", "```js", "const x = 1;", "```",
                   "~~~", "tilde fenced", "~~~", "a much longer line ".repeat(6), "üçüncü satır çok güzel", "- bullet"];
-  let seed = 7;
+  // Seeded and fixed by DEFAULT, so this is a regression net that fails for the commit that broke it and
+  // for no other reason — the same rule the catalog --check jobs are split on. The two knobs let the
+  // scheduled job run a different, much longer search, where a red result means "go look" rather than
+  // "your branch is broken"; on failure the seed is printed so the shape can be replayed here.
+  const SEED = Number(process.env["ROVECODE_FUZZ_SEED"] ?? 7);
+  const ROUNDS = Number(process.env["ROVECODE_FUZZ_ROUNDS"] ?? 200);
+  let seed = SEED;
   const next = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
-  for (let i = 0; i < 200; i++) {
+  for (let i = 0; i < ROUNDS; i++) {
     const lines: string[] = [];
     for (let n = Math.floor(next() * 40); n > 0; n--) lines.push(pieces[Math.floor(next() * pieces.length)]!);
     const cap = 60 + Math.floor(next() * 900);
     const d = buildDocs(lines.join("\n"), BASE, { cap });
     if (d === null) continue;
-    expect(bytes(d.body)).toBeLessThanOrEqual(cap);
+    const where = `seed ${SEED}, round ${i}, cap ${cap} (replay: ROVECODE_FUZZ_SEED=${SEED})`;
+    expect(bytes(d.body), where).toBeLessThanOrEqual(cap);
     // "balanced" has to be asked the way the parser defines it: a ~~~ line INSIDE a ``` block is content,
     // not a fence, so counting markers with a regex reports a false imbalance. If nothing is open, the
     // repair is a no-op — that is the invariant, and it is the same code path the generator relies on.
-    expect(closeOpenFence(d.body)).toBe(d.body);
+    expect(closeOpenFence(d.body), where).toBe(d.body);
   }
 });
