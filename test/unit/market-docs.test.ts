@@ -18,10 +18,17 @@
 
 import { test, expect } from "bun:test";
 // @ts-expect-error - a build script, plain JS, no types alongside it
-import { absolutiseLinks, buildDocs, closeOpenFence, stripFrontmatter, stripHtml, truncate } from "../../scripts/lib/docs.mjs";
+import { absolutiseLinks, buildDocs, closeOpenFence, proseOnly, stripFrontmatter, stripHtml, truncate } from "../../scripts/lib/docs.mjs";
 
 const BASE = "https://raw.githubusercontent.com/o/r/main/skills/demo/SKILL.md";
 const bytes = (s: string) => Buffer.byteLength(s, "utf8");
+
+/** Read at module scope, not inside the test, because the round count also has to set the test's TIMEOUT:
+ *  the weekly search runs 40 000 rounds and blew through bun's 5 s default, which reads exactly like a
+ *  real failure in the log and is not one. */
+const SEED = Number(process.env["ROVECODE_FUZZ_SEED"] ?? 7);
+const ROUNDS = Number(process.env["ROVECODE_FUZZ_ROUNDS"] ?? 200);
+const FUZZ_TIMEOUT = Math.max(5_000, Math.ceil(ROUNDS * 0.75));
 
 // ------------------------------------------------------------------ dangerous link targets
 
@@ -165,13 +172,20 @@ test("bytes counts bytes, not UTF-16 units, so the cap means what it says", () =
  *  in nine bytes under by luck), so the invariant gets exercised across shapes and caps instead. */
 test("the cap is never exceeded, whatever the shape of the input", () => {
   const pieces = ["# Heading", "", "some prose with a [link](./a.md)", "```js", "const x = 1;", "```",
-                  "~~~", "tilde fenced", "~~~", "a much longer line ".repeat(6), "üçüncü satır çok güzel", "- bullet"];
+                  "~~~", "tilde fenced", "~~~", "a much longer line ".repeat(6), "üçüncü satır çok güzel", "- bullet",
+                  // The three CommonMark title forms and a title carrying the characters that end an
+                  // attribute. These were NOT in the generator, which is exactly why 40 000 rounds found
+                  // nothing and a security review found the single-quoted form in minutes: a fuzzer only
+                  // explores the alphabet it is given.
+                  `[a](https://e.com "double")`, `[b](https://e.com 'single')`, `[c](https://e.com (paren))`,
+                  `[d](https://e.com 'has " quote')`, `[e](./rel.md "has <tag> and > sign")`,
+                  `[f](<https://e.com/a b> 'spaced target')`, `[g](https://e.com/x_(y) "balanced parens")`,
+                  "[unclosed](https://e.com 'never", "[ref]: ./n.md 'a title'", "![img](./a.png \"alt\")",
+                  `[h](javascript:alert(1) 'x')`, `[i](JavaScript:alert(1))`, `[j](data:text/html,x 'y')`];
   // Seeded and fixed by DEFAULT, so this is a regression net that fails for the commit that broke it and
   // for no other reason — the same rule the catalog --check jobs are split on. The two knobs let the
   // scheduled job run a different, much longer search, where a red result means "go look" rather than
   // "your branch is broken"; on failure the seed is printed so the shape can be replayed here.
-  const SEED = Number(process.env["ROVECODE_FUZZ_SEED"] ?? 7);
-  const ROUNDS = Number(process.env["ROVECODE_FUZZ_ROUNDS"] ?? 200);
   let seed = SEED;
   const next = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
   for (let i = 0; i < ROUNDS; i++) {
@@ -186,5 +200,57 @@ test("the cap is never exceeded, whatever the shape of the input", () => {
     // not a fence, so counting markers with a regex reports a false imbalance. If nothing is open, the
     // repair is a no-op — that is the invariant, and it is the same code path the generator relies on.
     expect(closeOpenFence(d.body), where).toBe(d.body);
+
+    // No shape of input may leave a dangerous scheme in a link position, and no title may carry a quote
+    // out — a title re-emitted verbatim is how `'a" onmouseover="alert(1)'` reached a `title` attribute
+    // even after the pattern started matching it. Fences are exempt: they are text by construction.
+    // proseOnly, not a regex: a regex pairs an opening ``` with a closing ~~~ and hands back fenced
+    // content as prose. That misfired here on the first run — a javascript: link INSIDE a fence, which is
+    // text and perfectly safe, was reported as a leak.
+    const prose = proseOnly(d.body);
+    expect(prose, where).not.toMatch(/\]\(\s*(?:javascript|data|vbscript):/i);
+    for (const link of prose.match(/\]\([^)\n]*\)/g) ?? []) {
+      expect((link.match(/"/g) ?? []).length % 2, `${where}: unbalanced quotes in ${link}`).toBe(0);
+      expect(link, where).not.toMatch(/["'][^"']*["'][^"']*["']/);   // never three quote characters
+    }
   }
+}, FUZZ_TIMEOUT);
+
+/** The second hole of the same class, found by a security review rather than by the fuzz — and the reason
+ *  the fuzz now generates all three CommonMark title forms.
+ *
+ *  `[x](https://e.com 'a" onmouseover="alert(1)')` is legal CommonMark: a single-quoted title, which the
+ *  pattern only recognised in double quotes. It therefore did not match, and the link was copied through
+ *  UNTOUCHED — straight into a `title` attribute in the rendered page. Matching it is only half the fix:
+ *  a title copied out verbatim carries the same payload into a form we DO match, so titles are stripped of
+ *  the characters that can close an attribute or open a tag and re-emitted in one canonical shape. */
+test("every CommonMark title form is recognised, and no title carries a quote back out", () => {
+  expect(absolutiseLinks(`[x](https://e.com 'a" onmouseover="alert(1)')`, BASE))
+    .toBe(`[x](https://e.com/ "a onmouseover=alert(1)")`);
+  expect(absolutiseLinks(`[x](https://e.com (paren title))`, BASE)).toBe(`[x](https://e.com/ "paren title")`);
+  expect(absolutiseLinks(`[x](https://e.com "plain")`, BASE)).toBe(`[x](https://e.com/ "plain")`);
+  expect(absolutiseLinks(`[x](https://e.com '<img src=x onerror=alert(1)>')`, BASE))
+    .toBe(`[x](https://e.com/ "img src=x onerror=alert(1)")`);
+  // a title on a reference definition takes the same path
+  expect(absolutiseLinks(`[ref]: https://e.com 'a" onmouseover="x'`, BASE))
+    .toBe(`[ref]: https://e.com/ "a onmouseover=x"`);
+});
+
+test("a dangerous scheme is still refused when it hides behind a title", () => {
+  expect(absolutiseLinks(`[x](javascript:alert(1) 'title')`, BASE)).toBe("x");
+  expect(absolutiseLinks(`[x](data:text/html,<script>1</script> "t")`, BASE)).toBe("x");
+});
+
+/** The design change behind both fixes: a shape we cannot read must STOP being a link, because the
+ *  renderer's parser is more generous than any pattern we write. Failing by copying through is what let
+ *  two holes past. */
+test("a link shape that cannot be read degrades to plain text rather than passing through", () => {
+  const out = absolutiseLinks("[unclosed](https://e.com 'never closed", BASE);
+  expect(out).not.toContain("](");                    // no link markup survives
+  expect(out).toContain("unclosed");                  // the words do
+});
+
+test("a destination is re-emitted encoded, so dropping the angle brackets cannot produce a broken link", () => {
+  // <...> legally carries a space; without the brackets that space has to become %20 or the link breaks
+  expect(absolutiseLinks(`[s](<https://e.com/a b> "t")`, BASE)).toBe(`[s](https://e.com/a%20b "t")`);
 });

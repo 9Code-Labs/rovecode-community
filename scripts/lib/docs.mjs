@@ -31,9 +31,14 @@ const CAP_BYTES = 24 * 1024;
 const enc = new TextEncoder();
 export const byteLength = (s) => enc.encode(s).length;
 
-/** the default note appended when a body is cut. Kept a parameter, not a constant, because it is the one
- *  piece of prose in here and the display side may want to own it — see the note in the report. */
-export const TRUNCATION_NOTE = (url) => `… (kısaltıldı, tamamı: ${url})`;
+/** The note appended when a body is cut.
+ *
+ *  English, and deliberately so: it is appended INSIDE a third party's document, which is English, and a
+ *  sentence embedded in a body cannot be translated the way a rendered line can. The site builds its own
+ *  localised sentence from `truncated`, `bytes` and `source` in all fifteen languages and never shows this
+ *  one — it exists for the CLI and for anyone reading the raw body, where a document that simply stops
+ *  with no marker is the worse outcome. Kept a parameter so a caller can own the wording. */
+export const TRUNCATION_NOTE = (url) => `… (truncated — the rest is at ${url})`;
 
 /** Drop a leading `---` frontmatter block. The body is what a reader wants; the frontmatter's fields are
  *  already columns on the row (name, description), so carrying them again would just be noise. */
@@ -71,6 +76,13 @@ function segments(text) {
   return out;
 }
 
+/** The non-code text of a document, by the same fence rules the cleaner itself uses.
+ *
+ *  Exported for the tests that ask "is anything dangerous left in the text a reader sees", because doing
+ *  that with a regex mis-pairs an opening ``` with a closing ~~~ and hands back fenced content as prose —
+ *  which is a false alarm at best and, in the other direction, a hidden finding. */
+export const proseOnly = (body) => segments(body).filter((s) => !s.code).map((s) => s.text).join("\n");
+
 /** the same idea one level down: `code` spans inside a line of prose are verbatim too */
 function mapOutsideInlineCode(text, fn) {
   return text
@@ -102,34 +114,120 @@ function absolutise(target, base) {
   const t = target.trim().replace(/^<|>$/g, "");
   if (t === "") return null;
   if (t.startsWith("#")) return t;                             // an in-document anchor stays as it is
-  if (HAS_SCHEME.test(t)) return SAFE_SCHEME.test(t) ? t : null;
-  if (t.startsWith("//")) return `https:${t}`;
-  try { return new URL(t, base).href; } catch { return null; }
+  if (HAS_SCHEME.test(t) && !SAFE_SCHEME.test(t)) return null;
+  // Everything kept goes through the URL parser, absolute included, so what we emit is always encoded:
+  // `<https://e.com/a b>` arrives legal (the angle brackets carry the space) and would leave illegal if
+  // it were copied through as-is, because we drop the brackets.
+  try { return new URL(t.startsWith("//") ? `https:${t}` : t, base).href; } catch { return null; }
 }
 
-/** A link destination as CommonMark allows it: either `<...>`, or a run of non-space characters that may
- *  contain BALANCED parentheses.
- *
- *  The parentheses are the whole point and were a real hole while this read `[^()\s]+`: the target in
- *  `[click](javascript:alert(1))` contains them, so the pattern simply failed to match and the link was
- *  copied through unrewritten — the one input this pass exists to catch was the one it let past. */
-const TARGET = String.raw`<[^<>\n]*>|(?:[^()\s]|\([^()\s]*\))+`;
-const INLINE_LINK = new RegExp(String.raw`(!?)\[([^\]]*)\]\(\s*(${TARGET})(\s+"[^"]*")?\s*\)`, "g");
+/** A title as re-emitted by us, never as it arrived. CommonMark allows `"…"`, `'…'` and `(…)`, and the
+ *  contents are arbitrary text — including a quote character, which is how
+ *  `[x](https://e.com 'a" onmouseover="alert(1)')` becomes an unescaped `title` attribute downstream.
+ *  Matching that form is necessary but NOT sufficient: copying the title through verbatim would carry the
+ *  payload into a pattern we do have. So the title is stripped of the four characters that can end an
+ *  attribute or open a tag and re-emitted in one canonical form. */
+const safeTitle = (t) => {
+  const clean = t.replace(/["'<>]/g, "").replace(/\s+/g, " ").trim();
+  return clean === "" ? "" : ` "${clean}"`;
+};
 
-/** `[text](target)`, `![alt](target)` and the reference form `[label]: target`, made absolute. A target
- *  that cannot be kept leaves the text behind: dropping the words too would lose meaning, and leaving a
- *  `javascript:` href would be the one thing this pass exists to prevent. */
+/** Read a link destination and optional title out of `text` starting just after `(`. Returns the pieces
+ *  and where the closing `)` was, or null when this is not a link we can read.
+ *
+ *  Hand-written rather than a regular expression, and that is the point of the whole change. A regex has
+ *  exactly one failure mode here — it does not match — and the code around it then copied the link
+ *  through UNTOUCHED. That is the wrong direction to fail in, and it is now twice that a form nobody had
+ *  thought of (a target containing parentheses; a single-quoted title) slipped past for that reason. A
+ *  parser can say "I could not read this", which lets the caller degrade to plain text instead. */
+function readDestination(text, start) {
+  let i = start;
+  const ws = () => { while (i < text.length && /\s/.test(text[i])) i++; };
+  ws();
+  let dest = "";
+  if (text[i] === "<") {
+    const end = text.indexOf(">", i + 1);
+    if (end === -1 || text.slice(i, end).includes("\n")) return null;
+    dest = text.slice(i + 1, end);
+    i = end + 1;
+  } else {
+    let depth = 0;
+    const from = i;
+    while (i < text.length) {
+      const c = text[i];
+      if (c === "\\") { i += 2; continue; }
+      if (/\s/.test(c)) break;
+      if (c === "(") depth++;
+      else if (c === ")") { if (depth === 0) break; depth--; }
+      i++;
+    }
+    dest = text.slice(from, i);
+  }
+  ws();
+  let title = "";
+  const open = text[i];
+  if (open === '"' || open === "'" || open === "(") {
+    const close = open === "(" ? ")" : open;
+    const end = text.indexOf(close, i + 1);
+    if (end === -1) return null;
+    title = text.slice(i + 1, end);
+    i = end + 1;
+    ws();
+  }
+  if (text[i] !== ")") return null;
+  return { dest, title, end: i };
+}
+
+/** `[text](target)`, `![alt](target)` and the reference form `[label]: target`, made absolute.
+ *
+ *  The rule everywhere below: **when in doubt, degrade to plain text.** A target we will not keep, or a
+ *  link shape we cannot read, loses its brackets and keeps its words. Leaving the markup in place and
+ *  hoping is what produced two holes already — the renderer's parser is more generous than any pattern we
+ *  write, so anything we cannot read confidently must stop being a link here. */
+function rewriteInlineLinks(text, base) {
+  let out = "";
+  let i = 0;
+  while (i < text.length) {
+    const open = text.indexOf("[", i);
+    if (open === -1) { out += text.slice(i); break; }
+    const isImage = open > 0 && text[open - 1] === "!";
+    out += text.slice(i, isImage ? open - 1 : open);
+
+    // the label: to its matching ], allowing nesting and backslash escapes
+    let j = open + 1, depth = 1;
+    while (j < text.length && depth > 0) {
+      if (text[j] === "\\") { j += 2; continue; }
+      if (text[j] === "[") depth++;
+      else if (text[j] === "]") depth--;
+      j++;
+    }
+    if (depth !== 0) { out += text.slice(isImage ? open - 1 : open); break; }
+    const label = text.slice(open + 1, j - 1);
+
+    if (text[j] !== "(") {                       // a reference link or plain brackets: not ours to rewrite
+      out += text.slice(isImage ? open - 1 : open, j);
+      i = j;
+      continue;
+    }
+    const read = readDestination(text, j + 1);
+    // unreadable shape: the label stops being a link and the rest is left as ordinary text, starting at
+    // the `(` so the words do not run together
+    if (read === null) { out += label; i = j; continue; }
+    const abs = absolutise(read.dest, base);
+    out += abs === null ? label : `${isImage ? "!" : ""}[${label}](${abs}${safeTitle(read.title)})`;
+    i = read.end + 1;
+  }
+  return out;
+}
+
 export function absolutiseLinks(prose, base) {
   return mapOutsideInlineCode(prose, (part) =>
-    part
-      .replace(INLINE_LINK, (whole, bang, text, target, title) => {
+    rewriteInlineLinks(part, base)
+      // the reference form carries a title too, in the same three flavours
+      .replace(/^(\s{0,3}\[[^\]]+\]:\s*)(\S+)([ \t]+(?:"[^"]*"|'[^']*'|\([^()]*\)))?[ \t]*$/gm, (whole, head, target, title) => {
         const abs = absolutise(target, base);
-        if (abs === null) return text;                          // keep the words, lose the target
-        return `${bang}[${text}](${abs}${title ?? ""})`;
-      })
-      .replace(/^(\s{0,3}\[[^\]]+\]:\s*)(\S+)/gm, (whole, head, target) => {
-        const abs = absolutise(target, base);
-        return abs === null ? "" : `${head}${abs}`;
+        if (abs === null) return "";
+        return `${head}${abs}${title ? safeTitle(title.trim().slice(1, -1)) : ""}`;
       }));
 }
 

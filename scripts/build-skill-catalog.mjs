@@ -17,7 +17,11 @@ import { fileURLToPath } from "node:url";
 import { buildDocs } from "./lib/docs.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const OUT = join(ROOT, "src", "market", "catalogs", "skills.json");
+/** Overridable so the tests can drive a real run against a throwaway copy. They used to write the shipped
+ *  catalog and put it back afterwards, which is fine alone and wrong in a suite: bun runs test files
+ *  concurrently, and another file reading `skills.json` during the `--allow-shrink` case saw a catalog with
+ *  `xlsx` deliberately removed. A build script should not be the reason an unrelated test goes red. */
+const OUT = process.env.ROVECODE_CATALOG_OUT || join(ROOT, "src", "market", "catalogs", "skills.json");
 
 /** Every source is a public git repository laid out as <subfolder>/<name>/SKILL.md. Add one only after
  *  opening it: the publisher must be nameable and the layout must be the standard one. */
@@ -208,27 +212,35 @@ const previous = (() => {
 /** Four refusals, in the order they can happen. Each one leaves the existing catalog exactly as it is:
  *  a market that is a day stale is a small problem, a market that silently lost most of its shelf is not. */
 function refuseToWrite() {
-  if (items.length === 0) return "produced no items at all";
+  // NOT overridable. A run that produced nothing is a broken run, never a shelf that legitimately emptied,
+  // and `--allow-shrink` means "yes, that id really went" — not "write whatever you have over a good
+  // catalog". While the flag covered this too, one bad run plus one impatient operator emptied the market.
+  if (items.length === 0) return { reason: "produced no items at all", overridable: false };
   if (previous === null) return null;                       // first run: nothing to compare against
   const before = Array.isArray(previous.items) ? previous.items.length : 0;
   if (items.length < before) {
     const gone = previous.items.filter((p) => !items.some((i) => i.id === p.id)).map((p) => p.id);
-    return `has ${items.length} items where the shipped one has ${before} (missing: ${gone.join(", ")})`;
+    return { reason: `has ${items.length} items where the shipped one has ${before} (missing: ${gone.join(", ")})`, overridable: true };
   }
   // Losing documentation is the same failure wearing a different hat: every row still there, every row
   // now blank. The count check above would pass it without a word, and one rate-limited run would empty
   // every doc in the market. A row that HAD docs must still have them, or this is not a good run.
   const lost = previous.items.filter((p) => p.docs && !items.find((i) => i.id === p.id)?.docs).map((p) => p.id);
-  if (lost.length > 0) return `drops the documentation of ${lost.length} row(s) that have it today (lost docs: ${lost.join(", ")})`;
+  if (lost.length > 0) return { reason: `drops the documentation of ${lost.length} row(s) that have it today (lost docs: ${lost.join(", ")})`, overridable: true };
   return null;
 }
 
 const refusal = refuseToWrite();
 if (refusal !== null) {
-  console.error(`refusing to write: the new catalog ${refusal}.`);
-  console.error("The shipped catalog is untouched. If the loss is real (a skill was withdrawn upstream, or");
-  console.error("its SKILL.md really is empty now), re-run with --allow-shrink; otherwise this was a bad");
-  console.error("fetch and running again is the fix.");
+  console.error(`refusing to write: the new catalog ${refusal.reason}.`);
+  console.error("The shipped catalog is untouched.");
+  if (!refusal.overridable) {
+    console.error("This one has no override: an empty result is a broken run, not a shelf that emptied.");
+    console.error("Check the network and the source, then run it again.");
+    process.exit(1);
+  }
+  console.error("If the loss is real (a skill was withdrawn upstream, or its SKILL.md really is empty now),");
+  console.error("re-run with --allow-shrink; otherwise this was a bad fetch and running again is the fix.");
   if (!process.argv.includes("--allow-shrink")) process.exit(1);
   console.error("--allow-shrink given: writing anyway.");
 }

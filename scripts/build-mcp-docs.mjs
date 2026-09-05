@@ -23,7 +23,9 @@ import { fileURLToPath } from "node:url";
 import { buildDocs } from "./lib/docs.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-const OUT = join(ROOT, "src", "market", "catalogs", "mcp-docs.json");
+/** overridable for the same reason as in build-skill-catalog.mjs: a test drives a real run against a
+ *  throwaway copy rather than writing the shipped file and putting it back */
+const OUT = process.env.ROVECODE_MCP_DOCS_OUT || join(ROOT, "src", "market", "catalogs", "mcp-docs.json");
 const CURATED_FILE = join(ROOT, "src", "mcp", "market-catalog.ts");
 
 /** The same distinction the other two generators are built on, and for the same reason:
@@ -153,18 +155,25 @@ const previous = (() => {
  *  run rather than a real change. Without it one rate-limited build empties every MCP doc at once and the
  *  file still looks structurally fine. */
 function refuseToWrite() {
-  if (Object.keys(ordered).length === 0) return "produced no documentation at all";
+  // not overridable, for the same reason as in build-skill-catalog.mjs: nothing at all is a broken run
+  if (Object.keys(ordered).length === 0) return { reason: "produced no documentation at all", overridable: false };
   if (previous === null || typeof previous.docs !== "object" || previous.docs === null) return null;
   const gone = Object.keys(previous.docs).filter((k) => !(k in ordered));
-  if (gone.length > 0) return `drops the documentation of ${gone.length} entr(y/ies) that have it today (lost docs: ${gone.join(", ")})`;
+  if (gone.length > 0) return { reason: `drops the documentation of ${gone.length} entr(y/ies) that have it today (lost docs: ${gone.join(", ")})`, overridable: true };
   return null;
 }
 
 const refusal = refuseToWrite();
 if (refusal !== null) {
-  console.error(`refusing to write: the new sidecar ${refusal}.`);
-  console.error("The shipped sidecar is untouched. If the loss is real (a README was removed upstream),");
-  console.error("re-run with --allow-shrink; otherwise this was a bad fetch and running again is the fix.");
+  console.error(`refusing to write: the new sidecar ${refusal.reason}.`);
+  console.error("The shipped sidecar is untouched.");
+  if (!refusal.overridable) {
+    console.error("This one has no override: an empty result is a broken run, not a shelf that emptied.");
+    console.error("Check the network and the source, then run it again.");
+    process.exit(1);
+  }
+  console.error("If the loss is real (a README was removed upstream), re-run with --allow-shrink;");
+  console.error("otherwise this was a bad fetch and running again is the fix.");
   if (!process.argv.includes("--allow-shrink")) process.exit(1);
   console.error("--allow-shrink given: writing anyway.");
 }

@@ -16,6 +16,8 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { itemFromCatalog } from "../../src/market/registry.ts";
 import { LIMITS } from "../../src/market/types.ts";
+// @ts-expect-error - a build script, plain JS, no types alongside it
+import { proseOnly } from "../../scripts/lib/docs.mjs";
 
 const CATALOGS = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "src", "market", "catalogs");
 const load = (name: string): { version: number; sources: string[]; items: Record<string, unknown>[] } =>
@@ -144,8 +146,10 @@ test("the docs that ship are cleaned: no script tags in prose, no relative links
   for (const kind of ["skills", "plugins"] as const) {
     for (const raw of load(kind).items) {
       const body = (raw["docs"] as { body: string }).body;
-      // fenced code is carried verbatim on purpose, so only prose is asked this question
-      const prose = body.replace(/^ {0,3}(?:```|~~~)[\s\S]*?^ {0,3}(?:```|~~~).*$/gm, "");
+      // fenced code is carried verbatim on purpose, so only prose is asked this question — via the
+      // cleaner's own fence parser, because a regex pairs an opening ``` with a closing ~~~ and would
+      // hand back fenced text as prose (a hidden finding in this direction, a false alarm in the other)
+      const prose = proseOnly(body) as string;
       expect(prose, `${String(raw["id"])}`).not.toMatch(/<script\b/i);
       expect(prose, `${String(raw["id"])}`).not.toMatch(/<iframe\b/i);
       expect(prose, `${String(raw["id"])}`).not.toMatch(/\]\(\s*(?:\.{1,2}\/|javascript:|data:)/i);
