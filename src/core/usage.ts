@@ -25,7 +25,12 @@
 import type { countTokens as CountTokensFn } from "gpt-tokenizer/encoding/o200k_base";
 import { breakdownTokens } from "tokenlens/helpers";
 
-// lazy loader — the 2.3 MB BPE rank table is deferred until the first countTokens() call
+// lazy loader — the o200k rank table is deferred until the first countTokens() call that needs it.
+// Measured (scripts/probe-import.ts, 2026-09-06): loading it takes 385–520 ms and adds ~136 MB of
+// resident memory, and 3.8 MB of the 8 MB CLI bundle is this table. So nothing on a session's boot
+// path may call countTokens(): the sextant usage panel goes through countTokensIfLoaded() and the
+// chars-based estimator instead (tui/cost.ts), and the table loads when a person asks for the exact
+// figure — /cost, /context, `rovecode context`.
 type GptTokenizerMod = { countTokens: typeof CountTokensFn };
 let _gptMod: GptTokenizerMod | null = null;
 function lazyTokenizer(): GptTokenizerMod {
@@ -35,6 +40,8 @@ function lazyTokenizer(): GptTokenizerMod {
   }
   return _gptMod;
 }
+/** the o200k table is resident (some caller already paid for it) */
+export function tokenizerLoaded(): boolean { return _gptMod !== null; }
 
 // ---------- pricing ----------
 
@@ -59,7 +66,15 @@ export interface NormalizedUsage {
  *  An ESTIMATE for non-OpenAI models (Anthropic's tokenizer is not public); good enough for
  *  context-budget arithmetic, not for billing reconciliation — use provider usage for that. */
 export function countTokens(text: string): number {
+  if (text.length === 0) return 0; // a fresh session's empty transcript must not load a 136 MB table to learn it is empty
   return lazyTokenizer().countTokens(text);
+}
+
+/** The exact o200k count when the table is already resident, else null — never loads it. For callers
+ *  that run on a session's boot path or on every repaint and have a cheaper estimator to fall back on. */
+export function countTokensIfLoaded(text: string): number | null {
+  if (text.length === 0) return 0;
+  return _gptMod === null ? null : _gptMod.countTokens(text);
 }
 
 // ---------- usage normalization ----------

@@ -26,7 +26,7 @@
   },
   "scripts": {
     "build": "bun run scripts/build.ts",
-    "build:cli": "bun build --target=bun --sourcemap=external src/cli/main.ts --outdir dist/cli && bun run smoke:dist",
+    "build:cli": "bun -e \"require('node:fs').rmSync('dist/cli', { recursive: true, force: true })\" && bun build --target=bun --splitting --sourcemap=external src/cli/main.ts --outdir dist/cli && bun run smoke:cli && bun run smoke:dist",
     "smoke:cli": "bun dist/cli/main.js --version",
     "smoke:dist": "bun dist/cli/main.js smoke-tui --sextant",
     "test": "bun test",
