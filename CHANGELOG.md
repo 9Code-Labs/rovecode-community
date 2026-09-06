@@ -10,23 +10,38 @@ machine it names.
 
 - The TUI opens on a card that names the version, the connected model, what loaded (skills · plugins · MCP servers, zeroes omitted), the folder and permission tier — and `update available: x → y · <url>` when GitHub Releases on 9Code-Labs/rovecode has a newer one. The check needs `GITHUB_TOKEN`, `GH_TOKEN` or `gh auth login` (the repository is private), asks at most every six hours, never blocks, and prints nothing unless a release is genuinely newer (8c6f6f9)
 - An opening intro, centred on a cleared screen: the ROVECODE mark fills in left to right, a hairline frame draws inward from the four corners, the cloud mascot leans down out of that top line, and the mark breathes once. ~1.1 s; the session boots underneath it, so the only wall time it adds is whatever is left of the show once the session is ready. `--no-intro` or `ROVECODE_INTRO=0` skips it; nothing is drawn into a pipe or under `--plain`, and it never reads stdin, so keys typed during it reach the session (09e4a1c, 420353d, 9d6fe71)
+- The intro no longer draws outside a terminal it does not fit in: at 34×24 the frame wrapped six columns past the edge and the mark broke up, at 40×10 it painted thirteen lines into ten and scrolled its own top away. A terminal too small for the whole block gets no intro and the card's prose form instead (25ca9af)
 - Every session loaded a 136 MB token table before its first frame — to count an empty string and return 0. Fresh session to first frame: RSS 238–246 MB → 111–112 MB, boot 450–550 ms → 154–183 ms; a resumed session with a 435k-character transcript no longer pays it either. `/cost`, `/context` and `export` are unchanged and still exact (574dae0)
 - The pre-bundled CLI was undoing its own lazy imports: `bun build` inlines dynamic imports, so `dist/cli/main.js --version` paid for pi-tui, the gauntlet, acp and the tokenizer. Built with `--splitting`: 388–491 ms → 84–103 ms wall, 98 MB → 74 MB. `build:cli` also clears `dist/cli` first (574dae0)
 - An idle session repainted ~9.5 times a second to show nothing changing: 89–98 ms of CPU per wall-clock second → 14–20 ms at ~2.5 frames/s. A busy session is unchanged by design, and nothing looks different — things now paint only when they change (df155ca)
-- `rovecode --version` prints the version to stdout alone (still one word for a script) and the update check’s answer to stderr: the newer release, `up to date (0.2.0) · cached`, or the reason it could not look (2aef715)
+- `rovecode --version` prints the version to stdout alone (still one word for a script) and the update check’s answer to stderr: the newer release, `up to date (0.2.0) · cached`, or `not asked yet`. It reads the cache and never opens a socket — awaiting the network there made the one command scripts call to identify a build take 3.2 s on a fresh machine, against 117–159 ms now (2aef715, b2e1101)
 - Two configured MCP servers cost 758 ms before the first frame because the MCP SDK was evaluated inside createRuntime; it now loads on the connect path, after the first frame, and servers start one per event-loop turn (createRuntime 758 ms → 22 ms with the same home) (f36e73b)
+
+### Speed
+
+- The first edit of a session took 26–35 s in this repository and built a 232 MB checkpoint: the shadow-git snapshot taken before the first change hashed 165 MB of video and 82 MB of screenshots, because only cline's structural excludes had been ported. With its media, archive, binary and database/log patterns added (SVG stays — it is text and it is edited), the first snapshot is 2.8–3.2 s and 3.6 MB over 566 files, and every later change costs ~200 ms (14e9118)
 
 ### Correctness
 
 - A one-shot run with no provider configured reported success: `rovecode run "hi" --output json` printed `{"status":"done"}` with the “no model is connected” hint as its summary, and exited 0. It is a startup failure — exit 2, one document in a machine mode — and the canned provider is now asked for by name (`ROVECODE_MOCK=1`) rather than fallen into (d80c2f6)
 - A configured MCP server that never connected was counted on the startup card and never mentioned; boot-time connect failures now say so by name, the same way the loader’s skipped entries do (f213b58)
 - `rovecode mcp add` and `rovecode market install` share one plan and had drifted into three different behaviours — different wording for the same question, a secret asked in project scope and then discarded, and `--yes` off a terminal refused by one face and written by the other. Unified on: write it, name it out loud, let the loader refuse to launch until the variable is set (18f607a)
+- Pointing `ROVECODE_HOME` at a directory that did not exist yet filled it with a copy of `~/.cumulus`, stored keys included: the rename migration honoured an explicit home too, so a "scratch" home was not scratch. It billed two real API calls during this release's own verification before anyone noticed. An explicit home is now that directory and nothing else; the default home still inherits, and says so on stderr (03817b8)
+- A first word shaped like a path (`rovecode ./src/cli/main.ts`) is no longer sent to the provider as a prompt — it cost a real API call when a probe passed a filename where a prompt was expected. On a terminal it asks first; off one it exits 2 before the runtime boots. `rovecode run <word>` stays the explicit way to send it, and sentences are never guarded (60456d6, 14e9118)
+- `rovecode run "hi" --output json --max-turns 1` sent the model the prompt "hi 1": only `--output`'s value was kept out of the prompt words, every other value flag after the command leaked its value in. All of them are dropped now, by position, so a prompt may still contain the word "json" (60456d6)
+- `rovecode trace` with no id exited 0 and printed nothing — a silent success a reader takes for an empty session; it now asks for the id and exits 2. `rovecode export` with no argument exited 1, the code a failed export uses; a usage error there is 2 now, like every other command, and a real failure stays 1 (9936376)
+- A TypeScript project on a machine without `typescript-language-server` on PATH is told once at boot that edits and writes are NOT being type-checked and the model gets no diagnostics after them. The gate had been silently off, and everyone had been crediting a loop that was not running (60456d6)
+- `--help` still promised that "a scripted mock answers when no provider is configured", which d80c2f6 made false; the line now says exit 2 and names `ROVECODE_MOCK=1` as the way to ask for the mock (03817b8)
 
 ### Sessions & scripting
 
 - A session that never received a message no longer leaves `.rovecode/sessions/<id>/` behind — 35 hollow directories in this repository alone; the directory appears with the first entry, and nothing is ever deleted, so every session that has content resumes as before (1169be0)
 - Every `--json` surface is one parseable document on stdout on every exit: `market update --all --json` (was a sentence, or one document per item), every market usage error (`{ok:false, error, usage}`, exit 2) and the early exits of `context --json` (`{error}`) (1169be0)
 - `market list --kind mcp|skill|plugin` filters; a flag a market subcommand does not read is refused with exit 2 instead of ignored (1169be0)
+- `rovecode --continue` (or `--resume` with no id) reopens the newest session in this directory that holds something: a leftover directory with only a meta.json cannot win, and `--resume <id>` still opens exactly what was named. With nothing to continue from, a fresh session (60456d6)
+- Piped stdin becomes the prompt's context: `git diff | rovecode run "review this"` appends the diff under the words as a fenced block. It is never read from a terminal; an open pipe that sends nothing for 3 s is skipped with a note; input past 1 MB is trimmed with a note; `--no-stdin` opts out (60456d6)
+- `--max-cost 0.50` (`ROVECODE_MAX_COST` on every surface) ends a run at the next turn boundary once the money is spent — status "budget", the dollars in the message — priced the way `/cost` prices, for the model that served each turn. A turn the catalog cannot price adds nothing and is counted in the message, so the figure is never mistaken for the whole bill (60456d6)
+- `provider list --json` and `auth list --json` accepted the flag and printed prose, so a script asking for a document got a paragraph and exit 0; both are one document now, the credentials one carrying only the redacted form (03817b8)
 
 ### MCP market & trust
 
@@ -36,8 +51,15 @@ machine it names.
 - MCP servers can be installed once instead of resolved through `npx` at every start: connect 1767/2052 ms → 347/473 ms for memory/filesystem, no network needed to open a session, and the package, version and npm integrity hash recorded in `installed.json`. It always asks, declining leaves the `npx` line exactly as it is, and existing entries are never rewritten (158e2e9)
 - A server that was downloading looked like a server that was broken: a first-ever `uvx` or `npx` launch can exceed the 10 s connect budget, so the very first start of a newly installed server failed with “Request timed out”. Package runners now get 90 s for a first connect, and a timeout says what happened and both ways out (736f6fd)
 
+### Sextant TUI
+
+- `@path` in the prompt attaches the file: the model receives exactly what the `read` tool returns, edit anchors included, with no tool round-trip. The footer had promised this while nothing read the mentions. Every refusal is named — no match, a directory, a binary, over 2 MB, outside the workspace — and the caps are said out loud: 400 lines a file, 8 files, ~60k characters a message. The transcript shows `▤ path · N lines` chips instead of the file (8a5e9d7)
+- The terminal bell rings when a run ends, when an approval card opens and when a question card opens — the three moments someone who tabbed away needs. `"bell": false` in settings.json silences it, user or project scope (8a5e9d7)
+- `/market` can install an MCP server's package once, as the two CLI faces already could: it asks before the plan with the trade under each option, the approval card stays the gate, and Esc at either step installs nothing (8a5e9d7)
+
 ### Tests
 
+- The migration test asserted the very behaviour 03817b8 removed — "the override is a home like any other" — and so kept the defect honest until someone measured what it cost. Flipped, with the two real charges recorded in it; tests that need the migration inject `legacyDir` (3f8c0ed, 03817b8)
 - `bun test` runs against an empty `ROVECODE_HOME` and a scrubbed environment (`bunfig.toml` preloads `test/helpers/isolate-home.ts`): every `*_API_KEY`, `GITHUB_TOKEN`/`GH_TOKEN` and `ROVECODE_*` variable is cleared, so what is installed or exported on the machine running the suite cannot decide a result. Installing one skill used to fail a plugin test, two MCP servers failed twenty-five, and an exported `ANTHROPIC_API_KEY` let a headless run on a clean checkout bill a real call (8c6f6f9, f213b58)
 
 ## Unreleased — 2026-09-04
