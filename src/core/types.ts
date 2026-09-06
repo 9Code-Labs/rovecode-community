@@ -199,6 +199,8 @@ export type RunEvent =
   | { type: "compaction"; strategy: string; trigger?: CompactionTrigger; tokensBefore: number; tokensAfter: number }
   | { type: "turn_end"; turn: number; stopReason: StopReason }
   | { type: "steer"; text: string }
+  /** the verify gate is running the project's check / has finished it (core/verify-gate.ts); `detail` is one line */
+  | { type: "verify"; command: string; state: "running" | "passed" | "failed" | "timeout"; ms?: number; detail?: string }
   /** `outstanding` (status "done" only): what the run left behind when the model stopped talking — absent
    *  when nothing is notable AND at least one file was written, so a clean run's event is exactly what it
    *  always was. "done" alone means "the model produced a turn with no tool call"; this field is how a
@@ -219,6 +221,27 @@ export interface RunOutstanding {
   todosTotal?: number;
   /** the finish check (core/loop.ts) asked once for the work to be finished; this run_end is the answer it got */
   nudged: boolean;
+  /** the verify gate (core/verify-gate.ts), present when the run wrote files and a gate was wired: did the
+   *  project's own check pass after the changes, fail (with the failing part), time out, or was there no check to
+   *  run. Absent when nothing was written — and when files changed only through `bash`, which `writes` cannot see. */
+  verify?: VerifyState;
+}
+
+/** `refused`: what the resolver (core/verify.ts) saw and deliberately did not run, each with its reason — the
+ *  argument for trusting the gate. `reason` (unconfigured): why there is nothing to run, in the resolver's words. */
+export type VerifyState =
+  | { state: "unconfigured"; reason?: string; refused?: string[] }
+  | { state: "passed"; command: string; ms: number; refused?: string[] }
+  | { state: "failed"; command: string; code: number; failure: string; refused?: string[] }
+  | { state: "timeout"; command: string; seconds: number; refused?: string[] };
+
+/** RunConfig.verify — wired by the runtime, consumed by the loop's "done" exit. `resolution` is what
+ *  core/verify.ts decided (null / no commands = nothing to run → run_end says "not verified"); `run` executes it
+ *  bounded by `timeoutMs` and the run's abort (core/verify-gate.ts runVerify). */
+export interface VerifyGate {
+  resolution: { commands: string[]; refused?: string[]; source?: string; reason?: string } | null;
+  timeoutMs: number;
+  run: (signal: AbortSignal) => Promise<{ command: string; ok: boolean; code: number; timedOut: boolean; ms: number; failure: string; ran: number }>;
 }
 
 // ---------- Agent ----------
@@ -274,6 +297,11 @@ export interface RunConfig {
   /** the model's own todo list for this session, read at the exit: open / total, or null when it kept none.
    *  Represented on run_end; it is NOT a nudge trigger (no session on this machine has ever written one). */
   todoState?: () => { open: number; total: number } | null;
+  /** The verify gate (core/verify-gate.ts): after a run that wrote files, run the project's own check before
+   *  "done"; a failure goes back to the model ONCE (sharing the finish check's one-nudge budget), then run_end
+   *  says how it ended. Absent = off (ROVECODE_VERIFY=0, plan mode, or a surface that wired none): nothing runs,
+   *  nothing is added, a run's event is byte-identical to one without the gate. */
+  verify?: VerifyGate;
   contextBudgetTokens: number;
   compactionThreshold: number;   // fraction of budget triggering compaction
   /** port #25: history compaction strategy (core/compaction.ts; env ROVECODE_COMPACTION); default head-summarize */

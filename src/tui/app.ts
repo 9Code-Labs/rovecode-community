@@ -3,7 +3,7 @@
  *  beside it (ADR-002 cap): info-cmd.ts (/help /status /cost /skills /memory /export /todos
  *  /tasks), session-cmd.ts (/new /rewind /sessions /resume), checkpoints-cmd.ts, modes-cmd.ts. */
 
-import { agentLoop, outstandingClause } from "../core/loop.ts";
+import { agentLoop, outstandingClause, outstandingTone } from "../core/loop.ts";
 import { resetTurnFailureCount } from "../memory/tools.ts";
 import { createRuntime } from "../cli/runtime.ts";
 import { SandboxConfigError } from "../core/sandbox-config.ts";
@@ -486,11 +486,14 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
           renderer.addSystemNote(compactionNote(ev)); // one wording with the replayed marker (port #25 LOW-4)
         } else if (ev.type === "steer") {
           renderer.addSystemNote("↪ steering applied");
+        } else if (ev.type === "verify") {
+          // the verify gate (core/verify-gate.ts): say that the check is running — a silent two minutes reads as a hang
+          renderer.addSystemNote(ev.state === "running" ? `⧗ verify: ${ev.command.slice(0, 120)}` : `verify ${ev.state}: ${ev.detail ?? ""}`, ev.state === "running" || ev.state === "passed" ? "info" : "warn");
         } else if (ev.type === "run_end") {
           lastView?.done();
           if (ev.status === "error") renderer.addSystemNote(ev.summary, "error");
           else if (ev.status !== "done") renderer.addSystemNote(`run ${ev.status}: ${ev.summary}`, "warn");
-          else if (ev.outstanding) { const c = outstandingClause(ev.outstanding); if (c !== null) renderer.addSystemNote(`done · ${c}`, "warn"); } // "done" ≠ finished: say what was left (core/loop.ts)
+          else if (ev.outstanding) { const c = outstandingClause(ev.outstanding); if (c !== null) renderer.addSystemNote(`done · ${c}`, outstandingTone(ev.outstanding)); } // "done" ≠ finished: say what was left (core/loop.ts)
           // if the model produced no streaming deltas, surface the final text
           if (views.size === 0 && ev.status === "done" && ev.summary) {
             const v = renderer.beginAssistant(); v.append(ev.summary); v.done();

@@ -24,6 +24,7 @@ export function togglePlanAct(modes: ModeManager, cmd: AgentMode, state: ModeSta
 export function applyModeToRun(modes: ModeManager, cfg: RunConfig, def: AgentDefinition): void {
   cfg.permissionRules = applyModeRules(modes.mode, cfg.permissionRules);
   if (modes.mode !== "plan") return;
+  delete cfg.verify; // plan mode changes nothing and runs nothing: the verify gate (core/verify-gate.ts) is off here, not merely idle
   const base = def.systemPrompt;
   def.systemPrompt = (v) => (typeof base === "function" ? base(v) : base) + "\n\n" + planModePromptSection();
 }

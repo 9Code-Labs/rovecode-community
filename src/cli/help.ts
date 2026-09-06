@@ -217,6 +217,9 @@ const ENV = `env — every ROVECODE_* setting
   ROVECODE_FINISH_CHECK=0  turn off the once-per-run finish check: when the model stops right after a failed tool
                     call or an unanswered question, it is asked ONCE to finish or say what is left; the next
                     reply ends the run either way. "done · …" on run_end still names what was left
+  ROVECODE_VERIFY=1   turn ON the verify gate (off by default): a run that wrote files runs the project's configured
+                    check before "done"; a failure goes back to the model once, then "done · check failed (…)" says
+                    so. No check configured → nothing runs, run_end says "not verified". ROVECODE_VERIFY_TIMEOUT=<s> (120)
   ROVECODE_HOME       credentials + user-scope providers/commands dir (default ~/.rovecode)
 providers: built in — kaesra openai anthropic deepseek groq openrouter ollama lmstudio
             together mistral cerebras fireworks perplexity xai moondream vllm

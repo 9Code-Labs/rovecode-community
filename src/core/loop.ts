@@ -6,7 +6,7 @@
 
 import { randomUUID } from "node:crypto";
 import type {
-  AgentDefinition, Message, MessagePart, RunEvent, RunConfig, RunOutstanding, StreamEvent, StreamFn,
+  AgentDefinition, Message, MessagePart, RunEvent, RunConfig, RunOutstanding, StreamEvent, StreamFn, VerifyState,
   ModelRef, ToolCallPart, AgentVars, ToolContext, ToolOutput, ToolSchema,
   StopReason, TokenUsage,
 } from "./types.ts";
@@ -16,6 +16,7 @@ import { servedBy } from "../providers/router.ts";
 import { SessionStore } from "./session.ts";
 import { assembleContext, estimateTokens, type ContextChunk } from "./context.ts";
 import { compactionTrigger, planCompaction, applyCompaction, isContextOverflow, type CompactionCtx, type NativeCompactor } from "./compaction.ts";
+import { verifyClause, verifyDetail, verifyNudgeText } from "./verify-gate.ts";
 
 export interface LoopDeps {
   stream: StreamFn;
@@ -165,6 +166,10 @@ async function* runLoop(
   let spentUsd = 0, unpricedTurns = 0;
   // the finish check fires at most once per run (see the "done" exit below)
   let nudged = false;
+  // the verify gate's memory: the write count the last check saw, and how it ended — a model that answers the
+  // failed check with prose (no new write) gets that answer represented, not a second two-minute run
+  let verifiedAtWrites = -1;
+  let lastVerify: VerifyState | undefined;
 
   for (let turn = 1; turn <= cfg.maxTurns; turn++) {
     // --- abort check: an abort that landed during the previous batch (or before
@@ -357,9 +362,42 @@ async function* runLoop(
         yield { type: "steer", text };
         continue;
       }
+      // --- the verify gate (core/verify-gate.ts): a run that wrote files runs the project's own check before it
+      // may end "done". Composition with the finish check above is one flag, not two: whichever fires first takes
+      // the run's single extra turn; if the finish check already fired, the gate still RUNS and represents, but
+      // never asks again. Nothing configured → nothing runs, and run_end says so ("not verified") rather than
+      // letting an unchecked change look finished. Nothing written → the gate is not consulted at all.
+      if (cfg.verify !== undefined && outstanding.writes > 0) {
+        const gate = cfg.verify;
+        const refused = gate.resolution?.refused && gate.resolution.refused.length > 0 ? { refused: gate.resolution.refused } : {};
+        if (gate.resolution === null || gate.resolution.commands.length === 0) {
+          outstanding.verify = { state: "unconfigured", ...(gate.resolution?.reason ? { reason: gate.resolution.reason } : {}), ...refused };
+        } else if (outstanding.writes === verifiedAtWrites && lastVerify !== undefined) {
+          outstanding.verify = lastVerify; // nothing written since that check: its verdict stands, it is not re-run
+        } else {
+          yield { type: "verify", command: gate.resolution.commands.join(" && "), state: "running" };
+          const r = await gate.run(runAc.signal);
+          if (runAc.signal.aborted) { yield { type: "run_end", status: "stopped", summary: "run aborted" }; return; }
+          verifiedAtWrites = outstanding.writes;
+          const state: VerifyState = r.ok ? { state: "passed", command: r.command, ms: r.ms, ...refused }
+            : r.timedOut ? { state: "timeout", command: r.command, seconds: Math.round(gate.timeoutMs / 1000), ...refused }
+            : { state: "failed", command: r.command, code: r.code, failure: r.failure, ...refused };
+          lastVerify = state;
+          yield { type: "verify", command: r.command, state: state.state, ms: r.ms, detail: verifyDetail(r) };
+          if (!r.ok && !nudged) {
+            nudged = true;
+            const text = verifyNudgeText(r, gate.timeoutMs);
+            const fm: Message = { id: randomUUID(), role: "user", parts: [{ kind: "text", text }], parentId: history.at(-1)?.id ?? null, createdAt: Date.now() };
+            deps.store.append(fm); history.push(fm);
+            yield { type: "steer", text };
+            continue;
+          }
+          outstanding.verify = state;
+        }
+      }
       // attached only when there IS something to say: a run that answered a question (no files, no failures) ends
       // byte-identical to before — "no files changed" is what every answered question looks like, not a finding
-      const notable = outstanding.failed.length > 0 || outstanding.unansweredAsk || (outstanding.todosOpen ?? 0) > 0 || outstanding.nudged;
+      const notable = outstanding.failed.length > 0 || outstanding.unansweredAsk || (outstanding.todosOpen ?? 0) > 0 || outstanding.nudged || outstanding.verify !== undefined;
       yield { type: "run_end", status: "done", summary: partsText(parts), ...(notable ? { outstanding } : {}) };
       return;
     }
@@ -477,7 +515,13 @@ export function outstandingClause(o: RunOutstanding): string | null {
   if (o.failed.length > 0) parts.push(`${o.failed.length} failed tool call${o.failed.length === 1 ? "" : "s"} not recovered (${[...new Set(o.failed.map((f) => f.split(":")[0]))].join(", ")})`);
   if (o.unansweredAsk) parts.push("its question to you went unanswered");
   if ((o.todosOpen ?? 0) > 0) parts.push(`${o.todosOpen} of ${o.todosTotal} items still open`);
+  if (o.verify !== undefined) parts.push(verifyClause(o.verify));
   return parts.length > 0 ? parts.join(" · ") : null;
+}
+/** how a surface should colour the clause: a passed check is information, everything else is a warning */
+export function outstandingTone(o: RunOutstanding): "info" | "warn" {
+  const onlyPassed = o.failed.length === 0 && !o.unansweredAsk && (o.todosOpen ?? 0) === 0 && o.verify?.state === "passed";
+  return onlyPassed ? "info" : "warn";
 }
 
 function appendToolResult(store: SessionStore, history: Message[], callId: string, out: { ok: boolean; output: string }): void {

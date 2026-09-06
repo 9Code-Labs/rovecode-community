@@ -5,7 +5,7 @@
  *  parameter, no Date.now()/timers/process access; `applyEvent` mutates the state in place. */
 
 import { contextHealth } from "../core/usage.ts";
-import { outstandingClause } from "../core/loop.ts";
+import { outstandingClause, outstandingTone } from "../core/loop.ts";
 import { estimateTokens } from "../core/context.ts";
 import { todoCounts, type TodoItem, type TodoCounts } from "../tools/todo.ts";
 import type { TaskInfo } from "../core/tasks.ts";
@@ -170,6 +170,9 @@ export function makeApplyEvent(hooks: ApplyHooks = {}): ApplyEvent {
       case "steer":
         pushRow(s, { kind: "steer", text: ev.text });
         break;
+      case "verify": // the verify gate (core/verify-gate.ts): the check is running / how it ended, one row each
+        pushRow(s, { kind: "system", tone: ev.state === "running" || ev.state === "passed" ? "info" : "warn", text: ev.state === "running" ? `⧗ verify: ${ev.command}` : `verify ${ev.state}: ${ev.detail ?? ""}` });
+        break;
       case "turn_end":
         finalizeAssistant(s); settleTurn(s);
         break;
@@ -180,8 +183,9 @@ export function makeApplyEvent(hooks: ApplyHooks = {}): ApplyEvent {
           if (!sawText && ev.summary) pushRow(s, { kind: "assistant", text: ev.summary, streaming: false });
           // "done" is the model's silence, not a verdict — one clause says what the transcript left (core/loop.ts)
           const left = ev.outstanding ? outstandingClause(ev.outstanding) : null;
-          if (left !== null) pushRow(s, { kind: "system", tone: "warn", text: `done · ${left}` });
-          notify(s, left !== null ? `run done · ${left}` : "run done", now, left !== null ? "warn" : "info", "done");
+          const tone = ev.outstanding ? outstandingTone(ev.outstanding) : "info";
+          if (left !== null) pushRow(s, { kind: "system", tone, text: `done · ${left}` });
+          notify(s, left !== null ? `run done · ${left}` : "run done", now, tone, "done");
         } else if (ev.status === "error") {
           setActivity(s, "ERROR", "error", now);
           if (ev.summary) pushRow(s, { kind: "system", tone: "error", text: ev.summary });

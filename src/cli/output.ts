@@ -299,6 +299,9 @@ export function createOutputSink(mode: OutputMode, opts: OutputSinkOptions): Out
         human(`← ${ev.ok ? "ok" : "FAIL"} ${ev.output.slice(0, 200).replace(/\n/g, " ⏎ ")}`);
       } else if (ev.type === "tool_call_failed") {
         call(ev.callId).ok = false;
+      } else if (ev.type === "verify") {
+        // the verify gate, in the same two-line shape as a tool call: what runs, then how it ended
+        human(ev.state === "running" ? `→ verify ${ev.command.slice(0, 100)}` : `← ${ev.state === "passed" ? "ok" : "FAIL"} verify ${ev.detail ?? ev.state}`);
       }
     },
     finish(end) {

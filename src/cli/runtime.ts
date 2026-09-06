@@ -49,6 +49,7 @@ import { recallTool } from "../memory/recall.ts";
 import { configureExecutor, type SpawnRunner } from "../core/executor.ts";
 import { loadSandboxConfig, unavailableRungError, type SandboxConfig } from "../core/sandbox-config.ts";
 import { loadTodos, planReminder, todoTools } from "../tools/todo.ts";
+import { noteVerifyCost, resolveForGate, runVerify, VERIFY_TIMEOUT_MS, type VerifyResolver } from "../core/verify-gate.ts";
 import { SteeringQueue } from "../core/loop.ts";
 import { TaskManager } from "../core/tasks.ts";
 import { createTaskTool, createTaskStatusTool } from "../tools/task.ts";
@@ -70,6 +71,10 @@ export interface RuntimeOptions {
   /** port #27 test seam: process runner behind the executor rung (probe AND
    *  commands); default Bun.spawn. Tests must never probe a real wsl.exe/docker. */
   spawnRunner?: SpawnRunner;
+  /** test seam for the verify gate: which check a run that wrote files must pass. Default: core/verify.ts
+   *  resolveVerify through verify-gate.ts resolveForGate (settings, then a manifest's unambiguous check script,
+   *  never a guess). Returning null or no commands makes the gate report "not verified" instead of running. */
+  verifyResolver?: VerifyResolver;
   /** port #27 test seam: platform the rung probe assumes; default process.platform */
   platform?: NodeJS.Platform;
 }
@@ -619,8 +624,24 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
         return items.length === 0 ? null : { open: items.filter((i) => i.status !== "completed").length, total: items.length };
       } catch { return null; }
     };
+    // the verify gate (core/verify-gate.ts): OFF unless ROVECODE_VERIFY=1. Measured 2026-09-06 (nimbus-6f): the
+    // projects actually edited with rovecode have no check command at all (23 of 23 edits), and where one exists it
+    // costs 3 s to 170 s — a gate that spends three minutes on a six-line CSS edit gets turned off and never comes
+    // back. The default lives in this ONE comparison so flipping it later is editing this line. The check is
+    // resolved per run (a key added to settings mid-session counts next run); ROVECODE_VERIFY_TIMEOUT=<seconds>
+    // bounds one command, default 120.
+    const verifyOn = process.env.ROVECODE_VERIFY === "1";
+    const verifyTimeoutMs = (positiveInt(process.env.ROVECODE_VERIFY_TIMEOUT) ?? VERIFY_TIMEOUT_MS / 1000) * 1000;
+    const verifyGate = (): RunConfig["verify"] => {
+      const resolution = (opts.verifyResolver ?? resolveForGate)(cwd);
+      return {
+        resolution, timeoutMs: verifyTimeoutMs,
+        run: async (signal) => { const o = await runVerify(resolution ?? { commands: [] }, cwd, { signal, timeoutMs: verifyTimeoutMs }); noteVerifyCost(cwd, o); return o; },
+      };
+    };
     return (activeCfg = {
     maxTurns: runLimits.maxTurns ?? positiveInt(process.env.ROVECODE_MAX_TURNS) ?? 60,
+    ...(verifyOn ? { verify: verifyGate() } : {}),
     ...(maxSeconds !== undefined ? { maxSeconds } : {}),
     ...(maxCostUsd !== undefined ? { maxCostUsd, priceUsd } : {}),
     finishCheck: process.env.ROVECODE_FINISH_CHECK !== "0",
