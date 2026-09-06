@@ -107,13 +107,17 @@ export function infoLines(e: MarketEntry): string[] {
 export async function askPlan(plan: InstallPlan, deps: { secret: (p: string) => Promise<string>; plain: (p: string) => Promise<string>; tty: boolean; err: (l: string) => void }): Promise<Record<string, string> | null> {
   const answers: Record<string, string> = {};
   for (const a of plan.asks) {
-    if (!deps.tty) {
-      if (a.required && !(a.secret && plan.scope === "project")) { deps.err(`${a.name} is required and there is no terminal to ask on — export ${a.name} and re-run, or run this on a terminal`); return null; }
-      continue; // written as ${NAME}: the environment supplies it at launch
+    // A PROJECT file never holds a secret's value — fillPlan writes `${NAME}` there whatever is typed — so
+    // asking for one would take a token off a human and throw it away. `rovecode market install` already
+    // declined to ask; this face used to ask anyway, which is the worse half of the two.
+    const pointless = a.secret && plan.scope === "project";
+    if (!deps.tty || pointless) {
+      if (a.required) deps.err(`${a.name} is not set — it will be written as \${${a.name}} and read from your environment at launch`);
+      continue;
     }
     const label = `${a.name}${a.description ? ` (${a.description})` : ""}${a.required ? "" : " [optional, enter to skip]"}: `;
     answers[a.name] = a.secret ? await deps.secret(label) : await deps.plain(label);
-    if (a.required && answers[a.name]!.length === 0 && !(a.secret && plan.scope === "project")) { deps.err(`${a.name} is required`); return null; }
+    if (a.required && answers[a.name]!.length === 0) deps.err(`${a.name} is not set — it will be written as \${${a.name}} and read from your environment at launch`);
   }
   // `pending` is a required argument only the human knows — a directory, a database URL. It is never a
   // secret, so it is asked in the clear and keyed by the placeholder text itself (fillPlan reads it back
@@ -202,7 +206,7 @@ export async function cmdMcp(args: string[], deps: McpCliDeps = {}): Promise<num
       for (const l of describePlan(plan)) out(l);
       if (!flag(rest, "--yes")) {
         if (!tty) { err("nothing written: no terminal to confirm on — re-run with --yes after reading the lines above"); return 1; }
-        const a = (await plain("install? [y/N] ")).toLowerCase();
+        const a = (await plain("install this? [y/N] ")).toLowerCase();   // the same words `rovecode market install` uses
         if (a !== "y" && a !== "yes") { out("nothing written"); return 1; }
       }
       const answers = await askPlan(plan, { secret, plain, tty, err });

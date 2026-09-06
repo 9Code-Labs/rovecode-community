@@ -53,6 +53,9 @@ async function cli(args: string[], extra: Record<string, string> = {}, cwd = wor
     if (v !== undefined && !/^ROVECODE_/i.test(k) && !/_API_KEY$/i.test(k)) env[k] = v;
   }
   env.ROVECODE_HOME = home;
+  // the "mock provider" describes in these tests is ASKED FOR, not fallen into: since d80c2f6 a one-shot
+  // run with nothing configured is a startup failure (exit 2) rather than a canned reply reported as done
+  env.ROVECODE_MOCK = "1";
   Object.assign(env, extra);
   const p = Bun.spawn([process.execPath, MAIN, ...args], { cwd, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
   const [stdout, stderr, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);

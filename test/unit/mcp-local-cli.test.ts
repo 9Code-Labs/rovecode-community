@@ -95,7 +95,7 @@ test("cli add: the offer can neither skip nor replace the approval — 'y' to in
   // offer yes, approval NO: the approval is the gate, and npm is a write — it must not have run
   const swallow = cli(cwd, home, npm.spawn, { tty: true, secret: "s3cret", plain: ["y", "n"] });
   expect(await swallow.run("add io.github.acme/widgets")).toBe(1);
-  expect(swallow.prompts).toEqual(["plain:install widgets-mcp@1.2.0 once? [y/N] ", "plain:install? [y/N] "]);
+  expect(swallow.prompts).toEqual(["plain:install widgets-mcp@1.2.0 once? [y/N] ", "plain:install this? [y/N] "]);
   expect(swallow.out.some((l) => l.startsWith("  installs   npm install"))).toBe(true);   // the plan showed the install…
   expect(swallow.out.at(-1)).toBe("nothing written");                                       // …and the no stopped everything
   expect(npm.calls).toHaveLength(0);
@@ -113,9 +113,11 @@ test("cli add: the offer can neither skip nor replace the approval — 'y' to in
   expect(await lst.run("list")).toBe(0);
   expect(lst.out).toHaveLength(2);
   expect(lst.out[1]).toMatch(/^1 server starts through npx.*widgets.*--local --force.*Nothing changes until you do\.$/);
-  // no terminal: no question, no npm — a script gets yesterday's behaviour exactly (WIDGET_TOKEN cannot be asked → 1, unchanged)
+  // no terminal: no offer question and no npm — a script gets the npx line, never an install it could not
+  // approve. (It now exits 0: a required secret it cannot be asked for is written as ${NAME} and named,
+  // the same on both CLI faces. What matters here is that the OFFER is silent and npm never ran.)
   const script = cli(cwd, tmp("rovecode-mcpl-home-"), npm.spawn, { tty: false });
-  expect(await script.run("add io.github.acme/widgets --yes")).toBe(1);
+  expect(await script.run("add io.github.acme/widgets --yes")).toBe(0);
   expect(script.prompts).toEqual([]);
   expect(npm.calls).toHaveLength(0);
   // --yes on a terminal: the approval is given, so the offer is not asked either — npx
@@ -126,7 +128,7 @@ test("cli add: the offer can neither skip nor replace the approval — 'y' to in
   // --no-local on a terminal: straight to the plan and its yes
   const noLocal = cli(cwd, tmp("rovecode-mcpl-home-"), npm.spawn, { tty: true, secret: "s", plain: ["y", "/d"] });
   expect(await noLocal.run("add io.github.acme/widgets --no-local")).toBe(0);
-  expect(noLocal.prompts[0]).toBe("plain:install? [y/N] ");
+  expect(noLocal.prompts[0]).toBe("plain:install this? [y/N] ");
   expect(npm.calls).toHaveLength(0);
 });
 

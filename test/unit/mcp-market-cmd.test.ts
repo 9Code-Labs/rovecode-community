@@ -61,10 +61,16 @@ test("cli: search lists curated then registry rows; info names publisher, the ex
   expect(h.out).toContain("  runs       npx -y widgets-mcp@1.2.0 --mode fast");
   expect(h.err.at(-1)).toMatch(/nothing written: no terminal to confirm on/);
   expect(existsSync(join(home, "mcp.json"))).toBe(false);
-  // --yes without a TTY: a required secret for the USER file cannot be asked → still nothing
-  expect(await h.run("add io.github.acme/widgets --yes")).toBe(1);
-  expect(h.err.at(-1)).toMatch(/WIDGET_TOKEN is required and there is no terminal to ask on/);
-  expect(existsSync(join(home, "mcp.json"))).toBe(false);
+  // --yes without a TTY and a required secret for the USER file: the entry is WRITTEN with `${NAME}` and
+  // the name is said out loud. This face used to refuse (exit 1) while `rovecode market install` wrote it,
+  // and one feature behaving differently through its two doors is worse than either behaviour. Unified on
+  // the one that matches everything else here: write it, name it, and let the loader refuse to launch a
+  // server whose variable is unset — the same rule as an unfilled <placeholder>.
+  expect(await h.run("add io.github.acme/widgets --yes --as fromscript")).toBe(0);
+  expect(h.err.join("\n")).toMatch(/WIDGET_TOKEN is not set — it will be written as \$\{WIDGET_TOKEN\}/);
+  const scripted = JSON.parse(readFileSync(join(home, "mcp.json"), "utf8")) as { mcpServers: Record<string, { env: Record<string, string> }> };
+  expect(scripted.mcpServers.fromscript!.env).toEqual({ WIDGET_TOKEN: "${WIDGET_TOKEN}" });
+  expect(h.out).toContain("set WIDGET_TOKEN in your environment — the file only names them");
   // --yes without a TTY for a PROJECT file: the secret is a ${NAME} reference anyway → written
   expect(await h.run("add io.github.acme/widgets --yes --project --as wid")).toBe(0);
   const proj = JSON.parse(readFileSync(join(cwd, ".rovecode", "mcp.json"), "utf8")) as { mcpServers: Record<string, unknown> };
@@ -93,7 +99,8 @@ test("cli: on a terminal add shows the plan, asks y/N, asks the secret MASKED by
   // The approval itself is unchanged and comes after the plan; the offer never stands in for it.
   const no = cli(cwd, home, { tty: true, plain: ["n", "n"], secret: "s3cret" });
   expect(await no.run("add io.github.acme/widgets")).toBe(1);
-  expect(no.prompts).toEqual(["plain:install widgets-mcp@1.2.0 once? [y/N] ", "plain:install? [y/N] "]);
+  // "install this?" — the same words `rovecode market install` asks with; the two faces used to differ
+  expect(no.prompts).toEqual(["plain:install widgets-mcp@1.2.0 once? [y/N] ", "plain:install this? [y/N] "]);
   expect(no.out.at(-1)).toBe("nothing written");
   expect(existsSync(join(home, "mcp.json"))).toBe(false);
   // the third plain answer is the `pending` one: a required argument only the human knows, asked in the
@@ -104,7 +111,7 @@ test("cli: on a terminal add shows the plan, asks y/N, asks the secret MASKED by
   expect(yes.out.indexOf("Install it once instead?")).toBeLessThan(yes.out.indexOf("  runs       npx -y widgets-mcp@1.2.0 --mode fast"));
   expect(yes.out.indexOf("  runs       npx -y widgets-mcp@1.2.0 --mode fast")).toBeLessThan(yes.out.indexOf(`added "widgets" → ${join(home, "mcp.json")}`));
   expect(yes.out).toContain("  env        WIDGET_TOKEN (asked, masked, never shown)");
-  expect(yes.prompts).toEqual(["plain:install widgets-mcp@1.2.0 once? [y/N] ", "plain:install? [y/N] ", "secret:WIDGET_TOKEN (API token): ", "plain:--root <value>: "]);
+  expect(yes.prompts).toEqual(["plain:install widgets-mcp@1.2.0 once? [y/N] ", "plain:install this? [y/N] ", "secret:WIDGET_TOKEN (API token): ", "plain:--root <value>: "]);
   expect([...yes.out, ...yes.err].join("\n")).not.toContain("s3cret");
   const user = JSON.parse(readFileSync(join(home, "mcp.json"), "utf8")) as { mcpServers: Record<string, { env: Record<string, string> }> };
   expect(user.mcpServers.widgets!.env).toEqual({ WIDGET_TOKEN: "s3cret" });
