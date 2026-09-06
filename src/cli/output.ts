@@ -147,16 +147,72 @@ export function runPromptWords(cli: { cmd: string; rest: string[] }, argv: reado
   const isFlag = (a: string) => a.startsWith("-");
   const cmdIdx = args.findIndex((a, i) => !isFlag(a) && !(i > 0 && VALUE_FLAGS.has(args[i - 1]!)));
   if (cmdIdx === -1) return words;
-  // words = the non-flag tokens from `from` on; a value's word index = the non-flag tokens before it
+  // words = the non-flag tokens from `from` on; a value's word index = the non-flag tokens before it.
+  // EVERY value flag's value, not only --output's: `rovecode run "hi" --max-turns 1` used to send the prompt
+  // "hi 1" — the ceiling's number rode into the words because only --output dropped its own.
   const from = cli.cmd === "run" ? cmdIdx + 1 : cmdIdx;
   const drop: number[] = [];
   args.forEach((a, oi) => {
     const value = args[oi + 1];
-    if (a !== "--output" || oi < cmdIdx || value === undefined || isFlag(value)) return;
+    if (!VALUE_FLAGS.has(a) || oi < cmdIdx || value === undefined || isFlag(value)) return;
     drop.push(args.slice(from, oi + 1).filter((t) => !isFlag(t)).length);
   });
   for (const k of drop.reverse()) words.splice(k, 1); // descending: earlier indexes stay valid
   return words;
+}
+
+// ---------- piped stdin (`git diff | rovecode run "review this"`) ----------
+
+/** What a pipe on stdin handed us, or "" — never from a terminal, and never waited on forever.
+ *
+ *  The one hazard: stdin that is not a TTY and not a pipe anybody writes to — a child spawned with an
+ *  inherited-but-idle handle, an agent's own bash tool running `rovecode run`. `readFileSync(0)` there
+ *  blocks until something closes the handle, which may be never. So the first byte gets a deadline
+ *  (default 3 s): nothing by then means nothing is coming, a note says so, and the run proceeds with the
+ *  prompt alone. A producer that HAS started is read to EOF however long it takes — the deadline is on the
+ *  first byte, not the whole stream. Bounded at `maxChars` (1 MB of text) with a note, because a 200 MB log
+ *  piped in by accident should not become one 200 MB prompt. */
+export async function readPipedStdin(
+  stdin: NodeJS.ReadableStream & { isTTY?: boolean; pause?: () => unknown; resume?: () => unknown },
+  opts: { firstByteMs?: number; maxChars?: number; note?: (line: string) => void } = {},
+): Promise<string> {
+  if (stdin.isTTY === true) return "";
+  const firstByteMs = opts.firstByteMs ?? 3_000;
+  const maxChars = opts.maxChars ?? 1_000_000;
+  return new Promise<string>((resolve) => {
+    const chunks: Buffer[] = [];
+    let got = false, done = false;
+    const finish = (): void => {
+      if (done) return;
+      done = true; clearTimeout(timer);
+      const text = Buffer.concat(chunks).toString("utf8");
+      if (text.length > maxChars) opts.note?.(`stdin: ${text.length.toLocaleString("en-US")} characters piped in — kept the first ${maxChars.toLocaleString("en-US")}`);
+      resolve(text.slice(0, maxChars));
+    };
+    const timer = setTimeout(() => {
+      if (got || done) return;
+      opts.note?.(`stdin: not a terminal, but nothing arrived in ${firstByteMs / 1000} s — ignored (pipe your input, or pass --no-stdin)`);
+      try { stdin.pause?.(); } catch { /* nothing to pause */ }
+      finish();
+    }, firstByteMs);
+    stdin.on("data", (c: Buffer | string) => { got = true; chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)); });
+    stdin.on("end", finish);
+    stdin.on("close", finish);
+    stdin.on("error", finish);
+    try { stdin.resume?.(); } catch { finish(); }
+  });
+}
+
+/** The prompt with the piped text under it as a fenced block. The fence grows until it cannot occur inside the
+ *  text (a diff of a markdown file carries ``` of its own). No words → "Here is the input:" introduces the
+ *  block, so the model is never handed a bare fence. Empty pipe → the prompt unchanged. */
+export function withPipedInput(prompt: string, piped: string): string {
+  const text = piped.replace(/\r\n?/g, "\n").replace(/\n+$/, "");
+  if (text.length === 0) return prompt;
+  let fence = "```";
+  while (text.includes(fence)) fence += "`";
+  const head = prompt.trim().length > 0 ? prompt.trim() : "Here is the input:";
+  return `${head}\n\n${fence}\n${text}\n${fence}`;
 }
 
 // ---------- stdout guard (pi core/output-guard.ts:45-70) ----------

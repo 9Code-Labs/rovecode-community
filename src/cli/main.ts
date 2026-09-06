@@ -446,9 +446,11 @@ async function cmdTrace(sessionId: string): Promise<void> {
 }
 
 const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "plugin", "mcp", "market", "context", "auth", "provider", "model", "models", "setup", "connect", "trace", "help", "chat", "repl", "smoke-tui", "acp", "serve", "export"]);
-const rIx = process.argv.indexOf("--resume");
-const rArg = rIx !== -1 ? process.argv[rIx + 1] : undefined;
-const resumeId = rArg !== undefined && !rArg.startsWith("-") ? rArg : undefined;
+// --resume <id> · --resume (no id) · --continue: the last two reopen the newest session that holds something
+// (cli/resume.ts). Resolved only for the TUI branch below, so `rovecode run … --continue` costs no session scan.
+const resumeId = (cmd === "" || cmd === "chat" || cmd === "repl")
+  ? (await import("./resume.ts")).resolveResume(process.argv, join(process.cwd(), ".rovecode", "sessions"))
+  : undefined;
 if (cmd === "" || cmd === "chat" || cmd === "repl") {
   // The intro (core/intro.ts) plays centred on a cleared screen while the session boots underneath it.
   // Unlike the first version it has a duration of its own (~0.9s), because the shipped CLI is one bundled
@@ -482,8 +484,15 @@ if (cmd === "" || cmd === "chat" || cmd === "repl") {
   switch (cmd) {
     case "run": {
       const { expandSlashPrompt } = await import("../tui/commands.ts");
-      const { runPromptWords } = await import("./output.ts");
-      await cmdRun(expandSlashPrompt(runPromptWords(cli, process.argv).join(" ") || "hello", process.cwd()));
+      const { runPromptWords, readPipedStdin, withPipedInput } = await import("./output.ts");
+      // Piped stdin rides along as a fenced block under the prompt — `git diff | rovecode run "review this"` —
+      // which is what makes a one-shot run composable with every other tool on the machine. Never read from a
+      // terminal, skipped with --no-stdin, and an open pipe that sends nothing is given up on with a note rather
+      // than waited on forever (output.ts readPipedStdin). The words stay the prompt's head; with none, the
+      // block is introduced as "Here is the input:" so the model is not handed a bare fence.
+      const words = runPromptWords(cli, process.argv).join(" ");
+      const piped = process.argv.includes("--no-stdin") ? "" : await readPipedStdin(process.stdin, { note: (l) => console.error(l) });
+      await cmdRun(expandSlashPrompt(withPipedInput(words, piped) || "hello", process.cwd()));
       break;
     }
     case "gauntlet": case "eval": await cmdGauntlet(); break;
@@ -534,7 +543,23 @@ if (cmd === "" || cmd === "chat" || cmd === "repl") {
     default: cmdHelp(); break;
   }
 } else {
+  // An unknown first word is a one-shot prompt — and a prompt is billed. A word shaped like a PATH
+  // (./x, C:\x, foo.ts, a name that exists on disk) is far more often a mistyped or misplaced argument
+  // than a prompt, so it is not sent silently: a person at a terminal is asked, a script is refused with
+  // exit 2 (the usage class), and `rovecode run <word>` is the explicit way to send it regardless.
+  // Sentences are never guarded — only the single path-shaped word (dispatch.ts pathShaped).
+  const { pathShaped } = await import("./dispatch.ts");
+  if (pathShaped(cmd)) {
+    const words = process.argv.slice(process.argv.indexOf(cmd)).map((w) => (/\s/.test(w) ? JSON.stringify(w) : w)).join(" ");
+    const why = `"${cmd}" looks like a path, not a prompt. A bare prompt is sent to your provider and billed; for a command see \`rovecode help\`, to send it as a prompt anyway: rovecode run ${words}`;
+    if (!process.stdin.isTTY || !process.stderr.isTTY) { console.error(`error: ${why}`); process.exit(2); }
+    const { askLine } = await import("./setup.ts");
+    const answer = (await askLine(`${why}\nSend it as a prompt? [y/N] `)).trim().toLowerCase();
+    if (answer !== "y" && answer !== "yes") { console.error("nothing sent"); process.exit(2); }
+  }
   const { expandSlashPrompt } = await import("../tui/commands.ts");
-  const { runPromptWords } = await import("./output.ts");
-  await cmdRun(expandSlashPrompt(runPromptWords(cli, process.argv).join(" "), process.cwd()));
+  const { runPromptWords, readPipedStdin, withPipedInput } = await import("./output.ts");
+  // the bare form is "the same as run" (help.ts), piped stdin included
+  const piped = process.argv.includes("--no-stdin") ? "" : await readPipedStdin(process.stdin, { note: (l) => console.error(l) });
+  await cmdRun(expandSlashPrompt(withPipedInput(runPromptWords(cli, process.argv).join(" "), piped), process.cwd()));
 }

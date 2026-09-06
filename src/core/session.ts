@@ -118,6 +118,14 @@ export function listSessions(rootDir: string): SessionSummary[] {
   return out.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
+/** The session `rovecode --continue` (or `--resume` with no id) reopens: the most recently updated one that
+ *  HOLDS something. A session with no entries is not a place to continue from — and while the store used to
+ *  leave one behind at every start (see the constructor note), a directory holding only meta.json can still
+ *  exist from before that change, so the count is checked rather than assumed. */
+export function newestSession(rootDir: string): SessionSummary | undefined {
+  return listSessions(rootDir).find((s) => s.entryCount > 0);
+}
+
 export interface TurnPoint {
   entryId: string;         // the user message's wrapped-entry id
   index: number;           // 1-based position among user turns on the active path

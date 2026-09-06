@@ -26,7 +26,7 @@ describe("isPackageRunner", () => {
     expect(isPackageRunner(stdio(String.raw`C:\Users\b\.rovecode\mcp\node_modules\x\dist\index.js`))).toBe(false);
     expect(isPackageRunner(stdio("docker"))).toBe(false);          // pulls once, then cached by docker
     expect(isPackageRunner(stdio(undefined))).toBe(false);
-    expect(isPackageRunner({ name: "s", transport: "http" as const, command: "npx" })).toBe(false);
+    expect(isPackageRunner({ transport: "http" as const, command: "npx" })).toBe(false);   // a remote never spawns
   });
 });
 

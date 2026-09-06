@@ -237,6 +237,15 @@ export interface RunConfig {
    *  verification spiral of many short turns ends in a clean run_end "budget" with what was done so far.
    *  Unset = no clock. `rovecode run` defaults it to 20 minutes; ROVECODE_MAX_SECONDS / --max-seconds set it. */
   maxSeconds?: number;
+  /** a spend ceiling for one run, in US dollars, checked at every turn boundary like maxSeconds: the run ends
+   *  with status "budget" and what was done so far. Only turns `priceUsd` can price count; an unpriced turn
+   *  (a model the catalog does not know) adds nothing and the summary says how many there were. Unset = no cap.
+   *  `rovecode run --max-cost D`, ROVECODE_MAX_COST on every surface. */
+  maxCostUsd?: number;
+  /** what one turn cost, from its usage and the model that SERVED it (router fallback may differ from the one
+   *  asked for) — undefined when the catalog has no price. The runtime binds this to its catalog; without it
+   *  maxCostUsd can never trip, which is why buildCfg always sets both together. */
+  priceUsd?: (usage: TokenUsage, origin: ModelRef) => number | undefined;
   contextBudgetTokens: number;
   compactionThreshold: number;   // fraction of budget triggering compaction
   /** port #25: history compaction strategy (core/compaction.ts; env ROVECODE_COMPACTION); default head-summarize */

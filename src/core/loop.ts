@@ -160,6 +160,8 @@ async function* runLoop(
   let emergencyRedrives = 0;
   const clock = deps.clock ?? Date.now;
   const startedAt = clock();
+  // running spend for RunConfig.maxCostUsd (checked at the turn boundary below)
+  let spentUsd = 0, unpricedTurns = 0;
 
   for (let turn = 1; turn <= cfg.maxTurns; turn++) {
     // --- abort check: an abort that landed during the previous batch (or before
@@ -170,6 +172,15 @@ async function* runLoop(
     // turns ends in a result object instead of an external kill
     if (cfg.maxSeconds !== undefined && (clock() - startedAt) / 1000 >= cfg.maxSeconds) {
       yield { type: "run_end", status: "budget", summary: `wall clock (${cfg.maxSeconds}s) reached after ${turn - 1} turn${turn === 2 ? "" : "s"}` };
+      return;
+    }
+    // --- spend cap (RunConfig.maxCostUsd): the same boundary, the same status. Priced from each turn's own
+    // usage as it lands (below), so the cap is compared against dollars actually spent, never an estimate.
+    // Turns the catalog cannot price add nothing; the summary says how many, so "$0.40 spent" is never read
+    // as "$0.40 in total" when two turns were unpriced.
+    if (cfg.maxCostUsd !== undefined && spentUsd >= cfg.maxCostUsd) {
+      const unpriced = unpricedTurns > 0 ? `; ${unpricedTurns} turn${unpricedTurns === 1 ? "" : "s"} unpriced` : "";
+      yield { type: "run_end", status: "budget", summary: `cost cap ($${cfg.maxCostUsd.toFixed(2)}) reached after ${turn - 1} turn${turn === 2 ? "" : "s"} — $${spentUsd.toFixed(4)} spent${unpriced}` };
       return;
     }
 
@@ -270,6 +281,10 @@ async function* runLoop(
       // asked for; /cost prices per-message via origin — port #14 HIGH-2), else the request
       createdAt: Date.now(), origin: turnResult.origin ?? model, usage,
     };
+    if (cfg.maxCostUsd !== undefined && (usage.input > 0 || usage.output > 0 || (usage.cacheRead ?? 0) > 0 || (usage.cacheWrite ?? 0) > 0)) {
+      const c = cfg.priceUsd?.(usage, assistant.origin ?? model);
+      if (c === undefined) unpricedTurns++; else spentUsd += c;
+    }
     if (!aborted || parts.length > 0) { deps.store.append(assistant); history.push(assistant); }
     yield { type: "turn_end", turn, stopReason: aborted ? "aborted" : stopReason };
     if (aborted) {

@@ -296,6 +296,20 @@ export interface LspGate {
   readonly client: LspClient | null;
 }
 
+/** One startup line when the gate CANNOT run here, or null when there is nothing to say.
+ *
+ *  The gate is silent by design when the server is missing (the note below is "" and the edit succeeds as
+ *  it should) — and that silence let everyone credit a diagnostics loop that was not running: on the
+ *  machine this was written on, typescript-language-server was not on PATH and no edit had ever been
+ *  type-checked. Silence is right for the TOOL RESULT (the model has nothing to act on); it is wrong for
+ *  the person, who was promised the loop. So the absence is said once, at boot, next to the other "this is
+ *  off" notes. Only for a TypeScript project (a tsconfig.json at the root): elsewhere nothing was promised. */
+export function lspAvailabilityNote(root: string, which: (name: string) => string | null = (n) => Bun.which(n), serverName = "typescript-language-server"): string | null {
+  if (!existsSync(join(root, "tsconfig.json"))) return null;
+  if (which(serverName) !== null) return null;
+  return `lsp: ${serverName} is not on PATH — edits and writes are NOT type-checked, and the model gets no diagnostics after them (npm i -g typescript-language-server typescript)`;
+}
+
 /** PATH probe (opencode server.ts:139 — Npm.which then spawn with --stdio). */
 function probe(serverName: string): string[] | null {
   const bin = Bun.which(serverName);

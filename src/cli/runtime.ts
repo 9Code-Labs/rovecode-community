@@ -2,7 +2,7 @@
  *  registration, skills/memory indexes, provider resolution, RunConfig defaults.
  *  Extracted from repl.ts/main.ts so every surface builds the same agent. */
 
-import type { AgentDefinition, ApprovalFn, Message, ModelRef, PermissionLevel, RunConfig, StreamFn, ThinkingEffort, Tool } from "../core/types.ts";
+import type { AgentDefinition, ApprovalFn, Message, ModelRef, PermissionLevel, RunConfig, StreamFn, ThinkingEffort, TokenUsage, Tool } from "../core/types.ts";
 import { parseEffort } from "../core/types.ts";
 import { SessionStore } from "../core/session.ts";
 import { ToolRegistry } from "../core/tools.ts";
@@ -28,13 +28,15 @@ import type { McpManager } from "../mcp/client.ts";
 import { activatePlugins, discoverPlugins, loadState as loadPluginState, type DiscoveredPlugin, type LoadedPlugin } from "../plugins/index.ts";
 import type { McpServerConfig } from "../mcp/config.ts";
 import { trustedPredicate } from "../mcp/trust.ts";
-import { positiveInt, type RunLimits } from "./run-limits.ts";
+import { positiveInt, positiveUsd, type RunLimits } from "./run-limits.ts";
+import { costUsdTiered } from "../core/usage.ts";
+import { ratesFor } from "../providers/catalog.ts";
 import { contextBudgetFor } from "../core/context-report.ts";
 import { tokenScaleFor } from "../core/token-scale.ts";
 import { rovecodeHome } from "../providers/auth.ts";
 import { readTool, editTool, writeTool, bashTool } from "../coding/hashline.ts";
 import { globTool, grepTool, lsTool } from "../coding/files.ts";
-import { withLspGate, lspGateNote } from "../coding/lsp.ts";
+import { withLspGate, lspGateNote, lspAvailabilityNote } from "../coding/lsp.ts";
 import type { buildRepoMapChunk as BuildRepoMapChunkFn } from "../coding/repomap.ts";
 import { anchorEntryId, Checkpoints, MUTATING_KINDS } from "../coding/checkpoints.ts";
 import { createRouter, roleTableFromEnv, type Router } from "../providers/router.ts";
@@ -276,6 +278,10 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   // port #13: successful edits/writes get LSP diagnostics appended within a ≤2s
   // settle window (typescript-language-server on PATH; absent → silently off).
   const lspNote = (p: string): Promise<string> => lspGateNote(p, cwd);
+  // "absent → silently off" is right for the tool result and wrong for the person: say once, at boot, that the
+  // diagnostics loop is not running here (TypeScript projects only — coding/lsp.ts lspAvailabilityNote)
+  const lspGap = lspAvailabilityNote(cwd);
+  if (lspGap !== null) pluginWarn(lspGap);
   registry.register(readTool, withCheckpoint(withLspGate(editTool, lspNote)), withCheckpoint(withLspGate(writeTool, lspNote)), withCheckpoint(bashTool));
   registry.register(globTool, grepTool, lsTool); // port #22: bounded, gitignore-aware search/list (kind read → file.read auto-allow; non-mutating, no checkpoint)
   registry.register(webFetchTool); // port #31: kind network → net.fetch, PROMPT by default (rule below); SSRF-guarded, bounded; no checkpoint
@@ -579,9 +585,19 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     const level: PermissionLevel = permission === true ? "auto" : permission === false ? "ask" : permission;
     const yolo = level === "auto";
     const maxSeconds = runLimits.maxSeconds ?? positiveInt(process.env.ROVECODE_MAX_SECONDS);
+    const maxCostUsd = runLimits.maxCostUsd ?? positiveUsd(process.env.ROVECODE_MAX_COST);
+    // the same arithmetic /cost and the headless result use (tui/cost.ts, cli/output.ts): the catalog's price
+    // for the model that served the turn, tiered by the prompt the turn actually carried; no price → undefined
+    const priceUsd = (usage: TokenUsage, origin: ModelRef): number | undefined => {
+      const info = catalog.lookup(origin.provider, origin.model);
+      if (!info?.pricing) return undefined;
+      const n = { input: usage.input, output: usage.output, cacheRead: usage.cacheRead ?? 0, cacheWrite: usage.cacheWrite ?? 0 };
+      return costUsdTiered(n, ratesFor(info, n.input + n.cacheRead + n.cacheWrite));
+    };
     return (activeCfg = {
     maxTurns: runLimits.maxTurns ?? positiveInt(process.env.ROVECODE_MAX_TURNS) ?? 60,
     ...(maxSeconds !== undefined ? { maxSeconds } : {}),
+    ...(maxCostUsd !== undefined ? { maxCostUsd, priceUsd } : {}),
     // the history budget follows the model's window: a flat 200k spent a fifth of a 1M window and
     // overflowed a 128k one. ROVECODE_CONTEXT_BUDGET overrides; an unknown window keeps the old default.
     contextBudgetTokens: (() => {

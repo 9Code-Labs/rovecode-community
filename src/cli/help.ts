@@ -49,7 +49,10 @@ const ADVANCED = `advanced — the full command reference
   rovecode --help | -h          this help (only with no command in front of it) · rovecode --version prints the
                             version to stdout and the update check’s answer to stderr
   rovecode --resume <id>        open the TUI resuming a session (full id or unique prefix)
-  rovecode "prompt"             one-shot task (same as run)
+  rovecode --continue           reopen the newest session that holds something (also: --resume with no id);
+                                nothing to continue from → a fresh session
+  rovecode "prompt"             one-shot task (same as run; a lone path-shaped word — ./x, x.ts, an existing
+                                name — is confirmed on a TTY and refused with exit 2 off one: use "rovecode run" to send it)
   rovecode setup                connect a model step by step (TTY only; piped stdin prints the recipe and exits 2)
   rovecode connect              the same wizard when given no arguments
   rovecode connect <id> [<baseUrl>] [--model <id>] [--key | --key-stdin | --key-env NAME | --no-key]
@@ -65,9 +68,15 @@ const ADVANCED = `advanced — the full command reference
                             "/name args" expands a custom command (.rovecode/commands/<name>.md, else ~/.rovecode/commands)
                             the way the TUI does; an unknown /name is sent verbatim; model:/mode: frontmatter is
                             TUI-only and not applied headlessly
+                            piped stdin is appended to the prompt as a fenced block — git diff | rovecode run "review this"
+                            (never read from a terminal; --no-stdin ignores it; an open pipe that sends nothing
+                            for 3 s is skipped with a note; capped at 1 MB)
     --max-turns N · --max-seconds S|off   ceilings on one run; a hit ends it cleanly with status
                             "budget" (exit 1) and the work so far, instead of an external kill. Headless runs
                             default to a 20-minute wall clock; --max-seconds off removes it
+    --max-cost D|off        a spend ceiling in dollars for one run, priced from each turn's usage as it lands
+                            (the catalog's rates for the model that served it); the same clean "budget" end.
+                            A turn the catalog cannot price adds nothing and is counted in the summary
     --output <text|json|ndjson>  text (default): progress + the final answer on stdout
                             json: exactly ONE result object on stdout {status, summary, sessionId,
                             model:{provider,model}, origin (served model|null), usage:{input,output,cacheRead,
@@ -197,6 +206,7 @@ const ENV = `env — every ROVECODE_* setting
                     "budget" and exit 1
   ROVECODE_MAX_SECONDS  the same as a wall clock, or "off". Every surface honours it, but only
                     one-shot runs have a DEFAULT (1200 s) — the TUI has no clock unless this sets one
+  ROVECODE_MAX_COST   the same in dollars for one run (--max-cost on a one-shot run), or "off"; no default
   ROVECODE_HOME       credentials + user-scope providers/commands dir (default ~/.rovecode)
 providers: built in — kaesra openai anthropic deepseek groq openrouter ollama lmstudio
             together mistral cerebras fireworks perplexity xai moondream vllm

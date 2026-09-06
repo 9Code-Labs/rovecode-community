@@ -4,6 +4,7 @@
  *  dispatch `export`, not `o.md` — an unknown cmd falls through to the bare-
  *  prompt one-shot, which spends tokens on a real provider. */
 
+import { existsSync } from "node:fs";
 import { parseEffort, type ThinkingEffort } from "../core/types.ts";
 
 export interface CliInvocation {
@@ -31,6 +32,23 @@ export interface CliInvocation {
  *  the owners still read it themselves, and `rest` keeps post-command values
  *  (cmdAuth/export.ts/output.ts drop their own). Add here when a new value flag lands. */
 export const VALUE_FLAGS: ReadonlySet<string> = new Set(["--resume", "--key", "--out", "--output", "--pet", "--effort", "--protocol", "--key-env", "--model", "--scope", "--max-turns", "--max-seconds"]);
+
+/** file extensions a stray argv word tends to carry: code, docs, data. Not a guess at natural language —
+ *  a word that ends like a file is treated like one, a word that does not is left alone */
+const FILE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|kt|rb|php|c|h|cpp|cs|swift|sh|ps1|bat|md|mdx|txt|json|jsonc|yaml|yml|toml|ini|env|html|css|scss|svg|csv|sql|lock)$/i;
+
+/** A first word that is shaped like a PATH rather than a command or a sentence: it starts the way paths
+ *  start (./ ../ / .\ ..\ \ or a drive letter), or ends the way files end, or names something that
+ *  exists on disk. Only single words are ever path-shaped — a sentence is a prompt however it begins.
+ *  main.ts asks before sending such a word to the provider: an unknown first word falls through to the
+ *  one-shot `run`, and on 2026-09-06 `rovecode ./src/cli/main.ts` typed by mistake became a billed prompt.
+ *  `exists` is injectable for tests. */
+export function pathShaped(word: string, exists: (p: string) => boolean = existsSync): boolean {
+  if (word.length === 0 || /\s/.test(word)) return false;
+  if (/^(\.\.?[\\/]|[\\/]|[A-Za-z]:[\\/])/.test(word)) return true;
+  if (FILE_EXT.test(word)) return true;
+  try { return exists(word); } catch { return false; }
+}
 
 export function parseCli(argv: string[]): CliInvocation {
   const args = argv.slice(2);
