@@ -1,5 +1,26 @@
 /** Shadow-git checkpoints (PORT #11, cline port, Apache-2.0 — see THIRD_PARTY_NOTICES).
  *
+ *  KNOWN COST, and the design that would remove it — measured 2026-09-06, kept here so the next reader
+ *  starts from the answer rather than the question. The shadow git-dir is per SESSION, so every new
+ *  session pays `git init` + a full `add` of the workspace inside its FIRST write or bash call: 3.45–3.56 s
+ *  in this repository (init+config 160 ms, first add 1.4 s, first commit 1.5 s writing 565 loose objects
+ *  on Windows). Later calls in that session are 210–335 ms, of which ~200 ms is git. It does not amortise
+ *  across sessions because nothing is shared.
+ *
+ *  The cut is one shadow repo per REPOSITORY with a ref per session — a new session's first snapshot
+ *  becomes an incremental add, ~80 ms measured. cline keeps one shadow repo per TASK because a task is its
+ *  unit of restore; ours is the repository, so sessions in one workspace can share an object store and
+ *  differ only by ref. It is NOT a configuration change: a shared git-dir means a shared index and a
+ *  shared HEAD, and today's `add . && commit` / `reset --hard && clean -fd` would collide on index.lock
+ *  (the second writer silently gets no checkpoint) and move HEAD under another session. It has to be
+ *  re-done on plumbing: GIT_INDEX_FILE=<shadow>/<session>.index per session, then add → write-tree →
+ *  commit-tree -p <that session's last> → update-ref refs/rovecode/<session> (atomic per ref, and the
+ *  object store is atomic per object); restore becomes read-tree --reset -u then clean -fd against that
+ *  same index, with no HEAD involved. A hash stays a hash, so restoring one session's checkpoint from
+ *  another finally works — the case per-session storage never allowed, and the one that needs its own
+ *  test, alongside a two-writers concurrency test. Sessions whose old per-session repo exists keep using
+ *  it; nothing needs migrating.
+ *
  *  A SECOND git repository whose git-dir lives under .rovecode/checkpoints/<session> and whose
  *  work-tree is the WORKSPACE, so the user's own .git is never written. This is cline's
  *  shadow-git design: the @8eb5f3d snapshot's docs still describe it (docs/core-workflows/
