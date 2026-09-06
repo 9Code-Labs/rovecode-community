@@ -453,3 +453,64 @@ describe("sync: adding a server to a live manager", () => {
     await m.close();
   });
 });
+
+// ---------- boot cost: the SDK is not the price of knowing a server exists ----------
+
+/** Requiring client.ts used to evaluate the whole MCP SDK (~200 ms of zod schemas) inside createRuntime,
+ *  ahead of the first painted frame. A fresh process is the only honest way to check: this test file has
+ *  the SDK loaded already (it hosts a toy McpServer), so the module graph is inspected in a child. */
+describe("mcp/client.ts loads without the SDK", () => {
+  test("importing the module pulls in no @modelcontextprotocol module; the first connect() does", async () => {
+    const dir = makeTmp();
+    const script = join(dir, "probe.ts");
+    const clientPath = join(process.cwd(), "src", "mcp", "client.ts").replace(/\\/g, "/");
+    writeFileSync(script, [
+      `const mod = await import(${JSON.stringify(clientPath)});`,
+      `const sdk = () => Object.keys(require.cache).filter((k) => k.includes("modelcontextprotocol")).length;`,
+      `const before = sdk();`,
+      // a command that cannot exist: the connect fails, but only after the SDK (Client, StdioClientTransport) is loaded
+      `const m = new mod.McpManager([{ name: "nope", transport: "stdio", command: "rovecode-definitely-not-a-real-binary-probe" }], { connectTimeoutMs: 2_000 });`,
+      `await m.connect();`,
+      `console.log(JSON.stringify({ before, after: sdk() }));`,
+    ].join("\n"));
+    const proc = Bun.spawn([process.execPath, "run", script], { cwd: process.cwd(), stdout: "pipe", stderr: "pipe" });
+    const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+    expect(await proc.exited).toBe(0);
+    const lines = out.trim().split("\n");
+    const r = JSON.parse(lines[lines.length - 1] ?? "{}") as { before: number; after: number };
+    expect(r.before).toBe(0);               // mutation: a top-level `import { Client } from "@modelcontextprotocol/sdk/..."` → > 0
+    expect(r.after).toBeGreaterThan(0);     // and the lazy path really does load it (the probe is not vacuous)
+    expect(err).not.toContain("error:");
+  }, 20_000);
+});
+
+// ---------- connect(): parallel waiting, staggered starting ----------
+
+describe("connect() starts one server per event-loop turn", () => {
+  const cfg = (name: string): McpServerConfig => ({ name, transport: "stdio", command: "unused-inmemory" });
+
+  test("the second transport is built in a later timer turn than the first, and both still connect", async () => {
+    // a zero timer armed BEFORE connect() fires before any timer connect() arms itself (same delay → FIFO):
+    // the first server's transport must be built ahead of it, the second one only after it
+    const turnsSeen: Record<string, boolean> = {};
+    let timerFired = false;
+    const m = new McpManager([cfg("a"), cfg("b")], {
+      transportFactory: async (c) => { turnsSeen[c.name] = timerFired; return linked(c.name); },
+    });
+    setTimeout(() => { timerFired = true; }, 0);
+    const res = await m.connect();
+    expect(res.connected.sort()).toEqual(["a", "b"]);
+    expect(turnsSeen).toEqual({ a: false, b: true }); // mutation: drop the yield between starts → { a: false, b: false }
+    await m.close();
+  });
+
+  test("one server starts at once — no yield in front of the first (an idle turn would delay every single-server boot)", async () => {
+    let timerFired = false;
+    let seen: boolean | undefined;
+    const m = new McpManager([cfg("solo")], { transportFactory: async (c) => { seen = timerFired; return linked(c.name); } });
+    setTimeout(() => { timerFired = true; }, 0);
+    await m.connect();
+    expect(seen).toBe(false);
+    await m.close();
+  });
+});

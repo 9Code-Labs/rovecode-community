@@ -74,3 +74,41 @@ describe("createRuntime MCP wiring", () => {
     expect(rt.registry.list().some((t) => t.schema.name.startsWith("mcp_"))).toBe(false);
   });
 });
+
+/** The connect is kicked off on the next turn of the event loop, not inside createRuntime: runTui is synchronous
+ *  from createRuntime through renderer.start() (the first painted frame), and connect()'s first step — loading
+ *  the MCP SDK — used to run on the first microtask, still ahead of that paint. Nothing at boot awaits mcpReady;
+ *  the two house tools do. */
+describe("createRuntime does not connect MCP servers before the first frame", () => {
+  test("McpManager.connect is untouched when createRuntime returns and has run after one timer turn; the tools still wait for it", async () => {
+    const dir = makeTmp();
+    writeTrustedMcpJson(dir, { toy: { command: "rovecode-not-a-real-binary-deferred" } });
+    const { McpManager } = await import("../../src/mcp/client.ts");
+    const origConnect = McpManager.prototype.connect;
+    let connects = 0;
+    let settled = false;
+    McpManager.prototype.connect = async function (this: InstanceType<typeof McpManager>) {
+      connects += 1;
+      // a slow connect: the tool call below must not answer before it has settled
+      await new Promise((r) => setTimeout(r, 30));
+      settled = true;
+      return { connected: [], failed: [{ name: "toy", error: "stubbed" }] };
+    };
+    try {
+      const rt = createRuntime({ cwd: dir, stream: null });
+      expect(connects).toBe(0);                                          // mutation: connect() called inline → 1
+      await Promise.resolve();                                           // microtasks alone are not enough to start it…
+      expect(connects).toBe(0);
+      await new Promise((r) => setTimeout(r, 0));                        // …one timer turn is
+      expect(connects).toBe(1);
+      const cfg = rt.buildCfg(true);
+      const out = await rt.registry.dispatch(callPart("mcp_list", {}), ctx(dir), undefined, cfg.permissionRules, cfg.approval, () => {});
+      expect(settled).toBe(true);                                        // mcp_list awaited mcpReady (the gate survived the deferral)
+      expect(out.ok).toBe(true);
+      expect(out.output).toContain("no MCP servers connected");
+      await rt.mcp?.close();
+    } finally {
+      McpManager.prototype.connect = origConnect;
+    }
+  });
+});

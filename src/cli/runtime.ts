@@ -399,7 +399,15 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     const mcpMod = lazyMcp();
     const manager = new mcpMod.client.McpManager(mcpConfigs);
     mcp = manager;
-    mcpReady = manager.connect().then(() => undefined, () => undefined);
+    // The connect starts on the NEXT turn of the event loop, not here: runTui is synchronous from
+    // createRuntime through renderer.start(), which paints the first frame, and connect()'s first
+    // step is loading the MCP SDK (~200 ms of module evaluation). Kicked off inline that load ran on
+    // the first microtask — still ahead of the first paint. A zero timer puts it behind it. Nothing
+    // at boot awaits mcpReady; mcp_list/mcp_call do (registerMcpTools), so a tool call may wait —
+    // the terminal must not. Measured: two npx servers, createRuntime 254 ms → 30 ms.
+    mcpReady = new Promise<void>((resolve) => {
+      setTimeout(() => { manager.connect().then(() => resolve(), () => resolve()); }, 0);
+    });
     registerMcpTools(manager);
   }
 

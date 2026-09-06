@@ -7,13 +7,41 @@
  *
  *  Config loading lives in config.ts; re-exported here as the public surface. */
 
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import type { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { isRecord, message, type McpServerConfig } from "./config.ts";
 
 export { loadMcpConfig, type McpServerConfig } from "./config.ts";
+
+// ---------- the SDK, loaded when the first server connects ----------
+
+/** The MCP SDK is ~200 ms of module evaluation (zod schemas for every protocol message). Requiring this
+ *  file used to pay that inside createRuntime, before the terminal had painted anything — two servers in
+ *  ~/.rovecode/mcp.json made the first frame ~250 ms late. Now this module imports only types, so the
+ *  manager exists (server names, tool registration) for free and the SDK loads on the async connect path. */
+interface Sdk {
+  Client: typeof import("@modelcontextprotocol/sdk/client/index.js").Client;
+  StdioClientTransport: typeof import("@modelcontextprotocol/sdk/client/stdio.js").StdioClientTransport;
+  getDefaultEnvironment: typeof import("@modelcontextprotocol/sdk/client/stdio.js").getDefaultEnvironment;
+  StreamableHTTPClientTransport: typeof import("@modelcontextprotocol/sdk/client/streamableHttp.js").StreamableHTTPClientTransport;
+}
+let sdkPromise: Promise<Sdk> | null = null;
+function sdk(): Promise<Sdk> {
+  sdkPromise ??= Promise.all([
+    import("@modelcontextprotocol/sdk/client/index.js"),
+    import("@modelcontextprotocol/sdk/client/stdio.js"),
+    import("@modelcontextprotocol/sdk/client/streamableHttp.js"),
+  ]).then(([index, stdio, http]) => ({
+    Client: index.Client,
+    StdioClientTransport: stdio.StdioClientTransport,
+    getDefaultEnvironment: stdio.getDefaultEnvironment,
+    StreamableHTTPClientTransport: http.StreamableHTTPClientTransport,
+  }));
+  return sdkPromise;
+}
+
+/** one turn of the event loop — a timer, not a microtask, so painters and input get to run in between */
+const yieldToLoop = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
 // ---------- manager ----------
 
@@ -74,12 +102,20 @@ export class McpManager {
   }
 
   /** Connect every enabled server. Lazy-friendly: failures never throw — they
-   *  come back in `failed` and the server simply stays unavailable. */
+   *  come back in `failed` and the server simply stays unavailable.
+   *
+   *  The servers wait in parallel (an `npx` server spends ~2 s resolving its package and booting node;
+   *  two of them must not take 4 s), but they are STARTED one per event-loop turn. Spawning a stdio
+   *  server is the one synchronous cost here — cross-spawn's PATH walk plus a cmd.exe wrapper on
+   *  Windows, ~40 ms each — and back to back those stalls added up into one long freeze of a renderer
+   *  that repaints every 40 ms. Staggered, no single frame loses more than one spawn. */
   async connect(): Promise<{ connected: string[]; failed: { name: string; error: string }[] }> {
     const failed: { name: string; error: string }[] = [];
-    const attempts = [...this.servers.values()]
-      .filter((e) => e.config.enabled !== false && e.client === null)
-      .map(async (entry) => {
+    const pending = [...this.servers.values()].filter((e) => e.config.enabled !== false && e.client === null);
+    const attempts: Promise<void>[] = [];
+    for (const entry of pending) {
+      if (attempts.length > 0) await yieldToLoop();
+      attempts.push((async () => {
         try {
           entry.client = await this.open(entry.config);
           delete entry.lastError;
@@ -87,14 +123,15 @@ export class McpManager {
           entry.lastError = message(err);
           failed.push({ name: entry.config.name, error: entry.lastError });
         }
-      });
+      })());
+    }
     await Promise.all(attempts);
     return { connected: this.connectedNames(), failed };
   }
 
   private async open(config: McpServerConfig): Promise<Client> {
     const transport = await this.buildTransport(config);
-    const client = new Client({ name: "rovecode", version: "0.1.0" });
+    const client = new (await sdk()).Client({ name: "rovecode", version: "0.1.0" });
     try {
       await withTimeout(
         client.connect(transport, { timeout: this.connectTimeout }),
@@ -113,6 +150,7 @@ export class McpManager {
       const custom = await this.transportFactory(config);
       if (custom) return custom;
     }
+    const { StreamableHTTPClientTransport, StdioClientTransport, getDefaultEnvironment } = await sdk();
     if (config.transport === "http") {
       if (config.url === undefined) throw new Error(`http server "${config.name}" has no url`);
       // headers (auth tokens etc.) ride on every request via fetch's RequestInit
