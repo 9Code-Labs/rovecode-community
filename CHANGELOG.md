@@ -4,7 +4,12 @@ What changed for the person using rovecode, newest first. Every line ends with t
 the change (hashes on `main`). Numbers are measurements from the commit that reports them, on the
 machine it names.
 
-## Unreleased — 2026-09-06
+## 0.3.0 — 2026-09-06
+
+`rovecode doctor` is new: one command that runs every check in here and says what it did NOT check.
+Startup, the first edit of a session and an idle session all got much cheaper, several surfaces stopped
+promising things they did not do, and MCP servers can be installed once instead of resolved at every
+start. Numbers are measurements from the commit that reports them, on the machine it names.
 
 ### Startup
 
