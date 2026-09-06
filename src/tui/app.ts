@@ -538,6 +538,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     onInterrupt: () => { runAbort?.abort(); void run?.return(undefined as never); renderer.addSystemNote("run interrupted", "warn"); },
     onExit: close,
   });
+  rt.warmRepoMap(); // the repo map builds on the next tick, behind this first frame, not inside the first submit (runtime.ts)
   // resumed boot: restore the transcript and usage counters (a bare session open left both blank)
   if (boot.id !== undefined) { replayHistory(); refreshUsage(); }
   // the welcome card (core/voice.ts): a fresh session opens with rovecode's card — connected, or the /setup

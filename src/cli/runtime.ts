@@ -110,6 +110,13 @@ export interface Runtime {
    *  workspace while everything else (indexes, profile override lookup) stays on the runtime's cwd */
   systemPrompt(cwdOverride?: string): string;
   buildDef(model: ModelRef, opts?: { cwd?: string }): AgentDefinition;
+  /** Build the repo map on the next turn of the event loop instead of inside the first buildDef. The TUI
+   *  calls this right after its first paint: the build took 720–850 ms in this repository (2026-09-06),
+   *  all of it on the first request's latency when it ran at submit time. A buildDef that arrives while
+   *  the timer is still pending gets a definition WITHOUT the map — the map is not in that prompt, the
+   *  request never waits — and every later run has it. Headless callers do not call this and keep the
+   *  synchronous build: a one-shot `run` wants the map in its only prompt. Idempotent. */
+  warmRepoMap(): void;
   /** `true`/`false` still mean auto/ask — every existing caller keeps working */
   buildCfg(permission: PermissionLevel | boolean, approval?: ApprovalFn): RunConfig;
   /** swap the session-scoped memory store — rebinds the memory tool AND the prompt (port #2 fix) */
@@ -527,6 +534,16 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     extraChunksMemo = [configChunk, repoMapChunk].filter((c): c is ContextChunk => c !== null);
     return extraChunksMemo;
   };
+  // warmRepoMap (Runtime interface): the map builds behind the TUI's first frame. While that timer is
+  // pending, buildDef hands out the cheap chunks only — "the map is not in this prompt", never "the
+  // request waits" — and does NOT memoize, so the timer's build is the one that freezes the map.
+  let warmPending = false;
+  const warmRepoMap = (): void => {
+    if (extraChunksMemo !== null || warmPending) return;
+    warmPending = true;
+    setTimeout(() => { warmPending = false; try { extraChunks(); } catch { /* the memo stays empty; the next buildDef builds synchronously */ } }, 0);
+  };
+  const chunksForDef = (): ContextChunk[] => extraChunksMemo ?? (warmPending ? [configChunk].filter((c): c is ContextChunk => c !== null) : extraChunks());
 
   const systemPrompt = (cwdOverride?: string): string => {
     const skillsIndex = buildSkillsIndex(skillStore);
@@ -570,7 +587,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
       systemPrompt: nonNative
         ? `${base}\n\n# Tool calling\n${toolPromptBlock(registry.list().map((t) => t.schema))}`
         : base,
-      ...(extraChunks().length > 0 ? { contextChunks: extraChunks() } : {}),
+      ...(chunksForDef().length > 0 ? { contextChunks: chunksForDef() } : {}),
     };
   };
   /** the workspace as a rule resource: every path resource is absolute (tools.ts describeResource),
@@ -715,7 +732,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     get defaultModel() { return providers.defaultRef()?.model ?? process.env.ROVECODE_MODEL ?? ""; },
     noProviderReason: () => (opts.stream === undefined && !providers.configured() ? NO_PROVIDER_HINT : null),
     systemPrompt,
-    buildDef, buildCfg,
+    buildDef, buildCfg, warmRepoMap,
     steering, tasks,
   };
 }
