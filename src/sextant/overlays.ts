@@ -20,6 +20,7 @@ import {
   type ScreenLike, type SextantState, type Style, type Theme, type ThemeName,
 } from "./types.ts";
 import { markNoticesRead } from "./model.ts";
+import { MENTION_RE } from "./mentions.ts";
 
 // ------------------------------------------------------------------ parsing (commands.js)
 
@@ -57,7 +58,7 @@ export function parseInput(text: string): ParsedInput {
     return { kind: "slash", cmd: m?.[1] ?? "", arg: m?.[2] === undefined ? undefined : (m[3] ?? "").trim(), mentions: [] };
   }
   if (t[0] === "!") return { kind: "shell", cmd: t.slice(1).trim(), mentions: [] };
-  return { kind: "text", mentions: [...t.matchAll(/(?:^|\s)@([\w./-]+)/g)].map((m) => m[1]!) };
+  return { kind: "text", mentions: [...t.matchAll(MENTION_RE)].map((m) => m[1]!) }; // one regex for both surfaces (mentions.ts)
 }
 
 /** commands.js:24-29 — the @mention token under the cursor */

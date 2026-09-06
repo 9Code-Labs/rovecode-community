@@ -252,6 +252,17 @@ notifications · `⌃v` paste a clipboard image · `⌃t` theme · `⌃n` new se
 `⌃←`/`⌃→` word jump · mouse: clicks everywhere (tabs, file rows, cards, a tool row opens its file, the header's unread badge, the footer's theme and effort words), wheel over any panel, scrollbar drag. `rovecode smoke-tui --sextant` renders a
 160×44 frame through the real pipeline and prints PASS.
 
+**`@file` in the prompt** (both TUIs) attaches the file to the message exactly as the `read` tool would return it —
+hashline header, numbered lines with their anchors, footer — so the model has the contents and valid edit anchors
+without a tool round-trip. In the sextant, `@` opens a fuzzy picker over the workspace's files and a mention resolves
+the way the picker does (exact path, unique basename, best fuzzy match); in the classic chat, `@` autocompletes
+paths and a mention must be the exact cwd-relative path. The transcript shows one chip per file, never the file body.
+A file the model did not ask for is still context you pay for, so every limit is enforced AND said (a toast in the
+sextant, a note in the classic chat): **400 lines per file** (the block's footer names the offset that continues),
+**8 files per message**, **about 60,000 characters of files per message** (a further file is named instead of being
+cut to a fragment). Named and left out: a mention nothing matches, a directory, a binary, a file over **2 MB**, a path
+outside the workspace. A `/command` or a `!shell` line is never expanded. Settings: none — the caps are fixed.
+
 ## Features beyond the 20 ports (wave 3, verified per port in `PORTS.md`)
 
 - **Custom slash commands** (#30) — `.rovecode/commands/<name>.md` (project shadows `~/.rovecode/commands/`):
@@ -376,8 +387,13 @@ Defaults < project config chunks (harvested, capped) < env < CLI flags.
   prompt section (see Model profiles below); `ROVECODE_PROFILE=off|<id>` turns profiles off or forces one
 - `.rovecode/design.json` — the interface-design direction this project chose; written by `design_direction`,
   checked by `design_audit` (`ROVECODE_DESIGN=off` drops the prompt section). See `docs/design.md`
-- `.rovecode/settings.json` (project) / `~/.rovecode/settings.json` (user) — the persisted permission level,
-  written by `/yolo --save` and `/accept-edits --save [--project]`
+- `.rovecode/settings.json` (project) / `~/.rovecode/settings.json` (user) — the answers you should only have to
+  give once; the project file wins key by key. Three keys: `"permission": "ask" | "accept-edits" | "auto"` (written
+  by `/yolo --save` and `/accept-edits --save [--project]`; ladder: CLI flag > `ROVECODE_PERMISSION` > project >
+  user > ask), `"effort": "auto" | "off" | "low" | "medium" | "high"` (the thinking dial, `/effort --save`), and
+  `"bell": false` — both TUIs ring the terminal bell (BEL) when a run ends and when an approval or question card
+  opens, so a terminal you tabbed away from can flash or chime; this turns it off. Anything else in the file, or a
+  value of the wrong type (`"bell": "off"`), is ignored rather than guessed at
 - `.rovecode/` also holds sessions (each with its `todos.json`), checkpoints, repo-map cache
 - Permission rules: deny-by-default, last-match wildcard (`file.read/write`, `shell.exec`, `spawn`, `memory.write`, `net.fetch`, `tool.*`). Three permission levels, as the screen names them: **ask first** (default — I ask before every write, shell command and subagent), **accept edits** (`--accept-edits` / `ROVECODE_ACCEPT_EDITS=1` / `/accept-edits` — writes inside this folder stop asking; shell, subagents, network and writes outside it still ask) and **auto (never asks)** (`--yolo` / `ROVECODE_YOLO=1` / `/yolo` in the TUI). `ROVECODE_PERMISSION=ask|accept-edits|auto` sets the level a run starts at; auto skips the prompts, never the deny rules or plan mode
 - `.rovecode/hooks.ts` (+ `~/.rovecode/hooks.ts`, `ROVECODE_HOME`-aware) — typed hook set (#29; see Extending → Hooks);

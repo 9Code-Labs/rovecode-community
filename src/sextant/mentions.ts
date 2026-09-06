@@ -19,7 +19,17 @@
 import { readFileSync, statSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import { fileTag, lineHash, readAnchored, renderAnchored, type AnchoredFile } from "../coding/hashline.ts";
-import { parseInput, resolveFile, type Fuzzy } from "./overlays.ts";
+
+/** `@path` tokens in free text: at the start or after whitespace, so `me@example.com` is not one. The one
+ *  regex both surfaces and overlays.ts parseInput read — this module imports nothing from the sextant, so the
+ *  classic renderer can use it without loading the cockpit's module graph. */
+export const MENTION_RE = /(?:^|\s)@([\w./-]+)/g;
+/** the mentions of a typed line — none for a `/command` or a `!shell` line, which are never expanded */
+export function mentionsIn(text: string): string[] {
+  const t = text.trim();
+  if (t[0] === "/" || t[0] === "!") return [];
+  return [...t.matchAll(MENTION_RE)].map((m) => m[1]!);
+}
 
 /** the most lines one mention contributes — the rest is one `read` with an offset away */
 export const MENTION_MAX_LINES = 400;
@@ -49,11 +59,12 @@ export interface MentionExpansion {
 
 export interface ExpandOptions {
   cwd: string;
-  /** the workspace file list (SextantState.files.paths — cwd-relative, posix) that resolveFile ranks over */
-  paths: readonly string[];
-  /** already parsed mentions (default: parseInput(text).mentions) */
+  /** a mention → the cwd-relative posix path it names, or null. The sextant ranks over its scanned file list
+   *  (overlays.ts resolveFile: exact, unique basename, fuzzy); the classic renderer, which has no list, takes
+   *  the exact path only — what its own `@` autocomplete inserts. */
+  resolve: (mention: string) => string | null;
+  /** already parsed mentions (default: mentionsIn(text)) */
   mentions?: readonly string[];
-  fz?: Fuzzy;
   /** seams for tests */
   stat?: (abs: string) => { isFile(): boolean; size: number };
   read?: (abs: string) => string;
@@ -64,7 +75,7 @@ const BINARY_PROBE = 8 * 1024;
 /** Expand every `@mention` in a typed line. Pure apart from the reads; never throws — a file that cannot be
  *  read becomes a note and the message goes out without it. */
 export function expandMentions(text: string, opts: ExpandOptions): MentionExpansion {
-  const mentions = [...new Set(opts.mentions ?? parseInput(text).mentions)];
+  const mentions = [...new Set(opts.mentions ?? mentionsIn(text))];
   const notes: string[] = [];
   const attached: AttachedFile[] = [];
   const blocks: string[] = [];
@@ -74,7 +85,7 @@ export function expandMentions(text: string, opts: ExpandOptions): MentionExpans
   let budget = MENTION_MAX_CHARS;
   for (const m of mentions) {
     if (attached.length >= MENTION_MAX_FILES) { notes.push(`@${m}: not attached — ${MENTION_MAX_FILES} files per message is the cap; ask me to read it`); continue; }
-    const rel = resolveFile(m, opts.paths, opts.fz);
+    const rel = opts.resolve(m);
     if (rel === null) { notes.push(`@${m}: no file in the workspace matches`); continue; }
     const abs = resolve(root, rel);
     if (abs !== root && !abs.startsWith(root + sep)) { notes.push(`@${rel}: outside the workspace — not attached`); continue; }

@@ -40,6 +40,10 @@ import type {
 } from "./renderer.ts";
 import { ApprovalCard, FREE_TEXT, QuestionCard, SKIP_QUESTION } from "./overlays.ts";
 import { modeLabelShort } from "../core/voice.ts";
+import { loadSettings } from "../core/settings.ts";
+import { expandMentions, mentionsIn, splitAttached } from "../sextant/mentions.ts";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { rovecodeEditorTheme, rovecodeMarkdownTheme, rovecodeSelectListTheme, pal, st } from "./theme.ts";
 
 /** Tool cards stay single-line: collapse whitespace and clip to ~120 columns. */
@@ -60,6 +64,8 @@ export interface PiTuiRendererOptions {
 	terminal?: Terminal;
 	/** Working directory for file autocomplete; defaults to process.cwd(). */
 	cwd?: string;
+	/** the terminal bell on run end / a card that needs you; default = settings.json `bell` (true when unset) */
+	bell?: boolean;
 }
 
 export class PiTuiRenderer implements Renderer {
@@ -77,9 +83,19 @@ export class PiTuiRenderer implements Renderer {
 	/** cancel thunks for overlays awaiting an answer; drained on stop() */
 	private readonly pendingPickers = new Set<() => void>();
 
+	/** BEL when a run ends or a card opens — the same knob as the sextant's (settings.json `bell: false`) */
+	private readonly bell: boolean;
+
 	constructor(opts?: PiTuiRendererOptions) {
 		this.terminal = opts?.terminal ?? new ProcessTerminal();
 		this.cwd = opts?.cwd ?? process.cwd();
+		this.bell = opts?.bell ?? loadSettings(this.cwd).bell ?? true;
+	}
+
+	/** `\x07` straight to the terminal — only while the surface is live. A control character, not a cursor
+	 *  move, so it lands safely between pi-tui's synchronized frames. Same rules as sextant-renderer.ts ring. */
+	private ring(): void {
+		if (this.bell && this.tui) this.terminal.write("\x07");
 	}
 
 	private ui(): TUI {
@@ -120,7 +136,14 @@ export class PiTuiRenderer implements Renderer {
 		editor.onSubmit = (value: string) => {
 			const text = value.trim();
 			if (!text) return;
-			hooks.onSubmit(text);
+			// `@file` (sextant/mentions.ts): this editor's autocomplete offers files after `@`, so the mention must do
+			// something here too. No file list on this surface, so a mention is the exact cwd-relative path — what
+			// the autocomplete inserts. Every refusal and cap is said as a note, never swallowed.
+			const mentions = mentionsIn(text);
+			if (mentions.length === 0) { hooks.onSubmit(text); return; }
+			const r = expandMentions(text, { cwd: this.cwd, mentions, resolve: (m) => (existsSync(join(this.cwd, m)) ? m.replace(/\\/g, "/") : null) });
+			for (const n of r.notes) this.addSystemNote(n, "warn");
+			hooks.onSubmit(r.text);
 		};
 		editor.setAutocompleteProvider(new CombinedAutocompleteProvider(this.commands, this.cwd));
 		tui.addChild(editor);
@@ -180,7 +203,10 @@ export class PiTuiRenderer implements Renderer {
 	}
 
 	addUser(text: string): void {
-		this.insertTranscript(new Text(st.dim("> ") + text, 1, 0));
+		// the typed line and one row per @file attached — the read blocks stay in the session, not on screen
+		const { text: typed, files } = splitAttached(text);
+		this.insertTranscript(new Text(st.dim("> ") + typed, 1, 0));
+		for (const f of files) this.insertTranscript(new Text(st.dim(`  ▤ attached ${f}`), 1, 0));
 	}
 
 	addSystemNote(text: string, tone: "info" | "warn" | "error" = "info"): void {
@@ -266,6 +292,7 @@ export class PiTuiRenderer implements Renderer {
 	}
 
 	async askApproval(tool: string, argsPreview: string, detail?: string): Promise<ApprovalAnswer> {
+		this.ring(); // the run is waiting on a human who may have tabbed away
 		this.addSystemNote(`approval needed: ${tool} ${argsPreview}`, "warn");
 		const items: PickItem[] = [
 			{ value: "once", label: "allow once", description: "run this call only" },
@@ -292,6 +319,7 @@ export class PiTuiRenderer implements Renderer {
 		if (!tui || !editor || signal?.aborted) return Promise.resolve(null); // nobody to ask / run already gone
 		// concurrent-ask decision: ONE modal at a time — a second ask is a caller bug surfaced loudly, not queued
 		if (tui.hasOverlay()) return Promise.reject(new Error("a question or approval overlay is already open"));
+		this.ring();
 		const options = q.options ?? [];
 		const freeText = q.allowFreeText !== false;
 		const items: SelectItem[] = options.map((label, i) => ({ value: String(i), label }));
@@ -373,6 +401,7 @@ export class PiTuiRenderer implements Renderer {
 			const idx = tui.children.indexOf(loader);
 			if (idx >= 0) tui.children.splice(idx, 1);
 			tui.requestRender();
+			this.ring(); // a run just ended (done, failed or interrupted)
 		}
 	}
 

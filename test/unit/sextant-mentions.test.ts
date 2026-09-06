@@ -12,6 +12,10 @@ import { join } from "node:path";
 import { fileTag, lineHash, readTool } from "../../src/coding/hashline.ts";
 import { expandMentions, MENTION_FRAME, MENTION_HEAD, MENTION_MAX_CHARS, MENTION_MAX_FILES, MENTION_MAX_LINES, splitAttached } from "../../src/sextant/mentions.ts";
 import { userRow } from "../../src/sextant/sextant-bridge.ts";
+import { resolveFile } from "../../src/sextant/overlays.ts";
+
+/** the sextant's resolver: exact, unique basename, then fuzzy — over a workspace list */
+const by = (paths: readonly string[]) => (m: string): string | null => resolveFile(m, paths);
 import { makeState, spyCtx, key, press, type } from "../helpers/sextant-fixtures-keys.ts";
 
 const dirs: string[] = [];
@@ -34,7 +38,7 @@ function workspace() {
 describe("expandMentions", () => {
   test("a resolved mention is appended as the read tool would return it — same header, same hashes, same footer", async () => {
     const w = workspace();
-    const r = expandMentions("look at @session.ts please", { cwd: w.cwd, paths: w.paths });
+    const r = expandMentions("look at @session.ts please", { cwd: w.cwd, resolve: by(w.paths) });
     expect(r.notes).toEqual([]);
     // 3 lines, not 2: readAnchored counts the empty line a trailing newline yields, and so does the read tool —
     // the attachment matches the tool, quirk included, so the model's line numbers agree with its next read
@@ -51,8 +55,8 @@ describe("expandMentions", () => {
 
   test("no mention → the text is returned as is; a mention nothing matches is a note and nothing is attached", () => {
     const w = workspace();
-    expect(expandMentions("plain text", { cwd: w.cwd, paths: w.paths })).toEqual({ text: "plain text", attached: [], notes: [] });
-    const r = expandMentions("see @nothing-like-this", { cwd: w.cwd, paths: w.paths, fz: () => null });
+    expect(expandMentions("plain text", { cwd: w.cwd, resolve: by(w.paths) })).toEqual({ text: "plain text", attached: [], notes: [] });
+    const r = expandMentions("see @nothing-like-this", { cwd: w.cwd, resolve: () => null });
     expect(r.text).toBe("see @nothing-like-this");
     expect(r.attached).toEqual([]);
     expect(r.notes).toEqual(["@nothing-like-this: no file in the workspace matches"]);
@@ -62,7 +66,7 @@ describe("expandMentions", () => {
     const w = workspace();
     const paths = [...w.paths, "src/core", "../outside.ts"];
     const stat = (abs: string) => (abs.endsWith("big.ts") ? { isFile: () => true, size: 3 * 1024 * 1024 } : { isFile: () => !abs.endsWith("core"), size: 10 });
-    const r = expandMentions("@src/core @src/blob.bin @src/big.ts @../outside.ts @README.md", { cwd: w.cwd, paths, stat });
+    const r = expandMentions("@src/core @src/blob.bin @src/big.ts @../outside.ts @README.md", { cwd: w.cwd, resolve: by(paths), stat });
     expect(r.attached.map((a) => a.path)).toEqual(["README.md"]);
     expect(r.notes).toEqual([
       "@src/core: a directory — name a file in it",
@@ -76,7 +80,7 @@ describe("expandMentions", () => {
 
   test("the line cap: the first 400 lines, the head and footer name the offset that continues, and a toast says so", () => {
     const w = workspace();
-    const r = expandMentions("@src/big.ts", { cwd: w.cwd, paths: w.paths });
+    const r = expandMentions("@src/big.ts", { cwd: w.cwd, resolve: by(w.paths) });
     expect(r.attached).toEqual([{ path: "src/big.ts", shown: MENTION_MAX_LINES, total: 1001, capped: true }]);
     expect(r.text).toContain(`[@src/big.ts — attached: ${MENTION_MAX_LINES} of 1001 lines, capped: read it with offset ${MENTION_MAX_LINES + 1} for the rest]`);
     expect(r.text).toContain(`(showing lines 1-${MENTION_MAX_LINES} of 1001)`);
@@ -88,12 +92,12 @@ describe("expandMentions", () => {
     const cwd = mkdtempSync(join(tmpdir(), "rovecode-mentions-")); dirs.push(cwd);
     const paths: string[] = [];
     for (let i = 0; i < MENTION_MAX_FILES + 1; i++) { writeFileSync(join(cwd, `f${i}.txt`), `file ${i}\n`); paths.push(`f${i}.txt`); }
-    const many = expandMentions(paths.map((p) => `@${p}`).join(" "), { cwd, paths });
+    const many = expandMentions(paths.map((p) => `@${p}`).join(" "), { cwd, resolve: by(paths) });
     expect(many.attached).toHaveLength(MENTION_MAX_FILES);
     expect(many.notes).toEqual([`@f${MENTION_MAX_FILES}.txt: not attached — ${MENTION_MAX_FILES} files per message is the cap; ask me to read it`]);
     // 300 lines of 300 chars each = 90k > the budget: fewer lines land, the head says capped, the total stays under the budget
     writeFileSync(join(cwd, "wide.txt"), Array.from({ length: 300 }, () => "x".repeat(300)).join("\n") + "\n");
-    const wide = expandMentions("@wide.txt @f0.txt", { cwd, paths: [...paths, "wide.txt"] });
+    const wide = expandMentions("@wide.txt @f0.txt", { cwd, resolve: by([...paths, "wide.txt"]) });
     expect(wide.attached[0]!.capped).toBe(true);
     expect(wide.attached[0]!.shown).toBeLessThan(300);
     expect(wide.text.length - "@wide.txt @f0.txt".length).toBeLessThan(MENTION_MAX_CHARS + 2_000);
@@ -104,7 +108,7 @@ describe("expandMentions", () => {
 
   test("the same file mentioned twice is attached once", () => {
     const w = workspace();
-    const r = expandMentions("@README.md and again @README.md", { cwd: w.cwd, paths: w.paths });
+    const r = expandMentions("@README.md and again @README.md", { cwd: w.cwd, resolve: by(w.paths) });
     expect(r.attached).toHaveLength(1);
     expect((r.text.match(/\[@README\.md — attached/g) ?? []).length).toBe(1);
   });
@@ -113,7 +117,7 @@ describe("expandMentions", () => {
 describe("the transcript's view", () => {
   test("splitAttached / userRow: the typed text and one chip per file, the bodies gone; image chips still work beside them", () => {
     const w = workspace();
-    const r = expandMentions("explain @session.ts and @src/big.ts", { cwd: w.cwd, paths: w.paths });
+    const r = expandMentions("explain @session.ts and @src/big.ts", { cwd: w.cwd, resolve: by(w.paths) });
     expect(splitAttached(r.text)).toEqual({ text: "explain @session.ts and @src/big.ts", files: ["src/core/session.ts · 3 lines", `src/big.ts · ${MENTION_MAX_LINES}/1001 lines, capped`] });
     expect(MENTION_HEAD.test("[@src/core/session.ts — attached: 3 lines]")).toBe(true);
     const row = userRow(`${r.text}\n[image: shot.png]`, 5);

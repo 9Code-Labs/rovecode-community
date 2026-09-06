@@ -71,7 +71,7 @@ export function dispatch(s: SextantState, text: string, ctx: KeyCtx): void {
   // `@file` in free text: the file goes with the message as a `read` result (mentions.ts) — this is the one
   // consumer of parseInput's `mentions`, and what the footer's "@ mentions attach files" has meant since
   if (p.kind === "text" && p.mentions.length > 0) {
-    const r = expandMentions(text, { cwd: s.cwd, paths: s.files.paths, mentions: p.mentions });
+    const r = expandMentions(text, { cwd: s.cwd, mentions: p.mentions, resolve: (m) => resolveFile(m, s.files.paths) });
     for (const n of r.notes) ctx.local.toast(n);
     ctx.hooks.onSubmit(r.text);
     return;
