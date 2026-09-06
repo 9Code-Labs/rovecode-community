@@ -401,11 +401,27 @@ export class SextantRenderer implements Renderer {
       });
     },
     marketInstall: (row) => {
-      void install(row, { scope: "user", cwd: this.state.cwd, home: homedir() }).then((outcome) => {
+      void install(row, { scope: "user", cwd: this.state.cwd, home: homedir() }).then(async (outcome) => {
+        // An MCP server lands in a file this session already read, so the install used to end in
+        // "restart rovecode" — a poor answer to "I just installed it". Ask the runtime to re-read the
+        // files and connect what is new, and report what actually happened instead of what to do next.
+        // Only on success, only for MCP, and never fatal: a reload that throws leaves the install
+        // reported exactly as it was, because the write DID happen and saying otherwise would be worse.
+        let text = outcome.text;
+        if (outcome.ok && row.kind === "mcp" && this.ctx?.reloadMcp) {
+          try {
+            const r = await this.ctx.reloadMcp();
+            const failed = r.failed.find((f) => r.added.includes(f.name));
+            text = text.replace(/ · restart rovecode[^·]*/, "");
+            text += failed
+              ? ` · ${failed.name} did not connect: ${failed.error}`
+              : r.added.length > 0 ? ` · connected as ${r.added.join(", ")} — no restart needed` : "";
+          } catch { /* the install stands on its own */ }
+        }
         const m = this.state.market;
         if (!m?.plan) return;
         m.plan.running = false;
-        m.plan.outcome = outcome;
+        m.plan.outcome = { ...outcome, text };
         this.loop.markDirty();
       });
     },

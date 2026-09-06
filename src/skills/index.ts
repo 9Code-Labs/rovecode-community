@@ -5,7 +5,7 @@
 import {
   existsSync, readFileSync, readdirSync, renameSync, statSync, utimesSync, writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
+import { rovecodeHome } from "../providers/auth.ts";
 import { join, resolve } from "node:path";
 
 export const SKILL_FILE = "SKILL.md";
@@ -203,7 +203,13 @@ export class SkillStore {
     this.projectDir = resolve(cwd, opts.projectDir ?? join(".rovecode", "skills"));
     this.globalDir = opts.globalDir === null
       ? null
-      : resolve(opts.globalDir ?? join(homedir(), ".rovecode", "skills"));
+      // rovecodeHome(), not homedir(): ROVECODE_HOME is how every other part of rovecode finds its
+      // config — hooks, settings, plugins, credentials — and skills were the one that ignored it. So a
+      // user who set it read skills from a directory nothing else used, and every test that isolates
+      // itself with a scratch home silently indexed the DEVELOPER's real skills instead. That is how
+      // this was found: installing one skill into a real home broke a plugin test that never touches
+      // skills, and the failure named a skill the test had never heard of.
+      : resolve(opts.globalDir ?? join(rovecodeHome(), "skills"));
     this.maxDepth = opts.maxDepth ?? 3;
     this.extraDirs = (opts.extraDirs ?? []).map(({ dir, scope }) => [resolve(cwd, dir), scope]);
   }

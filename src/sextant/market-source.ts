@@ -237,15 +237,24 @@ export async function install(row: MarketViewRow, ctx: { scope: "user" | "projec
   if (!item) return { ok: false, text: `${row.kind}:${row.id} is not in the catalog any more` };
   const plan = mod.install.planInstall(item, ctx);
   if ("error" in plan) return { ok: false, text: plan.error };
-  // a plan with unanswered questions cannot be finished inside the overlay: a secret must be typed on a
-  // shell, masked, not into a TUI query line. The overlay says so and hands the exact command over.
-  if (plan.asks.length > 0 || plan.pending.length > 0) {
-    return { ok: false, text: `needs answers — run: rovecode market install ${item.kind}:${item.id}` };
+  // A SECRET cannot be finished inside the overlay: it has to be typed on a shell, masked, not into a
+  // query line that echoes. The overlay says so and hands the exact command over.
+  //
+  // `pending` is not that, and treating it as if it were made six of the sixteen curated MCP servers
+  // uninstallable from the cockpit — including `filesystem`, which is the first one anybody tries.
+  // Nothing is asked for a pending value: it is a placeholder the installer writes into the config
+  // (`<directory the server may touch>`) for the human to replace afterwards, and the CLI installs it
+  // exactly that way. Refusing here was the overlay inventing a requirement the installer does not have.
+  if (plan.asks.length > 0) {
+    const what = plan.asks.map((a) => a.name).join(", ");
+    return { ok: false, text: `${what} must be typed where it can be masked — run: rovecode market install ${item.kind}:${item.id}` };
   }
   const outcome = await mod.install.runInstall(plan, {}, ctx);
   if (!outcome.ok) return { ok: false, text: outcome.error };
   const bits = [`installed into ${outcome.target}`];
   if (outcome.envNames.length) bits.push(`export ${outcome.envNames.join(", ")}`);
+  // the placeholder is the one thing between this install and a working server, so it leads
+  for (const p of plan.pending) bits.push(`fill in ${p}`);
   if (outcome.next) bits.push(outcome.next);
   return { ok: true, text: bits.join(" · ") };
 }

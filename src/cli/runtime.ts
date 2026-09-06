@@ -124,8 +124,14 @@ export interface Runtime {
   /** the two ceilings on a run (cli/run-limits.ts): buildCfg reads them ahead of ROVECODE_MAX_TURNS /
    *  ROVECODE_MAX_SECONDS and the 60-turn default — `rovecode run` sets its flags and headless default here */
   setRunLimits(limits: RunLimits): void;
-  /** MCP server manager (port #3); null when no servers configured */
+  /** MCP server manager (port #3); null when no servers were configured at boot AND none has been
+   *  installed since — `reloadMcp` creates it on demand. */
   mcp: McpManager | null;
+  /** Re-read the MCP files and bring the session in line with them, connecting anything new. What
+   *  `market install mcp:<id>` calls so a fresh server is usable in the session that installed it
+   *  rather than after a restart. Never throws: a server that will not connect comes back in `failed`
+   *  and simply stays unavailable, exactly as at boot. */
+  reloadMcp(): Promise<{ added: string[]; removed: string[]; failed: { name: string; error: string }[] }>;
   /** port #8 config snapshot (AGENTS.md/CLAUDE.md/… harvested cwd-upward ONCE
    *  at construction, for prompt-cache stability) incl. dropped/truncated
    *  source stubs for /status. Mid-session config edits are intentionally not
@@ -362,17 +368,60 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     for (const c of lazyMcp().client.loadMcpConfig(cwd, mcpWarnings, { home: pluginHome, trusted: trustedPredicate(pluginState) })) { if (mcpByName.has(c.name)) pluginWarn(`mcp.json server "${c.name}" overrides a plugin's entry of the same name`); mcpByName.set(c.name, c); }
   }
   for (const w of mcpWarnings) pluginWarn(`mcp: ${w}`);
+  // Reading the three files is its own function because it happens twice: once here, and again whenever
+  // something installs a server and wants it usable without a restart (reloadMcp below).
+  const readMcpConfigs = (): McpServerConfig[] => {
+    const byName = new Map<string, McpServerConfig>();
+    for (const p of activePlugins) for (const c of p.mcp) if (!byName.has(c.name)) byName.set(c.name, c);
+    const warn: string[] = [];
+    const files = existsSync(join(pluginHome, "mcp.json"))
+      || existsSync(join(cwd, ".rovecode", "mcp.json"))
+      || existsSync(join(cwd, ".mcp.json"));
+    // the trust gate is re-read too: a project file approved since boot starts counting from now on,
+    // and one whose contents changed is untrusted again, exactly as it would be on a fresh start
+    if (files) for (const c of lazyMcp().client.loadMcpConfig(cwd, warn, { home: pluginHome, trusted: trustedPredicate(loadPluginState(pluginHome)) })) byName.set(c.name, c);
+    return [...byName.values()];
+  };
+
   const mcpConfigs = [...mcpByName.values()];
   let mcp: McpManager | null = null;
+  let mcpReady: Promise<void> = Promise.resolve();
+  /** register mcp_list/mcp_call once; they dispatch by server name, so a new server needs no new tool */
+  const registerMcpTools = (manager: McpManager): void => {
+    for (const t of lazyMcp().tools.createMcpTools(manager)) {
+      registry.register({ ...t, execute: async (a, c) => { await mcpReady; return t.execute(a, c); } });
+    }
+  };
   if (mcpConfigs.length > 0) {
     const mcpMod = lazyMcp();
     const manager = new mcpMod.client.McpManager(mcpConfigs);
     mcp = manager;
-    const ready = manager.connect().then(() => undefined, () => undefined);
-    for (const t of mcpMod.tools.createMcpTools(manager)) {
-      registry.register({ ...t, execute: async (a, c) => { await ready; return t.execute(a, c); } });
-    }
+    mcpReady = manager.connect().then(() => undefined, () => undefined);
+    registerMcpTools(manager);
   }
+
+  /** Pick up mcp.json changes in a live session — what `market install mcp:<id>` calls so the answer is
+   *  "ready" instead of "restart rovecode".
+   *
+   *  Two cases, and the second is the one that matters most: when a session started with NO servers there
+   *  is no manager and `mcp_list`/`mcp_call` were never registered, so installing your first server used
+   *  to leave the model with no way to reach it at all. Here the manager is created and the two tools are
+   *  registered at that moment. Servers already connected are left alone (see McpManager.sync). */
+  const reloadMcp = async (): Promise<{ added: string[]; removed: string[]; failed: { name: string; error: string }[] }> => {
+    const configs = readMcpConfigs();
+    if (mcp === null) {
+      if (configs.length === 0) return { added: [], removed: [], failed: [] };
+      const manager = new (lazyMcp().client.McpManager)(configs);
+      mcp = manager;
+      registerMcpTools(manager);
+      const r = await manager.connect();
+      mcpReady = Promise.resolve();
+      return { added: configs.map((c) => c.name), removed: [], failed: r.failed };
+    }
+    const { added, removed } = await mcp.sync(configs);
+    const r = added.length > 0 ? await mcp.connect() : { failed: [] as { name: string; error: string }[] };
+    return { added, removed, failed: r.failed };
+  };
 
   // boot-time view of the default provider — only the router's role table is pinned to it; every
   // other reader goes through the LIVE getters on the returned Runtime (provider / defaultModel)
@@ -611,7 +660,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     cwd, sessionId, store, registry, skillStore,
     get blockStore() { return blocks; },
     setBlockStore(b: BlockStore) { blocks = b; registry.register(memoryEditTool(b)); },
-    guard, planReminder: planReminderFor, mcp, projectContext, router,
+    guard, planReminder: planReminderFor, get mcp() { return mcp; }, reloadMcp, projectContext, router,
     get effort() { return effort; },
     setEffort(e: ThinkingEffort) { effort = e; },
     setRunLimits(l: RunLimits) { runLimits = l; },

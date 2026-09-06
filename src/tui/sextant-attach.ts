@@ -58,6 +58,9 @@ export function buildSextantAttach(a: AttachSources): SextantAttach {
       },
       runtime: a.runtime?.() ?? null,
     }),
+    // /market installs an MCP server into a file this session already read; without this the only way to
+    // reach it was to quit and start again, which is a poor answer to "I just installed it"
+    reloadMcp: async () => { const rt = a.runtime?.(); return (await rt?.reloadMcp?.()) ?? { added: [], removed: [], failed: [] }; },
     // the images staged for the next message (tui/attach.ts /attach, /paste) — read live, the store owns them
     staged: () => a.store().stagedAttachments.map((p) => p.name ?? "image"),
     ...(a.petName !== undefined ? { petName: a.petName } : {}),

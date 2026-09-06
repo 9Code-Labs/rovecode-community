@@ -256,6 +256,36 @@ export class McpManager {
     }
   }
 
+  /** Bring the manager's server list in line with `configs`, without touching what is already running.
+   *
+   *  This is what lets `market install mcp:<id>` be usable in the session that installed it, instead of
+   *  ending in "restart rovecode". A server the manager already knows is left exactly as it is —
+   *  connected, cached tools and all — because re-adding it would drop a working connection to change
+   *  nothing. A server that has disappeared from the files is closed and forgotten. New names are added
+   *  disconnected; `connect()` then picks them up, since it only attempts entries whose client is null.
+   *
+   *  Config changes to an EXISTING name are deliberately not applied here: swapping the command under a
+   *  live connection is a different operation with its own failure modes, and pretending otherwise would
+   *  make this quietly unreliable. Removing and re-adding does it, and says what it is doing. */
+  async sync(configs: readonly McpServerConfig[]): Promise<{ added: string[]; removed: string[] }> {
+    const wanted = new Map(configs.map((c) => [c.name, c]));
+    const added: string[] = [];
+    const removed: string[] = [];
+    for (const [name, entry] of [...this.servers]) {
+      if (wanted.has(name)) continue;
+      removed.push(name);
+      this.servers.delete(name);
+      this.toolCache.delete(name);
+      if (entry.client) await entry.client.close().catch(() => {});
+    }
+    for (const [name, config] of wanted) {
+      if (this.servers.has(name)) continue;
+      this.servers.set(name, { config, client: null });
+      added.push(name);
+    }
+    return { added, removed };
+  }
+
   /** Close all clients (errors swallowed) and drop caches. Configs are kept, so
    *  connect() can be called again. */
   async close(): Promise<void> {

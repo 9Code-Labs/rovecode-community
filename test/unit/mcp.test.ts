@@ -390,3 +390,66 @@ describe("McpManager.listTools cache", () => {
     expect(refreshed.map((t) => t.name)).toContain("extra");
   });
 });
+
+
+/** a linked in-memory MCP server that lists one tool — enough for connect() to succeed */
+async function linked(name: string): Promise<Transport> {
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const server = new McpServer({ name, version: "1.0.0" });
+  server.registerTool("ping", { description: "d", inputSchema: {} }, async () => ({ content: [{ type: "text", text: "pong" }] }));
+  await server.connect(serverTransport);
+  return clientTransport;
+}
+
+/** `sync` is what lets an install be usable in the session that installed it, instead of ending in
+ *  "restart rovecode". The rules it has to keep: a running server is not disturbed, a vanished one is
+ *  closed, and a new one is added disconnected so `connect()` picks it up. */
+describe("sync: adding a server to a live manager", () => {
+  const cfg = (name: string): McpServerConfig => ({ name, transport: "stdio", command: "unused-inmemory" });
+
+  test("a server added after connect() joins the session, and the one already running is untouched", async () => {
+    let firstOpens = 0;
+    const m = new McpManager([cfg("first")], {
+      transportFactory: async (c) => {
+        if (c.name === "first") firstOpens += 1;
+        return linked(c.name);
+      },
+    });
+    await m.connect();
+    expect(m.connectedNames()).toEqual(["first"]);
+    expect(firstOpens).toBe(1);
+
+    const { added, removed } = await m.sync([cfg("first"), cfg("second")]);
+    expect(added).toEqual(["second"]);
+    expect(removed).toEqual([]);
+    expect(m.connectedNames()).toEqual(["first"]);   // not connected until connect() is called
+
+    await m.connect();
+    expect(m.connectedNames().sort()).toEqual(["first", "second"]);
+    // the point of leaving known servers alone: re-adding one must not drop and reopen a live connection
+    expect(firstOpens).toBe(1);
+    await m.close();
+  });
+
+  test("a server that disappeared from the files is closed and forgotten", async () => {
+    const m = new McpManager([cfg("a"), cfg("b")], { transportFactory: async (c) => linked(c.name) });
+    await m.connect();
+    expect(m.connectedNames().sort()).toEqual(["a", "b"]);
+
+    const { added, removed } = await m.sync([cfg("a")]);
+    expect(removed).toEqual(["b"]);
+    expect(added).toEqual([]);
+    expect(m.serverNames()).toEqual(["a"]);
+    expect(m.connectedNames()).toEqual(["a"]);
+    await m.close();
+  });
+
+  test("syncing to nothing empties the manager without throwing", async () => {
+    const m = new McpManager([cfg("only")], { transportFactory: async (c) => linked(c.name) });
+    await m.connect();
+    await m.sync([]);
+    expect(m.serverNames()).toEqual([]);
+    expect(m.connectedNames()).toEqual([]);
+    await m.close();
+  });
+});
