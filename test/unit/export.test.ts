@@ -306,3 +306,23 @@ test("rovecode export e2e: --json before the command is honored; dangling --out 
   }
   rmSync(cwd, { recursive: true, force: true });
 }, 30_000); // three synchronous main.ts boots — the known 5s-timeout flake under load (seen by 3 critics)
+
+test("a usage error and a failure are different answers: `export` with no id exits 2, a real failure exits 1", async () => {
+  // README documents the classes as 0 done · 1 error/budget · 2 usage/startup, and every other command
+  // answers that way; export exited 1 for both, so a script could not tell "you typed it wrong" from
+  // "it did not work". Spawned rather than called, because the distinction IS the exit code.
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-export-exit-"));
+  const main = join(import.meta.dir, "..", "..", "src", "cli", "main.ts");
+  const run = async (...args: string[]) => {
+    const p = Bun.spawn([process.execPath, main, "export", ...args], { cwd, env: { ...process.env, ROVECODE_HOME: cwd }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+    return { code: await p.exited, err: await new Response(p.stderr).text() };
+  };
+  const noId = await run();
+  expect(noId.code).toBe(2);
+  expect(noId.err).toContain("usage: rovecode export");
+
+  const missing = await run("nosuchsession");
+  expect(missing.code).toBe(1);                       // a real failure, not a usage error
+  expect(missing.err).not.toContain("usage:");
+  rmSync(cwd, { recursive: true, force: true });
+}, 30_000);

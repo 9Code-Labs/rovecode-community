@@ -27,7 +27,8 @@ import type { ImagePart, Message, ToolCallPart, ToolResultPart } from "../core/t
 export const TOOL_OUTPUT_CAP = 2000;
 /** One-line args summary cap — same 120-char clip the TUI uses for tool cards. */
 const ARGS_CAP = 120;
-/** CLI usage line — thrown (exit 1 via cmdExport) on a missing id or a dangling --out. */
+/** CLI usage line — thrown on a missing id or a dangling --out; cmdExport turns it into exit 2, the
+ *  usage/startup class README documents, while a real export failure stays exit 1. */
 const USAGE = "usage: rovecode export <session-id|prefix> [--json] [--out <path>] [--force]";
 
 export interface ExportOptions {
@@ -268,7 +269,10 @@ export function cmdExport(argv: readonly string[]): void {
     const res = exportSession(join(process.cwd(), ".rovecode", "sessions"), a.idOrPrefix ?? "", a);
     console.log(`exported ${res.format} → ${res.path}`);
   } catch (e) {
-    console.error(`error: ${e instanceof Error ? e.message : String(e)}`);
-    process.exit(1);
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`error: ${msg}`);
+    // "you typed it wrong" and "it did not work" are different answers to a script: 2 is the usage class
+    // (README: 0 done · 1 error/budget · 2 usage/startup), and every other command already answers that way
+    process.exit(msg.startsWith("usage:") ? 2 : 1);
   }
 }

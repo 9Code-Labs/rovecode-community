@@ -514,7 +514,13 @@ if (cmd === "" || cmd === "chat" || cmd === "repl") {
     case "provider": await cmdProvider(argvAfter("provider")); break;
     case "model": await cmdModel(argvAfter("model")); break;
     case "models": await cmdModel(["list", ...argvAfter("models")]); break;
-    case "trace": await cmdTrace(cli.rest[0] ?? ""); break;
+    // an id is required: without one this built a store on the empty id, printed nothing and exited 0 —
+    // a silent success a reader takes for "this session has no messages"
+    case "trace": {
+      const id = cli.rest[0];
+      if (id === undefined || id.length === 0) { console.error("usage: rovecode trace <session-id>  (rovecode context lists them)"); process.exitCode = 2; break; }
+      await cmdTrace(id); break;
+    }
     case "export": (await import("./export.ts")).cmdExport(process.argv); break;
     case "smoke-tui": {
       if (process.argv.includes("--sextant")) { await (await import("../tui/sextant-smoke.ts")).runSextantSmoke(); break; }
