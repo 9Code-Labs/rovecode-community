@@ -4,6 +4,33 @@ What changed for the person using rovecode, newest first. Every line ends with t
 the change (hashes on `main`). Numbers are measurements from the commit that reports them, on the
 machine it names.
 
+Hashes on entries before 0.3.2 name commits in the checkout rovecode shared with its website until
+2026-09-06. That repository is gone; the entries are kept because what they describe still ships.
+
+## 0.3.2 — 2026-09-06
+
+### Fixed
+
+- `--max-cost 0.15` sent its own number to the model as part of the prompt: the flag was not in the
+  parser's value list, so the budget was consumed as a flag and `0.15` was consumed as the request. A
+  run asked to build a page came back with `0.15` used as a CSS opacity. The test now walks the whole
+  flag table instead of the three entries someone remembered
+
+### Added
+
+- A run that changed files can check its own work before it says done: rovecode works out what checking
+  this project costs (a `verify` list in settings, or inferred from package.json / Makefile / pyproject),
+  runs it once at the end, and on failure gives the model one turn with the failing part quoted. Off by
+  default — `ROVECODE_VERIFY=1` turns it on, and `rovecode doctor` says which commands it would run
+- `rovecode doctor` gained a verify row: what would run, where it came from, and — when nothing is
+  configured — that this is the blind spot, named rather than silently skipped
+
+### Changed
+
+- The website moved out. rovecode is its own repository with its own history; site/ was 250 MB of the
+  old pack and none of it was ever read by a build here. Content still lives here and is published to
+  the site with `bun run publish:site`
+
 ## 0.3.1 — 2026-09-06
 
 Berkay: "kod yazarken pek üstünde durmuyor, çoğu durumda az değişiklikler yapıp bırakıyor" — when it writes
