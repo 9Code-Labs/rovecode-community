@@ -139,18 +139,32 @@ export class SessionStore {
   /** port #34: image parts waiting for the next user message (stageAttachments) */
   private staged: ImagePart[] = [];
 
+  /** Opening a store touches nothing on disk. The directory and meta.json appear with the FIRST entry
+   *  (append, appendEvent, branch) — see materialize(). Constructing used to write both immediately, so
+   *  every start that never got a prompt (`rovecode --help` paths that boot a runtime, `rovecode context`,
+   *  a TUI opened and closed, every test) left `<sessions>/<uuid>/meta.json` behind: dozens of empty
+   *  directories that listSessions offered as sessions with nothing in them. Deleting them afterwards was
+   *  the other option, and it races: process B prunes the directory process A has just opened and not
+   *  yet written to. Not creating it has no such window. An existing session (meta.json + entries) opens
+   *  exactly as before; nothing is ever deleted. */
   constructor(rootDir: string, public readonly id: string) {
     this.dir = join(rootDir, id);
     this.meta = { id, createdAt: Date.now() };
-    mkdirSync(this.dir, { recursive: true });
-    const metaP = join(this.dir, "meta.json");
-    if (!existsSync(metaP)) {
-      writeFileSync(metaP, JSON.stringify(this.meta, null, 2));
-    }
     this.reload();
   }
 
   private get file() { return join(this.dir, "entries.jsonl"); }
+
+  /** Make the session real on disk: the directory plus meta.json (once). Called on every write path,
+   *  before the write. Idempotent and cheap (a mkdir on an existing directory and one stat), so it also
+   *  means a session whose empty directory was swept away by hand recovers on its next entry instead of
+   *  throwing ENOENT from appendFileSync. `createdAt` is the construction time, written whenever the first
+   *  entry lands — the session began when it was opened, not when someone first spoke. */
+  private materialize(): void {
+    mkdirSync(this.dir, { recursive: true });
+    const metaP = join(this.dir, "meta.json");
+    if (!existsSync(metaP)) writeFileSync(metaP, JSON.stringify(this.meta, null, 2));
+  }
 
   /** Replay JSONL → cache; detect corruption instead of crashing (pi reducer pattern).
    *  Restores a persisted leaf (durable branch) when meta.json names an existing entry;
@@ -235,6 +249,7 @@ export class SessionStore {
     // A supplied parentId can lag the leaf (the loop snapshots history at run start;
     // /new and /rewind may move the leaf mid-run). The chain must follow the PARENT
     // pointer, never the moved leaf, or hash chain and tree silently disagree.
+    this.materialize();
     const supplied = (entry as { parentId?: string | null }).parentId;
     const parentId = supplied !== undefined ? supplied : this.leaf;
     let prevHash = this.prevHash;
@@ -294,6 +309,7 @@ export class SessionStore {
    *  into a dead sibling the moment that message lands. Hash-chained like any entry; path()
    *  folds it back in right after the message it annotates; messages() never sees it. */
   appendEvent(event: RunEvent): Entry {
+    this.materialize();
     const parentId = this.leaf === "root" ? null : this.leaf;
     const entry: Entry = { id: randomUUID(), kind: "event", parentId, createdAt: Date.now(), event };
     const w: Wrapped = { id: entry.id, parentId, createdAt: entry.createdAt, prevHash: this.prevHash, hash: "", entry };
@@ -361,6 +377,7 @@ export class SessionStore {
 
   /** Atomically rewrite meta.json carrying the active leaf (write tmp + rename). */
   private persistLeaf(): void {
+    this.materialize();
     this.meta = { ...this.meta, leaf: this.leaf };
     const metaP = join(this.dir, "meta.json");
     const tmp = metaP + ".tmp";

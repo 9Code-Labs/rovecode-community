@@ -204,7 +204,7 @@ test("boot with an ambiguous prefix starts fresh and warns instead of guessing",
 test("memory_edit writes to the SWITCHED session's block store after /resume", async () => {
   const cwd = mkdtempSync(join(tmpdir(), "rovecode-nav-"));
   const root = join(cwd, ".rovecode", "sessions");
-  new SessionStore(root, "mem-b");                  // pre-existing target session
+  new SessionStore(root, "mem-b").append(umsg("b began here", null)); // pre-existing target session (on disk once it holds an entry)
   const stream = mockStream({
     turns: [
       toolTurn([{ id: "m1", tool: "memory_edit", args: { op: "add", block: "memory", text: "FROM-B-FACT" } }]),
@@ -279,7 +279,7 @@ test("rewind to the ROOT turn opens a fresh session, keeps the old one, prefills
   expect(fake.prefilled).toContain("first question");            // original prompt back in the editor
   expect(fake.users).toEqual([]);                                // fresh session transcript is empty
   const dirs = readdirSync(root).filter((d) => existsSync(join(root, d, "meta.json")));
-  expect(dirs.length).toBe(2);                                   // old session + the fresh one
+  expect(dirs).toEqual([sid]);                                   // the old session; the fresh one reaches disk with its first entry, not before
   expect(readFileSync(join(root, sid, "entries.jsonl"), "utf8")).toBe(entriesBefore); // nothing deleted
   fake.hooks.onExit();
   await app;

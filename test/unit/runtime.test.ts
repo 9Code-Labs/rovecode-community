@@ -14,15 +14,21 @@ function tmpCwd(): string {
   return mkdtempSync(join(tmpdir(), "rovecode-runtime-"));
 }
 
-test("createRuntime builds stores under <cwd>/.rovecode/sessions/<id>", () => {
+test("createRuntime builds stores under <cwd>/.rovecode/sessions/<id> — on disk only once the session holds an entry", () => {
   const cwd = tmpCwd();
   const rt = createRuntime({ cwd, sessionId: "sess-1", stream: null });
   expect(rt.cwd).toBe(cwd);
   expect(rt.sessionId).toBe("sess-1");
   expect(rt.store.id).toBe("sess-1");
-  expect(existsSync(join(cwd, ".rovecode", "sessions", "sess-1"))).toBe(true);
-  // BlockStore path: <sessions>/<sessionId>/memory
-  expect(existsSync(join(cwd, ".rovecode", "sessions", "sess-1", "memory"))).toBe(true);
+  // Booting a runtime used to leave `<sessions>/<id>/meta.json` and an empty `memory/` behind whether or not
+  // anything was ever said: 27 hollow session directories in this repo alone. The sessions ROOT may exist
+  // (recall and todo tools are bound to it); the session's own directory appears with its first entry.
+  expect(existsSync(join(cwd, ".rovecode", "sessions", "sess-1"))).toBe(false);
+  rt.store.append({ id: "u1", role: "user", parts: [{ kind: "text", text: "hello" }], parentId: null, createdAt: Date.now() });
+  expect(existsSync(join(cwd, ".rovecode", "sessions", "sess-1", "meta.json"))).toBe(true);
+  expect(existsSync(join(cwd, ".rovecode", "sessions", "sess-1", "entries.jsonl"))).toBe(true);
+  // BlockStore path: <sessions>/<sessionId>/memory — created by the first memory commit, not by boot
+  expect(existsSync(join(cwd, ".rovecode", "sessions", "sess-1", "memory"))).toBe(false);
   rmSync(cwd, { recursive: true, force: true });
 });
 

@@ -309,7 +309,7 @@ test("(e) /attach while a run is busy → the queued steer carries the image whe
 test("(f) /attach then /resume <other>: the stage is carried to the new store with a note and rides on the next message THERE; a same-store /new keeps it; nothing is written under the old session", async () => {
   const cwd = cwdWithImage();
   const root = join(cwd, ".rovecode", "sessions");
-  new SessionStore(root, "other-sess");                  // pre-existing target
+  new SessionStore(root, "other-sess").appendEvent({ type: "turn_start", turn: 0 }); // pre-existing target: on disk once it holds an entry
   const fake = new FakeRenderer();
   const { stream, seen } = capturing([textTurn("x")]);
   const app = runTui({ renderer: fake, stream, cwd, sessionId: "first-sess", yolo: true, exitOnClose: false, model: "scripted" });

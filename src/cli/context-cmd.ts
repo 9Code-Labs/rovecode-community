@@ -101,17 +101,15 @@ export async function cmdContext(args: string[], deps: ContextCliDeps = {}): Pro
   const json = args.includes("--json");
   const id = args.find((a) => !a.startsWith("-"));
 
+  // --json is one document on stdout on every exit, the failing ones included — a script that asked for the
+  // report gets `{error}` it can read, not an empty stdout and a 1 (the market commands keep the same rule)
+  const fail = (msg: string): 1 => { err(msg); if (json) log(JSON.stringify({ error: msg })); return 1; };
+
   const sessionsDir = join(cwd, ".rovecode", "sessions");
   const sessions = listSessions(sessionsDir);
   const chosen = id ?? sessions[0]?.id;
-  if (!chosen) {
-    err("no sessions here — run rovecode in this directory first");
-    return 1;
-  }
-  if (id && !sessions.some((s) => s.id === id)) {
-    err(`no session ${id} here — rovecode context lists the newest by default`);
-    return 1;
-  }
+  if (!chosen) return fail("no sessions here — run rovecode in this directory first");
+  if (id && !sessions.some((s) => s.id === id)) return fail(`no session ${id} here — rovecode context lists the newest by default`);
 
   const messages = new SessionStore(sessionsDir, chosen).messages();
   const ref = deps.currentRef
@@ -120,10 +118,7 @@ export async function cmdContext(args: string[], deps: ContextCliDeps = {}): Pro
         const { ProviderRegistry } = await import("../providers/registry.ts");
         return new ProviderRegistry(cwd).defaultRef() ?? null;
       })();
-  if (!ref) {
-    err("no default model — rovecode model use <provider/model>");
-    return 1;
-  }
+  if (!ref) return fail("no default model — rovecode model use <provider/model>");
 
   // The system prompt and the tool schemas are the two rows a transcript cannot tell us, and they are
   // the largest fixed cost of every turn — so the command builds the same runtime a real run would and

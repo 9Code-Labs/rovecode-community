@@ -231,6 +231,10 @@ test("markdown walks the ACTIVE path only (branched-away turns excluded); empty 
   const md = renderSessionMarkdown(new SessionStore(root, "goldsess").path(), "goldsess", new ModelCatalog());
   expect(md).toContain("hello there");
   expect(md).not.toContain("try the risky thing");
+  // a directory holding meta.json and no entries: what every start left behind before the store went lazy
+  // (core/session.ts materialize()) — still resumable, still exportable as markdown, still refused as JSONL
+  mkdirSync(join(root, "hollow"), { recursive: true });
+  writeFileSync(join(root, "hollow", "meta.json"), JSON.stringify({ id: "hollow", createdAt: Date.now() }));
   const empty = new SessionStore(root, "hollow");
   const emd = renderSessionMarkdown(empty.path(), "hollow", new ModelCatalog());
   expect(emd).toContain("*(no entries)*");

@@ -3,7 +3,7 @@
  *  cache-stable; tools mutate live state + disk only. A threat-scan neutralizes injection
  *  lines in the rendered view — raw text on disk is never rewritten by the scan. */
 
-import { mkdirSync, existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { VersionLedger } from "../skills/versioned.ts";
 
@@ -56,7 +56,9 @@ export class BlockStore {
     private readonly dir: string,
     private readonly caps: BlockCaps = defaultCaps,
   ) {
-    mkdirSync(dir, { recursive: true });
+    // no mkdir here: reads tolerate a missing directory and the ledger creates it on the first commit
+    // (skills/versioned.ts). Creating `<session>/memory` at construction was what made every session
+    // directory non-empty before anyone had said anything (core/session.ts materialize()).
     this.live.memory = this.read("MEMORY.md");
     this.live.user = this.read("USER.md");
     // snapshot is the threat-scanned view of what session start loaded

@@ -250,6 +250,7 @@ test("stageAttachments: a system entry leaves the stage alone; the next USER app
 test("sidecar write failure keeps the image inline in the JSONL — nothing dropped, the round-trip still reads back", () => {
   const dir = mkdtempSync(join(tmpdir(), "rovecode-test-"));
   const s = new SessionStore(dir, "img4");
+  mkdirSync(join(dir, "img4"), { recursive: true }); // the store creates its directory with the first entry, so plant the obstacle first
   writeFileSync(join(dir, "img4", "attachments"), "a file where the directory should be");
   s.append(imsg("look", dot()));
   const w = JSON.parse(readFileSync(join(dir, "img4", "entries.jsonl"), "utf8").trim());

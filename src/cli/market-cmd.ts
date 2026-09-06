@@ -56,7 +56,7 @@ export const MARKET_USAGE = [
   "                                             shows the plan, asks (masked) for keys by name, then writes",
   "                                             --dry-run shows the plan and stops; nothing is fetched or written",
   "  remove <id|kind:id> [--project]            undo an install of any kind",
-  "  list [--all]                               what is installed here (--all: the whole market, with badges)",
+  "  list [--all] [--kind mcp|skill|plugin]     what is installed here (--all: the whole market, with badges)",
   "  update [id] [--all] [--yes]                what is out of date; with an id or --all: plan, approve, reinstall",
   "                                             --all --yes skips plugins (new code): name one, or pass --yes-plugins",
   "  sources [probe]                            where rows come from right now; really asks the registry (--offline to skip)",
@@ -66,6 +66,29 @@ export const MARKET_USAGE = [
   "every command takes --json · --offline skips the network entirely",
   "an id is a bare slug inside its kind (filesystem); say mcp:filesystem when two kinds share a name",
 ];
+
+/** Flags every subcommand reads. */
+const COMMON_FLAGS: ReadonlySet<string> = new Set(["--json", "--offline"]);
+/** Flags that take a value — the token after them is never a positional. */
+const VALUE_FLAGS: ReadonlySet<string> = new Set(["--as", "--pick", "--kind", "--ref"]);
+/** What each subcommand reads, beyond COMMON_FLAGS. A flag not listed for the subcommand it was given to is
+ *  a usage error (exit 2), whether or not another subcommand knows it — `list --kind mcp` used to be
+ *  accepted and ignored. Pinned by test/unit/market-cmd-flags.test.ts, one case per subcommand. */
+export const SUBCOMMAND_FLAGS: Readonly<Record<string, ReadonlySet<string>>> = {
+  search: new Set(["--kind"]),
+  info: new Set(),
+  docs: new Set(),
+  install: new Set(["--project", "--as", "--pick", "--ref", "--yes", "--force", "--dry-run"]),
+  remove: new Set(["--project", "--yes"]),
+  list: new Set(["--all", "--kind"]),
+  update: new Set(["--all", "--yes", "--yes-plugins", "--dry-run"]),
+  sources: new Set(),
+  verify: new Set(),
+  validate: new Set(["--kind"]),
+  help: new Set(),
+};
+/** every flag some subcommand takes — only to word the error: "does not take" vs "unknown flag" */
+const KNOWN_FLAGS: ReadonlySet<string> = new Set([...COMMON_FLAGS, ...Object.values(SUBCOMMAND_FLAGS).flatMap((s) => [...s])]);
 
 /** C0/C1 control characters, minus the three that are legitimately part of a text file (tab, newline,
  *  carriage return). A catalog body is UNTRUSTED text from a third party: printed raw it can clear the
@@ -146,9 +169,13 @@ async function installOne(item: MarketItem, opts: PlanOptions, ctx: {
   out: (l: string) => void; err: (l: string) => void; json: boolean; yes: boolean; tty: boolean;
   secret: (p: string) => Promise<string>; plain: (p: string) => Promise<string>;
   run: RunDeps; verb: string; dryRun?: boolean;
+  /** --json with several items (`update --all`): each item's document goes here instead of stdout, and the
+   *  caller prints ONE document around them. Absent = this call owns stdout (`install`, `update <id>`). */
+  collect?: (doc: unknown) => void;
 }): Promise<number> {
+  const doc = (d: unknown): void => { if (ctx.collect) ctx.collect(d); else jsonOut({ out: ctx.out }, d); };
   const plan = planInstall(item, opts);
-  if ("error" in plan) { ctx.err(plan.error); return 1; }
+  if ("error" in plan) { ctx.err(plan.error); if (ctx.json) doc({ ok: false, error: plan.error, id: qualify(item) }); return 1; }
   // In --json mode the plan travels as FIELDS, not as prose printed above the JSON. It used to be both,
   // which meant `market install --json` emitted human lines and then an object on the same stream and
   // nothing could parse the result — a flag whose whole promise is "a script reads what the terminal
@@ -166,7 +193,7 @@ async function installOne(item: MarketItem, opts: PlanOptions, ctx: {
   // written and where, never what is inside the repository — and the sentence below says so rather than
   // letting the silence imply a stronger check than happened.
   if (ctx.dryRun) {
-    if (ctx.json) { jsonOut({ out: ctx.out }, { dryRun: true, item, target: plan.target, scope: plan.scope,
+    if (ctx.json) { doc({ dryRun: true, item, target: plan.target, scope: plan.scope,
       preview: plan.preview, asks: plan.asks, pending: plan.pending, ...(plan.replaces ? { replaces: plan.replaces } : {}) }); return 0; }
     ctx.out(`nothing written — --dry-run. ${needsNetwork(item.install) ? "The source was not fetched, so this is the plan, not its contents." : "This is the whole plan."}`);
     return 0;
@@ -177,7 +204,7 @@ async function installOne(item: MarketItem, opts: PlanOptions, ctx: {
     // asking would mean asking someone to approve a plan they were not shown. The plan is returned with
     // `needsApproval` and exit 1; rerun with --yes, or --dry-run if reading it was the whole point.
     if (ctx.json) {
-      jsonOut({ out: ctx.out }, { ok: false, needsApproval: true, item, target: plan.target, scope: plan.scope,
+      doc({ ok: false, needsApproval: true, item, target: plan.target, scope: plan.scope,
         preview: plan.preview, asks: plan.asks, pending: plan.pending, ...(plan.replaces ? { replaces: plan.replaces } : {}) });
       ctx.err(`nothing written: pass --yes to accept this plan, or --dry-run to read it`);
       return 1;
@@ -192,8 +219,8 @@ async function installOne(item: MarketItem, opts: PlanOptions, ctx: {
     tty: ctx.tty && !(opts.scope === "project" && plan.asks.some((a) => a.secret)), err: ctx.err,
   });
   const outcome = await runInstall(plan, answers, opts, ctx.run);
-  if (!outcome.ok) { ctx.err(outcome.error); if (ctx.json) jsonOut({ out: ctx.out }, outcome); return 1; }
-  if (ctx.json) { jsonOut({ out: ctx.out }, outcome); return 0; }
+  if (!outcome.ok) { ctx.err(outcome.error); if (ctx.json) doc(outcome); return 1; }
+  if (ctx.json) { doc(outcome); return 0; }
   ctx.out(`${ctx.verb === "update" ? "updated" : "installed"} ${qualify(item)} → ${outcome.target}${outcome.trusted === true ? " (trusted as written)" : ""}`);
   if (outcome.trusted === false) ctx.err(`that file already held entries you have not approved, so it is NOT trusted yet — rovecode mcp trust`);
   if (outcome.envNames.length) ctx.err(`set ${outcome.envNames.join(", ")} in your environment before the restart`);
@@ -221,17 +248,40 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
   const scope: MarketScope = args.includes("--project") ? "project" : "user";
   const registry: RegistryDeps = { ...deps.registry, ...(offline ? { offline: true } : {}) };
   const flag = (name: string): string | undefined => { const i = args.indexOf(name); return i >= 0 ? args[i + 1] : undefined; };
-  const KNOWN = new Set(["--json", "--offline", "--project", "--yes", "--yes-plugins", "--force", "--all", "--as", "--pick", "--kind", "--ref", "--dry-run"]);
-  const positional = args.filter((a, i) => !a.startsWith("--") && !(i > 0 && ["--as", "--pick", "--kind", "--ref"].includes(args[i - 1]!)));
-  for (const a of args) if (a.startsWith("--") && !KNOWN.has(a)) { err(`unknown flag ${a}`); err(MARKET_USAGE.join("\n")); return 2; }
+  const positional = args.filter((a, i) => !a.startsWith("--") && !(i > 0 && VALUE_FLAGS.has(args[i - 1]!)));
+  // A usage error is exit 2 and prose on stderr. In --json mode it is ALSO a document on stdout: "one
+  // document, every subcommand, every exit code" (docs/market.md) — a script that passed a flag `list`
+  // does not take must be able to read why, not just see an empty stdout and a number.
+  const usage = (msg: string): 2 => {
+    err(msg); err(MARKET_USAGE.join("\n"));
+    if (json) jsonOut(deps, { ok: false, error: msg, usage: MARKET_USAGE });
+    return 2;
+  };
 
   const sub = positional[0];
-  if (sub === undefined || sub === "help") { (sub === undefined ? err : out)(MARKET_USAGE.join("\n")); return sub === undefined ? 2 : 0; }
+  if (sub === undefined) return usage("market needs a command");
+  const allowed = SUBCOMMAND_FLAGS[sub];
+  if (allowed === undefined) return usage(`unknown command "${sub}"`);
+  // Per SUBCOMMAND, not against the union of every flag any subcommand takes: that global set accepted
+  // `list --kind mcp` and then ignored it, so a caller who asked for MCP servers got a skill row and no
+  // error to notice. A flag a subcommand does not read is refused, in the same words for every one.
+  for (const a of args) {
+    if (!a.startsWith("--")) continue;
+    if (COMMON_FLAGS.has(a) || allowed.has(a)) continue;
+    return usage(KNOWN_FLAGS.has(a) ? `market ${sub} does not take ${a}` : `unknown flag ${a}`);
+  }
+  // `help` is the one subcommand whose stdout IS the usage text, --json or not: it is for a person
+  if (sub === "help") { out(MARKET_USAGE.join("\n")); return 0; }
+  const kindFilter = (): MarketKind | undefined | 2 => {
+    const kind = flag("--kind");
+    if (kind === undefined) return undefined;
+    return ["mcp", "skill", "plugin"].includes(kind) ? (kind as MarketKind) : usage(`--kind takes mcp, skill or plugin`);
+  };
 
   // ---------------- search
   if (sub === "search") {
-    const kind = flag("--kind") as MarketKind | undefined;
-    if (kind !== undefined && !["mcp", "skill", "plugin"].includes(kind)) { err(`--kind takes mcp, skill or plugin`); return 2; }
+    const kind = kindFilter();
+    if (kind === 2) return 2;
     const query = positional.slice(1).join(" ");
     const r = await searchMarket(query, registry);
     const items = kind ? r.items.filter((i) => i.kind === kind) : r.items;
@@ -308,15 +358,22 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
   // ---------------- list
   if (sub === "list") {
     const all = args.includes("--all");
+    const kind = kindFilter();
+    if (kind === 2) return 2;
     const r = await allItems(registry);
-    const rows = withInstalled(r.items, cwd, home).filter((row) => all || row.installed);
+    const rows = withInstalled(r.items, cwd, home).filter((row) => (all || row.installed) && (kind === undefined || row.kind === kind));
     // where each installed row came from: the catalog row, the clone URL, the commit. The disk still says
     // WHETHER it is installed; the manifest says where it came from, and says so honestly when it cannot.
     const withOrigin = rows.map((row) => row.installed
       ? { ...row, origin: recordFor(row, row.installed.scope, cwd, home) ?? null }
       : row);
     if (json) { jsonOut(deps, withOrigin); return 0; }
-    if (rows.length === 0) { out(all ? "the market is empty" : "nothing installed here yet — `rovecode market search` to look around"); return 0; }
+    if (rows.length === 0) {
+      const what = kind === undefined ? "" : `${kind === "mcp" ? "MCP server" : kind} `;
+      out(all ? (kind === undefined ? "the market is empty" : `the market has no ${what}items`)
+        : `${kind === undefined ? "nothing " : `no ${what}`}installed here yet — \`rovecode market search${kind ? ` --kind ${kind}` : ""}\` to look around`);
+      return 0;
+    }
     for (const row of rows) {
       out(`${itemLine(row)}${badge(row)}`);
       if (row.installed) out(`         from ${originLine(recordFor(row, row.installed.scope, cwd, home))}`);
@@ -354,22 +411,33 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
     let targets = stale;
     if (which !== undefined) {
       const pick = await resolveTarget(which, registry);
-      if (!pick.ok) { err(pick.error); return pick.ambiguous ? 2 : 1; }
+      if (!pick.ok) { err(pick.error); if (json) jsonOut(deps, { ok: false, error: pick.error, candidates: pick.ambiguous ?? [] }); return pick.ambiguous ? 2 : 1; }
       const row = installed.find((x) => x.id === pick.item.id && x.kind === pick.item.kind);
-      if (row === undefined) { err(`${qualify(pick.item)} is not installed here — rovecode market install ${qualify(pick.item)}`); return 1; }
+      if (row === undefined) {
+        const msg = `${qualify(pick.item)} is not installed here — rovecode market install ${qualify(pick.item)}`;
+        err(msg); if (json) jsonOut(deps, { ok: false, error: msg, id: qualify(pick.item), installed: false });
+        return 1;
+      }
       targets = [row];
     }
     const skipped = skipPlugins ? targets.filter((r) => r.kind === "plugin") : [];
     if (skipped.length) targets = targets.filter((r) => r.kind !== "plugin");
-    if (targets.length === 0 && skipped.length === 0) { out("everything installed is at the catalog's version"); return 0; }
+    // In --json mode the whole update is ONE document, however many items it touched: each item's own
+    // outcome (the same object `install --json` prints) is collected under `results`, the plugins that
+    // `--all --yes` set aside under `skipped`. It used to print one document per item and, with nothing
+    // to do, a sentence — so `update --all --yes --json` was parseable only when exactly one item was stale.
+    const results: unknown[] = [];
+    const wrap = (ok: boolean): void => { if (json) jsonOut(deps, { ok, results, skipped: skipped.map(qualify) }); };
+    if (targets.length === 0 && skipped.length === 0) { if (json) wrap(true); else out("everything installed is at the catalog's version"); return 0; }
 
     const ctx = {
       out, err, json, yes: args.includes("--yes"), tty: deps.tty ?? process.stdin.isTTY === true,
       secret: deps.secret ?? readSecret, plain: deps.plain ?? defaultPlain, verb: "update", dryRun: args.includes("--dry-run"),
       run: { ...deps.run, force: true, ...(offline ? { offline: true } : {}) },
+      ...(json ? { collect: (doc: unknown) => { results.push(doc); } } : {}),
     };
     let worst = 0;
-    if (skipped.length) {
+    if (skipped.length && !json) {
       out(`${skipped.length} plugin${skipped.length > 1 ? "s" : ""} skipped — a plugin update runs new code: ${skipped.map(qualify).join(", ")}`);
       out(`  rovecode market update <id> --yes   ·   or --yes-plugins to take them all`);
     }
@@ -379,11 +447,12 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
       const code = await installOne(row, opts, ctx);
       if (code !== 0) worst = code;
     }
+    wrap(worst === 0);
     return worst;
   }
 
   const target = positional[1];
-  if (["info", "install", "remove", "docs"].includes(sub) && target === undefined) { err(`market ${sub} needs a name`); return 2; }
+  if (["info", "install", "remove", "docs"].includes(sub) && target === undefined) return usage(`market ${sub} needs a name`);
 
   // ---------------- info
   if (sub === "info") {
@@ -428,23 +497,25 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
 
   // ---------------- validate
   if (sub === "validate") {
-    if (target === undefined) { err("usage: rovecode market validate <path|url> [--kind skill|plugin]"); return 2; }
+    if (target === undefined) return usage("usage: rovecode market validate <path|url> [--kind skill|plugin]");
     const kindFlag = flag("--kind");
-    if (kindFlag !== undefined && kindFlag !== "skill" && kindFlag !== "plugin") { err("validate takes --kind skill or --kind plugin"); return 2; }
+    if (kindFlag !== undefined && kindFlag !== "skill" && kindFlag !== "plugin") return usage("validate takes --kind skill or --kind plugin");
 
     let text: string;
     const isUrl = /^https?:\/\//i.test(target);
+    // an unreadable path or a failed fetch is a document too: the report a script asked for says why there is none
+    const unreadable = (msg: string): 1 => { err(msg); if (json) jsonOut(deps, { ok: false, error: msg, source: target }); return 1; };
     if (isUrl) {
       // a URL is the network, so --offline means it: the flag says "skips the network entirely"
-      if (offline) { err(`--offline and a URL cannot both be meant — give a local path, or drop --offline`); return 2; }
+      if (offline) return usage(`--offline and a URL cannot both be meant — give a local path, or drop --offline`);
       try {
         const res = await fetch(target, { headers: { "user-agent": "rovecode-market-validate" } });
-        if (!res.ok) { err(`${target}: HTTP ${res.status}`); return 1; }
+        if (!res.ok) return unreadable(`${target}: HTTP ${res.status}`);
         text = await res.text();
-      } catch (e) { err(`${target}: ${e instanceof Error ? e.message : String(e)}`); return 1; }
+      } catch (e) { return unreadable(`${target}: ${e instanceof Error ? e.message : String(e)}`); }
     } else {
       try { text = readFileSync(target, "utf8"); }
-      catch (e) { err(`${target}: ${e instanceof Error ? e.message : String(e)}`); return 1; }
+      catch (e) { return unreadable(`${target}: ${e instanceof Error ? e.message : String(e)}`); }
     }
 
     const report = validateCatalog(text, {
@@ -502,13 +573,13 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
     }
     const pickRaw = flag("--pick");
     const pick = pickRaw === undefined ? undefined : Number(pickRaw);
-    if (pick !== undefined && !Number.isInteger(pick)) { err(`--pick takes a number`); return 2; }
+    if (pick !== undefined && !Number.isInteger(pick)) return usage(`--pick takes a number`);
     const asName = flag("--as");
     // the configured default model, so the estimate is scaled to the tokenizer the person actually runs.
     // Nothing configured → undefined, and the line says the numbers are unscaled rather than guessing.
     const model = deps.model ?? (await defaultModelRef());
     const ref = flag("--ref");
-    if (ref !== undefined && ref.trim() === "") { err(`--ref needs a branch, tag or commit`); return 2; }
+    if (ref !== undefined && ref.trim() === "") return usage(`--ref needs a branch, tag or commit`);
     const opts = { scope, cwd, home, ...(pick !== undefined ? { pick } : {}), ...(asName !== undefined ? { as: asName } : {}),
       ...(ref !== undefined ? { ref } : {}), ...(deps.prereqEnv !== undefined ? { prereqEnv: deps.prereqEnv } : {}),
       ...(model !== undefined ? { model } : {}) };
@@ -521,9 +592,8 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
     });
   }
 
-  err(`unknown command "${sub}"`);
-  err(MARKET_USAGE.join("\n"));
-  return 2;
+  // every name in SUBCOMMAND_FLAGS is handled above; an unknown one was refused before the branches
+  return usage(`unknown command "${sub}"`);
 }
 
 /** The configured default provider/model, or undefined. Imported lazily: `market search` has no business

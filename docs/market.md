@@ -12,7 +12,7 @@ rovecode market docs <id>
 rovecode market install <id | kind:id | git-url | npm-package> [--project] [--as name] [--pick N]
                         [--ref <branch|tag|commit>] [--yes] [--force]
 rovecode market remove <id | kind:id>
-rovecode market list [--all]
+rovecode market list [--all] [--kind mcp|skill|plugin]
 rovecode market update [id] [--all] [--yes] [--yes-plugins]
 rovecode market sources [probe]
 rovecode market verify [id]
@@ -73,7 +73,10 @@ environment when the server launches, so the file can be committed.
 Every `--json` output is **one document**, on every subcommand and every exit code. The human preview is
 not printed above it — the same lines are inside the object, as `preview` — and a failure is a document
 too, so a script that names a missing id gets something it can read rather than an empty stdout and a
-number. Prose may still go to stderr; stderr is not the document.
+number. Prose may still go to stderr; stderr is not the document. A usage error (an unknown command, a flag
+the subcommand does not take) is `{ok: false, error, usage}` with exit 2, and `update --all --json` is one
+object — `results` holds each item's outcome, `skipped` the plugins `--yes` set aside — however many items
+it touched, including none.
 
 `--json` also **never prompts**, terminal or not. The line that would let a person answer "install this?"
 or "remove this?" is inside the object rather than on the screen, so asking would mean asking someone to
@@ -223,7 +226,9 @@ means MCP rows have no documentation, which is not an error.
 
 ## Installed, updates, trust
 
-`market list` shows what is installed here; `--all` shows the whole market with badges.
+`market list` shows what is installed here; `--all` shows the whole market with badges; `--kind mcp|skill|plugin`
+narrows either view to one kind. A flag a subcommand does not read is refused (exit 2), not ignored — `list
+--kind mcp` once returned a skill row without a word.
 
 `market update` with no argument lists what is out of date and writes nothing. Comparison is a string
 difference, not a semver judgement, so both numbers are printed and you decide. An item nobody can compare —
