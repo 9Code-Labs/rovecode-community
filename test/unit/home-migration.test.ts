@@ -69,12 +69,18 @@ test("no legacy directory: a fresh install starts empty and resolving the path c
   expect(existsSync(join(root, ".rovecode"))).toBe(false);
 });
 
-test("ROVECODE_HOME is migrated into as well — the override is a home like any other", async () => {
+test("ROVECODE_HOME is NOT migrated into — a path you chose is a request for that path, not for a copy", async () => {
+  // This test used to assert the opposite ("the override is a home like any other"), and that behaviour
+  // was a hazard rather than a convenience: pointing ROVECODE_HOME at a fresh path is how everyone
+  // isolates a test, a script or a clean-room check, and it silently filled the path with the user's
+  // stored keys. It billed two real API calls during this repository's own release verification
+  // (2026-09-06). The default home still inherits, and now says so — see the test above and
+  // test/unit/legacy-home.test.ts for the injected-legacyDir form.
   legacyWithKeys();
   const home = join(root, "explicit");
   process.env.ROVECODE_HOME = home;
   const auth = await freshAuth();
   expect(auth.rovecodeHome()).toBe(home);
-  expect(auth.loadCredentials().anthropic!.key).toBe("sk-legacy-secret");
-  if (process.platform !== "win32") expect(statSync(join(home, "credentials.json")).mode & 0o777).toBe(0o600);
+  expect(existsSync(home)).toBe(false);                       // nothing was created, nothing was copied
+  expect(auth.loadCredentials().anthropic).toBeUndefined();   // and the old key did not follow
 });
