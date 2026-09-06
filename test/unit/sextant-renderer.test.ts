@@ -572,5 +572,13 @@ test("a keystroke paints without waiting for the frame timer — the echo must n
   paints = 0;
   io.feed("a paste of many characters arriving together");
   expect(paints).toBe(1);
+
+  // ...and once the loop is stopped, input paints NOTHING. A key can end the session — ⌃c, /exit, a
+  // click on the exit row — and by the time the chunk finishes the terminal has been handed back, so a
+  // frame written then lands on the shell the user was just returned to. An integration test caught
+  // this the first time; it belongs here too, next to the behaviour that caused it.
   renderer.stop();
+  paints = 0;
+  io.feed("typed after the session ended");
+  expect(paints).toBe(0);
 });

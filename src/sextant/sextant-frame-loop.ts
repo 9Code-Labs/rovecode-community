@@ -142,7 +142,11 @@ export class FrameLoop {
     // and one that appears to have stopped accepting input. This costs no extra frame: the tick would
     // have painted the same state a moment later, and it clears `dirty` so the tick then skips.
     // Once per CHUNK, not once per event, so a paste of two hundred characters still paints once.
-    if (this.screen && r.events.length > 0) this.render(this.d.clock());
+    // `this.timer` is the guard, not `this.screen`: a key can END the session — ⌃c, /exit, a click on
+    // the exit row — and by the time this line runs the loop has been stopped and the terminal handed
+    // back. Painting then writes a frame over the shell the user has just been returned to. The screen
+    // object is still there; the loop is what says whether it is ours to paint on.
+    if (this.timer !== null && r.events.length > 0) this.render(this.d.clock());
   }
 
   dispatch(ev: InputEvent): void {
