@@ -27,7 +27,30 @@ import { createInterface } from "node:readline";
 import { Writable } from "node:stream";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { providers as snapshotProviders } from "@opencode-ai/models/snapshot";
+import { createRequire } from "node:module";
+
+/** The provider index, loaded ONLY when something asks for a key name.
+ *
+ *  Two things were wrong here and they compounded. The import was at the top of the module, and what it
+ *  imported was the full models.dev snapshot: 63 MB resident, for one call site (`keyNameFor`). Meanwhile
+ *  `rovecodeHome`, three lines of path arithmetic in this same file, is imported by hooks.ts, settings.ts,
+ *  runtime.ts, the plugin loader and half the TUI — so all of them paid 63 MB to learn where `~/.rovecode`
+ *  is, and the TUI paid it at startup before drawing a frame.
+ *
+ *  Now it is deferred, and it reads the trimmed index (src/providers/models-index.json, the same file the
+ *  catalog reads) rather than the upstream snapshot. Only `env[0]` is ever used from it.
+ *
+ *  `require` rather than `await import` because `keyNameFor` is synchronous and called from synchronous
+ *  code; making it async would push the change through a dozen call sites to save nothing extra. */
+let snapshotCache: Record<string, { env?: string[] } | undefined> | null = null;
+function snapshotProvidersLazy(): Record<string, { env?: string[] } | undefined> {
+  if (snapshotCache === null) {
+    const req = createRequire(import.meta.url);
+    const m = req("./models-index.json") as { providers?: Record<string, { env?: string[] }> };
+    snapshotCache = m.providers ?? {};
+  }
+  return snapshotCache;
+}
 
 export interface StoredCredential {
   type: "api";
@@ -194,7 +217,7 @@ const AUTH_PROVIDER_MAP: Record<string, string> = {
  *  stream.ts builtinProviders by construction. */
 export function keyNameFor(providerId: string): string {
   const key = AUTH_PROVIDER_MAP[providerId] ?? providerId;
-  const env = snapshotProviders[key]?.env;
+  const env = snapshotProvidersLazy()[key]?.env;
   if (env !== undefined && env.length > 0 && env[0]) return env[0];
   return providerId.toUpperCase().replace(/[^A-Z0-9]+/g, "_") + "_API_KEY";
 }

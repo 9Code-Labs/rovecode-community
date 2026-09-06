@@ -10,14 +10,20 @@ import { join } from "node:path";
 import type { ProviderMap, Model } from "@opencode-ai/models";
 import { LOCAL_MODELS, PRICE_NOTES, PRICE_TIERS, type LocalModel, type PriceTier } from "./catalog-local.ts";
 
-// Snapshot is loaded lazily on the first lookup() call so that merely importing
-// catalog.ts (e.g. at module load time) does not pay the @opencode-ai/models
-// parse cost — the TUI paints its first frame before buildDef() is called.
+// Loaded lazily on the first lookup() so that importing catalog.ts costs nothing — the TUI paints its
+// first frame before buildDef() is called.
+//
+// It reads src/providers/models-index.json, not @opencode-ai/models/snapshot. Same shape, same source,
+// five fields per model instead of the whole models.dev record: the upstream snapshot is 4.26 MB and
+// parsing it costs 55 MB resident, which every session paid on its first status update to answer "what
+// is this model's window and price". The trimmed index is 1.1 MB. scripts/build-model-index.mjs
+// generates it and `--check` fails when it and the installed package disagree, so an upgrade cannot
+// leave the catalog quietly describing the previous release.
 let _snapshot: ProviderMap | null = null;
 function snapshotProviders(): ProviderMap {
   if (_snapshot === null) {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    _snapshot = (require("@opencode-ai/models/snapshot") as { providers: ProviderMap }).providers;
+    _snapshot = (require("./models-index.json") as { providers: ProviderMap }).providers;
   }
   return _snapshot;
 }
