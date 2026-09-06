@@ -38,6 +38,9 @@ function hermeticEnv(extra: Record<string, string> = {}): Record<string, string>
     if (v !== undefined && !/^ROVECODE_/i.test(k) && !/_API_KEY$/i.test(k)) env[k] = v;
   }
   env.ROVECODE_HOME = home;
+  // the canned provider is ASKED FOR here, not fallen into: a one-shot run with nothing configured is a
+  // startup failure (exit 2), and these tests drive the headless path without a key on purpose
+  env.ROVECODE_MOCK = "1";
   return Object.assign(env, extra);
 }
 
@@ -187,4 +190,33 @@ test("--plain binds ask_user to readline: the question and numbered options prin
     await child.stop();
     server.stop(true);
   }
+}, T);
+
+// ---------- no provider is a startup failure, not a finished run ----------
+
+test("with nothing configured a one-shot run refuses instead of answering as the mock: exit 2, one JSON document in --json, the hint on stderr in text mode", async () => {
+  // The regression this pins: cmdRun fell back to the canned provider whenever no key was configured, so
+  // `rovecode run "hi" --output json` printed {"status":"done"} whose summary was the "no model is
+  // connected" hint, and exited 0. A script cannot tell that from a real answer — it is the one failure
+  // mode a machine-readable mode exists to prevent. The mock is still reachable, but only when asked for
+  // by name (ROVECODE_MOCK=1), which is what hermeticEnv does for every other test in this file.
+  const bare = { ROVECODE_MOCK: "" };
+  const j = await cli(["run", "hi", "--output", "json"], bare);
+  expect(j.code).toBe(2);
+  const doc = JSON.parse(j.stdout.trim()) as { status: string; error: string; exitCode: number };
+  expect(doc.status).toBe("error");
+  expect(doc.exitCode).toBe(2);
+  expect(doc.error).toMatch(/no provider configured/);
+  expect(j.stdout.trim().split("\n")).toHaveLength(1);          // one document, not prose plus a document
+
+  const t = await cli(["run", "hi"], bare);
+  expect(t.code).toBe(2);
+  expect(t.stdout).toBe("");                                     // nothing on stdout: there is no answer
+  expect(t.stderr).toMatch(/no provider configured/);
+  expect(t.stderr).toMatch(/rovecode setup/);                    // and it says how to fix it
+
+  // asked for by name, the canned provider still works — that is what the rest of this file relies on
+  const m = await cli(["run", "hi", "--output", "json"]);
+  expect(m.code).toBe(0);
+  expect((JSON.parse(m.stdout.trim()) as { status: string }).status).toBe("done");
 }, T);

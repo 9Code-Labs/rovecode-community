@@ -89,6 +89,10 @@ async function cmdRun(prompt: string): Promise<void> {
   const model: ModelRef = rt.provider
     ? { provider: rt.provider.id, model: process.env.ROVECODE_MODEL ?? rt.provider.defaultModel ?? "gpt-4o-mini" }
     : { provider: "mock", model: "default" };
+  // ROVECODE_MOCK=1 asks for the canned provider ON PURPOSE — that is how the wiring tests exercise the
+  // headless path without a key. Without it, a missing provider is refused below rather than quietly
+  // answered by a stand-in.
+  const wantsMock = process.env.ROVECODE_MOCK === "1";
   const stream = rt.stream !== null && rt.noProviderReason() === null
     ? rt.stream
     : mockStream({ turns: [textTurn(MOCK_PROVIDER_TEXT)] });
@@ -105,6 +109,18 @@ async function cmdRun(prompt: string): Promise<void> {
     return process.exit(code);
   };
   const sink = createOutputSink(mode, { stdout: mode === "text" ? process.stdout : rawOut, stderr: process.stderr, model, messages: () => rt.store.messages() });
+  // No provider is a STARTUP failure, not a run that finished. The mock stream above exists so an
+  // interactive session can say "nothing is connected, here is how" instead of crashing — but a one-shot
+  // run that answers with the canned mock text and exits 0 is worse than a crash: `rovecode run … --output
+  // json` reported {"status":"done"} with the hint as its summary, and a script cannot tell that from a
+  // real answer. Exit 2, the usage/startup class, and in a machine mode say so as one document.
+  if (rt.noProviderReason() !== null && !wantsMock) {
+    const why = rt.noProviderReason()!;
+    if (mode === "text") console.error(`error: ${why}`);
+    else rawOut.write(`${JSON.stringify({ status: "error", summary: why, error: why, exitCode: 2 })}
+`);
+    await exit(2);
+  }
   const effortFlag = parseEffort(process.argv[process.argv.indexOf("--effort") + 1]);
   if (effortFlag !== undefined) rt.setEffort(effortFlag);
   rt.setRunLimits(limits);
