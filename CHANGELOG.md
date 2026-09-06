@@ -9,8 +9,18 @@ machine it names.
 ### Startup
 
 - The TUI opens on a card that names the version, the connected model, what loaded (skills · plugins · MCP servers, zeroes omitted), the folder and permission tier — and `update available: x → y · <url>` when GitHub Releases on 9Code-Labs/rovecode has a newer one. The check needs `GITHUB_TOKEN`, `GH_TOKEN` or `gh auth login` (the repository is private), asks at most every six hours, never blocks, and prints nothing unless a release is genuinely newer (8c6f6f9)
-- ROVECODE draws itself in while the session boots: no sleep, no minimum duration, a glimpse on a warm start and the whole sweep on a cold one; nothing is drawn into a pipe or under `--plain` (09e4a1c)
+- An opening intro, centred on a cleared screen: the ROVECODE mark fills in left to right, a hairline frame draws inward from the four corners, the cloud mascot leans down out of that top line, and the mark breathes once. ~1.1 s; the session boots underneath it, so the only wall time it adds is whatever is left of the show once the session is ready. `--no-intro` or `ROVECODE_INTRO=0` skips it; nothing is drawn into a pipe or under `--plain`, and it never reads stdin, so keys typed during it reach the session (09e4a1c, 420353d, 9d6fe71)
+- Every session loaded a 136 MB token table before its first frame — to count an empty string and return 0. Fresh session to first frame: RSS 238–246 MB → 111–112 MB, boot 450–550 ms → 154–183 ms; a resumed session with a 435k-character transcript no longer pays it either. `/cost`, `/context` and `export` are unchanged and still exact (574dae0)
+- The pre-bundled CLI was undoing its own lazy imports: `bun build` inlines dynamic imports, so `dist/cli/main.js --version` paid for pi-tui, the gauntlet, acp and the tokenizer. Built with `--splitting`: 388–491 ms → 84–103 ms wall, 98 MB → 74 MB. `build:cli` also clears `dist/cli` first (574dae0)
+- An idle session repainted ~9.5 times a second to show nothing changing: 89–98 ms of CPU per wall-clock second → 14–20 ms at ~2.5 frames/s. A busy session is unchanged by design, and nothing looks different — things now paint only when they change (df155ca)
+- `rovecode --version` prints the version to stdout alone (still one word for a script) and the update check’s answer to stderr: the newer release, `up to date (0.2.0) · cached`, or the reason it could not look (2aef715)
 - Two configured MCP servers cost 758 ms before the first frame because the MCP SDK was evaluated inside createRuntime; it now loads on the connect path, after the first frame, and servers start one per event-loop turn (createRuntime 758 ms → 22 ms with the same home) (f36e73b)
+
+### Correctness
+
+- A one-shot run with no provider configured reported success: `rovecode run "hi" --output json` printed `{"status":"done"}` with the “no model is connected” hint as its summary, and exited 0. It is a startup failure — exit 2, one document in a machine mode — and the canned provider is now asked for by name (`ROVECODE_MOCK=1`) rather than fallen into (d80c2f6)
+- A configured MCP server that never connected was counted on the startup card and never mentioned; boot-time connect failures now say so by name, the same way the loader’s skipped entries do (f213b58)
+- `rovecode mcp add` and `rovecode market install` share one plan and had drifted into three different behaviours — different wording for the same question, a secret asked in project scope and then discarded, and `--yes` off a terminal refused by one face and written by the other. Unified on: write it, name it out loud, let the loader refuse to launch until the variable is set (18f607a)
 
 ### Sessions & scripting
 
@@ -23,9 +33,12 @@ machine it names.
 - An install that could not fill a required argument (the filesystem server's directory) wrote a server that could never start. Now the argument is asked for on both CLI faces (`rovecode mcp add`, `rovecode market install`), written as `<directory the server may touch>` when nobody answered, and the loader skips a server still carrying the placeholder and names the file and the line to edit (a180ad2)
 - A server installed from `/mcp` or `/market` is connected in that session, without a restart, and a session that had no servers gets `mcp_list`/`mcp_call` at that moment; the overlay also stopped refusing the six curated servers that only needed a placeholder argument (d30755f)
 
+- MCP servers can be installed once instead of resolved through `npx` at every start: connect 1767/2052 ms → 347/473 ms for memory/filesystem, no network needed to open a session, and the package, version and npm integrity hash recorded in `installed.json`. It always asks, declining leaves the `npx` line exactly as it is, and existing entries are never rewritten (158e2e9)
+- A server that was downloading looked like a server that was broken: a first-ever `uvx` or `npx` launch can exceed the 10 s connect budget, so the very first start of a newly installed server failed with “Request timed out”. Package runners now get 90 s for a first connect, and a timeout says what happened and both ways out (736f6fd)
+
 ### Tests
 
-- `bun test` runs against an empty `ROVECODE_HOME` (`bunfig.toml` preloads `test/helpers/isolate-home.ts`), so what is installed on the machine running the suite cannot decide a result (8c6f6f9)
+- `bun test` runs against an empty `ROVECODE_HOME` and a scrubbed environment (`bunfig.toml` preloads `test/helpers/isolate-home.ts`): every `*_API_KEY`, `GITHUB_TOKEN`/`GH_TOKEN` and `ROVECODE_*` variable is cleared, so what is installed or exported on the machine running the suite cannot decide a result. Installing one skill used to fail a plugin test, two MCP servers failed twenty-five, and an exported `ANTHROPIC_API_KEY` let a headless run on a clean checkout bill a real call (8c6f6f9, f213b58)
 
 ## Unreleased — 2026-09-04
 
