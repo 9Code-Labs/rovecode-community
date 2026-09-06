@@ -19,7 +19,16 @@ const cli = parseCli(process.argv);
 const cmd = cli.cmd;
 
 if (process.argv.includes("--version")) {
+  // The version goes to stdout alone, so `rovecode --version` stays a single parseable word for scripts.
+  // The update line goes to STDERR, because this is the one command where asking WAS the point: the
+  // startup card is deliberately silent when there is nothing newer, which means a check that could not
+  // run — no token, offline, a repository with no releases — would otherwise never be reported anywhere.
+  // 3s rather than the usual 8: a person typed this and is waiting on it. The answer is cached six hours,
+  // so only the first run of the day can be slow, and a timeout prints itself as the reason.
   console.log(pkg.version);
+  const { checkForUpdate, updateLine } = await import("../core/update-check.ts");
+  const line = updateLine(await checkForUpdate(pkg.version, { timeoutMs: 3_000 }), true);
+  if (line !== null) console.error(line);
   process.exit(0);
 }
 

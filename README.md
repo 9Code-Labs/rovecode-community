@@ -14,8 +14,12 @@ repository for now).
 
 - **All 20 BLUEPRINT §3 ports landed** (P1 8/8 · P2 6/6 · P3 4/4 · P4 2/2) **+ all 19 Wave-3 parity ports (#21–#39)** landed
   through the gauntlet-loop (builder → fresh-context critic → fix wave → re-verify; ledger: `PORTS.md`)
-- **Tests**: 1953 pass / 0 fail / 1 skip (156 files, unit + integration; run in ≤4-file chunks). CI runs the
-  same suite on `ubuntu-latest` (`.github/workflows/ci.yml`), so POSIX paths are gated, not just exercised
+- **Tests**: 2360 pass / 0 fail (191 files, unit + integration; measured 2026-09-06). CI runs the
+  same suite on `ubuntu-latest` (`.github/workflows/ci.yml`), so POSIX paths are gated, not just exercised.
+  `bun test` runs against an **empty `ROVECODE_HOME`**: `bunfig.toml` preloads `test/helpers/isolate-home.ts`,
+  which points it at a fresh temp directory before any test file loads, so the skills, plugins, MCP servers
+  and keys installed on the machine cannot decide a result (installing one skill used to fail a plugin test,
+  two MCP servers failed twenty-five). A test that wants a home of its own still sets `ROVECODE_HOME` itself
 - **Gauntlet**: 10/10 (basic, coding, failure-recovery, adversarial: loop-guard, huge-output, permission-bypass)
 - **Typecheck**: 0 errors · TUI render smoke: PASS
 - **Wave 4**: the sextant surface (`src/sextant/*`, the new default TUI ported from the user's prototype) is merged —
@@ -55,10 +59,26 @@ dist/rovecode.exe --version
 npm install -g ./rovecode-0.2.0.tgz
 ```
 
-Not yet published to the npm registry (name availability unverified; no self-update — rebuild or
-reinstall to update).
+Not yet published to the npm registry (name availability unverified). Releases are cut on
+[GitHub Releases](https://github.com/9Code-Labs/rovecode/releases) — v0.2.0 is the current one — and there is no
+self-update: `git pull` and rebuild, or reinstall the binary. Rovecode does tell you when that is worth doing: the
+TUI's startup card carries `update available: 0.2.0 → 0.3.0 · <release url>` when a newer release exists. The check
+(`src/core/update-check.ts`) asks GitHub once every six hours (cached in `~/.rovecode/update-check.json`), never
+blocks the start and never throws. The repository is private, so it needs `GITHUB_TOKEN`, `GH_TOKEN` or a
+`gh auth login`; without one the result is "unknown — the release repository is private and no token is set",
+never "up to date", and the card prints nothing rather than a guess. Only a real newer release produces a line
+on the card — `rovecode --version` is where you ask on purpose: the version goes to stdout alone (so a script can
+still read it) and the check's answer to stderr, including the reason when it could not look.
 
 ## Quickstart
+
+On a terminal, `rovecode` draws the ROVECODE mark in from left to right while the session actually boots — no
+fixed duration and no sleep: a warm start is a glimpse, a cold home with skills, plugins and MCP servers to read
+plays the whole sweep, and a frozen frame means the process is busy, which is the truth (`src/core/intro.ts`;
+nothing is drawn into a pipe or under `--plain`). It hands over to a card that names the version, the connected
+model, what loaded (`3 skills · 1 plugin · 2 MCP servers` — zeroes are omitted), the folder and permission tier,
+and, only when there is one, the newer release (see Install). A resumed session gets a one-line note instead; a
+terminal narrower than the mark gets the same facts as prose.
 
 ```bash
 rovecode connect                # connect a model, step by step: pick a provider, paste the key (hidden), one

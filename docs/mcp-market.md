@@ -22,7 +22,23 @@ appended after the map entries), accepts `transport` as a synonym for `type` (`s
 in the file but out of the run — `mcp list` shows it as `(disabled)`.
 An unset `${NAME}` **skips that server with a warning** instead of starting it with an empty key.
 
-Servers are read once per process — restart rovecode after `add`/`remove`.
+Some servers also take an argument only you can supply and that is not a secret — the filesystem server's
+directory, a database URL. The catalog marks it `needs`, and an install that nobody answered writes it into `args`
+as an angle-bracket placeholder, `<directory the server may touch>`. The loader **refuses to launch a server
+still carrying one** and names the file and the hole instead:
+
+```
+~/.rovecode/mcp.json: server "filesystem" still has <directory the server may touch> to fill in; skipped (edit that line and it will connect)
+```
+
+Replace that one word in `args` and restart. Before a180ad2 the argument was dropped and the entry was written in a
+form that could never start — `npx … server-filesystem` with no directory — and the only sign was a server that
+was never there.
+
+Servers are read once per process — restart rovecode after a shell `add`/`remove`. An install made from inside
+a session (`/mcp`, `/market`) is the exception: the session re-reads the three files, trust gate included, and
+connects the new server on the spot — "connected as <name> — no restart needed", or the name of the one that
+failed. A session that started with no servers at all gets `mcp_list`/`mcp_call` registered at that moment (d30755f).
 
 ## Sources
 
@@ -93,12 +109,17 @@ rovecode mcp untrust               withdraw that approval
 `add` in order: (1) prints the **plan** — title, version, status, source, publisher, repo, the exact `runs …`
 or `connects …` line, each env/header **name** and how it will be filled, what still `needs` a hand, the file and
 the server name; (2) asks `install? [y/N]` — skipped by `--yes`; (3) asks each secret by name through the same
-masked prompt as `rovecode auth set` (`readSecret`: raw mode, never echoed, never in argv) and each plain
-required value on a normal line; (4) writes.
+masked prompt as `rovecode auth set` (`readSecret`: raw mode, never echoed, never in argv), each plain
+required value on a normal line, and each `needs` argument in the clear, under its own placeholder text
+(`<directory the server may touch>: `); (4) writes. `rovecode market install <server>` asks the same questions in
+the same order — the two CLI faces share one plan and one prompt sequence.
 
 Without a terminal: no `--yes` → nothing written, exit 1. With `--yes` but a required secret for the **user**
 file → nothing written (there is no way to ask); for a **project** file the secret is `${NAME}` anyway, so the
-write succeeds and the closing line names the variables to export.
+write succeeds and the closing line names the variables to export. A `needs` argument nobody could answer is
+written as its placeholder and the closing line says so — `fill in before use: <directory the server may
+touch> — edit the args in that file; until then this server is skipped` — only for what is *still* a placeholder,
+never for a question you answered at the prompt.
 
 Secrets go **as values only into `~/.rovecode/mcp.json`** (mode 0600 where the OS honours it). A `--project` file
 gets `${NAME}` — a token never lands in a repo. `--as` renames (a registry `io.github.acme/widgets` is `widgets`
@@ -116,6 +137,9 @@ The TUI has **no masked input, so it never asks for a secret**: every **required
 hand if you want it). The closing note lists only the names the file now refers to, to set before the restart —
 or says to run `rovecode mcp add <name>` on a shell, where the prompt is masked. Nothing typed into the TUI's
 prompt ever becomes a key. The CLI's closing line follows the same rule: it names what the written entry refers to.
+The TUI cannot ask for a `needs` argument either: the placeholder is written and a warning note names it
+(`mcp: fill in <directory the server may touch> in that file's args before use`); the server connects once the
+line is edited.
 
 Flags: each `rovecode mcp` subcommand accepts only its own (`add`: `--project --pick --as --yes --force`; `remove`,
 `show`: `--project`; `trust`: `--yes --project`); any other `--flag`, a missing name, or an unknown subcommand is a

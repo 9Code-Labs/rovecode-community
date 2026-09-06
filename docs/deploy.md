@@ -99,7 +99,11 @@ one-year immutable header.
 
 `.github/workflows/site.yml` builds and deploys on every push to `main` that touches `site/`;
 `.github/workflows/ci.yml` runs `tsc` + `bun test` on Ubuntu for everything else. The suite is
-Linux-clean — tests must not assume `C:/` paths, backslash separators or readdir order.
+Linux-clean — tests must not assume `C:/` paths, backslash separators or readdir order. It is also
+home-clean: `bunfig.toml` preloads `test/helpers/isolate-home.ts`, which sets `ROVECODE_HOME` to an
+empty temp directory before the first test file loads, so a run on a developer's machine sees the same
+nothing CI does — no installed skills, plugins, MCP servers or credentials. A test that needs a home
+writes its own and sets the variable itself; do not write one that reads the real `~/.rovecode`.
 
 The deploy key is bound on the server (`~/.ssh/authorized_keys`) to a forced command,
 `/usr/local/bin/rovecode-deploy-receive`, with `no-pty` and no forwarding: it reads a tar.gz of
