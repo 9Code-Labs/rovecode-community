@@ -43,6 +43,26 @@ function sdk(): Promise<Sdk> {
 /** one turn of the event loop — a timer, not a microtask, so painters and input get to run in between */
 const yieldToLoop = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
+/** One call's signal, linked to the caller's and thrown away with the call.
+ *
+ *  The SDK does `options.signal.addEventListener("abort", …)` per request (shared/protocol.js:709) and
+ *  never removes it. Every surface passes the RUN's signal, which lives for the whole run, so the
+ *  listeners pile up on one emitter: at eleven, Node fires MaxListenersExceededWarning and prints the
+ *  emitter it is complaining about — a whole Writable, pages of it — on stderr, straight over the TUI's
+ *  alternate screen. Observed on a Playwright MCP session, twelve calls in.
+ *
+ *  A per-call controller ends that: the SDK's listener belongs to a signal nobody keeps, and the link
+ *  back to the run's signal is removed in the caller's finally. Aborting still works in both directions
+ *  — the run aborts the call; the call finishing does not touch the run. */
+function perCallSignal(outer?: AbortSignal): { signal: AbortSignal; dispose: () => void } {
+  const ac = new AbortController();
+  if (outer === undefined) return { signal: ac.signal, dispose: () => {} };
+  if (outer.aborted) { ac.abort(outer.reason); return { signal: ac.signal, dispose: () => {} }; }
+  const forward = () => ac.abort(outer.reason);
+  outer.addEventListener("abort", forward, { once: true });
+  return { signal: ac.signal, dispose: () => outer.removeEventListener("abort", forward) };
+}
+
 /** Commands that fetch the server’s package before running it, so a first launch is a download. */
 const PACKAGE_RUNNERS = new Set(["npx", "npx.cmd", "uvx", "uvx.exe", "pipx", "pipx.exe", "bunx", "bunx.exe"]);
 /** the budget a runner-launched server gets: enough for a cold fetch on a slow line */
@@ -210,7 +230,11 @@ export class McpManager {
     let pages = 0;
     do {
       if (signal?.aborted) throw new Error(`tool listing on "${server}" aborted`);
-      const res = await client.listTools(cursor === undefined ? undefined : { cursor }, { timeout: this.connectTimeout, signal });
+      const per = perCallSignal(signal);   // same leak: listTools is a request like any other
+      let res;
+      try {
+        res = await client.listTools(cursor === undefined ? undefined : { cursor }, { timeout: this.connectTimeout, signal: per.signal });
+      } finally { per.dispose(); }
       pages += 1;
       for (const t of res.tools) {
         tools.push({
@@ -295,6 +319,7 @@ export class McpManager {
       }
     }
 
+    const per = perCallSignal(signal);
     try {
       // an onprogress handler makes the SDK request a progress token, which is what
       // arms resetTimeoutOnProgress — without it that option is a no-op.
@@ -302,7 +327,7 @@ export class McpManager {
         { name: tool, arguments: (args ?? undefined) as Record<string, unknown> | undefined },
         undefined,
         {
-          signal,
+          signal: per.signal,
           timeout: this.callTimeout,
           resetTimeoutOnProgress: true,
           onprogress: (p) => onProgress?.(
@@ -317,6 +342,8 @@ export class McpManager {
       return { ok: true, output: text };
     } catch (err) {
       return { ok: false, output: `mcp call ${server}/${tool} failed: ${message(err)}` };
+    } finally {
+      per.dispose();
     }
   }
 

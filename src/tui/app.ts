@@ -238,6 +238,8 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   };
   const pushStatus = () => renderer.setStatus(status());
 
+  /** set once the surface owns the screen (below renderer.start); puts Node's warning printer back */
+  let restoreWarnings: (() => void) | undefined;
   const close = () => {
     if (closed) return;
     closed = true;
@@ -247,6 +249,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     const settled = run?.return(undefined as never).then(() => undefined, () => undefined) ?? Promise.resolve();
     rt.tasks.cancelAll(); // port #26: background children die with the surface, never after it
     void rt.mcp?.close().catch(() => {}); // stop MCP child processes/connections
+    restoreWarnings?.();   // the screen is going away; Node's own printer is the right one again
     renderer.stop();
     // port #29: session_close fires ONCE, after the aborted run settled and its in-flight on_event
     // taps drained (hooks.close() waits for those) — cmdRun's exit() order; the app promise
@@ -531,6 +534,25 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   const refreshModelChoices = (): void => { void listModelIds(rt.providers).then((ids) => { modelChoices.splice(0, modelChoices.length, ...ids); }).catch(() => {}); };
   renderer.setCommands([...TUI_COMMANDS.map((c) => (c.name === MODEL_COMMAND.name ? { ...c, choices: () => modelChoices } : c)), ...commandsForPalette(custom.commands)]);
   setTimeout(refreshModelChoices, 0);
+  // Node prints warnings on stderr, and stderr goes straight onto the alternate screen. A
+  // MaxListenersExceededWarning does not just say its sentence — it dumps the emitter it is complaining
+  // about, which for a stream is pages of `[Function: …]`, over the panels. Berkay hit exactly that
+  // during a Playwright MCP session (the leak itself is fixed in mcp/client.ts; this is the other half:
+  // no warning from anywhere should be able to garble the screen). Node's own printer is removed and the
+  // warning becomes a note — still said, never drawn over anything — and put back on the way out.
+  const nodeWarnListeners = process.listeners("warning");
+  // assigned here, read by `close` above (declared before this point, called only after start)
+  process.removeAllListeners("warning");
+  const onWarning = (w: Error): void => {
+    // the first line only: a MaxListenersExceededWarning's body is the emitter it is complaining about
+    const first = w.message.split("\n")[0] ?? w.message;
+    renderer.addSystemNote(`node: ${w.name === "Warning" ? "" : `${w.name}: `}${first}`, "warn");
+  };
+  process.on("warning", onWarning);
+  restoreWarnings = (): void => {
+    process.off("warning", onWarning);
+    for (const l of nodeWarnListeners) process.on("warning", l as (w: Error) => void);
+  };
   _trace("renderer.start");
   renderer.start({
     onSubmit: (text) => { if (text.startsWith("/")) handleSlash(text); else void submit(text); },
