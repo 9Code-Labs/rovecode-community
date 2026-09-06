@@ -175,7 +175,10 @@ it never asks the offer, because an update must not change how a server starts.
 `rovecode mcp list` prints, under the rows, one line for servers that still start through npx — how many, which,
 the cost, and the command to reinstall them once — and **rewrites nothing**: an npx entry keeps working for as
 long as you keep it. The same offer is one more pick in the TUI's `/mcp` (`install once` / `run through npx at
-every start — as today`), before the approval card, whose detail carries the same `installs` rows.
+every start — as today`), before the approval card, whose detail carries the same `installs` rows — and in the
+sextant's `/market`, Enter on an npx row opens a **how to start it** card first (↑↓ choose, ⏎ show the plan,
+esc back), then the plan card drawn for that answer; ⏎ on the plan card is still the only thing that installs,
+and npm runs only then.
 
 ## `/mcp` in the TUI
 

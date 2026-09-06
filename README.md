@@ -110,6 +110,14 @@ rovecode --accept-edits         # middle tier: writes INSIDE this folder stop as
                                 # session. network and writes outside it still ask (/accept-edits ·
                                 # ROVECODE_ACCEPT_EDITS=1 · or the `all edits` button on a write approval
                                 # card)
+                                # The same file takes "bell": false — the sextant rings the terminal bell
+                                # (BEL) when a run ends or a card needs you, so a tabbed-away terminal
+                                # can flash or chime; off with that key (user or project scope).
+@src/auth.ts why does this fail  # @file attaches the file to the message as a `read` would return it —
+                                # contents + edit anchors, no tool round-trip. Capped and said: 400 lines
+                                # per file (the footer names the offset to continue), 8 files, ~60k chars
+                                # per message; a directory, a binary, a 2 MB+ file or a path outside the
+                                # workspace is named and left out. The panel shows one chip per file.
 rovecode run "<prompt>" --output json    # ONE result object on stdout (ndjson: one line per RunEvent + a
                                          # result line)
 rovecode run "<prompt>" --max-seconds 300 --max-turns 40  # ceilings on one run: a hit ends it cleanly with

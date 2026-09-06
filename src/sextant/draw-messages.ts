@@ -162,6 +162,8 @@ export function buildRows(s: SextantState, w: number, theme: Theme, now: number)
         rows.push({ segs: [["you", st(last ? theme.accent : theme.muted)], [last ? "  · sent" : "", st(theme.accentDim)]] });
         for (const l of wrap(m.text, iw)) rows.push({ segs: mentionSegs(l, theme), indent: 2 });
         if (m.images?.length) rows.push({ segs: m.images.flatMap((name): Seg[] => [[` ▣ ${name} `, st(theme.fg2, theme.selBg)], ["  ", st(-1)]]), indent: 2 });
+        // one chip per @file attached (mentions.ts): the read block itself is in the session, not on screen
+        if (m.files?.length) for (const f of m.files) rows.push({ segs: [[` ▤ ${f} `, st(theme.fg2, theme.selBg)]], indent: 2 });
         headerDue = true; inRun = true;
         break;
       }

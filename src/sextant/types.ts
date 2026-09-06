@@ -251,7 +251,9 @@ export interface ToolRow {
 
 export type MessageRow =
   /** `at` = the clock the line was sent (renderer addUser); the `· sent` tag fades 1.4 s after it */
-  | { kind: "user"; text: string; /** image chips `[image: name]` */ images?: string[]; at?: number }
+  | { kind: "user"; text: string; /** image chips `[image: name]` */ images?: string[];
+      /** `@file` chips — "src/x.ts · 120 lines": the attached read blocks are in the session, never in the panel (mentions.ts) */
+      files?: string[]; at?: number }
   /** `id` = the RunEvent messageId the streaming row belongs to (absent on replayed/summary rows) */
   | { kind: "assistant"; text: string; streaming: boolean; id?: string }
   | ToolRow

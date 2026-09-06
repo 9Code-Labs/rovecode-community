@@ -11,6 +11,7 @@ import type { RunEvent } from "../core/types.ts";
 import type { TaskInfo } from "../core/tasks.ts";
 import type { Pet, PetEventData } from "./pet.ts";
 import { baseName, describeCall, relPath } from "./tool-rows.ts";
+import { splitAttached } from "./mentions.ts";
 import type { MessageRow, ToolRow } from "./types.ts";
 
 type UserRow = Extract<MessageRow, { kind: "user" }>;
@@ -32,8 +33,11 @@ export function userRow(line: string, now: number): UserRow {
   const last = lines[lines.length - 1] ?? "";
   const chips = [...last.matchAll(CHIP_RE)].map((m) => m[1]!);
   const chipLine = chips.length > 0 && last.replace(CHIP_RE, "").trim() === "";
-  const row: UserRow = { kind: "user", text: (chipLine ? lines.slice(0, -1) : lines).join("\n"), at: now };
+  // `@file` read blocks (mentions.ts) stay out of the panel: the typed text and one chip per file
+  const { text, files } = splitAttached((chipLine ? lines.slice(0, -1) : lines).join("\n"));
+  const row: UserRow = { kind: "user", text, at: now };
   if (chipLine) row.images = chips;
+  if (files.length > 0) row.files = files;
   return row;
 }
 

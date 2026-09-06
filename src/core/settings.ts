@@ -27,6 +27,10 @@ export interface Settings {
   permission?: PermissionLevel;
   /** how hard the model thinks before answering */
   effort?: ThinkingEffort;
+  /** the terminal bell (BEL) when a run ends or a card needs you — default true; `false` turns it off.
+   *  A terminal that beeps when you did not ask is worse than silence, so this is one key, in the file
+   *  you already have, rather than a flag you have to remember every launch (sextant-renderer.ts ring). */
+  bell?: boolean;
 }
 
 const FILE = "settings.json";
@@ -45,6 +49,7 @@ function sanitize(raw: unknown): Settings {
   const out: Settings = {};
   if (typeof r.permission === "string" && PERMISSIONS.includes(r.permission)) out.permission = r.permission as PermissionLevel;
   if (typeof r.effort === "string" && (THINKING_EFFORTS as readonly string[]).includes(r.effort)) out.effort = r.effort as ThinkingEffort;
+  if (typeof r.bell === "boolean") out.bell = r.bell; // "off"/"no" are not false: a string is ignored, the bell stays on
   return out;
 }
 

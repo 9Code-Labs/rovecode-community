@@ -20,6 +20,7 @@ import { basename, join } from "node:path";
 import pkg from "../../package.json";
 import type { RunEvent } from "../core/types.ts";
 import { loadTodos } from "../tools/todo.ts";
+import { loadSettings } from "../core/settings.ts";
 import type { ApprovalAnswer, AssistantView, PickItem, QuestionAnswer, QuestionPrompt, Renderer, RendererHooks, SlashCommand, StatusInfo } from "../tui/renderer.ts";
 import { drawAgents } from "./draw-agents.ts";
 import { openMarket } from "./draw-market.ts";
@@ -62,6 +63,8 @@ export interface SextantRendererOptions {
   git?: GitRunner | GitRunnerAsync;
   /** false disables the repo scan entirely (pure tests) */
   scan?: boolean;
+  /** the terminal bell on run end / a card that needs you; default = settings.json `bell` (true when unset) */
+  bell?: boolean;
 }
 
 const TOAST_MAX = 48;
@@ -88,6 +91,8 @@ export class SextantRenderer implements Renderer {
   private stopped = false;
   /** between setBusy(true) and setBusy(false): the event stream owns the rows */
   private busy = false;
+  /** ring BEL when a run ends or a card opens — the one signal a human who tabbed away gets; settings.json `bell: false` silences it */
+  private readonly bell: boolean;
   private dropNotes = 0;
   /** the approval / question / picker promises (sextant-cards.ts) */
   private readonly cards: CardHost;
@@ -110,6 +115,7 @@ export class SextantRenderer implements Renderer {
     const themeName: ThemeName = isThemeName(o.theme ?? "") ? (o.theme as ThemeName) : "night";
     this.theme = buildTheme(themeName);
     const cwd = o.cwd ?? process.cwd();
+    this.bell = o.bell ?? loadSettings(cwd).bell ?? true;
     this.state = initialState({ cwd, repo: { name: basename(cwd) || cwd, branch: null }, version: pkg.version, theme: themeName, mode: "act", yolo: false, commands: [], now: this.clock() });
     this.pet = createPet({ name: o.pet });
     // the reducer's diffFor seam stays empty: the hunks arrive through the watcher's scheduleDiff (a
@@ -275,6 +281,7 @@ export class SextantRenderer implements Renderer {
    *  ungated edit of the same file must not diff against that stale snapshot */
   askApproval(tool: string, argsPreview: string, detail?: string): Promise<ApprovalAnswer> {
     const file = this.previewInCodePanel(tool, argsPreview, detail);
+    this.ring(); // the run is now waiting on a human who may have tabbed away
     const answer = this.cards.approval(tool, argsPreview, detail);
     if (file !== null) void answer.then((a) => { if (a === "deny") this.before.delete(file); });
     return answer;
@@ -282,7 +289,15 @@ export class SextantRenderer implements Renderer {
   /** the palette as a picker (sextant-cards.ts) */
   pickOne(items: PickItem[], title?: string): Promise<string | null> { return this.cards.pick(items, title); }
   /** the question card (sextant-cards.ts): `signal` abort dismisses it, a second concurrent ask is rejected */
-  askQuestion(q: QuestionPrompt, signal?: AbortSignal): Promise<QuestionAnswer | null> { return this.cards.question(q, signal); }
+  askQuestion(q: QuestionPrompt, signal?: AbortSignal): Promise<QuestionAnswer | null> { this.ring(); return this.cards.question(q, signal); }
+
+  /** BEL (\x07) to the terminal — only once the surface is live, and never after leave. The terminal decides
+   *  what a bell is (Windows Terminal: audible/visual/taskbar flash per profile; iTerm2/kitty: a notification
+   *  when unfocused). No OSC 9/777: support is uneven and a stray escape sequence on screen is worse than no
+   *  sound. Off with settings.json `"bell": false` (core/settings.ts) or the renderer option. */
+  private ring(): void {
+    if (this.bell && this.started && !this.stopped) this.io.write("\x07");
+  }
 
   clearTranscript(): void { this.state.messages = []; this.state.stick = true; this.pet.event("fresh", undefined, this.clock()); this.loop.markDirty(); }
 
@@ -305,6 +320,7 @@ export class SextantRenderer implements Renderer {
         if (s.activity.state !== "SUCCESS" && s.activity.state !== "ERROR") { s.activity.state = "IDLE"; s.activity.label = "stopped"; }
         for (const r of s.messages) if (r.kind === "tool" && r.running) { r.running = false; r.ok = false; r.detail ??= "interrupted"; }
         this.pet.event("stopped", undefined, now);
+        this.ring(); // a run just ended (done, failed or interrupted): the moment a human who tabbed away wants to know about
       }
       s.escUntil = 0; delete s.ctrlCUntil;
     }
@@ -380,8 +396,8 @@ export class SextantRenderer implements Renderer {
         this.loop.markDirty();
       }).catch(() => { /* loadContext does not reject; this is belt and braces on the dynamic import */ });
     },
-    marketPlan: (row) => {
-      void planFor(row, { scope: "user", cwd: this.state.cwd, home: homedir() })
+    marketPlan: (row, local) => {
+      void planFor(row, { scope: "user", cwd: this.state.cwd, home: homedir() }, local)
         .then((plan) => {
           const m = this.state.market;
           if (!m) return;
@@ -400,8 +416,9 @@ export class SextantRenderer implements Renderer {
         this.loop.markDirty();
       });
     },
-    marketInstall: (row) => {
-      void install(row, { scope: "user", cwd: this.state.cwd, home: homedir() }).then(async (outcome) => {
+    marketInstall: (row, local) => {
+      // `local` is the approved card's own answer (keys.ts hands over req.plan.local): npm runs only now
+      void install(row, { scope: "user", cwd: this.state.cwd, home: homedir() }, local === true ? { local: true } : {}).then(async (outcome) => {
         // An MCP server lands in a file this session already read, so the install used to end in
         // "restart rovecode" — a poor answer to "I just installed it". Ask the runtime to re-read the
         // files and connect what is new, and report what actually happened instead of what to do next.

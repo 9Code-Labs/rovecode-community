@@ -445,6 +445,6 @@ export function drawHelp(scr: ScreenLike, L: Layout, C: Theme, s: SextantState, 
     const yy = y + 3 + i;
     scr.put(kx, yy, a, st(C.fg, C.bg2, ATTR.BOLD), 10); scr.put(kx + 11, yy, b, st(C.fg2, C.bg2), w - (kx - x) - 13);
   });
-  scr.put(x + 3, y + h - 2, "plain text and !commands reach the agent as typed · @ mentions attach files", st(C.dim, C.bg2), w - 6);
+  scr.put(x + 3, y + h - 2, "plain text and !commands reach the agent as typed · @file attaches the file as a read (400 lines, 8 files)", st(C.dim, C.bg2), w - 6);
   hits?.push({ rect: { x: 0, y: 0, w: L.w, h: L.h }, onClick: () => { s.help = false; } });
 }

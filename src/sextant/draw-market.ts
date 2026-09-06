@@ -48,6 +48,9 @@ export interface MarketViewRow {
   pending?: string[];
   /** present when it is on this machine — MarketRow.installed, flattened */
   installed?: { path: string; scope: "user" | "project"; version?: string; updateAvailable?: boolean; trusted?: boolean };
+  /** the npm package spec when the row starts through `npx <package>` — the install-once offer
+   *  (mcp/local-package.ts) has something to say about this row; absent = no offer, Enter goes to the plan */
+  localOffer?: string;
   /** the item's own documentation, already made safe for a terminal: no escape sequences, no control
    *  characters, markdown flattened to kinds a cockpit can draw. Absent = the catalog carries none, which
    *  is a quiet state and not an error. */
@@ -77,11 +80,23 @@ export interface MarketPlan {
   asks: { name: string; required: boolean; secret: boolean }[];
   pending: string[];
   replaces?: string;
+  /** the human chose "install once" on the chooser card: this plan was drawn for `node <bin>`, and the
+   *  install must run with the same answer — the card is the plan that runs, never a re-derivation */
+  local?: boolean;
   /** set once the confirmed install has answered */
   outcome?: { ok: boolean; text: string };
   /** true while runInstall is in flight */
   running?: boolean;
 }
+
+/** the install-once chooser (mcp/local-package.ts), open over the list BEFORE the plan card for a row that
+ *  starts through npx: the same question the CLI asks on a terminal and /mcp asks as a pick. `sel` 0 =
+ *  install once, 1 = npx at every start, as today. Enter asks for the plan with that answer; Esc backs out. */
+export interface MarketChoice { row: MarketViewRow; sel: 0 | 1 }
+export const CHOICE_LINES: readonly { label: string; hint: string }[] = [
+  { label: "install once — node starts it in ~0.4 s", hint: "npm install runs now, AFTER the plan is approved: the package's code lands under ~/.rovecode/mcp (typically 20–30 MB, once); no network needed to start" },
+  { label: "run through npx at every start — as today", hint: "~2 s per start, re-resolves the package and asks the npm registry each time; nothing is installed now" },
+];
 
 export interface MarketState {
   tab: MarketTab;
@@ -93,6 +108,8 @@ export interface MarketState {
   notes: string[];
   /** the plan card, open over the list until it is confirmed or dismissed */
   plan: MarketPlan | null;
+  /** the install-once chooser, open between Enter on an npx row and its plan card */
+  choice: MarketChoice | null;
   /** alt+d opens the selected row's documentation in the detail column; ↑↓ then scroll it */
   docs: boolean;
   docScroll: number;
@@ -102,7 +119,7 @@ export interface MarketState {
 
 export function openMarket(s: SextantState, rows: MarketViewRow[], status: MarketStatus = { kind: "ready" }, notes: string[] = []): void {
   openOverlay(s, "market"); // one overlay at a time; the transition lives in overlays.ts
-  s.market = { tab: "all", query: "", sel: 0, rows, status, notes, plan: null, docs: false, docScroll: 0, docRows: 12 };
+  s.market = { tab: "all", query: "", sel: 0, rows, status, notes, plan: null, choice: null, docs: false, docScroll: 0, docRows: 12 };
 }
 export function closeMarket(s: SextantState): void { s.market = null; }
 
@@ -157,7 +174,7 @@ const KIND_LABEL: Record<string, string> = { mcp: "mcp", skill: "skill", plugin:
 /** the plan card: the whole write, in the human's words, over the list. Enter installs, esc backs out. */
 function drawPlan(scr: ScreenLike, L: Layout, C: Theme, m: MarketState, hits?: HitZone[]): void {
   const p = m.plan;
-  if (!p) return;
+  if (!p) { if (m.choice) drawChoice(scr, L, C, m, hits); return; }
   const w = Math.min(76, L.w - 8);
   const lines = [
     ...p.preview,
@@ -190,6 +207,38 @@ function drawPlan(scr: ScreenLike, L: Layout, C: Theme, m: MarketState, hits?: H
   ], w - 6);
   hits?.push({ rect: { x, y, w, h }, onClick: () => {} });
   hits?.push({ rect: { x: x + 3, y: footY, w: 9, h: 1 }, onClick: () => {}, key: ENTER });
+}
+
+/** the chooser card: two ways to start an npx server, the trade under each, Enter picks, esc backs out. It
+ *  is not the gate — the plan card that follows is — so it writes nothing and runs nothing itself. */
+function drawChoice(scr: ScreenLike, L: Layout, C: Theme, m: MarketState, hits?: HitZone[]): void {
+  const c = m.choice;
+  if (!c) return;
+  const w = Math.min(84, L.w - 8);
+  const inner = w - 6;
+  const rows: { text: string; sel: boolean; head: boolean }[] = [];
+  CHOICE_LINES.forEach((o, i) => {
+    rows.push({ text: `${i === c.sel ? "●" : "○"} ${o.label}`, sel: i === c.sel, head: true });
+    for (const l of wrap(o.hint, inner - 4)) rows.push({ text: `    ${l}`, sel: false, head: false });
+  });
+  const h = Math.min(L.h - 4, rows.length + 6);
+  const x = Math.floor((L.w - w) / 2), y = Math.max(1, Math.floor((L.h - h) / 2));
+  scr.box(x, y, w, h, st(C.accent), C.bg2);
+  scr.text(x + 2, y, [[" how to start it ", st(C.accent, -1, ATTR.BOLD)]]);
+  scr.clip(x + 3, y + 1, `${c.row.title} · ${c.row.localOffer ?? c.row.runs}`, st(C.fg, C.bg2, ATTR.BOLD), inner);
+  scr.hline(x + 1, y + 2, w - 2, st(C.rule2, C.bg2), "╌");
+  let optionIndex = -1;
+  rows.slice(0, h - 5).forEach((r, i) => {
+    const yy = y + 3 + i;
+    scr.clip(x + 3, yy, r.text, r.head ? st(r.sel ? C.accent : C.fg, C.bg2, r.sel ? ATTR.BOLD : 0) : st(C.muted, C.bg2), inner);
+    if (r.head) {
+      optionIndex += 1;
+      const pick = optionIndex as 0 | 1;
+      hits?.push({ rect: { x: x + 3, y: yy, w: inner, h: 1 }, onClick: () => { c.sel = pick; } }); // a click selects; Enter still decides
+    }
+  });
+  scr.text(x + 3, y + h - 2, [["↑↓ choose   ⏎ show the plan", st(C.accent, C.bg2, ATTR.BOLD)], ["   esc back", st(C.dim, C.bg2)]], inner);
+  hits?.push({ rect: { x, y, w, h }, onClick: () => {} });
 }
 
 /** the detail column: everything the row promises, in the order a reader asks for it */
@@ -420,11 +469,19 @@ export function drawMarket(scr: ScreenLike, L: Layout, C: Theme, s: SextantState
 /** What a key press asked the app to do. The overlay never installs anything itself: it asks, and the
  *  renderer (which owns src/market/) answers by writing back into `plan`. */
 export type MarketRequest =
-  | { kind: "plan"; row: MarketViewRow }
+  /** `local` = the chooser's answer for an npx row (true: install once); absent = no offer was made */
+  | { kind: "plan"; row: MarketViewRow; local?: boolean }
   | { kind: "install"; plan: MarketPlan }
   /** the pane opened on a row whose body has not been read yet (search carries metadata, not bodies) */
   | { kind: "docs"; row: MarketViewRow }
   | { kind: "none" };
+
+/** Enter on a row: a row that starts through npx gets the chooser first (the same question the CLI and /mcp
+ *  ask), every other row goes straight to its plan. Either way nothing is written until the plan card. */
+function askOrPlan(m: MarketState, row: MarketViewRow): MarketRequest {
+  if (row.localOffer !== undefined) { m.choice = { row, sel: 0 }; return { kind: "none" }; }
+  return { kind: "plan", row };
+}
 
 /** Esc closes (the plan card first), ↑↓ move, ⇥/⇧⇥ cycle the kind, Enter asks for the plan and then
  *  confirms it, typing edits the query. Returns what the renderer must do next. */
@@ -444,6 +501,16 @@ export function onMarketKey(s: SextantState, ev: KeyEvent, fz: Fuzzy = defaultFu
       p.running = true;
       return { kind: "install", plan: p };
     }
+    return { kind: "none" };
+  }
+
+  // the install-once chooser: the answer decides which plan is drawn; nothing runs here. Esc backs out to
+  // the list — no plan, no install, exactly as if Enter had not been pressed.
+  if (m.choice) {
+    const c = m.choice;
+    if (name === "escape" || (ctrl && name === "c")) { m.choice = null; return { kind: "none" }; }
+    if (name === "up" || name === "down") { c.sel = c.sel === 0 ? 1 : 0; return { kind: "none" }; }
+    if (name === "enter") { m.choice = null; return { kind: "plan", row: c.row, local: c.sel === 0 }; }
     return { kind: "none" };
   }
 
@@ -486,7 +553,7 @@ export function onMarketKey(s: SextantState, ev: KeyEvent, fz: Fuzzy = defaultFu
     if (name === "pagedown") { m.docScroll = Math.min(m.docScroll + 12, docMaxScroll(current, m.docRows)); return { kind: "none" }; }
     if (name === "home") { m.docScroll = 0; return { kind: "none" }; }
     if (name === "end") { m.docScroll = docMaxScroll(current, m.docRows); return { kind: "none" }; }
-    if (name === "enter") return current ? { kind: "plan", row: current } : { kind: "none" };
+    if (name === "enter") return current ? askOrPlan(m, current) : { kind: "none" };
     return { kind: "none" }; // typing does not filter while a document is being read
   }
   if (name === "up") { m.sel = (m.sel - 1 + n) % n; return { kind: "none" }; }
@@ -497,7 +564,7 @@ export function onMarketKey(s: SextantState, ev: KeyEvent, fz: Fuzzy = defaultFu
   if (name === "end") { m.sel = n - 1; return { kind: "none" }; }
   if (name === "enter") {
     const row = vis[m.sel];
-    return row ? { kind: "plan", row } : { kind: "none" };
+    return row ? askOrPlan(m, row) : { kind: "none" };
   }
   if (name === "backspace") { m.query = [...m.query].slice(0, -1).join(""); m.sel = 0; return { kind: "none" }; }
   const c = name === "space" ? " " : ch;

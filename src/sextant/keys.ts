@@ -58,10 +58,11 @@ export interface KeyCtx {
     /** open /context: the renderer asks the LIVE runtime for the system prompt and tool schemas — the two
      *  rows a transcript cannot know — and fills s.context when the count is done */
     openContext(): void;
-    /** the human pressed Enter on a row: build the plan and write it into s.market.plan */
-    marketPlan(row: MarketViewRow): void;
-    /** the human confirmed the plan card: run it and write the outcome back onto the card */
-    marketInstall(row: MarketViewRow): void;
+    /** the human pressed Enter on a row (and answered the install-once chooser for an npx row: `local`):
+     *  build the plan and write it into s.market.plan */
+    marketPlan(row: MarketViewRow, local?: boolean): void;
+    /** the human confirmed the plan card: run THAT plan (its `local` included) and write the outcome back onto the card */
+    marketInstall(row: MarketViewRow, local?: boolean): void;
     /** the docs pane opened on a row whose body has not been read: fetch it and fill the row's lines */
     marketDocs(row: MarketViewRow): void;
   };
@@ -110,12 +111,12 @@ export function handleInput(s: SextantState, ev: InputEvent, ctx: KeyCtx, now: n
     if (ev.ctrl && ev.name === "c") return ctrlC(s, ctx);
     const req = onMarketKey(s, ev, ctx.fuzzy);
     // the overlay decides WHAT should happen; the renderer owns the market module and does it
-    if (req.kind === "plan") ctx.local.marketPlan(req.row);
+    if (req.kind === "plan") ctx.local.marketPlan(req.row, req.local);
     else if (req.kind === "docs") ctx.local.marketDocs(req.row);
     // the plan card names an item; installing re-read the SELECTION instead, and the two can differ —
     // the plan arrives asynchronously, so an arrow key (or a click on a list row that outlived the card)
     // moved the selection while the card still showed the first item. Install what the human approved.
-    else if (req.kind === "install") ctx.local.marketInstall(req.plan.row);
+    else if (req.kind === "install") ctx.local.marketInstall(req.plan.row, req.plan.local);
     return R();
   }
   if (s.context) {

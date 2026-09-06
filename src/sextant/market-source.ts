@@ -13,6 +13,8 @@
  *  market module is not wired yet", not as a crash in the middle of a frame. */
 
 import type { MarketDocLine, MarketPlan, MarketStatus, MarketViewRow } from "./draw-market.ts";
+import { npxPackage } from "../mcp/local-package.ts";
+import type { MarketInstall } from "../mcp/market.ts";
 
 /** what the overlay needs to open: the rows, why they are what they are, and anything worth saying once */
 export interface MarketLoad {
@@ -47,8 +49,12 @@ interface PlanView {
   asks: Env[]; pending: string[]; replaces?: string;
 }
 type Outcome =
-  | { ok: true; item: Item; target: string; scope: "user" | "project"; envNames: string[]; trusted?: boolean; next?: string }
+  | { ok: true; item: Item; target: string; scope: "user" | "project"; envNames: string[]; trusted?: boolean; next?: string;
+      /** install-once: what npm put on disk (src/market/types.ts InstallOutcome.package) */
+      package?: { name: string; version: string; prefix: string; integrity?: string; missing?: string[] } }
   | { ok: false; error: string };
+/** the plan/install options the overlay passes through; `local` is the chooser's answer (mcp/local-package.ts) */
+interface Ctx { scope: "user" | "project"; cwd: string; home: string; local?: boolean }
 
 /** the module's public surface, as much of it as the overlay uses (src/market/registry.ts + install.ts;
  *  there is no barrel file, so the two are imported separately) */
@@ -59,8 +65,8 @@ interface RegistryModule {
   findItem(kind: "mcp" | "skill" | "plugin", id: string, deps?: { offline?: boolean }): Promise<{ item?: Item; notes: string[] }>;
 }
 interface InstallModule {
-  planInstall(item: Item, opts: { scope: "user" | "project"; cwd: string; home: string }): PlanView | { error: string };
-  runInstall(plan: PlanView, answers: Record<string, string>, opts: { scope: "user" | "project"; cwd: string; home: string }, deps?: unknown): Promise<Outcome>;
+  planInstall(item: Item, opts: Ctx): PlanView | { error: string };
+  runInstall(plan: PlanView, answers: Record<string, string>, opts: Ctx, deps?: unknown): Promise<Outcome>;
   withInstalled(items: readonly Item[], cwd: string, home: string): Row[];
 }
 
@@ -106,8 +112,19 @@ function alternatives(item: Item): string[] {
   return (spec.entry?.installs ?? []).slice(1).map((i) => (i.kind === "http" ? `remote ${i.url ?? ""}` : `${i.runtime ?? "stdio"}: ${[i.command, ...(i.args ?? [])].join(" ")}`));
 }
 
+/** the npm package an mcp row's first form would run through npx — the install-once offer's subject */
+function localOfferOf(item: Item): string | undefined {
+  const spec = item.install as { kind?: string; entry?: { installs?: unknown[] } } | undefined;
+  if (spec?.kind !== "mcp") return undefined;
+  const first = spec.entry?.installs?.[0];
+  if (first === undefined || typeof first !== "object" || first === null) return undefined;
+  return npxPackage(first as MarketInstall)?.spec;
+}
+
 export function toViewRow(row: Row): MarketViewRow {
+  const localOffer = localOfferOf(row);
   return {
+    ...(localOffer !== undefined ? { localOffer } : {}),
     id: row.id,
     kind: row.kind,
     title: row.title,
@@ -207,14 +224,16 @@ export async function docsFor(row: MarketViewRow): Promise<{ source: string; tru
   return { source: docs.source, truncated: docs.truncated === true, lines: docLines(docs.body) };
 }
 
-/** the plan for one row, or the reason there is none. Writes nothing. */
-export async function planFor(row: MarketViewRow, ctx: { scope: "user" | "project"; cwd: string; home: string }): Promise<MarketPlan | { error: string }> {
+/** the plan for one row, or the reason there is none. Writes nothing. `local` is the chooser's answer for an npx
+ *  row: true draws the install-once plan (`node <bin>`, the `installs`/`records` rows), false or absent the npx
+ *  line as today — and the plan remembers it, so the install runs the plan that was approved. */
+export async function planFor(row: MarketViewRow, ctx: Ctx, local?: boolean): Promise<MarketPlan | { error: string }> {
   const mod = await load();
   if (!mod) return { error: NOT_WIRED };
   const result = await mod.registry.searchMarket(row.id, { offline: true });
   const item = result.items.find((i) => i.kind === row.kind && i.id === row.id);
   if (!item) return { error: `${row.kind}:${row.id} is not in the catalog any more` };
-  const plan = mod.install.planInstall(item, ctx);
+  const plan = mod.install.planInstall(item, { ...ctx, ...(local === true ? { local: true } : {}) });
   if ("error" in plan) return { error: plan.error };
   return {
     row,
@@ -225,17 +244,21 @@ export async function planFor(row: MarketViewRow, ctx: { scope: "user" | "projec
     asks: plan.asks.map((a) => ({ name: a.name, required: a.required, secret: a.secret })),
     pending: plan.pending,
     ...(plan.replaces !== undefined ? { replaces: plan.replaces } : {}),
+    ...(local === true ? { local: true } : {}),
   };
 }
 
-/** Run a plan the human has just confirmed. The overlay only ever sees the outcome sentence. */
-export async function install(row: MarketViewRow, ctx: { scope: "user" | "project"; cwd: string; home: string }): Promise<{ ok: boolean; text: string }> {
+/** Run a plan the human has just confirmed. The overlay only ever sees the outcome sentence. `opts.local` must be
+ *  the approved plan's own `local` — npm runs here, and only here, after the card said yes. `opts.deps` is the
+ *  installer's seam (a fake `npm` in tests). */
+export async function install(row: MarketViewRow, ctx: Ctx, opts: { local?: boolean; deps?: unknown } = {}): Promise<{ ok: boolean; text: string }> {
   const mod = await load();
   if (!mod) return { ok: false, text: NOT_WIRED };
   const result = await mod.registry.searchMarket(row.id, { offline: true });
   const item = result.items.find((i) => i.kind === row.kind && i.id === row.id);
   if (!item) return { ok: false, text: `${row.kind}:${row.id} is not in the catalog any more` };
-  const plan = mod.install.planInstall(item, ctx);
+  const withLocal: Ctx = { ...ctx, ...(opts.local === true ? { local: true } : {}) };
+  const plan = mod.install.planInstall(item, withLocal);
   if ("error" in plan) return { ok: false, text: plan.error };
   // A SECRET cannot be finished inside the overlay: it has to be typed on a shell, masked, not into a
   // query line that echoes. The overlay says so and hands the exact command over.
@@ -249,9 +272,13 @@ export async function install(row: MarketViewRow, ctx: { scope: "user" | "projec
     const what = plan.asks.map((a) => a.name).join(", ");
     return { ok: false, text: `${what} must be typed where it can be masked — run: rovecode market install ${item.kind}:${item.id}` };
   }
-  const outcome = await mod.install.runInstall(plan, {}, ctx);
+  const outcome = await mod.install.runInstall(plan, {}, withLocal, opts.deps);
   if (!outcome.ok) return { ok: false, text: outcome.error };
   const bits = [`installed into ${outcome.target}`];
+  if (outcome.package) {
+    bits.push(`${outcome.package.name} ${outcome.package.version} installed once → ${outcome.package.prefix}${outcome.package.integrity !== undefined ? " (integrity recorded)" : ""}`);
+    if (outcome.package.missing?.length) bits.push(`record incomplete: ${outcome.package.missing.join("; ")}`);
+  }
   if (outcome.envNames.length) bits.push(`export ${outcome.envNames.join(", ")}`);
   // the placeholder is the one thing between this install and a working server, so it leads
   for (const p of plan.pending) bits.push(`fill in ${p}`);

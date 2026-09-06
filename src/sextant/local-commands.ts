@@ -10,6 +10,7 @@
 
 import type { KeyCtx } from "./keys.ts";
 import { parseInput, resolveFile } from "./overlays.ts";
+import { expandMentions } from "./mentions.ts";
 import { THEME_ORDER, type CodeMode, type Focus, type SextantState, type ThemeName } from "./types.ts";
 import { openHelp, openNotices } from "./overlays.ts";
 
@@ -67,6 +68,14 @@ export function setFocus(s: SextantState, ctx: KeyCtx, f: Focus): void {
  *  text, unknown `/x`) reaches onSubmit unchanged — app.ts handleSlash owns the rest */
 export function dispatch(s: SextantState, text: string, ctx: KeyCtx): void {
   const p = parseInput(text);
+  // `@file` in free text: the file goes with the message as a `read` result (mentions.ts) — this is the one
+  // consumer of parseInput's `mentions`, and what the footer's "@ mentions attach files" has meant since
+  if (p.kind === "text" && p.mentions.length > 0) {
+    const r = expandMentions(text, { cwd: s.cwd, paths: s.files.paths, mentions: p.mentions });
+    for (const n of r.notes) ctx.local.toast(n);
+    ctx.hooks.onSubmit(r.text);
+    return;
+  }
   if (p.kind !== "slash" || !runLocal(s, p.cmd ?? "", p.arg ?? "", ctx)) ctx.hooks.onSubmit(text);
 }
 

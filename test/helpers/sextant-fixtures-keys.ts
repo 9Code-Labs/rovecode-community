@@ -46,8 +46,9 @@ export function spyCtx(layout: Layout = makeLayout(160, 44)): Spy {
       setTheme: (n) => { spy.themes.push(n); }, setMode: (m) => { spy.modes.push(m); }, openFile: (p) => { spy.opened.push(p); }, toast: (t) => { spy.toasts.push(t); },
       openMarket: () => { spy.market.push("open"); },
       openContext: () => { spy.context.push("open"); },
-      marketPlan: (row) => { spy.market.push(`plan:${row.kind}:${row.id}`); },
-      marketInstall: (row) => { spy.market.push(`install:${row.kind}:${row.id}`); },
+      // `:local` only when the install-once chooser answered yes — every existing expectation stays as it was
+      marketPlan: (row, local) => { spy.market.push(`plan:${row.kind}:${row.id}${local === true ? ":local" : ""}`); },
+      marketInstall: (row, local) => { spy.market.push(`install:${row.kind}:${row.id}${local === true ? ":local" : ""}`); },
       marketDocs: (row) => { spy.market.push(`docs:${row.kind}:${row.id}`); },
     },
     hits: [], rows: [], drag: { zone: null, y0: 0 },
