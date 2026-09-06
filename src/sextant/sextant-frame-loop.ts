@@ -1,15 +1,15 @@
-/** Sextant frame loop (port #44): the ONE interval of the surface. Owns the Screen (#40) over the
+/** Sextant frame loop (port #44): the ONE timer of the surface. Owns the Screen (#40) over the
  *  TerminalIO, the layout, the per-frame hit zones, the painters wiring (#41 frame/files/plan/usage,
  *  #42 code/messages, #45 pet, #43 suggest/palette/help overlays), the scroll write-backs the pure
  *  #42 painters cannot do, the cursor placement and the input pipeline (parseInput → keys.handleInput).
  *  Ported from the user's sextant v0.4.0 app.js:1599-1632 (the boot: 40 ms tick, paint only when
- *  dirty / animating / every 170 ms, input and resize handlers). No git/fs here — the renderer
+ *  dirty / animating / every 170 ms, input and resize handlers; idle, the timer now sleeps until the next ambient change — see the class note). No git/fs here — the renderer
  *  schedules its I/O from `onTick`, off the paint path. `clock` is injected: tests drive time. */
 
 import { agentsScrollTop, laneCells } from "./draw-agents.ts";
 import { drawCode, codeScrollTop } from "./draw-code.ts";
 import { drawMessages, messagesScroll, promptCursor } from "./draw-messages.ts";
-import { drawPet } from "./draw-pet.ts";
+import { drawPet, SWAY_MS } from "./draw-pet.ts";
 import { fuzzy, tokenize } from "./engine.ts";
 import { renderFrame } from "./frame.ts";
 import { parseInput } from "./input.ts";
@@ -29,10 +29,14 @@ import { messageRowHits } from "./message-hits.ts";
 import { drawTabs, mainPage } from "./draw-tabs.ts";
 import type { HitZone, InputEvent, Layout, SextantState, TerminalIO, Theme, TreeRow } from "./types.ts";
 
-/** the interval (app.js: setInterval(tick, 40)) */
+/** the frame period while something moves (app.js: setInterval(tick, 40)) */
 export const FRAME_MS = 40;
-/** an idle surface still repaints this often (glyph pulse, pet sway) */
+/** a tick repaints a frame older than this even when nothing asked (tests drive the clock and tick by hand) */
 export const IDLE_REPAINT_MS = 170;
+/** the loop never sleeps longer than this: the repo's idle scan and the pet's due hum ride on the tick */
+export const IDLE_TICK_MS = 2000;
+/** the idle header glyph steps through its four colours every 500 ms (draw-frame.ts activityGlyph) */
+export const PULSE_MS = 500;
 /** the suggestion box shows at most this many rows (#43 fix-wave cap) */
 export const MAX_SUGGESTIONS = 8;
 /** the boot reveal animates for this long after bootAt (5 × 90 ms steps + slack) */
@@ -61,9 +65,23 @@ export interface FrameLoopDeps {
   onTick?: (now: number) => void;
 }
 
+/** The loop is one re-armed setTimeout, not a setInterval. Its period is FRAME_MS while something MOVES
+ *  (a spinner, a storm, the boot reveal: a new picture every frame). Otherwise the surface is only
+ *  AMBIENT — the header glyph steps colour every 500 ms, the pet sways every 1.8 s, a quip or a toast
+ *  expires at a known time — and the loop sleeps until the earliest of those instants (nextAmbient), so an
+ *  idle session paints ~2 frames a second instead of 6 and wakes ~2 times instead of 25; after a run,
+ *  when the glyph holds still, well under one a second. Nothing waits for the sleeping timer: a keystroke
+ *  paints in parse(), and every state change goes through markDirty() (dispatch, resize, the renderer),
+ *  which pulls the next tick forward to one frame from now (wake()). */
 export class FrameLoop {
   private screen: Screen | null = null;
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  /** performance.now() at which `timer` fires (wake() only re-arms when that is further than a frame away) */
+  private dueAt = 0;
+  /** the delay the last tick chose for the next one (fire() arms it) */
+  private _pace = FRAME_MS;
+  /** clock time of the next ambient change the last tick saw (a tick at or past it paints) */
+  private ambientDue = -Infinity;
   private unsubs: (() => void)[] = [];
   private carry = "";
   private held = "";
@@ -88,7 +106,9 @@ export class FrameLoop {
   get active(): boolean { return this.timer !== null; }
   /** the layout of the last frame (before the first frame: computed from the io size) */
   get layout(): Layout { return this.L; }
-  markDirty(): void { this.dirty = true; }
+  /** the delay between the last tick and the next (tests: the idle backoff) */
+  get pace(): number { return this._pace; }
+  markDirty(): void { this.dirty = true; this.wake(); }
   /** the last painted frame as text (tests/smoke); "" before start() */
   frameText(): string { return this.screen?.toText() ?? ""; }
 
@@ -98,14 +118,33 @@ export class FrameLoop {
     const { cols, rows } = this.d.io.size();
     this.screen = new Screen(this.d.io, cols, rows, { truecolor: this.d.truecolor });
     this.unsubs.push(this.d.io.onInput((chunk) => this.feed(chunk)));
-    this.unsubs.push(this.d.io.onResize((c, r) => { this.screen?.resize(c, r); this.dirty = true; }));
-    this.timer = setInterval(() => this.tick(), FRAME_MS);
+    this.unsubs.push(this.d.io.onResize((c, r) => { this.screen?.resize(c, r); this.markDirty(); }));
+    this._pace = FRAME_MS;
+    this.arm(FRAME_MS);
     this.render(this.d.clock());
   }
 
-  /** clear the interval and the ESC-hold timer, unsubscribe; the screen keeps its last frame for frameText() */
+  /** (re)arm the one timer */
+  private arm(ms: number): void {
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.dueAt = performance.now() + ms;
+    this.timer = setTimeout(() => this.fire(), ms);
+  }
+  /** the timer fired: tick, then arm the pace the tick chose — unless the tick stopped the loop (timer
+   *  gone) or a wake() inside it already re-armed (timer replaced): then it is no longer ours to arm */
+  private fire(): void {
+    const fired = this.timer;
+    this.tick();
+    if (this.timer === fired) { this.timer = null; this.arm(this._pace); }
+  }
+  /** something changed: if the loop is asleep, pull the next tick forward to one frame from now */
+  private wake(): void {
+    if (this.timer !== null && this.dueAt - performance.now() > FRAME_MS) this.arm(FRAME_MS);
+  }
+
+  /** clear the frame timer and the ESC-hold timer, unsubscribe; the screen keeps its last frame for frameText() */
   stop(): void {
-    if (this.timer) { clearInterval(this.timer); this.timer = null; }
+    if (this.timer) { clearTimeout(this.timer); this.timer = null; }
     if (this.holdTimer) { clearTimeout(this.holdTimer); this.holdTimer = null; }
     this.held = "";
     for (const u of this.unsubs) u();
@@ -151,7 +190,7 @@ export class FrameLoop {
 
   dispatch(ev: InputEvent): void {
     const now = this.d.clock();
-    this.dirty = true;
+    this.markDirty(); // and wake: the tick that follows this key (onTick: file reload) must come in one frame, not one sleep
     if (this.d.beforeInput?.(ev, now)) return;
     const kc = this.d.keyCtx();
     const ctx: KeyCtx = { layout: this.L, hooks: kc.hooks, local: kc.local, hits: this.hits, rows: this.rows, fuzzy, drag: this.drag };
@@ -159,17 +198,45 @@ export class FrameLoop {
     this.d.afterInput?.(ev, now);
   }
 
-  /** something on screen moves by itself: spinners, a waiting card, toasts, touched files, the esc arm, the pet, the boot reveal */
-  animating(now: number): boolean {
-    const s = this.d.state;
-    return s.running || s.card !== null || s.toasts.length > 0 || s.files.touched.size > 0 || now < s.escUntil
-      || this.d.pet.animating(now) || now - s.bootAt < REVEAL_MS;
+  /** a new picture EVERY frame: a run's spinners, a waiting card's blink, touched-file spinners, the pet's
+   *  storms and effects, the boot reveal. These hold the loop at FRAME_MS. */
+  moving(now: number): boolean {
+    const s = this.d.state, P = this.d.pet.state;
+    return s.running || s.card !== null || s.files.touched.size > 0 || now - s.bootAt < REVEAL_MS
+      || now < P.stormUntil || P.fx.some((f) => f.until > now);
+  }
+
+  /** the clock time the picture next changes on its own while nothing moves — Infinity when it never will:
+   *  the idle header glyph's next colour step (only while the activity state is IDLE and no card is up —
+   *  draw-frame.ts modeOf; after a run the glyph holds), the pet's next sway step (only while it is on
+   *  screen — the pet also hums from drawPet, so its due hum lands on the sway wake), and the instants a
+   *  quip, a glance, a toast or the esc arm expire */
+  nextAmbient(now: number): number {
+    const s = this.d.state, P = this.d.pet.state;
+    let due = Infinity;
+    if (s.card === null && s.activity.state === "IDLE") due = Math.min(due, (Math.floor(now / PULSE_MS) + 1) * PULSE_MS);
+    if (this.L.pet) due = Math.min(due, (Math.floor(now / SWAY_MS) + 1) * SWAY_MS);
+    if (P.quip && P.quip.until > now) due = Math.min(due, P.quip.until);
+    if (P.glance && P.glance.until > now) due = Math.min(due, P.glance.until);
+    for (const t of s.toasts) if (t.until > now) due = Math.min(due, t.until);
+    if (now < s.escUntil) due = Math.min(due, s.escUntil);
+    return due;
   }
 
   tick(): void {
     const now = this.d.clock();
     this.d.onTick?.(now); // first: a reload marks dirty and paints below, in this very frame
-    if (this.dirty || this.animating(now) || now - this.lastRender >= IDLE_REPAINT_MS) this.render(now);
+    if (this.dirty || this.moving(now) || now >= this.ambientDue || now - this.lastRender >= IDLE_REPAINT_MS) this.render(now);
+    this._pace = this.nextPace(now);
+  }
+
+  /** the delay to the next tick, decided AFTER the paint (a painter can mark dirty or start a quip): a
+   *  frame while anything moves or is dirty, else the time to the next ambient change, never under a frame
+   *  (a timer that fires a millisecond early must not spin) and never over IDLE_TICK_MS */
+  private nextPace(now: number): number {
+    if (this.dirty || this.moving(now)) { this.ambientDue = -Infinity; return FRAME_MS; }
+    this.ambientDue = this.nextAmbient(now);
+    return Math.min(IDLE_TICK_MS, Math.max(FRAME_MS, this.ambientDue - now));
   }
 
   /** paint one frame: panels (renderFrame) → suggestion box → palette → help → scroll write-backs → cursor → flush */
