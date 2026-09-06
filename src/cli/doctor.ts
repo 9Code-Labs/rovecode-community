@@ -33,11 +33,12 @@ import { loadMcpConfig, placeholderHoles, type McpServerConfig } from "../mcp/co
 import { mcpTrustStatus, trustedPredicate } from "../mcp/trust.ts";
 import { loadState as loadPluginState } from "../plugins/state.ts";
 import { launchesViaNpx, npxOfferLine } from "../mcp/local-package.ts";
+import { resolveVerify, VERIFY_BLIND_SPOT, verifyLabelWithCost } from "../core/verify.ts";
 
 export type DoctorStatus = "ok" | "note" | "warn" | "fail";
 
 export interface DoctorCheck {
-  id: "home" | "provider" | "permission" | "tools" | "mcp" | "checkpoints";
+  id: "home" | "provider" | "permission" | "tools" | "verify" | "mcp" | "checkpoints";
   status: DoctorStatus;
   summary: string;
   detail?: string[];
@@ -71,7 +72,7 @@ export interface DoctorDeps {
 
 const DOCTOR_USAGE = [
   "usage: rovecode doctor [--json] [--no-connect]",
-  "  one pass over the setup: home · provider · permission level · tools on PATH · MCP servers · checkpoints",
+  "  one pass over the setup: home · provider · permission level · tools on PATH · the verify check · MCP servers · checkpoints",
   "  --no-connect   do not start the MCP servers to see whether they answer (they are otherwise connected and closed)",
   "  --json         one document on stdout; exit 0 = nothing broken, 1 = something to fix (a missing provider is a note, not a failure)",
 ];
@@ -247,6 +248,20 @@ export async function runDoctor(deps: DoctorDeps = {}): Promise<DoctorReport> {
     else if (existsSync(join(cwd, "tsconfig.json"))) detail.push("✓ typescript-language-server — edits and writes come back with diagnostics");
     else detail.push("· typescript-language-server — not a TypeScript project here (no tsconfig.json), so the gate does not apply");
     checks.push({ id: "tools", status, summary: detail.filter((l) => l.startsWith("✓")).length + " of " + detail.length + " present", detail });
+  }
+
+  // ---- verify: the check the loop runs before "done" (core/verify.ts) — the same kind of fact as `tools` and
+  // `permission`: what this project WOULD run, or that nothing is configured and why nothing was inferred. Never a
+  // failure: a project with no gate is a project with no gate. The refusals are the row's detail on purpose — that
+  // list is how a person decides, once, whether to turn the gate on with the `verify` key.
+  {
+    const plan = resolveVerify(cwd);
+    const summary = plan.source === "settings" ? `${verifyLabelWithCost(cwd, plan)} · from ${plan.reason}`
+      : plan.source === "inferred" ? `${verifyLabelWithCost(cwd, plan)} · ${plan.reason} — set \`verify\` in .rovecode/settings.json to pin or replace it`
+      : `none · ${plan.reason}`;
+    const detail = plan.refused.map((r) => `not inferred: ${r}`);
+    if (plan.commands.length > 0) detail.push(VERIFY_BLIND_SPOT);
+    checks.push({ id: "verify", status: plan.source === "settings" ? "ok" : "note", summary, ...(detail.length ? { detail } : {}) });
   }
 
   // ---- checkpoints: the shadow repositories under this workspace

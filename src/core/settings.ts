@@ -31,6 +31,11 @@ export interface Settings {
    *  A terminal that beeps when you did not ask is worse than silence, so this is one key, in the file
    *  you already have, rather than a flag you have to remember every launch (sextant-renderer.ts ring). */
   bell?: boolean;
+  /** the check the loop runs after the agent's last edit before its reply counts as done (core/verify.ts):
+   *  one shell command, or a list run in order; `false` turns the gate off AND stops any inference. The
+   *  one source that needs no guessing — a project should set this rather than let a `test` script be
+   *  inferred, because a gate that runs the wrong command once is turned off forever. */
+  verify?: string | string[] | false;
 }
 
 const FILE = "settings.json";
@@ -50,6 +55,14 @@ function sanitize(raw: unknown): Settings {
   if (typeof r.permission === "string" && PERMISSIONS.includes(r.permission)) out.permission = r.permission as PermissionLevel;
   if (typeof r.effort === "string" && (THINKING_EFFORTS as readonly string[]).includes(r.effort)) out.effort = r.effort as ThinkingEffort;
   if (typeof r.bell === "boolean") out.bell = r.bell; // "off"/"no" are not false: a string is ignored, the bell stays on
+  // verify: a non-empty command string, a list of them (empty strings dropped, at most 8, each under 500 chars),
+  // or `false`. Not a table with the other keys on purpose: the shapes differ (two enums, a boolean, this).
+  if (r.verify === false) out.verify = false;
+  else if (typeof r.verify === "string" && r.verify.trim() !== "" && r.verify.length <= 500) out.verify = r.verify.trim();
+  else if (Array.isArray(r.verify)) {
+    const cmds = r.verify.filter((v): v is string => typeof v === "string" && v.trim() !== "" && v.length <= 500).map((v) => v.trim()).slice(0, 8);
+    if (cmds.length > 0) out.verify = cmds;
+  }
   return out;
 }
 

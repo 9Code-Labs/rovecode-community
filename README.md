@@ -392,7 +392,15 @@ Defaults < project config chunks (harvested, capped) < env < CLI flags.
   by `/yolo --save` and `/accept-edits --save [--project]`; ladder: CLI flag > `ROVECODE_PERMISSION` > project >
   user > ask), `"effort": "auto" | "off" | "low" | "medium" | "high"` (the thinking dial, `/effort --save`), and
   `"bell": false` — both TUIs ring the terminal bell (BEL) when a run ends and when an approval or question card
-  opens, so a terminal you tabbed away from can flash or chime; this turns it off. Anything else in the file, or a
+  opens, so a terminal you tabbed away from can flash or chime; this turns it off. Fourth key: `"verify": "bun run check"`
+  (or a list, run in order; or `false`) — the check the loop runs after the agent's last edit before its reply counts
+  as done. Without the key rovecode infers one only where both the name and the shape are recognised: a
+  `package.json` `check` script (unless its body names deploy/publish/push/docker/curl and the like), or a
+  `typecheck`/`lint`/`test` script whose body is a runner known to run unattended and end (tsc, eslint, biome, bun
+  test, vitest run, jest, node --test, mocha — never a watch mode), `cargo check`, `go vet ./...`, `ruff check .`;
+  `npm test` with any other body, `cargo test`, `pytest` and Makefile targets are never inferred, and `rovecode doctor`
+  prints each refusal with its reason so you can set the key deliberately. The check runs after edits made with the
+  `edit` or `write` tools; a run that changed files only through `bash` is not counted, so it is not verified. Anything else in the file, or a
   value of the wrong type (`"bell": "off"`), is ignored rather than guessed at
 - `.rovecode/` also holds sessions (each with its `todos.json`), checkpoints, repo-map cache
 - Permission rules: deny-by-default, last-match wildcard (`file.read/write`, `shell.exec`, `spawn`, `memory.write`, `net.fetch`, `tool.*`). Three permission levels, as the screen names them: **ask first** (default — I ask before every write, shell command and subagent), **accept edits** (`--accept-edits` / `ROVECODE_ACCEPT_EDITS=1` / `/accept-edits` — writes inside this folder stop asking; shell, subagents, network and writes outside it still ask) and **auto (never asks)** (`--yolo` / `ROVECODE_YOLO=1` / `/yolo` in the TUI). `ROVECODE_PERMISSION=ask|accept-edits|auto` sets the level a run starts at; auto skips the prompts, never the deny rules or plan mode

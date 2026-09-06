@@ -28,7 +28,7 @@ test("a fresh install: no provider is a NOTE and exit 0; every check present; th
   const r = await runDoctor({ cwd: s.cwd, home: s.home, env: s.env, which: none, prereqEnv: { PATH: "", windows: false }, connect: false });
   expect(r.exitCode).toBe(0);
   expect(r.ok).toBe(true);
-  expect(r.checks.map((c) => c.id)).toEqual(["home", "provider", "permission", "mcp", "tools", "checkpoints"]);
+  expect(r.checks.map((c) => c.id)).toEqual(["home", "provider", "permission", "mcp", "tools", "verify", "checkpoints"]);
   expect(byId(r, "provider").status).toBe("note");
   expect(byId(r, "provider").summary).toContain("no provider configured yet");
   expect(byId(r, "mcp").summary).toContain("no MCP servers configured");
@@ -45,7 +45,7 @@ test("a fresh install: no provider is a NOTE and exit 0; every check present; th
   const out: string[] = [];
   expect(await cmdDoctor(["--json", "--no-connect"], { cwd: s.cwd, home: s.home, env: s.env, which: none, prereqEnv: { PATH: "", windows: false }, out: (l) => out.push(l), err: () => {} })).toBe(0);
   const doc = JSON.parse(out.join("\n")) as DoctorReport;
-  expect(doc.checks.length).toBe(6);
+  expect(doc.checks.length).toBe(7);
   expect(doc.notChecked.some((n) => n.includes("--no-connect"))).toBe(false);   // nothing to connect, so nothing skipped
 });
 
