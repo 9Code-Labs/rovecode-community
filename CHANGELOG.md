@@ -4,6 +4,37 @@ What changed for the person using rovecode, newest first. Every line ends with t
 the change (hashes on `main`). Numbers are measurements from the commit that reports them, on the
 machine it names.
 
+## 0.3.1 — 2026-09-06
+
+Berkay: "kod yazarken pek üstünde durmuyor, çoğu durumda az değişiklikler yapıp bırakıyor" — when it writes
+code rovecode does not stay on the task. Three sessions measured it and the cause was ours, in two halves.
+
+### Finishing what was asked
+
+- A run ended as `done` whenever a turn contained no tool call — the model's silence, taken for finished
+  work by every layer. Proven end to end: a rejected `write`, the plan item marked completed anyway,
+  "Done — I created src/a.ts", exit 0, three of four items still open, the file never written. `run_end`
+  now carries what the transcript says was left (a failure with no later success at the same path, an
+  unanswered question, open plan items) and both TUIs and the headless summary say it in one clause —
+  `done · 1 failed tool call not recovered (write)`. A run with nothing outstanding is byte-identical to
+  before (b0dae27)
+- And once per run, on a failure or an unanswered question, the model gets one turn naming exactly what is
+  open, which it may answer by finishing OR by saying why it is not needed. Never on a permission denial,
+  the loop guard or an abort — those are the harness's verdict or the user's. The next silence is
+  accepted whatever it says: a loop that will not stop is worse than one that stops early.
+  `ROVECODE_FINISH_CHECK=0` turns the nudge off (b0dae27)
+- Nothing we send the model said to finish the task before answering, and ten sentences said do less. The
+  worst told it that turns are scarce without ever saying there are sixty; it is gone. The worked recap
+  example ended with "README untouched; say so if you want the flag documented" — we were teaching that
+  the right ending is a small change plus a menu. A `# Finishing` section now says what the harnesses that
+  get this right say: done means everything named and plainly implied is built and verified, a reply
+  without a tool call ends the run, and a blocked part is named while every other part is finished
+  (6714953)
+- The design gate asked for directions before every visual change, and on this machine 6 of 24 task runs
+  ended at that question. Berkay's decision: propose directions for something NEW; make the change to
+  something that already exists. The rule is now a test anyone can apply — if the person could point at
+  the thing on the screen, it exists and you change it (6714953)
+
 ## 0.3.0 — 2026-09-06
 
 `rovecode doctor` is new: one command that runs every check in here and says what it did NOT check.

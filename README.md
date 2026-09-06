@@ -58,11 +58,11 @@ bun run build                           # scripts/build.ts → dist/rovecode(.ex
 dist/rovecode.exe --version
 
 # from an npm tarball (npm pack) — global install shims to bun via the shebang
-npm install -g ./rovecode-0.3.0.tgz
+npm install -g ./rovecode-0.3.1.tgz
 ```
 
 Not yet published to the npm registry (name availability unverified). Releases are cut on
-[GitHub Releases](https://github.com/9Code-Labs/rovecode/releases) — v0.3.0 is the current one — and there is no
+[GitHub Releases](https://github.com/9Code-Labs/rovecode/releases) — v0.3.1 is the current one — and there is no
 self-update: `git pull` and rebuild, or reinstall the binary. Rovecode does tell you when that is worth doing: the
 TUI's startup card carries `update available: 0.3.0 → 0.4.0 · <release url>` when a newer release exists. The check
 (`src/core/update-check.ts`) asks GitHub once every six hours (cached in `~/.rovecode/update-check.json`), never
