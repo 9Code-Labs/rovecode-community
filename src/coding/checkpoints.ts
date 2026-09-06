@@ -71,8 +71,15 @@ export interface CheckpointsInit {
   shadowRoot?: string;
 }
 
-/** Trimmed port of cline's default exclusions (CheckpointExclusions.ts:42-70 keeps a long
- *  media/cache/db list; we keep the structural entries + the bar's node_modules/.rovecode). */
+/** cline's default exclusions (CheckpointExclusions.ts:42-70), structural entries first, then the media /
+ *  archive / binary categories. The first port kept only the structural entries, and the snapshot's
+ *  `git add .` then hashed every file the WORKSPACE tracks: in a repo carrying 165 MB of tracked video
+ *  (site/media-src) the first mutating tool call of every session took 26–35 s and left a 232 MB shadow
+ *  repo under .rovecode/checkpoints/<session> (measured 2026-09-06, scripts/probe-turn.ts). A checkpoint
+ *  exists to restore what the agent changed, and the agent does not edit videos, screenshots, archives or
+ *  compiled binaries — those are excluded by extension, like cline does. With videos alone excluded the
+ *  same repo still took 10.7 s and 79 MB: 82 MB of site/screenshots/*.png. Text of any size is still
+ *  snapshotted, and so is SVG (text a designer or the agent writes). */
 const EXCLUDES = [
   ".git/",
   ".rovecode/",            // the shadow repo itself lives here (deviation: in-workspace)
@@ -85,6 +92,16 @@ const EXCLUDES = [
   ".venv/",
   "venv/",
   ".DS_Store",
+  // media (cline getMediaFilePatterns): video, audio, raster images — not SVG
+  "*.mp4", "*.m4v", "*.mov", "*.avi", "*.mkv", "*.webm", "*.wmv", "*.flv", "*.mpg", "*.mpeg",
+  "*.mp3", "*.m4a", "*.wav", "*.flac", "*.ogg", "*.aac", "*.wma",
+  "*.png", "*.jpg", "*.jpeg", "*.gif", "*.bmp", "*.ico", "*.webp", "*.tif", "*.tiff", "*.heic", "*.avif", "*.psd",
+  // archives and disk images (getLargeDataFilePatterns)
+  "*.zip", "*.tar", "*.gz", "*.tgz", "*.bz2", "*.xz", "*.7z", "*.rar", "*.iso", "*.dmg",
+  // compiled binaries and native libraries
+  "*.exe", "*.dll", "*.so", "*.dylib", "*.node", "*.wasm", "*.o", "*.a", "*.class", "*.jar", "*.pyc",
+  // databases and caches (getDatabaseFilePatterns / getCacheFilePatterns)
+  "*.sqlite", "*.sqlite3", "*.db", "*.mdb", "*.log",
 ];
 
 /** `verb` names the failing subcommand in errors; the default suits bare invocations
