@@ -691,6 +691,18 @@ JSON/NDJSON output modes, session export, OTel spans.
 
 ### Not built
 
-- **#47 external agentic-CLI lanes** — the one wave-4 row that was never implemented here
+- **#47 external agentic-CLI lanes** — the one wave-4 row that was never implemented here. Measured
+  2026-09-06 rather than assumed: `claude -p` and `opencode run` already work through the `bash` tool
+  today, in print mode, without a TTY. What makes a lane a real feature rather than a shortcut is the
+  finding that came with it — **the child agent obeys its own permission configuration, not rovecode's.**
+  A `claude -p "create a file"` spawned from a rovecode run under `auto` created the file, because that
+  machine's `~/.claude/settings.json` sets `bypassPermissions`; rovecode's approval gate saw one `bash`
+  call and never saw a write. Under `ask` or `accept-edits` the bash call is refused first, so the hole is
+  exactly as wide as unattended `bash` — but a nested agent turns one approved command into an
+  unsupervised multi-step agent, under someone else's write policy, billing a different account. A lane
+  therefore has to run the child in a directory the approver saw, pass no `--dangerously-*` flag ever,
+  and name the account it spends from. (`opencode` also writes `.opencode/` and `docs/` into the working
+  directory even when it fails, and on Windows a nested shell layer ate the backslashes of an absolute
+  path and produced a file literally named `C:UsersberkaycikAppData…banana.txt`.)
 - **Publishing**: no npm package; the binary is built locally (see Known limitations)
 - **Linux/macOS CI**: POSIX paths are exercised in tests, but only Windows is gated
