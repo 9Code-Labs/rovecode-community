@@ -69,8 +69,9 @@ TUI's startup card carries `update available: 0.2.0 → 0.3.0 · <release url>` 
 blocks the start and never throws. The repository is private, so it needs `GITHUB_TOKEN`, `GH_TOKEN` or a
 `gh auth login`; without one the result is "unknown — the release repository is private and no token is set",
 never "up to date", and the card prints nothing rather than a guess. Only a real newer release produces a line
-on the card — `rovecode --version` is where you ask on purpose: the version goes to stdout alone (so a script can
-still read it) and the check's answer to stderr, including the reason when it could not look.
+on the card — `rovecode --version` prints the version to stdout alone (so a script can still read it) and, on
+stderr, whatever the last check found. It reads the cache and never opens a socket: a courtesy line must not
+make the one command scripts call to identify a build wait on the network.
 
 ## Quickstart
 

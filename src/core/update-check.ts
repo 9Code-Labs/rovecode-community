@@ -43,6 +43,10 @@ export interface UpdateCheckOptions {
   ttlMs?: number;
   timeoutMs?: number;
   now?: () => number;
+  /** answer from the cache or not at all — never open a socket. `rovecode --version` uses this: a courtesy
+   *  line must not make a command scripts call wait on a network round-trip (measured 3.2 s on a cold
+   *  cache before this existed, against 84–103 ms for everything else the command does). */
+  cacheOnly?: boolean;
   /** last-resort token source; the default asks the gh CLI. Injected in tests so no process is spawned. */
   ghToken?: () => Promise<string | undefined>;
 }
@@ -117,6 +121,9 @@ export async function checkForUpdate(current: string, opts: UpdateCheckOptions =
   // GITHUB_TOKEN, then GH_TOKEN, then whatever `gh auth login` already stored — most people who can read
   // a private repository at all have the CLI logged in, and making them export a variable to be told about
   // an update is a step they will not take. The token is used and dropped: it never enters the cache.
+  if (opts.cacheOnly === true) {
+    return { current, newer: false, from: "cache", reason: "not asked yet — rovecode checks at startup, at most once every six hours" };
+  }
   const token = opts.token ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? await (opts.ghToken ?? ghAuthToken)();
   if (!token) {
     // not cached: a token may appear before the next start, and caching "no token" would hide it

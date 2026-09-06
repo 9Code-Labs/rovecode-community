@@ -23,11 +23,12 @@ if (process.argv.includes("--version")) {
   // The update line goes to STDERR, because this is the one command where asking WAS the point: the
   // startup card is deliberately silent when there is nothing newer, which means a check that could not
   // run — no token, offline, a repository with no releases — would otherwise never be reported anywhere.
-  // 3s rather than the usual 8: a person typed this and is waiting on it. The answer is cached six hours,
-  // so only the first run of the day can be slow, and a timeout prints itself as the reason.
+  // Cache-only: it reports what is already known and never opens a socket. Awaiting the network here made
+  // `rovecode --version` take 3.2 s on a cold cache — for a courtesy line, on the one command scripts call
+  // to find out which build they have. The TUI asks on startup; this reads the answer.
   console.log(pkg.version);
   const { checkForUpdate, updateLine } = await import("../core/update-check.ts");
-  const line = updateLine(await checkForUpdate(pkg.version, { timeoutMs: 3_000 }), true);
+  const line = updateLine(await checkForUpdate(pkg.version, { cacheOnly: true }), true);
   if (line !== null) console.error(line);
   process.exit(0);
 }
