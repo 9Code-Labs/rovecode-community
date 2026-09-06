@@ -4,7 +4,7 @@
  *  a clean screen with the cursor restored, and that off a terminal it writes nothing at all. */
 
 import { describe, expect, test } from "bun:test";
-import { INTRO_MS, INTRO_STEPS, MARK_COLS, cloudRows, frameRows, introFrame, mergeCloudIntoLine, startIntro } from "../../src/core/intro.ts";
+import { INTRO_MS, INTRO_STEPS, MARK_COLS, cloudRows, frameRows, introFits, introFrame, mergeCloudIntoLine, startIntro } from "../../src/core/intro.ts";
 
 describe("introFrame", () => {
   test("step 0 is the whole word at its faintest, and the shape is already readable", () => {
@@ -151,5 +151,35 @@ describe("the mascot", () => {
     // the reserved rows are constant from the first step to the last: the mark cannot jump
     const counts = [0, 12, 19, 22, INTRO_STEPS].map((s) => cloudRows(s).length);
     expect(new Set(counts).size).toBe(1);
+  });
+});
+
+describe("room to play it", () => {
+  test("a terminal too small gets no intro at all, rather than a broken one", () => {
+    // both were real before this existed: 34×24 wrapped the frame six columns past the edge into
+    // nonsense, and 40×10 painted thirteen lines into ten, scrolling its own top away. Degrading the
+    // animation was not worth it — the session's card already has a prose form for a small terminal.
+    expect(introFits(34, 24)).toBe(false);      // too narrow: the frame wraps
+    expect(introFits(40, 10)).toBe(false);      // too short: the block scrolls
+    expect(introFits(46, 16)).toBe(true);
+    expect(introFits(200, 60)).toBe(true);
+
+    const out: string[] = [];
+    const intro = startIntro({ write: (s) => out.push(s), tty: true, version: "0.2.0", columns: 34, rows: 24 });
+    intro.finish();
+    expect(out).toEqual([]);                    // and it is a no-op, not a half-drawn frame
+  });
+
+  test("whatever it does paint fits inside the terminal it was given", () => {
+    for (const [cols, rows] of [[46, 16], [72, 26], [120, 40]] as const) {
+      const out: string[] = [];
+      let tick: (() => void) | null = null;
+      startIntro({ write: (s) => out.push(s), tty: true, version: "0.2.0", columns: cols, rows,
+        setInterval: (fn) => { tick = fn; return 1; }, clearInterval: () => {} });
+      for (let i = 0; i <= INTRO_STEPS; i++) (tick as unknown as () => void)();
+      const lines = (out.at(-2) ?? "").replaceAll("\x1b[2J\x1b[H", "").replaceAll("\x1b[?25l", "").split("\n");
+      expect(lines.length).toBeLessThanOrEqual(rows);
+      expect(Math.max(...lines.map((l) => [...l].length))).toBeLessThanOrEqual(cols);
+    }
   });
 });

@@ -154,6 +154,19 @@ export interface IntroOptions {
   clearInterval?: (h: unknown) => void;
 }
 
+/** rows the whole block occupies: frame top (the cloud’s crown cut into it), the cloud’s body, a blank,
+ *  the two mark rows, the version, the status line, the frame bottom */
+export const INTRO_ROWS = 7 + (CLOUD.length - 1);
+
+/** Is there room to play it? A terminal too narrow wraps the frame into nonsense; one too short scrolls
+ *  its own top away. Both were real — 34×24 overflowed by six columns, 40×10 painted thirteen lines — and
+ *  neither is worth degrading the animation for: the session’s card already has a prose form for a small
+ *  terminal, and no intro at all is better than a broken one. One row and one column of margin, so the
+ *  block is never flush against the edges. */
+export function introFits(columns: number, rows: number): boolean {
+  return columns >= FRAME_COLS + 2 && rows >= INTRO_ROWS + 2;
+}
+
 export interface Intro {
   /** what the session is doing right now, under the mark; "" clears the line */
   status: (line: string) => void;
@@ -170,7 +183,7 @@ const SHOW_CURSOR = "\x1b[?25h";
 /** Play the intro centred on a cleared screen. Off a terminal this is a no-op whose `done` is already
  *  resolved, so callers do not branch — the check lives here, once. */
 export function startIntro(opts: IntroOptions): Intro {
-  if (!opts.tty) return { status: () => {}, done: Promise.resolve(), finish: () => {} };
+  if (!opts.tty || !introFits(opts.columns ?? 80, opts.rows ?? 24)) return { status: () => {}, done: Promise.resolve(), finish: () => {} };
   const setI = opts.setInterval ?? setInterval;
   const clearI = opts.clearInterval ?? ((h: unknown) => clearInterval(h as ReturnType<typeof setInterval>));
   const cols = opts.columns ?? 80, rows = opts.rows ?? 24;
@@ -183,7 +196,7 @@ export function startIntro(opts: IntroOptions): Intro {
   // the frame does not shift the mark when it appears
   // The height is FIXED — the cloud's rows are reserved and empty before it descends — so the mark never
   // jumps down the screen while the mascot arrives.
-  const BLOCK_ROWS = 7 + CLOUD_BODY;
+  const BLOCK_ROWS = INTRO_ROWS;
   const pad = (width: number): string => " ".repeat(Math.max(0, Math.floor((cols - width) / 2)));
   const markPad = pad(MARK_COLS), framePad = pad(FRAME_COLS);
   const cloudPad = framePad + " ".repeat(Math.max(0, Math.floor((FRAME_COLS - CLOUD_COLS) / 2)));
