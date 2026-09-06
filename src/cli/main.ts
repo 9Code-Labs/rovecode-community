@@ -425,12 +425,28 @@ const rIx = process.argv.indexOf("--resume");
 const rArg = rIx !== -1 ? process.argv[rIx + 1] : undefined;
 const resumeId = rArg !== undefined && !rArg.startsWith("-") ? rArg : undefined;
 if (cmd === "" || cmd === "chat" || cmd === "repl") {
+  // The intro (core/intro.ts) covers the real wait and nothing more: it starts before the TUI module is
+  // even loaded, paints while that import and the runtime's boot happen, and finishes the moment the
+  // screen is about to be taken over. There is no sleep anywhere in it — on a warm start it is a glimpse,
+  // and on a cold one (skills, plugins, MCP servers to read) it plays out because there was that much to
+  // wait for. `--plain` gets none of it: that path is for pipes and scripts.
+  const { startIntro } = await import("../core/intro.ts");
+  const intro = startIntro({
+    write: (t) => process.stdout.write(t), tty: process.stdout.isTTY === true && !cli.plain, version: pkg.version,
+  });
+  intro.status("loading");
   const { runTui } = await import("../tui/app.ts");
   const { pickRenderer } = await import("../tui/sextant-io.ts");
   if (cli.plain) {
+    intro.finish();
     const { runRepl } = await import("./repl.ts");
     await runRepl({ yolo: cli.yolo });
   } else {
+    intro.status("starting the session");
+    // finish before runTui, not after: runTui enters the alternate screen and never returns until the
+    // session ends, so an intro still holding the cursor would be left painting into a screen it no
+    // longer owns. The card it hands over to is the one in core/voice.ts.
+    intro.finish();
     await runTui({ yolo: cli.yolo, acceptEdits: cli.acceptEdits, ...(cli.effort !== undefined ? { effort: cli.effort } : {}), sessionId: resumeId, renderer: pickRenderer(cli, process.env, process.stdout), ...(cli.pet !== undefined ? { pet: cli.pet } : {}) });
   }
 } else if (known.has(cmd)) {
