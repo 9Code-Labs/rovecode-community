@@ -11,7 +11,7 @@
  *  2. A LINK IS ALWAYS EXTERNAL. A relative link inside someone else's README means nothing on our origin,
  *     so it is resolved against their source URL when we can, and dropped to plain text when we cannot.
  *
- *  Everything else deliberately matches scripts/docs-build.mjs — the same heading ids and anchors, the same
+ *  Everything else deliberately matches docs-build.mjs beside it — the same heading ids and anchors, the same
  *  `tabindex="0"` on scrollable `<pre>`/`<table>` (axe scrollable-region-focusable) — so /docs/ and a market
  *  item's documentation read as one product. The rules are duplicated rather than shared because the two
  *  differ exactly where it matters: /docs/ renders OUR files and may link between them; this renders theirs

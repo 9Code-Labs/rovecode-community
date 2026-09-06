@@ -3,7 +3,7 @@
  *  Only when VITE_DOCS=1 (`bun run build:docs`, the production build since 2026-09-04); otherwise writes an empty list so
  *  the default build is unchanged. Markdown → HTML with marked; heading ids for the in-page index; relative links
  *  to other docs become /docs/<slug>/, other relative links point at the repository on GitHub. The docs body stays
- *  English — it is documentation, not copy. Everything outside site/ is read only. */
+ *  English — it is documentation, not copy. The site checkout is written to; this repository is only read. */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { marked } from "marked";
