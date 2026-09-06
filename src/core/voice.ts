@@ -47,24 +47,74 @@ export interface WelcomeOpts {
   yolo: boolean;
   /** plan/act; act is the default and is not mentioned */
   mode?: "plan" | "act";
+  /** the running version, so "which rovecode is this" never needs a second command */
+  version?: string;
+  /** what this session actually loaded. Zeroes are omitted rather than printed: a line reading
+   *  "0 skills · 0 plugins · 0 MCP servers" is three facts nobody asked for, while "19 skills · 2 MCP
+   *  servers" is the answer to "did my install take". */
+  loaded?: { skills?: number; plugins?: number; mcp?: number };
+  /** the one-line update notice, when there is one; see core/update-check.ts */
+  update?: string | null;
+  /** columns available; under BANNER_COLS the wordmark is dropped rather than wrapped (default 80) */
+  width?: number;
+}
+
+/** ROVECODE in half-block letters, two rows. Berkay picked this over a boxed header and a plain block
+ *  (2026-09-06). It is 31 columns wide, so it fits a narrow split, and it only appears when the card
+ *  knows the version — a banner with nothing to say under it is decoration. */
+const WORDMARK = ["█▀█ █▀█ █ █ █▀▀ █▀▀ █▀█ █▀▄ █▀▀", "█▀▄ █▄█ ▀▄▀ █▄▄ █▄▄ █▄█ █▄▀ █▄▄"] as const;
+const BANNER_COLS = 46;
+
+/** "19 skills · 3 plugins · 2 MCP servers", counting only what is there. Null when nothing loaded,
+ *  because the absence of the line says that better than the line saying zero three times. */
+export function loadedLine(loaded: WelcomeOpts["loaded"]): string | null {
+  if (!loaded) return null;
+  const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+  const bits: string[] = [];
+  if (loaded.skills) bits.push(plural(loaded.skills, "skill"));
+  if (loaded.plugins) bits.push(plural(loaded.plugins, "plugin"));
+  if (loaded.mcp) bits.push(plural(loaded.mcp, "MCP server"));
+  return bits.length > 0 ? bits.join(" · ") : null;
 }
 
 /** The card a fresh session opens with (the messages panel's first note). */
 export function welcomeCard(o: WelcomeOpts): string {
   const where = `${o.cwd} · ${modeLabelShort(o.yolo)}${o.mode === "plan" ? " · plan mode (read-only)" : ""}`;
+  const version = o.version ? ` ${o.version}` : "";
+  // the two optional footers, in the order a reader wants them: what this session has, then what it
+  // could have. Both drop out entirely when there is nothing to say — see loadedLine and updateLine.
+  const tail = [loadedLine(o.loaded), where, o.update ?? null].filter((l): l is string => l !== null);
+  // The banner form: the wordmark, then one line per fact. It needs a version (there is nothing to put
+  // beside the mark otherwise) and room (under BANNER_COLS the mark would wrap into noise), and it falls
+  // back to exactly the prose card below — which is what a resumed or narrow session still sees.
+  if (o.version !== undefined && (o.width ?? 80) >= BANNER_COLS) {
+    const model = o.connected === null ? null
+      : o.connected.model.length > 0 ? `${o.connected.provider}/${o.connected.model}` : o.connected.provider;
+    const loaded = loadedLine(o.loaded);
+    return [
+      `  ${WORDMARK[0]}`,
+      `  ${WORDMARK[1]}  ${o.version}`,
+      "",
+      model === null ? "  no model connected yet — /setup fixes that in about a minute"
+        : `  ${[model, loaded].filter((s) => s !== null).join(" · ")}`,
+      `  ${where}`,
+      ...(model === null ? [] : [`  I read first, then ${o.yolo ? "work without asking" : "ask before I write or run anything"}. /help lists commands by topic.`]),
+      ...(o.update ? [`  ${o.update}`] : []),
+    ].join("\n");
+  }
   if (o.connected === null) {
     return [
-      "◆ rovecode here. No model connected yet, so I can't think.",
+      `◆ rovecode${version} here. No model connected yet, so I can't think.`,
       "/setup fixes that in about a minute.",
-      where,
+      ...tail,
     ].join("\n");
   }
   const model = o.connected.model.length > 0 ? `${o.connected.provider}/${o.connected.model}` : o.connected.provider;
   return [
-    `◆ rovecode here. Connected to ${model}.`,
+    `◆ rovecode${version} here. Connected to ${model}.`,
     `Tell me what you want done; I read first, then ${o.yolo ? "work without asking" : "ask before I write or run anything"}.`,
     "/help lists commands by topic.",
-    where,
+    ...tail,
   ].join("\n");
 }
 

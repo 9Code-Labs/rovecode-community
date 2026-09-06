@@ -5,7 +5,7 @@
 import { test, expect } from "bun:test";
 import {
   EMPTY, MOCK_PROVIDER_TEXT, MODE_ASK, MODE_AUTO, NEXT, modeLabel, modeLabelShort, modeMeaning, modeSwitchNote,
-  next, noModelHint, resumedLine, welcomeCard,
+  loadedLine, next, noModelHint, resumedLine, welcomeCard,
 } from "../../src/core/voice.ts";
 
 const EMOJI = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u;
@@ -89,4 +89,29 @@ test("voice rules: no emoji anywhere in the shipped strings", () => {
     resumedLine("abc", "/w", false), EMPTY.code, ...EMPTY.plan, ...EMPTY.files, EMPTY.usage,
   ];
   for (const s of all) expect(s).not.toMatch(EMOJI);
+});
+
+test("welcome banner: the wordmark appears only with a version and room, and every line under it is a fact this session can vouch for", () => {
+  const full = welcomeCard({
+    connected: { provider: "anthropic", model: "claude-opus-5" }, cwd: "C:/work/atlas", yolo: true,
+    version: "0.2.0", loaded: { skills: 19, mcp: 2 }, update: "update available: 0.2.0 → 0.3.0", width: 100,
+  });
+  const lines = full.split("\n");
+  expect(lines[1]).toContain("0.2.0");                              // the version rides the mark, not a line of its own
+  expect(lines[3]).toBe("  anthropic/claude-opus-5 · 19 skills · 2 MCP servers");
+  expect(lines[4]).toBe("  C:/work/atlas · auto");
+  expect(lines.at(-1)).toBe("  update available: 0.2.0 → 0.3.0");
+  expect(full).not.toContain("0 plugin");                           // a zero is not a fact worth a word
+
+  // no version (a caller that does not know it) or no room: exactly the prose card, unchanged
+  const narrow = welcomeCard({ connected: { provider: "anthropic", model: "claude-opus-5" }, cwd: "/w", yolo: false, version: "0.2.0", width: 40 });
+  expect(narrow.split("\n")[0]).toBe("◆ rovecode 0.2.0 here. Connected to anthropic/claude-opus-5.");
+  expect(narrow).not.toContain("█");
+
+  // silence is the default: no loaded counts, no update line, no empty separators pretending to be facts
+  const bare = welcomeCard({ connected: { provider: "mock", model: "" }, cwd: "/w", yolo: false, version: "0.2.0", width: 100 });
+  expect(bare.split("\n")[3]).toBe("  mock");
+  expect(bare).not.toContain("update");
+  expect(loadedLine({ skills: 0, plugins: 0, mcp: 0 })).toBeNull();
+  expect(loadedLine({ plugins: 1 })).toBe("1 plugin");              // singular, because it is one
 });

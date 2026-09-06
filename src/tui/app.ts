@@ -23,6 +23,8 @@ import { cmdConnect, cmdModel as cmdModelSwitch, cmdModels, cmdProvider, cmdSetu
 import { cmdMcp, MCP_COMMAND } from "./mcp-cmd.ts";
 import { summarizePlugins } from "../plugins/index.ts";
 import { acceptEditsNote, effortNote, modeSwitchNote, noModelHint, resumedLine, welcomeCard } from "../core/voice.ts";
+import { checkForUpdate, updateLine } from "../core/update-check.ts";
+import pkg from "../../package.json";
 import { compactionNote } from "./replay-marker.ts";
 import { previewDiff } from "../coding/diff.ts";
 import { discoverCommands, commandsForPalette, dispatchCustomCommand, type CustomCommandCtx } from "./commands.ts";
@@ -531,7 +533,17 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   // pointer when no model is configured; a resumed session keeps its transcript and gets one line
   const connected = rt.stream && rt.noProviderReason() === null ? { provider: state.provider, model: state.model } : null;
   if (boot.id !== undefined) renderer.addSystemNote(resumedLine(store.id, rt.cwd, state.yolo));
-  else renderer.addSystemNote(welcomeCard({ connected, cwd: rt.cwd, yolo: state.yolo, mode: state.mode }));
+  else {
+    // What the card says about this session is counted, not assumed: skills and plugins are already
+    // loaded by now, and MCP servers are the entries the runtime actually accepted (an unfilled or
+    // untrusted one is not in this number, which is the point — the card must not claim it).
+    const loaded = { skills: rt.skillStore.list().length, plugins: rt.plugins.found.filter((p) => p.status === "active").length, mcp: rt.mcp?.serverNames().length ?? 0 };
+    renderer.addSystemNote(welcomeCard({ connected, cwd: rt.cwd, yolo: state.yolo, mode: state.mode, version: pkg.version, loaded, width: process.stdout.columns ?? 80 }));
+    // The update check is fire-and-forget on purpose: it never blocks the card, never throws, and says
+    // nothing at all unless there is genuinely a newer release (core/update-check.ts). A startup screen
+    // that reports its own plumbing every time teaches people to stop reading it.
+    void checkForUpdate(pkg.version).then((s) => { const l = updateLine(s); if (l !== null) renderer.addSystemNote(l); }).catch(() => {});
+  }
   if (boot.warn) renderer.addSystemNote(boot.warn, "warn");
   for (const w of custom.warnings) renderer.addSystemNote(w, "warn"); // port #30: skipped/shadowed command files
   for (const w of rt.providers.warnings()) renderer.addSystemNote(`providers: ${w}`, "warn"); // malformed providers.json entries
