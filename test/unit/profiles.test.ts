@@ -104,12 +104,12 @@ test("the GLM profile's section is persona, then voice examples, then the workin
   expect(GLM_53_PLAIN_PROFILE.promptSection).toBe(GLM_53_AGENT_CONTRACT);
 });
 
-test("the working agreement: markdown sections, 700-1100 words, no model or vendor names, ASCII punctuation, no shouting", () => {
+test("the working agreement: markdown sections, 700-1300 words, no model or vendor names, ASCII punctuation, no shouting", () => {
   const s = GLM_53_AGENT_CONTRACT;
   expect(s.startsWith("# ")).toBe(true);
   const words = s.split(/\s+/).filter(Boolean).length;
   expect(words).toBeGreaterThanOrEqual(700);
-  expect(words).toBeLessThanOrEqual(1100);
+  expect(words).toBeLessThanOrEqual(1300); // 1218 with # Finishing (2026-09-06); the ceiling is a brake on drift, not a target
   expect(s).not.toMatch(/claude|anthropic|sonnet|opus|\bglm\b|z\.ai|zhipu|openai|gpt/i);
   expect(s).not.toMatch(/[–—‘’“”…]/); // en/em dash, curly quotes, ellipsis
   expect(s).not.toMatch(/\b(CRITICAL|MUST|NEVER|ALWAYS|IMPORTANT)\b/); // calm register: no shouted rules
@@ -119,6 +119,26 @@ test("the working agreement: markdown sections, 700-1100 words, no model or vend
   expect(s).toMatch(/verif/i);
   expect(s).toMatch(/Edit rejected/);
   expect(s).toMatch(/context compacted/); // the compaction note the shipped runtime really emits (keep-window marker)
+});
+
+test("the working agreement says to FINISH: a # Finishing section with the read-it-back rule and the blocked-part rule; no sentence that turns are scarce; the recap example shows the implied part done, not offered", () => {
+  const s = GLM_53_AGENT_CONTRACT;
+  // the only unconditional "keep going" used to be about subagents; this section is about the task itself
+  expect(s).toContain("\n# Finishing\n");
+  expect(s.indexOf("# Finishing")).toBeGreaterThan(s.indexOf("# Scope and quality"));   // read right after minimality, as its counterweight
+  expect(s.indexOf("# Finishing")).toBeLessThan(s.indexOf("# Questions and permissions"));
+  expect(s).toContain("A reply without a tool call ends the run.");
+  expect(s).toContain("read it back: if it says what you will do, could do, or would do next, do that instead.");
+  expect(s).toContain("finish every other part in full and name the blocked one and why; leaving a part out is the user's decision, not yours.");
+  expect(s).toContain("Stop when the request is complete, or when the next step needs an answer only the user can give.");
+  // minimality stays exactly where it was: the bug was minimality WITHOUT a completion rule
+  expect(s).toContain("Change what was asked and what it strictly requires.");
+  // the brake is gone: nothing tells the model its turns are scarce
+  expect(s).not.toMatch(/bounded number of turns/);
+  expect(s).not.toMatch(/spends one of/);
+  // the worked recap — the strongest teacher in the prompt — no longer hands an implied part back as a menu item
+  expect(s).not.toContain("say so if you want the flag documented");
+  expect(s).toContain("README: the flag is listed under export.");
 });
 
 test("the Sonnet 5 persona: 600-900 words, names the role, is a CLOSED role (stays Sonnet 5 when asked, no sincerity break, never the underlying vendor), ASCII punctuation, calm register", () => {
