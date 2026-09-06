@@ -1,0 +1,30 @@
+{
+  "compilerOptions": {
+    // ES2024: vendored pi-tui uses /v regex flags (vendor/pi-tui/src/utils.ts:40-48)
+    "target": "ES2024",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    // package.json import in src/cli/main.ts (--version, port #36)
+    "resolveJsonModule": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "skipLibCheck": true,
+    "types": ["bun-types"],
+    "allowImportingTsExtensions": true,
+    // compiler-setting parity with upstream pi-tui (their tsconfig.base.json) for
+    // the vendored source. Typecheck-only: Bun's runtime transpiler does NOT read
+    // this flag (bun 1.3.14 — output is byte-identical with it flipped or this
+    // file absent), and tsc passes either way today. tsconfig ships in files[]
+    // so the installed source stays typecheckable in place (`bun x tsc --noEmit`).
+    "useDefineForClassFields": false,
+    "noEmit": true
+  },
+  "include": ["src", "test", "scripts"],
+  // test/fixtures/design-site is INPUT to design_audit, not project code: a synthetic Next.js app-router
+  // tree whose .tsx files exist to be read as text (the audit matches route files by path, so they have to
+  // keep their real names). They are never imported and never run, and compiling them would only demand a
+  // React/JSX setup for files nothing renders. Every other fixture stays in: fixtures/images.ts and
+  // fixtures/fake-lsp.ts are real modules that tests import.
+  "exclude": ["test/fixtures/design-site"]
+}

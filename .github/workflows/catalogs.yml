@@ -1,0 +1,85 @@
+# Prove the market catalogs still match the world they were generated from.
+#
+# WHY THIS IS NOT A STEP IN ci.yml. The two --check runs fail for opposite reasons and only one of them
+# is ever the author's fault:
+#
+#   build-plugin-catalog.mjs --check   reads plugins/*/plugin.json in this checkout. No network, fully
+#                                      deterministic. If it fails, someone edited a manifest and did not
+#                                      regenerate — that IS a broken commit, so it belongs on every push
+#                                      and it lives in ci.yml, not here.
+#
+#   build-skill-catalog.mjs --check    fetches ~40 files from github.com. It can fail because upstream
+#                                      genuinely changed (the thing we want to hear about) or because a
+#                                      shared runner IP got rate limited (nothing to do with the commit).
+#                                      Gating pull requests on that would teach everyone to ignore a red
+#                                      X, which is worse than not checking at all.
+#
+# So this workflow runs the network one on a schedule and on demand, and its failure means "go look",
+# not "your branch is broken". The generator itself refuses to write a shrunken or partial catalog
+# (unreachable != absent), so the worst outcome here is a red run, never a damaged file.
+#
+# NOTE (2026-09-05): Actions billing is off for this repository, so nothing below has executed yet. It
+# is committed ready so that enabling billing is the only remaining step.
+name: catalogs
+on:
+  schedule:
+    - cron: "17 6 * * 1"          # Mondays, 06:17 UTC — off the hour, where the runner queue is shorter
+  workflow_dispatch:
+  push:
+    paths:
+      - "scripts/build-skill-catalog.mjs"
+      - "scripts/build-mcp-docs.mjs"
+      - "scripts/lib/docs.mjs"
+      - "src/market/catalogs/skills.json"
+      - "src/market/catalogs/mcp-docs.json"
+      - "src/mcp/market-catalog.ts"
+      - ".github/workflows/catalogs.yml"
+concurrency:
+  group: catalogs
+  cancel-in-progress: true
+permissions:
+  contents: read                  # GITHUB_TOKEN is used ONLY to raise the anonymous rate limit
+jobs:
+  skills:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      - name: skills.json matches upstream
+        env:
+          # 60 requests/hour anonymous vs 5000 with a token, against ~40 requests per run. Nothing
+          # private is read; every URL the script fetches is a public raw.githubusercontent.com path.
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bun scripts/build-skill-catalog.mjs --check
+      # Separate step, not a second command on the one above: these read different repositories, and when
+      # one goes red the log should say which shelf moved without anyone opening it.
+      - name: mcp-docs.json matches upstream
+        if: always()                  # the skills answer does not decide whether this is worth asking
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bun scripts/build-mcp-docs.mjs --check
+      # The docs cleaner's shape fuzzing, run as a SEARCH rather than as the regression net ci.yml runs on
+      # every push: a fresh seed each week and 200x the rounds. It belongs here for the same reason the
+      # skills --check does — a red result means "a shape we had never generated broke it, go look", not
+      # "this branch is broken". The seed is printed in the failure message, so any hit replays locally
+      # with ROVECODE_FUZZ_SEED=<n>.
+      - name: docs cleaner, deep shape search
+        if: always()
+        env:
+          ROVECODE_FUZZ_ROUNDS: "40000"
+        run: |
+          seed=$RANDOM
+          echo "seed $seed — replay a failure with ROVECODE_FUZZ_SEED=$seed"
+          ROVECODE_FUZZ_SEED=$seed bun test ./test/unit/market-docs.test.ts
+      - name: what to do if that failed
+        if: failure()
+        run: |
+          echo "Either upstream moved or the run could not reach it. Tell the two apart by the message:"
+          echo "  'cannot reach the source' / 'HTTP 403 (rate limited?)'  -> transient. Re-run this job."
+          echo "  'catalog is out of date'                                -> real. Regenerate and commit:"
+          echo "      bun scripts/build-skill-catalog.mjs"
+          echo "  'refusing to write' + 'missing: <id>'                   -> a skill was withdrawn upstream."
+          echo "      Confirm it really went, then: bun scripts/build-skill-catalog.mjs --allow-shrink"

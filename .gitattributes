@@ -1,0 +1,4 @@
+# Line endings: LF in the repo and in every checkout, whatever core.autocrlf says on the machine.
+# Why: build scripts read files raw (site/scripts/docs-build.mjs strips the first "# " line with a
+# newline-anchored regex); on 2026-09-04 a CRLF checkout of docs/*.md shipped /docs/ pages with two <h1>s.
+* text=auto eol=lf

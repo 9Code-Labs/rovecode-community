@@ -1,0 +1,111 @@
+{
+  "version": 1,
+  "generatedBy": "scripts/build-plugin-catalog.mjs",
+  "sources": [
+    "https://github.com/9Code-Labs/rovecode"
+  ],
+  "items": [
+    {
+      "id": "conventional-commits",
+      "title": "Conventional Commits",
+      "publisher": "9Code Labs",
+      "description": "/commit writes a Conventional Commits message for the staged diff; the skill teaches the format and this project's scopes.",
+      "version": "0.1.0",
+      "apiVersion": 1,
+      "license": "AGPL-3.0-only",
+      "contributes": [
+        "commands",
+        "skills"
+      ],
+      "tags": [
+        "first-party"
+      ],
+      "repository": "https://github.com/9Code-Labs/rovecode",
+      "homepage": "https://github.com/9Code-Labs/rovecode",
+      "install": {
+        "source": "https://github.com/9Code-Labs/rovecode",
+        "git": true,
+        "subfolder": "plugins/conventional-commits"
+      },
+      "planNote": [
+        "no entry module: this plugin contributes files only (commands, skills), nothing is imported",
+        "contributes: commands, skills"
+      ],
+      "docs": {
+        "source": "https://github.com/9Code-Labs/rovecode/blob/main/plugins/conventional-commits/README.md",
+        "format": "markdown",
+        "bytes": 1913,
+        "truncated": false,
+        "body": "# conventional-commits\n\n`/commit` writes a Conventional Commits message for the staged diff. The bundled skill teaches the format\nso the model gets it right without the command having to re-explain it every time.\n\nThis is the **files-only** plugin: no entry module, nothing is imported, nothing runs in-process. It\ncontributes a command and a skill, both plain markdown.\n\n## What it contributes\n\n**`commands/commit.md` → the `/commit` command.** It reads what is staged (`git diff --cached --stat`,\nthen the diff itself), writes one message, and prints it in a fenced block.\n\nThree things it does on purpose:\n\n- **It does not stage anything.** Nothing staged means it says so and stops.\n- **It does not commit.** It prints the message; you commit. That is stated twice in the command for a\n  reason — a commit is a decision, and the point of the command is the wording, not the act.\n- **It describes the change, not the files.** \"teach the run panel to budget the command\", not\n  \"update draw-code.ts\".\n\n`$ARGUMENTS` is an optional scope or hint: `/commit tui` or `/commit this is the retry fix`.\n\n**`skills/conventional-commits/SKILL.md` → the format itself.** Types and which one a given change really\nis (a behaviour change nobody reported is not a `fix`), one scope or none, the imperative subject at ≤72\ncharacters, what a body earns its place by saying, and the footer forms that tools read.\n\n## Install\n\n```\nrovecode market install plugin:conventional-commits\n```\n\nOr from a checkout of this repository:\n\n```\nrovecode plugin add ./plugins/conventional-commits\n```\n\n## Adapting it to your project\n\nThe scope list is the part that is project-specific. It currently names rovecode's own layout — the folder\nunder `src/`, or a surface (`tui`, `cli`, `server`). Edit that line in both `commands/commit.md` and the\nskill to match your tree; everything else is the general format and transfers as it is."
+      }
+    },
+    {
+      "id": "notes",
+      "title": "Notes",
+      "publisher": "9Code Labs",
+      "description": "Two tools: notes_add appends a dated line to .rovecode/notes.md, notes_list reads it back — a scratchpad that survives the session.",
+      "version": "0.1.0",
+      "apiVersion": 1,
+      "license": "AGPL-3.0-only",
+      "contributes": [
+        "tools",
+        "hooks"
+      ],
+      "tags": [
+        "first-party"
+      ],
+      "repository": "https://github.com/9Code-Labs/rovecode",
+      "homepage": "https://github.com/9Code-Labs/rovecode",
+      "install": {
+        "source": "https://github.com/9Code-Labs/rovecode",
+        "git": true,
+        "subfolder": "plugins/notes"
+      },
+      "planNote": [
+        "runs code: this plugin ships an entry module that rovecode imports in-process",
+        "contributes: tools, hooks"
+      ],
+      "docs": {
+        "source": "https://github.com/9Code-Labs/rovecode/blob/main/plugins/notes/README.md",
+        "format": "markdown",
+        "bytes": 1792,
+        "truncated": false,
+        "body": "# notes\n\nA scratchpad that survives the session. Two in-process tools that write and read\n`.rovecode/notes.md` in the workspace.\n\n## What it does\n\n**`notes_add {text, tag?}`** appends one dated line:\n\n```\n- 2026-09-05 [decision] the accent went two-tone because the single tone failed AA at normal size\n```\n\n- `text` is required, one sentence, at most 500 characters. Whitespace is collapsed.\n- `tag` is optional, matches `[a-z0-9][a-z0-9-]{0,23}`, and is lowercased. It exists so `notes_list` can\n  filter — `decision`, `gotcha`, `todo` are the ones that get used.\n- The file is created with a `# notes` heading on first write.\n\n**`notes_list {tag?, last?}`** reads them back, newest last. `last` defaults to 50 and is clamped to 500.\nWith no notes it says so rather than returning an empty block.\n\n## Where the file lives, and why there\n\n`<cwd>/.rovecode/notes.md` — with the repository, not with the plugin. The `tools` export is a factory\nthat receives the plugin context and closes over `cwd`, so two projects keep two separate notebooks and\nneither follows you home. It is a plain markdown file: read it, edit it, commit it, or delete it.\n\n## Permissions\n\nThe two tools declare different kinds, and that is the whole permission story:\n\n- `notes_add` is `memory` — the same class as the built-in `todo_write`, allowed by default.\n- `notes_list` is `read`.\n\nSo a policy that already says something about memory or reads covers this plugin too, without a special\ncase. Nothing here shells out or reaches the network.\n\n## Install\n\n```\nrovecode market install plugin:notes\n```\n\nOr from a checkout of this repository:\n\n```\nrovecode plugin add ./plugins/notes\n```\n\nIt ships an entry module, so rovecode imports it in-process — the approval preview says so before anything\nis installed."
+      }
+    },
+    {
+      "id": "safety-net",
+      "title": "Safety Net",
+      "publisher": "9Code Labs",
+      "description": "A second look before a destructive shell command, and a nudge when a test run prints FAIL.",
+      "version": "0.1.0",
+      "apiVersion": 1,
+      "license": "AGPL-3.0-only",
+      "contributes": [
+        "tools",
+        "hooks"
+      ],
+      "tags": [
+        "first-party"
+      ],
+      "repository": "https://github.com/9Code-Labs/rovecode",
+      "homepage": "https://github.com/9Code-Labs/rovecode",
+      "install": {
+        "source": "https://github.com/9Code-Labs/rovecode",
+        "git": true,
+        "subfolder": "plugins/safety-net"
+      },
+      "planNote": [
+        "runs code: this plugin ships an entry module that rovecode imports in-process",
+        "contributes: tools, hooks"
+      ],
+      "docs": {
+        "source": "https://github.com/9Code-Labs/rovecode/blob/main/plugins/safety-net/README.md",
+        "format": "markdown",
+        "bytes": 2198,
+        "truncated": false,
+        "body": "# safety-net\n\nA second look before a destructive shell command, and a nudge when a test run prints `FAIL`.\n\nTwo hooks. That is the entire plugin.\n\n## What it does\n\n**`pre_tool` — refuses a shell command that matches a known-destructive shape.** The refusal names the\npattern and echoes the command back, so if you meant it you can run it yourself:\n\n```\nsafety-net: recursive forced delete — not from the agent. Run it yourself if you mean it: rm -rf ./build\n```\n\nThe seven shapes it looks for:\n\n| pattern | what it catches |\n|---|---|\n| `rm -rf` (in either flag order) | recursive forced delete |\n| `git push --force` / `-f` | force push |\n| `git reset --hard` | hard reset |\n| `git clean -f` | untracked files gone for good |\n| `chmod 777` | world-writable permissions |\n| `curl …` / `wget …` piped into a shell | network piped into a shell |\n| `drop table` / `database` / `schema` | dropping a table or database |\n\n**`post_tool` — when a shell run prints a `FAIL` line, it appends one sentence the model cannot miss:**\nfix it before moving on, do not mark the step done. The command's own output is left intact; the sentence\nis added after it, and never twice.\n\n## What it deliberately cannot do\n\nA hook can only **deny**. It cannot grant permission, widen policy, or approve something the permission\nrules would have refused — see `src/core/hooks.ts`: policy wins, and a hook is your own stricter layer on\ntop. For a safety net that is exactly the right amount of power.\n\nIt is also **not a security boundary**. The patterns are regular expressions over the command string, and\nanything determined to get past them will (`rm -r -f` with an odd spelling, a variable holding the flags, a\nscript that does the deleting). It is there to catch the ordinary accident, which is what actually happens.\n\n## Install\n\n```\nrovecode market install plugin:safety-net\n```\n\nOr from a checkout of this repository:\n\n```\nrovecode plugin add ./plugins/safety-net\n```\n\nIt ships an entry module, so rovecode imports it in-process — the approval preview says so before anything\nis installed.\n\n## Configuration\n\nNone. It applies to tools named `bash`, `shell` or `run`, and does nothing to any other tool."
+      }
+    }
+  ]
+}
