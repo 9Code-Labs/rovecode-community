@@ -17,9 +17,11 @@ repository for now).
 - **Tests**: 2360 pass / 0 fail (191 files, unit + integration; measured 2026-09-06). CI runs the
   same suite on `ubuntu-latest` (`.github/workflows/ci.yml`), so POSIX paths are gated, not just exercised.
   `bun test` runs against an **empty `ROVECODE_HOME`**: `bunfig.toml` preloads `test/helpers/isolate-home.ts`,
-  which points it at a fresh temp directory before any test file loads, so the skills, plugins, MCP servers
-  and keys installed on the machine cannot decide a result (installing one skill used to fail a plugin test,
-  two MCP servers failed twenty-five). A test that wants a home of its own still sets `ROVECODE_HOME` itself
+  which points it at a fresh temp directory before any test file loads and clears every `*_API_KEY`,
+  `GITHUB_TOKEN`/`GH_TOKEN` and `ROVECODE_*` variable, so the skills, plugins, MCP servers and keys installed
+  or exported on the machine cannot decide a result (installing one skill used to fail a plugin test, two MCP
+  servers failed twenty-five, and an exported `ANTHROPIC_API_KEY` let a headless run on a clean checkout bill
+  a real call). A test that wants a home or a variable of its own still sets it itself
 - **Gauntlet**: 10/10 (basic, coding, failure-recovery, adversarial: loop-guard, huge-output, permission-bypass)
 - **Typecheck**: 0 errors · TUI render smoke: PASS
 - **Wave 4**: the sextant surface (`src/sextant/*`, the new default TUI ported from the user's prototype) is merged —
@@ -72,10 +74,12 @@ still read it) and the check's answer to stderr, including the reason when it co
 
 ## Quickstart
 
-On a terminal, `rovecode` draws the ROVECODE mark in from left to right while the session actually boots — no
-fixed duration and no sleep: a warm start is a glimpse, a cold home with skills, plugins and MCP servers to read
-plays the whole sweep, and a frozen frame means the process is busy, which is the truth (`src/core/intro.ts`;
-nothing is drawn into a pipe or under `--plain`). It hands over to a card that names the version, the connected
+On a terminal, `rovecode` opens with a ~1.1 s intro centred on a cleared screen (`src/core/intro.ts`): the
+ROVECODE mark fills in left to right, a hairline frame draws inward from the four corners until the halves meet,
+the cloud mascot leans down out of that top line, and the mark breathes once. The session boots underneath it, in
+parallel, so the only wall time this adds is whatever is left of the show once the session is otherwise ready.
+Skip it with `--no-intro` or `ROVECODE_INTRO=0`; nothing is drawn into a pipe or under `--plain`, and it never
+reads stdin, so keys typed during it reach the session. It hands over to a card that names the version, the connected
 model, what loaded (`3 skills · 1 plugin · 2 MCP servers` — zeroes are omitted), the folder and permission tier,
 and, only when there is one, the newer release (see Install). A resumed session gets a one-line note instead; a
 terminal narrower than the mark gets the same facts as prose.

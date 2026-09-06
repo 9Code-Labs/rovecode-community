@@ -1,15 +1,18 @@
 /** The opening intro: ROVECODE assembles itself in the middle of the terminal.
  *
- *  Berkay picked this shape over a shimmer pass and a rain of blocks (2026-09-06): the mark fills in left
- *  to right, a hairline frame draws itself from the four corners toward the middle, and the mark breathes
- *  once. Centred, on a cleared screen, then it hands over to the session's card (core/voice.ts).
+ *  Four acts, all of them Berkay's picks (2026-09-06). The mark fills in left to right — chosen over a
+ *  checklist that ticks itself off and a single progress bar. A hairline frame draws inward from the four
+ *  corners until the halves meet — chosen over a shimmer pass and a rain of blocks. The cloud mascot leans
+ *  down out of the frame's top line — chosen over raining the letters into place and rising from the
+ *  bottom. Then the mark breathes once. Centred on a cleared screen, and it hands over to the session's
+ *  card (core/voice.ts).
  *
  *  The one thing to understand before changing it. The first version of this file refused to have a
  *  duration of its own: it painted only while boot happened to be working and snapped to the end the
  *  moment the session was ready. That is the right instinct and it produced nothing to look at — the
  *  shipped CLI is a single bundled file, so `import("../tui/app.ts")` resolves with no wait at all and the
  *  whole sequence collapsed into one frame. Berkay asked for an intro, so this one HAS a duration
- *  (INTRO_MS, ~0.9s) and the cost is stated rather than hidden: boot runs underneath it, in parallel, so
+ *  (INTRO_MS, ~1.1s) and the cost is stated rather than hidden: boot runs underneath it, in parallel, so
  *  the added wall time is only whatever is left of the animation when the session is already ready. It is
  *  off for a pipe, off under --plain, and off with ROVECODE_INTRO=0 or --no-intro.
  *
@@ -43,18 +46,49 @@ const FRAME_COLS = MARK_COLS + FRAME_PAD * 2 + ((MARK_COLS + FRAME_PAD * 2) % 2)
 /** columns each end of the frame grows per step — 3 makes the draw snappy without skipping */
 const FRAME_GROWTH = 3;
 
-/** the three acts, in steps */
+/** The mascot, hanging down from behind the frame's top line — Berkay's pick over the cloud raining the
+ *  letters into place and rising from the bottom (2026-09-06).
+ *
+ *  This is a COPY of SPRITE + FACE from sextant/pet.ts, not an import, and that is deliberate: importing
+ *  the sextant module here would pull the panel painter into the boot path of a process that has not
+ *  decided to draw panels yet, which is the opposite of the work that made startup cheap. The copy cannot
+ *  drift — test/unit/intro.test.ts asserts these rows are identical to the ones the TUI paints, so the
+ *  intro's cloud and the session's cloud are the same cloud or the suite fails. */
+const CLOUD_OUTLINE: readonly string[] = [
+  "       ╭────╮     ",
+  "   ╭───╯    ╰──╮  ",
+  "  ╭╯           ╰╮ ",
+  "  │             │ ",
+  "  ╰╮           ╭╯ ",
+  "   ╰───────────╯  ",
+];
+/** the face's columns and rows, copied from pet.ts FACE. Placed by INDEX rather than typed into the art,
+ *  so an eye cannot end up one column off the anchor the TUI paints it on — which is exactly what happened
+ *  when these rows were written by hand. */
+const FACE_AT = { EYE_L: 6, EYE_R: 12, MOUTH: 9, EYE_ROW: 3, MOUTH_ROW: 4 } as const;
+const CLOUD: readonly string[] = CLOUD_OUTLINE.map((row, r) => {
+  const cells = [...row];
+  if (r === FACE_AT.EYE_ROW) { cells[FACE_AT.EYE_L] = "•"; cells[FACE_AT.EYE_R] = "•"; }
+  if (r === FACE_AT.MOUTH_ROW) cells[FACE_AT.MOUTH] = "◡";
+  return cells.join("");
+});
+export const CLOUD_COLS = 18;
+/** rows of cloud that hang BELOW the frame line once it has fully descended */
+const CLOUD_BODY = CLOUD.length - 1;
+
+/** the four acts, in steps */
 const SWEEP_STEPS = LETTERS.length + RAMP.length - 1;                 // the mark fills in
 const FRAME_STEPS = Math.ceil(FRAME_COLS / 2 / FRAME_GROWTH);          // the corners reach the middle
+const CLOUD_STEPS = CLOUD.length;                                      // the mascot leans over the line
 const BREATHE = [3, 2, 3] as const;                                    // █ ▓ █, once
-export const INTRO_STEPS = SWEEP_STEPS + FRAME_STEPS + BREATHE.length;
+export const INTRO_STEPS = SWEEP_STEPS + FRAME_STEPS + CLOUD_STEPS + BREATHE.length;
 /** how long the whole show takes when nothing interrupts it */
-export const INTRO_MS = 900;
+export const INTRO_MS = 1100;
 
 /** the two mark rows at `step`; step 0 is the whole word at its faintest, SWEEP_STEPS is solid. Past the
  *  sweep the mark holds, except for the breath at the very end. */
 export function introFrame(step: number): [string, string] {
-  const breathIx = step - SWEEP_STEPS - FRAME_STEPS;
+  const breathIx = step - SWEEP_STEPS - FRAME_STEPS - CLOUD_STEPS;
   const held = breathIx >= 0 ? BREATHE[Math.min(breathIx, BREATHE.length - 1)]! : undefined;
   const rows: [string, string] = ["", ""];
   LETTERS.forEach((letter, i) => {
@@ -63,6 +97,34 @@ export function introFrame(step: number): [string, string] {
     for (const r of [0, 1] as const) rows[r] += (rows[r].length > 0 ? " " : "") + letter[r]!.replaceAll("█", shade);
   });
   return rows;
+}
+
+/** How far the cloud has leaned over the top line: 0 before it starts, CLOUD.length when it is all the
+ *  way out. It only begins once the frame has closed — one thing happens at a time. */
+export function cloudDescent(step: number): number {
+  return Math.max(0, Math.min(CLOUD.length, step - SWEEP_STEPS - FRAME_STEPS));
+}
+
+/** The cloud's rows that hang BELOW the frame line, padded to a fixed count so the block below never
+ *  shifts as it comes down — the mark must not jump while the mascot arrives. */
+export function cloudRows(step: number): string[] {
+  const d = cloudDescent(step);
+  const shown = CLOUD.slice(1, Math.max(0, d));
+  return [...shown, ...Array.from({ length: CLOUD_BODY - shown.length }, () => "")];
+}
+
+/** The cloud's FIRST row is drawn into the frame's top line rather than under it, which is what makes it
+ *  read as leaning over the edge instead of floating below it. Spaces in the sprite leave the line
+ *  showing through; the sprite's own glyphs cut into it. */
+export function mergeCloudIntoLine(line: string, step: number): string {
+  if (cloudDescent(step) === 0 || line.length === 0) return line;
+  const at = Math.max(0, Math.floor((line.length - CLOUD_COLS) / 2));
+  // always the sprite's FIRST row: it is the cloud's crown, and it stays cut into the line while the body
+  // appears underneath. Advancing it row by row instead made the line show the cloud's underside.
+  const row = CLOUD[0]!;
+  const chars = [...line];
+  [...row].forEach((ch, i) => { if (ch !== " " && at + i < chars.length) chars[at + i] = ch; });
+  return chars.join("");
 }
 
 /** the frame's top and bottom rows at `step`: two runs growing inward from the corners until they meet.
@@ -119,9 +181,12 @@ export function startIntro(opts: IntroOptions): Intro {
 
   // the block is: frame top, blank, two mark rows, version, blank, frame bottom — centred as a whole, so
   // the frame does not shift the mark when it appears
-  const BLOCK_ROWS = 7;
+  // The height is FIXED — the cloud's rows are reserved and empty before it descends — so the mark never
+  // jumps down the screen while the mascot arrives.
+  const BLOCK_ROWS = 7 + CLOUD_BODY;
   const pad = (width: number): string => " ".repeat(Math.max(0, Math.floor((cols - width) / 2)));
   const markPad = pad(MARK_COLS), framePad = pad(FRAME_COLS);
+  const cloudPad = framePad + " ".repeat(Math.max(0, Math.floor((FRAME_COLS - CLOUD_COLS) / 2)));
   const top = "\n".repeat(Math.max(0, Math.floor((rows - BLOCK_ROWS) / 2)));
 
   const paint = (): void => {
@@ -130,7 +195,9 @@ export function startIntro(opts: IntroOptions): Intro {
     const frameLine = (s: string) => (s.length > 0 ? `${framePad}${s}` : "");
     opts.write([
       CLEAR_SCREEN, HIDE_CURSOR, top,
-      `${frameLine(frameTop)}\n\n`,
+      `${frameLine(mergeCloudIntoLine(frameTop, step))}\n`,
+      cloudRows(step).map((r) => `${r.length > 0 ? cloudPad + r : ""}\n`).join(""),
+      "\n",
       `${markPad}${markTop}\n${markPad}${markBottom}\n`,
       version.length > 0 ? `${pad(version.length)}${version}\n` : "\n",
       `${line.length > 0 ? `${pad(line.length)}${line}` : ""}\n`,

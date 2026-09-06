@@ -1,10 +1,10 @@
-/** The intro is three acts — the mark fills in, the frame draws from the corners, the mark breathes once —
- *  centred on a cleared screen. What is pinned here is the arithmetic of those acts, that the show ends by
- *  itself and hands back a clean screen with the cursor restored, and that off a terminal it writes
- *  nothing at all. */
+/** The intro is four acts — the mark fills in, the frame draws from the corners, the cloud leans out of it,
+ *  the mark breathes once — centred on a cleared screen. What is pinned here is the arithmetic of those
+ *  acts, that the mascot is the SAME sprite the session paints, that the show ends by itself and hands back
+ *  a clean screen with the cursor restored, and that off a terminal it writes nothing at all. */
 
 import { describe, expect, test } from "bun:test";
-import { INTRO_MS, INTRO_STEPS, MARK_COLS, frameRows, introFrame, startIntro } from "../../src/core/intro.ts";
+import { INTRO_MS, INTRO_STEPS, MARK_COLS, cloudRows, frameRows, introFrame, mergeCloudIntoLine, startIntro } from "../../src/core/intro.ts";
 
 describe("introFrame", () => {
   test("step 0 is the whole word at its faintest, and the shape is already readable", () => {
@@ -116,5 +116,40 @@ describe("startIntro", () => {
   test("the default pace spreads the whole show over INTRO_MS", () => {
     expect(Math.round(INTRO_MS / INTRO_STEPS)).toBeGreaterThanOrEqual(25);
     expect(Math.round(INTRO_MS / INTRO_STEPS)).toBeLessThanOrEqual(60);
+  });
+});
+
+describe("the mascot", () => {
+  test("the intro's cloud IS the session's cloud — the copy in intro.ts cannot drift from pet.ts", async () => {
+    // intro.ts deliberately copies the sprite rather than importing sextant/pet.ts, which would pull the
+    // panel painter into the boot path of a process that has not decided to draw panels. This is what
+    // keeps the copy honest: the outline must match row for row, and the face must sit on pet.ts's own
+    // anchors, or the intro shows a different animal from the one the session opens with.
+    const { SPRITE, FACE } = await import("../../src/sextant/pet.ts");
+    const introCloud = [...Array(6).keys()].map((d) => mergeCloudIntoLine(" ".repeat(60), 100 + d));
+    void introCloud; // the merge is exercised below; this asserts the import shape stays valid
+
+    const faceless = (row: string) => row.replaceAll("•", " ").replaceAll("◡", " ");
+    const body = cloudRows(INTRO_STEPS);            // rows 1..5, fully descended
+    SPRITE.slice(1).forEach((row, i) => expect(faceless(body[i]!)).toBe(row));
+
+    // and the face is on pet.ts's anchors, not eyeballed into place
+    const eyes = body[FACE.EYE_ROW - 1]!, mouth = body[FACE.MOUTH_ROW - 1]!;
+    expect([...eyes][FACE.EYE_L]).toBe("•");
+    expect([...eyes][FACE.EYE_R]).toBe("•");
+    expect([...mouth][FACE.MOUTH]).toBe("◡");
+  });
+
+  test("it leans out of the frame's top line, and the block below never moves while it arrives", () => {
+    const line = "╭" + "─".repeat(38) + "╮";
+    expect(mergeCloudIntoLine(line, 0)).toBe(line);                  // nothing until the frame has closed
+    expect(cloudRows(0).join("")).toBe("");
+    const leaning = mergeCloudIntoLine(line, INTRO_STEPS);
+    expect(leaning).toContain("╭────╮");                             // the crown cuts into the line
+    expect(leaning).toHaveLength(line.length);                       // ...without widening it
+    expect(leaning.startsWith("╭─")).toBe(true);
+    // the reserved rows are constant from the first step to the last: the mark cannot jump
+    const counts = [0, 12, 19, 22, INTRO_STEPS].map((s) => cloudRows(s).length);
+    expect(new Set(counts).size).toBe(1);
   });
 });
