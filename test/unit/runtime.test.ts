@@ -88,20 +88,29 @@ test("buildDef returns main agent with wildcard tools and the runtime prompt", (
 
 test("buildCfg gated: repl defaults with memory/skill allows and prompt gates", async () => {
   const cwd = tmpCwd();
+  // The 1M-window branch below needs a configured provider. This test used to get one from the developer's
+  // exported ANTHROPIC_API_KEY — "this box's default model" — and passed on that machine only; the moment
+  // test/helpers/isolate-home.ts started clearing provider variables it fell back to the flat 200_000 and
+  // failed, which is exactly the dependency the preload exists to surface. So the key is set here, on purpose,
+  // and removed again before the parts of the test that do not need it.
+  process.env.ANTHROPIC_API_KEY = "sk-ant-test-not-a-real-key";
   const rt = createRuntime({ cwd, stream: null });
   const seen: string[] = [];
   const approval: ApprovalFn = async (req) => { seen.push(req.tool); return "once"; };
   const cfg = rt.buildCfg(false, approval);
-  expect(cfg.maxTurns).toBe(60);
-  // the budget follows the model's window now: this box's default model has a 1M window and a 128k answer,
-  // so the history gets what is left. A model the catalog does not know still falls back to the flat 200_000.
-  // It is then divided by the model's measured token scale, because the budget is compared against an
-  // estimate our tokenizer produces and this model's own tokenizer counts more (core/token-scale.ts).
-  const ref = rt.providers.defaultRef() ?? { provider: "mock", model: "default" };
-  expect(cfg.contextBudgetTokens).toBe(
-    contextBudgetFor({ window: 1_000_000, maxOutput: 128_000, scale: tokenScaleFor(ref).charScale }),
-  );
-  expect(cfg.contextBudgetTokens).toBeGreaterThan(200_000);
+  try {
+    expect(cfg.maxTurns).toBe(60);
+    // the budget follows the model's window now: anthropic's default model has a 1M window and a 128k answer,
+    // so the history gets what is left. A model the catalog does not know still falls back to the flat 200_000.
+    // It is then divided by the model's measured token scale, because the budget is compared against an
+    // estimate our tokenizer produces and this model's own tokenizer counts more (core/token-scale.ts).
+    const ref = rt.providers.defaultRef() ?? { provider: "mock", model: "default" };
+    expect(ref.provider).toBe("anthropic");   // the branch under test really is the 1M one
+    expect(cfg.contextBudgetTokens).toBe(
+      contextBudgetFor({ window: 1_000_000, maxOutput: 128_000, scale: tokenScaleFor(ref).charScale }),
+    );
+    expect(cfg.contextBudgetTokens).toBeGreaterThan(200_000);
+  } finally { delete process.env.ANTHROPIC_API_KEY; }
   expect(cfg.compactionThreshold).toBe(0.8);
   expect(cfg.parallelTools).toBe(true);
   expect(cfg.permissionRules).toEqual([

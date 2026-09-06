@@ -405,8 +405,17 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     // the first microtask — still ahead of the first paint. A zero timer puts it behind it. Nothing
     // at boot awaits mcpReady; mcp_list/mcp_call do (registerMcpTools), so a tool call may wait —
     // the terminal must not. Measured: two npx servers, createRuntime 254 ms → 30 ms.
+    // The result is not discarded: a server the loader accepted but that never answers (a command that does not
+    // exist, a package npx cannot resolve) is counted on the startup card as configured, and until it is named
+    // here the only sign of it was a tool call that found nothing. Same channel as the loader's own "skipped"
+    // lines (pluginWarn → the TUI's warn notes, stderr headless), same shape as reloadMcp's `failed`.
     mcpReady = new Promise<void>((resolve) => {
-      setTimeout(() => { manager.connect().then(() => resolve(), () => resolve()); }, 0);
+      setTimeout(() => {
+        manager.connect().then(
+          (r) => { for (const f of r.failed) pluginWarn(`mcp: server "${f.name}" did not connect — ${f.error}`); resolve(); },
+          () => resolve(),
+        );
+      }, 0);
     });
     registerMcpTools(manager);
   }
