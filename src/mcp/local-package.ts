@@ -204,6 +204,8 @@ export function launchesViaNpx(server: McpServerConfig): boolean {
 export function npxOfferLine(names: string[]): string | undefined {
   if (names.length === 0) return undefined;
   const n = names.length;
+  // `<catalog name>`, not the server name the row shows: `mcp add` takes the name you installed it by (a
+  // registry server is `io.github.acme/widgets`, its row is `widgets`), and a renamed one needs its `--as` back
   return `${n} server${n === 1 ? "" : "s"} start${n === 1 ? "s" : ""} through npx, which re-resolves the package at every start (~2 s each): ${names.join(", ")}. `
-    + `To start in ~0.4 s, reinstall with \`rovecode mcp add <name> --local --force\` (installs the package once, ~25 MB). Nothing changes until you do.`;
+    + `To start in ~0.4 s, reinstall with \`rovecode mcp add <catalog name> --local --force\` (the name you installed it by; add \`--as <server name>\` if you renamed it; installs the package once, ~25 MB). Nothing changes until you do.`;
 }

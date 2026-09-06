@@ -193,7 +193,8 @@ export async function cmdMcp(args: string[], deps: McpCliDeps = {}): Promise<num
       // terminal keeps today's npx line — the offer is never silent and never the only way.
       let local = flag(rest, "--local") ? true : flag(rest, "--no-local") ? false : undefined;
       const offer = npxPackage(base.install);
-      if (offer !== undefined && local === undefined && !flag(rest, "--yes") && tty) {
+      // not offered for a project file: install-once writes this machine's absolute path, and that file is shared (planInstall refuses an explicit --local there)
+      if (offer !== undefined && local === undefined && scope === "user" && !flag(rest, "--yes") && tty) {
         out(`${offer.spec} would start through npx: ~2 s at every start, re-resolving the package (and asking the npm registry) each time.`);
         out(`Install it once instead? npm puts the package's code under ~/.rovecode/mcp — typically 20–30 MB and a few seconds, one time;`);
         out(`it then starts in ~0.4 s and needs no network to start. No keeps the npx line exactly as it is today.`);

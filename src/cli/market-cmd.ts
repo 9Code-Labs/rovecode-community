@@ -169,6 +169,8 @@ async function askFor(plan: { asks: { name: string; secret: boolean; description
 /** the npx package the chosen install form would run — the thing the install-once offer is about */
 function offeredPackage(item: MarketItem, opts: PlanOptions): NpxPackage | undefined {
   if (item.install.kind !== "mcp") return undefined;
+  // a project file is shared with every clone; install-once writes this machine's absolute path — no offer there
+  if (opts.scope === "project") return undefined;
   const form = item.install.entry.installs[opts.pick ?? 0];
   return form === undefined ? undefined : npxPackage(form);
 }

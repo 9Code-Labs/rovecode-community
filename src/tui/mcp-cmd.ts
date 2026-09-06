@@ -82,7 +82,7 @@ export async function cmdMcp(ctx: McpCmdCtx, arg: string): Promise<void> {
   const chosen = entry.installs[pick];
   const offer = chosen !== undefined ? npxPackage(chosen) : undefined;
   let local = false;
-  if (offer !== undefined) {
+  if (offer !== undefined && scope === "user") { // a project file is shared: install-once's absolute path has no place in it (planInstall refuses it too)
     const how = await renderer.pickOne([
       { value: "local", label: `install once — node starts it in ~0.4 s`, description: `runs npm install now: ${offer.spec}'s code lands under ~/.rovecode/mcp (typically 20–30 MB, one time); no network needed to start` },
       { value: "npx", label: `run through npx at every start — as today`, description: `~2 s per start, re-resolves the package and asks the npm registry each time; nothing installed now` },

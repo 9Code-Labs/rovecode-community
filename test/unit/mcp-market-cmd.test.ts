@@ -129,7 +129,7 @@ test("cli: on a terminal add shows the plan, asks y/N, asks the secret MASKED by
   expect(lst.out).toEqual([
     expect.stringMatching(/^user\s+widgets\s+stdio\s+npx -y widgets-mcp@1\.2\.0 --mode fast --root \/srv\/data  env WIDGET_TOKEN$/), // names, never values
     // an npx row gets the install-once OFFER under the list — a sentence and a command, never a rewrite
-    expect.stringMatching(/^1 server starts through npx, which re-resolves the package at every start \(~2 s each\): widgets\. To start in ~0\.4 s, reinstall with `rovecode mcp add <name> --local --force`.*Nothing changes until you do\.$/),
+    expect.stringMatching(/^1 server starts through npx, which re-resolves the package at every start \(~2 s each\): widgets\. To start in ~0\.4 s, reinstall with `rovecode mcp add <catalog name> --local --force` \(the name you installed it by; add `--as <server name>` if you renamed it;.*Nothing changes until you do\.$/),
   ]);
   expect(await lst.run("remove widgets --project")).toBe(1);
   expect(await lst.run("remove widgets")).toBe(0);

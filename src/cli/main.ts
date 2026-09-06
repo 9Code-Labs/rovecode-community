@@ -468,7 +468,7 @@ async function cmdTrace(sessionId: string): Promise<void> {
   }
 }
 
-const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "plugin", "mcp", "market", "context", "auth", "provider", "model", "models", "setup", "connect", "trace", "help", "chat", "repl", "smoke-tui", "acp", "serve", "export"]);
+const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "plugin", "mcp", "market", "context", "doctor", "auth", "provider", "model", "models", "setup", "connect", "trace", "help", "chat", "repl", "smoke-tui", "acp", "serve", "export"]);
 // --resume <id> · --resume (no id) · --continue: the last two reopen the newest session that holds something
 // (cli/resume.ts). Resolved only for the TUI branch below, so `rovecode run … --continue` costs no session scan.
 const resumeId = (cmd === "" || cmd === "chat" || cmd === "repl")
@@ -525,6 +525,7 @@ if (cmd === "" || cmd === "chat" || cmd === "repl") {
     case "mcp": process.exitCode = await (await import("./mcp-market-cmd.ts")).cmdMcp(argvAfter("mcp")); break;
     case "market": process.exitCode = await (await import("./market-cmd.ts")).cmdMarket(argvAfter("market")); break;
     case "context": process.exitCode = await (await import("./context-cmd.ts")).cmdContext(argvAfter("context")); break;
+    case "doctor": process.exitCode = await (await import("./doctor.ts")).cmdDoctor(argvAfter("doctor")); break;
     case "setup": {
       const { runSetup } = await import("./setup.ts");
       const { ProviderRegistry } = await import("../providers/registry.ts");

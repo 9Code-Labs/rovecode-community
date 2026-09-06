@@ -23,7 +23,7 @@ everyday
   --effort auto|off|low|medium|high  how hard I think before answering (/effort in the TUI, ROVECODE_EFFORT=…)
   rovecode provider list|add|remove|test  endpoints in ~/.rovecode/providers.json — live, no restart
   rovecode auth set <id>          store an API key (hidden prompt) · auth list · auth remove <id>
-  rovecode --resume <id>          reopen a session · rovecode export <session> writes it as markdown
+  rovecode doctor · --resume <id>  what is wrong with my setup, in one pass · reopen a session (export <id> → markdown)
 
 safety
   ${MODE_ASK} (default)           I read freely; I ask before every write, shell command and subagent
@@ -113,6 +113,12 @@ const ADVANCED = `advanced — the full command reference
   rovecode market verify [id]   re-hash what is installed and say what has changed since
   rovecode market validate <path|url> [--kind skill|plugin]   check a catalog before anyone trusts it
                             (docs/market.md; /market does the same inside the TUI; every subcommand takes --json)
+  rovecode doctor [--json] [--no-connect]  one pass over the setup: home (and a legacy ~/.cumulus), the default
+                            provider and where its key comes from (names, never values), the permission level and
+                            which rung set it, git/node/npm/npx/uvx on PATH with what each absence costs HERE,
+                            every configured MCP server (loads? skipped for a placeholder or an unset variable?
+                            untrusted file? connects?), the shadow checkpoints' size — and a list of what it did
+                            NOT check. exit 0 nothing broken · 1 something to fix · a missing provider is a note
   rovecode context [session] [--json]  what fills the window, item by item, and how far our estimate is from
                             the provider's own count of the same prompt (cache reads included — they are the prompt too)
                             (--exact asks Anthropic to count it for real; --no-runtime skips the system prompt and tool schemas)

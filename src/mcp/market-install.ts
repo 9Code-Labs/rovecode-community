@@ -73,6 +73,10 @@ export function planInstall(entry: MarketEntry, opts: PlanOptions): InstallPlan 
   const file = opts.scope === "project" ? files.project : files.user!;
   let local: InstallPlan["local"];
   if (opts.local === true) {
+    // The launch line install-once writes is THIS machine's absolute path under its ROVECODE_HOME. A project
+    // file is shared with everyone who clones the repo, so that line would be a server none of them can start
+    // — refused with the way out, rather than written and discovered on someone else's machine.
+    if (opts.scope === "project") return { error: `${entry.key}: install-once writes this machine's absolute path (node <home>/mcp/…), and a project file is shared with every clone — install it in user scope (drop --project) or keep the npx line` };
     const pkg = npxPackage(install);
     if (pkg === undefined) return { error: `${entry.key} cannot be installed once: its launch line is not a plain \`npx <package>\` (${installLabel(install)}) — drop --local to write it as it is` };
     local = { pkg, prefix: localPrefix(opts.home) };

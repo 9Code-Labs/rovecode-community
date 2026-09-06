@@ -161,6 +161,9 @@ record, whatever you answered to the offer. If npm fails, nothing is written and
 `--local` answers the offer with yes and `--no-local` with no, so neither asks; `--yes` (a script) and no
 terminal never ask and keep npx. `--local` on an entry that is not a plain npx package (docker, uvx, an http
 remote) is an error, not a silent fallback. `--offline --local` is refused: installing once means fetching now.
+**User scope only**: the launch line is this machine's absolute path under its `ROVECODE_HOME`, and a project
+`mcp.json` is shared with every clone of the repo — so the offer is not made for `--project`, and an explicit
+`--project --local` is refused with the way out (drop `--project`, or keep the npx line, which works everywhere).
 
 What lands: one shared prefix `~/.rovecode/mcp/` (its own `package.json`, one `node_modules`, so several servers
 share one copy of the SDK — two servers are ~30 MB where npx's cache keeps a copy of the SDK per server). The

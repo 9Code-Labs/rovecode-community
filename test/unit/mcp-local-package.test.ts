@@ -161,7 +161,8 @@ describe("the offer under `mcp list`", () => {
     const one = npxOfferLine(["memory"])!;
     expect(one).toMatch(/^1 server starts through npx/);
     expect(one).toContain("memory");
-    expect(one).toContain("rovecode mcp add <name> --local --force");
+    expect(one).toContain("rovecode mcp add <catalog name> --local --force");   // the name `mcp add` takes, not the row's server name
+    expect(one).toContain("add `--as <server name>` if you renamed it");
     expect(one).toContain("Nothing changes until you do.");
     expect(npxOfferLine(["memory", "filesystem"])).toMatch(/^2 servers start through npx.*memory, filesystem/);
   });
