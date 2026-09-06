@@ -10,9 +10,11 @@
 import { readSecret } from "../providers/auth.ts";
 import { rovecodeHome } from "../providers/auth.ts";
 import { installLabel, marketInfo, searchMarket, type MarketDeps, type MarketEntry } from "../mcp/market.ts";
-import { configuredServers, describePlan, fillPlan, namesWritten, pendingWords, planInstall, removeServer, serverLine, writeServer, type InstallPlan, type McpScope } from "../mcp/market-install.ts";
+import { configuredServers, describePlan, fillPlan, namesWritten, planInstall, removeServer, serverLine, unfilledPending, writeServer, type InstallPlan, type McpScope } from "../mcp/market-install.ts";
 import { mcpConfigFiles, parseConfigFile } from "../mcp/config.ts";
 import { mcpTrustStatus, projectMcpFiles, trustMcpFile, untrustMcpFile } from "../mcp/trust.ts";
+import { installLocalPackage, launchesViaNpx, localLaunch, npxOfferLine, npxPackage, type Spawn } from "../mcp/local-package.ts";
+import { buildRecord, recordInstall } from "../market/manifest.ts";
 import { createInterface } from "node:readline";
 
 export interface McpCliDeps {
@@ -28,15 +30,19 @@ export interface McpCliDeps {
   plain?: (prompt: string) => Promise<string>;
   /** default process.stdin.isTTY === true; a pipe is never consumed by a prompt */
   tty?: boolean;
+  /** how `npm install` runs for `add --local` — tests inject one that writes a fake node_modules */
+  spawn?: Spawn;
 }
 
 export const MCP_USAGE = [
   "usage: rovecode mcp <command>",
   "  search [query]             the curated list, then the MCP registry's name matches (cached a day)",
   "  info <name>                everything about one server: publisher, version, what it runs or connects to, what it asks",
-  "  add <name> [--project] [--pick N] [--as <name>] [--yes] [--force]",
+  "  add <name> [--project] [--pick N] [--as <name>] [--yes] [--force] [--local | --no-local]",
   "                             install: shows the exact command/URL + source, asks (masked) for keys by name, then writes",
   "                             ~/.rovecode/mcp.json — or .rovecode/mcp.json with --project (keys stay out of it: ${NAME})",
+  "                             --local: an npx server is installed ONCE (npm, ~25 MB under ~/.rovecode/mcp) and started with",
+  "                             node in ~0.4 s instead of ~2 s; --no-local keeps npx; neither → a terminal asks, --yes keeps npx",
   "  remove <name> [--project]  delete the entry from that file",
   "  list                       every configured server, by file (user · .mcp.json · project), with the project files' trust",
   "  show --project             each project file's servers — exact command/URL, env NAMES — and whether it is trusted here",
@@ -132,7 +138,7 @@ export async function cmdMcp(args: string[], deps: McpCliDeps = {}): Promise<num
   // every flag a subcommand takes; anything else is a usage error (exit 2), not a silently ignored word —
   // `mcp show --project` used to pass only because unknown flags were filtered out
   const KNOWN_FLAGS: Record<string, readonly string[]> = {
-    search: [], info: [], add: ["--project", "--pick", "--as", "--yes", "--force"], remove: ["--project"], list: [],
+    search: [], info: [], add: ["--project", "--pick", "--as", "--yes", "--force", "--local", "--no-local"], remove: ["--project"], list: [],
     show: ["--project"], trust: ["--yes", "--project"], untrust: [], help: [],
   };
   if (cmd !== undefined && cmd in KNOWN_FLAGS) {
@@ -175,7 +181,22 @@ export async function cmdMcp(args: string[], deps: McpCliDeps = {}): Promise<num
       const pick = pickRaw === undefined ? undefined : Number(pickRaw);
       if (pick !== undefined && (!Number.isInteger(pick) || pick < 0)) { err(`--pick wants a whole number, not "${pickRaw}"`); return 2; }
       const as = value(rest, "--as");
-      const plan = planInstall(r.entry, { scope, cwd, home, ...(pick !== undefined ? { pick } : {}), ...(as !== undefined ? { name: as } : {}) });
+      const baseOpts = { scope, cwd, home, ...(pick !== undefined ? { pick } : {}), ...(as !== undefined ? { name: as } : {}) };
+      const base = planInstall(r.entry, baseOpts);
+      if ("error" in base) { err(base.error); return 1; }
+      // The install-once offer (mcp/local-package.ts), BEFORE the plan is shown, so the plan the human reads is
+      // the one that runs. --local / --no-local decide it; otherwise a terminal is asked, and --yes or no
+      // terminal keeps today's npx line — the offer is never silent and never the only way.
+      let local = flag(rest, "--local") ? true : flag(rest, "--no-local") ? false : undefined;
+      const offer = npxPackage(base.install);
+      if (offer !== undefined && local === undefined && !flag(rest, "--yes") && tty) {
+        out(`${offer.spec} would start through npx: ~2 s at every start, re-resolving the package (and asking the npm registry) each time.`);
+        out(`Install it once instead? npm puts the package's code under ~/.rovecode/mcp — typically 20–30 MB and a few seconds, one time;`);
+        out(`it then starts in ~0.4 s and needs no network to start. No keeps the npx line exactly as it is today.`);
+        const a = (await plain(`install ${offer.spec} once? [y/N] `)).trim().toLowerCase();
+        local = a === "y" || a === "yes";
+      }
+      const plan = local === true ? planInstall(r.entry, { ...baseOpts, local: true }) : base;
       if ("error" in plan) { err(plan.error); return 1; }
       // the human sees everything first — then the questions, then the yes
       for (const l of describePlan(plan)) out(l);
@@ -186,21 +207,39 @@ export async function cmdMcp(args: string[], deps: McpCliDeps = {}): Promise<num
       }
       const answers = await askPlan(plan, { secret, plain, tty, err });
       if (answers === null) { out("nothing written"); return 1; }
+      // install-once: npm runs first; only its success reaches the file, and what landed goes on record
+      let launch: { command: string; args: string[] } | undefined;
+      let pkgRecord: NonNullable<Parameters<typeof buildRecord>[1]["package"]> | undefined;
+      if (plan.local) {
+        const lr = await installLocalPackage(plan.local.pkg, plan.local.prefix, deps.spawn ? { spawn: deps.spawn } : {});
+        if (!lr.ok) { err(lr.error); out("nothing written"); return 1; }
+        launch = localLaunch(lr.pkg, plan.local.pkg.rest);
+        pkgRecord = { name: lr.pkg.name, version: lr.pkg.version, prefix: plan.local.prefix, bin: lr.pkg.bin, missing: lr.pkg.missing,
+          ...(lr.pkg.integrity !== undefined ? { integrity: lr.pkg.integrity } : {}), ...(lr.pkg.resolved !== undefined ? { resolved: lr.pkg.resolved } : {}) };
+      }
       let trusted: boolean | undefined;
-      const raw = fillPlan(plan, answers);
+      const raw = fillPlan(plan, answers, launch);
       try {
         // a project file the human just approved is trusted as written (mcp/trust.ts); the user file is never gated
         trusted = writeServer(plan.file, plan.name, raw, { replace: flag(rest, "--force"), ...(scope === "project" ? { trustHome: home } : {}) }).trusted;
       } catch (e) { err(e instanceof Error ? e.message : String(e)); return 1; }
       out(`added "${plan.name}" → ${plan.file}${trusted === true ? "  (trusted on this machine as written)" : ""}`);
+      if (pkgRecord) {
+        // the record is the point of installing once: what ran is written down (market/manifest.ts)
+        recordInstall(buildRecord({ kind: "mcp", id: r.entry.key, source: r.entry.source, ...(r.entry.version !== undefined ? { version: r.entry.version } : {}) },
+          { scope, target: plan.file, package: pkgRecord, installedBy: "mcp add" }), { cwd, home });
+        out(`installed ${pkgRecord.name} ${pkgRecord.version} once → ${plan.local!.prefix}${pkgRecord.integrity !== undefined ? "  (integrity recorded in installed.json)" : ""}`);
+        if (pkgRecord.missing?.length) err(`record incomplete: ${pkgRecord.missing.join("; ")}`);
+      }
       if (trusted === false) out(`NOT trusted yet: that file already held servers you have not approved — rovecode mcp show, then rovecode mcp trust`);
       // only what is STILL a placeholder: answering the question at the prompt should not leave the
       // install telling you to go and edit a line that now holds your answer
-      const unfilled = plan.pending.filter((p) => (pendingWords(p) as string[]).some((w) => (raw.args as string[] | undefined)?.includes(w) === true && /^<.*>$/.test(w)));
+      const unfilled = unfilledPending(plan, raw);
       if (unfilled.length) out(`fill in before use: ${unfilled.join(", ")} — edit the args in that file; until then this server is skipped`);
       const named = namesWritten(plan, raw); // only what the file now refers to (a project file's secrets, an unanswered required value)
       if (named.length) out(`set ${named.join(", ")} in your environment — the file only names them`);
-      out("restart rovecode to connect (servers are read once per process)");
+      // a restart does nothing for an entry the loader will skip; the line above is the whole next step
+      if (unfilled.length === 0) out("restart rovecode to connect (servers are read once per process)");
       return 0;
     }
     case "remove": {
@@ -214,12 +253,20 @@ export async function cmdMcp(args: string[], deps: McpCliDeps = {}): Promise<num
       return 0;
     }
     case "list": {
-      const rows = configuredServers(cwd, home);
+      // what the files say, placeholders included (marked `(fill in <…>)` by serverLine); what parsing could
+      // not read is said too, on stderr — an invalid file used to make its servers vanish without a word
+      const warnings: string[] = [];
+      const rows = configuredServers(cwd, home, warnings);
+      for (const w of warnings) err(w);
       if (rows.length === 0) { out("no MCP servers configured — rovecode mcp search <query>"); return 0; }
       for (const r of rows) {
         const gate = r.scope === "user" ? "" : mcpTrustStatus(home, r.file) === "trusted" ? "" : "  (file not trusted — off; rovecode mcp trust)";
         out(`${r.scope.padEnd(8)} ${serverLine(r.server)}${gate}`);
       }
+      // the install-once offer for rows still starting through npx: an offer and a command, never a rewrite —
+      // a listing changes nothing, and an npx line keeps working whether or not anyone takes it
+      const offer = npxOfferLine(rows.filter((r) => launchesViaNpx(r.server)).map((r) => r.server.name));
+      if (offer !== undefined) out(offer);
       return 0;
     }
     case "show": { for (const l of showLines(cwd, home)) out(l); return 0; }

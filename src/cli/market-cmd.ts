@@ -17,6 +17,7 @@ import { itemLine, qualify, type MarketItem, type MarketKind, type MarketRow, ty
 import { allItems, searchMarket, type RegistryDeps } from "../market/registry.ts";
 import { resolveTarget } from "../market/resolve.ts";
 import { installedState, needsNetwork, planInstall, removeItem, runInstall, withInstalled, type PlanOptions, type RunDeps } from "../market/install.ts";
+import { npxPackage, type NpxPackage } from "../mcp/local-package.ts";
 import type { PrereqEnv } from "../market/prereq.ts";
 import { originLine, readManifest, recordFor } from "../market/manifest.ts";
 import { verifyDigest, verifyLine } from "../market/digest.ts";
@@ -54,6 +55,8 @@ export const MARKET_USAGE = [
   "  docs <id>                                  the item's own documentation, as the catalog carries it",
   "  install <id|kind:id|git-url|npm-package> [--project] [--as <name>] [--pick N] [--ref <branch|tag|commit>] [--yes] [--force]",
   "                                             shows the plan, asks (masked) for keys by name, then writes",
+  "                                             --local / --no-local: an npx server installed ONCE (npm, ~25 MB, starts in 0.4 s not 2 s)",
+  "                                             or the npx line as it is; without either, a terminal asks and --yes keeps npx",
   "                                             --dry-run shows the plan and stops; nothing is fetched or written",
   "  remove <id|kind:id> [--project]            undo an install of any kind",
   "  list [--all] [--kind mcp|skill|plugin]     what is installed here (--all: the whole market, with badges)",
@@ -78,7 +81,7 @@ export const SUBCOMMAND_FLAGS: Readonly<Record<string, ReadonlySet<string>>> = {
   search: new Set(["--kind"]),
   info: new Set(),
   docs: new Set(),
-  install: new Set(["--project", "--as", "--pick", "--ref", "--yes", "--force", "--dry-run"]),
+  install: new Set(["--project", "--as", "--pick", "--ref", "--yes", "--force", "--dry-run", "--local", "--no-local"]),
   remove: new Set(["--project", "--yes"]),
   list: new Set(["--all", "--kind"]),
   update: new Set(["--all", "--yes", "--yes-plugins", "--dry-run"]),
@@ -163,6 +166,22 @@ async function askFor(plan: { asks: { name: string; secret: boolean; description
   return answers;
 }
 
+/** the npx package the chosen install form would run — the thing the install-once offer is about */
+function offeredPackage(item: MarketItem, opts: PlanOptions): NpxPackage | undefined {
+  if (item.install.kind !== "mcp") return undefined;
+  const form = item.install.entry.installs[opts.pick ?? 0];
+  return form === undefined ? undefined : npxPackage(form);
+}
+
+/** the question, in the human's terms: what it costs, what they get, and that "no" changes nothing */
+function offerLines(pkg: NpxPackage): string[] {
+  return [
+    `${pkg.spec} would start through npx: ~2 s at every start, re-resolving the package (and asking the npm registry) each time.`,
+    `Install it once instead? npm puts the package's code under ~/.rovecode/mcp — typically 20–30 MB and a few seconds, one time;`,
+    `it then starts in ~0.4 s and needs no network to start. No keeps the npx line exactly as it is today.`,
+  ];
+}
+
 /** One item, the whole ceremony: plan → show → ask → write. Shared by `install` and `update`, so an
  *  update can never become a quieter install that skips the preview. Returns the process exit code. */
 async function installOne(item: MarketItem, opts: PlanOptions, ctx: {
@@ -174,7 +193,18 @@ async function installOne(item: MarketItem, opts: PlanOptions, ctx: {
   collect?: (doc: unknown) => void;
 }): Promise<number> {
   const doc = (d: unknown): void => { if (ctx.collect) ctx.collect(d); else jsonOut({ out: ctx.out }, d); };
-  const plan = planInstall(item, opts);
+  // The install-once offer, BEFORE the plan is drawn, so the plan the human then reads is the one that will
+  // run. Asked only where a person can answer (a terminal, no --yes, no --json, no --dry-run) and only when
+  // nothing decided it already (--local / --no-local, or an update keeping what the record says). Every
+  // other path keeps today's npx line: the offer is never silent and never the only way.
+  let local = opts.local;
+  const offer = offeredPackage(item, opts);
+  if (offer !== undefined && local === undefined && !ctx.yes && !ctx.json && !ctx.dryRun && ctx.tty) {
+    for (const l of offerLines(offer)) ctx.out(l);
+    const a = (await ctx.plain(`install ${offer.spec} once? [y/N] `)).trim().toLowerCase();
+    local = a === "y" || a === "yes";
+  }
+  const plan = planInstall(item, local === undefined ? opts : { ...opts, local });
   if ("error" in plan) { ctx.err(plan.error); if (ctx.json) doc({ ok: false, error: plan.error, id: qualify(item) }); return 1; }
   // In --json mode the plan travels as FIELDS, not as prose printed above the JSON. It used to be both,
   // which meant `market install --json` emitted human lines and then an object on the same stream and
@@ -218,10 +248,15 @@ async function installOne(item: MarketItem, opts: PlanOptions, ctx: {
     // a project scope never takes a typed secret: it is written as ${NAME}
     tty: ctx.tty && !(opts.scope === "project" && plan.asks.some((a) => a.secret)), err: ctx.err,
   });
-  const outcome = await runInstall(plan, answers, opts, ctx.run);
+  const outcome = await runInstall(plan, answers, local === undefined ? opts : { ...opts, local }, ctx.run);
   if (!outcome.ok) { ctx.err(outcome.error); if (ctx.json) doc(outcome); return 1; }
   if (ctx.json) { doc(outcome); return 0; }
   ctx.out(`${ctx.verb === "update" ? "updated" : "installed"} ${qualify(item)} → ${outcome.target}${outcome.trusted === true ? " (trusted as written)" : ""}`);
+  if (outcome.package) {
+    ctx.out(`  package    ${outcome.package.name} ${outcome.package.version} → ${outcome.package.prefix}${outcome.package.integrity !== undefined ? "  (integrity recorded in installed.json)" : ""}`);
+    // a hole in the record is said, not smoothed over: the reader decides whether it matters
+    if (outcome.package.missing) ctx.err(`  record incomplete: ${outcome.package.missing.join("; ")}`);
+  }
   if (outcome.trusted === false) ctx.err(`that file already held entries you have not approved, so it is NOT trusted yet — rovecode mcp trust`);
   if (outcome.envNames.length) ctx.err(`set ${outcome.envNames.join(", ")} in your environment before the restart`);
   if (outcome.next) ctx.out(outcome.next);
@@ -442,8 +477,12 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
       out(`  rovecode market update <id> --yes   ·   or --yes-plugins to take them all`);
     }
     for (const row of targets) {
-      // an item is updated in the scope it is installed in, not the flag's default
-      const opts: PlanOptions = { scope: row.installed!.scope, cwd, home, ...(deps.prereqEnv !== undefined ? { prereqEnv: deps.prereqEnv } : {}) };
+      // an item is updated in the scope it is installed in, not the flag's default. An MCP server that was
+      // installed ONCE stays installed once (the record says so); one on an npx line stays on npx — an update
+      // never asks the install-once question, because it must not change how the server starts.
+      const keepLocal = row.kind === "mcp" ? recordFor(row, row.installed!.scope, cwd, home)?.package !== undefined : undefined;
+      const opts: PlanOptions = { scope: row.installed!.scope, cwd, home, ...(deps.prereqEnv !== undefined ? { prereqEnv: deps.prereqEnv } : {}),
+        ...(keepLocal !== undefined ? { local: keepLocal } : {}) };
       const code = await installOne(row, opts, ctx);
       if (code !== 0) worst = code;
     }
@@ -580,9 +619,11 @@ async function runMarket(args: string[], deps: MarketCliDeps): Promise<number> {
     const model = deps.model ?? (await defaultModelRef());
     const ref = flag("--ref");
     if (ref !== undefined && ref.trim() === "") return usage(`--ref needs a branch, tag or commit`);
+    // --local / --no-local decide the install-once question up front; neither → it is asked on a terminal
+    const local = args.includes("--local") ? true : args.includes("--no-local") ? false : undefined;
     const opts = { scope, cwd, home, ...(pick !== undefined ? { pick } : {}), ...(asName !== undefined ? { as: asName } : {}),
       ...(ref !== undefined ? { ref } : {}), ...(deps.prereqEnv !== undefined ? { prereqEnv: deps.prereqEnv } : {}),
-      ...(model !== undefined ? { model } : {}) };
+      ...(model !== undefined ? { model } : {}), ...(local !== undefined ? { local } : {}) };
     return installOne(r.item, opts, {
       out, err, json, yes: args.includes("--yes"), tty: deps.tty ?? process.stdin.isTTY === true,
       secret: deps.secret ?? readSecret, plain: deps.plain ?? defaultPlain, verb: "install", dryRun: args.includes("--dry-run"),

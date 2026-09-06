@@ -53,7 +53,7 @@ test("the table: what each subcommand reads beyond --json/--offline (widening it
     search: ["--kind"],
     info: [],
     docs: [],
-    install: ["--as", "--dry-run", "--force", "--pick", "--project", "--ref", "--yes"],
+    install: ["--as", "--dry-run", "--force", "--local", "--no-local", "--pick", "--project", "--ref", "--yes"],
     remove: ["--project", "--yes"],
     list: ["--all", "--kind"],
     update: ["--all", "--dry-run", "--yes", "--yes-plugins"],

@@ -17,12 +17,13 @@
 import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, sep, resolve as resolvePath } from "node:path";
-import { describePlan, fillPlan, namesWritten, planInstall as planMcp, removeServer, writeServer, type InstallPlan as McpPlan } from "../mcp/market-install.ts";
+import { describePlan, fillPlan, namesWritten, planInstall as planMcp, removeServer, unfilledPending, writeServer, type InstallPlan as McpPlan } from "../mcp/market-install.ts";
 import { mcpConfigFiles, parseConfigFile } from "../mcp/config.ts";
 import { mcpTrustStatus } from "../mcp/trust.ts";
 import { addPlugin, cloneKey, removePlugin, scopeRoot, type CopyTree, type Spawn } from "../plugins/install.ts";
 import { discoverPlugins } from "../plugins/discover.ts";
-import { prereqLine, prereqOf, type PrereqEnv } from "./prereq.ts";
+import { checkPrereq, prereqLine, prereqOf, type PrereqEnv } from "./prereq.ts";
+import { installLocalPackage, localLaunch } from "../mcp/local-package.ts";
 import { buildRecord, forgetInstall, recordInstall } from "./manifest.ts";
 import { cloneAtRef, type ResolvedBy } from "./clone.ts";
 import { contextCostLines, contextCostOf } from "./context-cost.ts";
@@ -46,6 +47,10 @@ export interface PlanOptions {
    *  undefined when nothing is configured — an unscaled number that says so beats one scaled to a model
    *  the person is not running. */
   model?: { provider: string; model: string };
+  /** MCP only: install the npx package ONCE and launch it with node (mcp/local-package.ts). True after the
+   *  human said yes to the offer (or passed --local); false or undefined writes today's npx line. Never
+   *  decided here — the surfaces ask, this only carries the answer. */
+  local?: boolean;
 }
 
 export interface RunDeps {
@@ -83,6 +88,11 @@ export function validInstallName(name: string): boolean {
  *  be executed or fetched — while `writes` and `fill in` are about what happens to the disk. It never
  *  blocks: some people install the tool next, and a warning is not a gate. */
 function requiresLine(item: MarketItem, opts: PlanOptions): string[] {
+  // install-once runs npm now and node at every start — those are the programs to look for, not npx
+  if (opts.local === true && item.install.kind === "mcp") {
+    const both = ["npm", "node"].map((p) => prereqLine(checkPrereq(p, opts.prereqEnv))).filter((l): l is string => l !== undefined);
+    return both.length === 0 ? [] : [`  requires   ${both.join("  ·  ")}`];
+  }
   const line = prereqLine(prereqOf(item, opts.prereqEnv));
   return line === undefined ? [] : [`  requires   ${line}`];
 }
@@ -185,6 +195,7 @@ export function planInstall(item: MarketItem, opts: PlanOptions): InstallPlanVie
     const inner = planMcp(install.entry, {
       scope: opts.scope, cwd: opts.cwd, home: opts.home,
       ...(opts.pick !== undefined ? { pick: opts.pick } : {}), ...(opts.as !== undefined ? { name: opts.as } : {}),
+      ...(opts.local !== undefined ? { local: opts.local } : {}),
     });
     if ("error" in inner) return inner;
     const view: InstallPlanView = {
@@ -259,18 +270,42 @@ export async function runInstall(plan: InstallPlanView, answers: Record<string, 
       const inner = planMcp(install.entry, {
         scope: opts.scope, cwd: opts.cwd, home: opts.home,
         ...(opts.pick !== undefined ? { pick: opts.pick } : {}), ...(opts.as !== undefined ? { name: opts.as } : {}),
+        ...(opts.local !== undefined ? { local: opts.local } : {}),
       });
       if ("error" in inner) return { ok: false, error: inner.error };
-      const raw = fillPlan(inner, answers);
+      // install-once (mcp/local-package.ts): npm runs FIRST, and only its success reaches mcp.json. A failed
+      // npm leaves the file as it was — no half-entry pointing at a bin that never arrived — and says why.
+      let launch: { command: string; args: string[] } | undefined;
+      let pkg: NonNullable<Extract<InstallOutcome, { ok: true }>["package"]> | undefined;
+      if (inner.local) {
+        if (deps.offline === true) return { ok: false, error: `--offline: installing ${inner.local.pkg.spec} once means npm fetching it now; drop --local to write the npx line, which fetches at launch instead` };
+        const r = await installLocalPackage(inner.local.pkg, inner.local.prefix, deps.spawn ? { spawn: deps.spawn } : {});
+        if (!r.ok) return { ok: false, error: r.error };
+        launch = localLaunch(r.pkg, inner.local.pkg.rest);
+        pkg = { name: r.pkg.name, version: r.pkg.version, prefix: inner.local.prefix, bin: r.pkg.bin,
+          ...(r.pkg.integrity !== undefined ? { integrity: r.pkg.integrity } : {}),
+          ...(r.pkg.missing.length > 0 ? { missing: r.pkg.missing } : {}) };
+      }
+      const raw = fillPlan(inner, answers, launch);
       const written = writeServer(inner.file, inner.name, raw, {
         ...(deps.force === true ? { replace: true } : {}),
         ...(opts.scope === "project" ? { trustHome: opts.home } : {}),
       });
-      recordInstall(buildRecord(item, { scope: opts.scope, target: inner.file }), { cwd: opts.cwd, home: opts.home, stillInstalled: recordStillInstalled(opts.cwd, opts.home) });
+      recordInstall(buildRecord(item, { scope: opts.scope, target: inner.file, ...(pkg ? { package: { ...pkg, missing: pkg.missing ?? [] } } : {}) }),
+        { cwd: opts.cwd, home: opts.home, stillInstalled: recordStillInstalled(opts.cwd, opts.home) });
+      // The same closing line `rovecode mcp add` prints (cli/mcp-market-cmd.ts), for the same two reasons: an
+      // entry still carrying a placeholder is skipped by the loader, so "restart rovecode" would send the
+      // person to a restart that changes nothing; and the placeholder is the one thing they must go and
+      // edit, so it is named here, not left for them to discover in a skipped-server warning later.
+      const fillIn = unfilledPending(inner, raw);
       return {
         ok: true, item, target: inner.file, scope: opts.scope, envNames: namesWritten(inner, raw),
         ...(written.trusted !== undefined ? { trusted: written.trusted } : {}),
-        next: "restart rovecode — MCP servers are read once per process",
+        ...(pkg ? { package: pkg } : {}),
+        ...(fillIn.length ? { fillIn } : {}),
+        next: fillIn.length
+          ? `fill in before use: ${fillIn.join(", ")} — edit the args in ${inner.file}; until then this server is skipped`
+          : "restart rovecode to connect — MCP servers are read once per process (a session that installs from /market connects it on the spot)",
       };
     }
 

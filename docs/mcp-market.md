@@ -31,9 +31,15 @@ still carrying one** and names the file and the hole instead:
 ~/.rovecode/mcp.json: server "filesystem" still has <directory the server may touch> to fill in; skipped (edit that line and it will connect)
 ```
 
-Replace that one word in `args` and restart. Before a180ad2 the argument was dropped and the entry was written in a
-form that could never start — `npx … server-filesystem` with no directory — and the only sign was a server that
-was never there.
+Replace that one word in `args` and restart. `rovecode mcp list` shows such an entry with `(fill in <…>)` at the end
+of its line — it is configured, not launchable — and prints on stderr whatever a file could not be parsed for
+(invalid JSON, a nameless entry). Before a180ad2 the argument was dropped and the entry was written in a form that
+could never start — `npx … server-filesystem` with no directory — and the only sign was a server that was never there.
+
+A server the loader accepted but that never answers — a command that does not exist, a package `npx` cannot
+resolve — is counted on the startup card as configured and, once its connect attempt has settled, named in a
+warning: `mcp: server "ghost" did not connect — <error>`. The same note an in-session install shows when a
+just-written server fails.
 
 Servers are read once per process — restart rovecode after a shell `add`/`remove`. An install made from inside
 a session (`/mcp`, `/market`) is the exception: the session re-reads the three files, trust gate included, and
@@ -97,7 +103,7 @@ network down a stale cache answers with a note; with no cache the curated shelf 
 ```
 rovecode mcp search [query]        curated rows first, then the registry's name matches
 rovecode mcp info <name>           publisher, version, status, every launch form, the env names it asks for
-rovecode mcp add <name> [--project] [--pick N] [--as <name>] [--yes] [--force]
+rovecode mcp add <name> [--project] [--pick N] [--as <name>] [--yes] [--force] [--local | --no-local]
 rovecode mcp remove <name> [--project]
 rovecode mcp list                  every configured server with its scope (user · harvest · project), and for
                                    project files whether they are trusted
@@ -119,11 +125,57 @@ file → nothing written (there is no way to ask); for a **project** file the se
 write succeeds and the closing line names the variables to export. A `needs` argument nobody could answer is
 written as its placeholder and the closing line says so — `fill in before use: <directory the server may
 touch> — edit the args in that file; until then this server is skipped` — only for what is *still* a placeholder,
-never for a question you answered at the prompt.
+never for a question you answered at the prompt. That line replaces "restart rovecode": a restart changes nothing
+for an entry the loader skips. Both faces close the same way.
 
 Secrets go **as values only into `~/.rovecode/mcp.json`** (mode 0600 where the OS honours it). A `--project` file
 gets `${NAME}` — a token never lands in a repo. `--as` renames (a registry `io.github.acme/widgets` is `widgets`
 by default), `--pick N` chooses among several launch forms (`info` numbers them), `--force` replaces.
+
+### Install once instead of `npx` at every start (`--local`)
+
+Most servers in the market are launched as `npx -y <package>`. Measured (Windows 11, node 24, npm 11, the memory
+and filesystem servers, medians through the real client): a warm `npx` takes **1.8–2.1 s** from spawn to the
+initialize handshake, the same package installed once and started with `node <its bin>` takes **0.35–0.47 s**.
+The difference is npx itself — `npx --version` alone is 0.6 s, and every warm launch still asks the npm
+registry to revalidate the package (0.3–1.3 s; no network means a timeout path). A cold cache is 7 s and a
+47 MB download, repeated whenever upstream publishes, because `-y <package>` means "latest".
+
+So, for an entry whose launch line is a plain `npx [flags] <package> [args]`, `add` **asks one thing before the
+plan** on a terminal:
+
+```
+widgets-mcp@1.2.0 would start through npx: ~2 s at every start, re-resolving the package (and asking the npm registry) each time.
+Install it once instead? npm puts the package's code under ~/.rovecode/mcp — typically 20–30 MB and a few seconds, one time;
+it then starts in ~0.4 s and needs no network to start. No keeps the npx line exactly as it is today.
+install widgets-mcp@1.2.0 once? [y/N]
+```
+
+"No" is today's behaviour, unchanged. "Yes" changes the **plan you then read**: `runs node ~/.rovecode/mcp/
+node_modules/<package>/<its bin> …`, an `installs` row with the exact `npm install --prefix …` command and, in so
+many words, that rovecode runs a package manager for you and puts the package's code on this machine, and a
+`records` row. Installing code is a bigger act than writing a config line, and the plan says so. The approval
+(`install? [y/N]`) is still the gate: npm runs **only after that yes** — a "no" leaves no folder, no file and no
+record, whatever you answered to the offer. If npm fails, nothing is written and its last lines are shown.
+
+`--local` answers the offer with yes and `--no-local` with no, so neither asks; `--yes` (a script) and no
+terminal never ask and keep npx. `--local` on an entry that is not a plain npx package (docker, uvx, an http
+remote) is an error, not a silent fallback. `--offline --local` is refused: installing once means fetching now.
+
+What lands: one shared prefix `~/.rovecode/mcp/` (its own `package.json`, one `node_modules`, so several servers
+share one copy of the SDK — two servers are ~30 MB where npx's cache keeps a copy of the SDK per server). The
+launch line is `node` plus the bin's **absolute path as one argument** (never the `.cmd` shim: that means
+`cmd.exe` and its quoting), so a home directory with a space in it works. `~/.rovecode/installed.json` records
+`package: { name, version, prefix, bin, integrity, resolved }` — npm's integrity hash from the lockfile, i.e.
+*what ran is on record*, which an `npx -y` line never gives you. When the lockfile cannot supply the hash the
+record says so in a `missing` list and stderr says `record incomplete: …`, rather than the field being silently
+absent. `rovecode market update` keeps an install-once server on `node` (npm runs again) and an npx one on npx;
+it never asks the offer, because an update must not change how a server starts.
+
+`rovecode mcp list` prints, under the rows, one line for servers that still start through npx — how many, which,
+the cost, and the command to reinstall them once — and **rewrites nothing**: an npx entry keeps working for as
+long as you keep it. The same offer is one more pick in the TUI's `/mcp` (`install once` / `run through npx at
+every start — as today`), before the approval card, whose detail carries the same `installs` rows.
 
 ## `/mcp` in the TUI
 
@@ -141,7 +193,7 @@ The TUI cannot ask for a `needs` argument either: the placeholder is written and
 (`mcp: fill in <directory the server may touch> in that file's args before use`); the server connects once the
 line is edited.
 
-Flags: each `rovecode mcp` subcommand accepts only its own (`add`: `--project --pick --as --yes --force`; `remove`,
+Flags: each `rovecode mcp` subcommand accepts only its own (`add`: `--project --pick --as --yes --force --local --no-local`; `remove`,
 `show`: `--project`; `trust`: `--yes --project`); any other `--flag`, a missing name, or an unknown subcommand is a
 one-line usage error with exit 2, like the rest of the CLI.
 

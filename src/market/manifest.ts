@@ -30,8 +30,9 @@ export interface InstallRecord {
   scope: MarketScope;
   /** ISO-8601, UTC */
   installedAt: string;
-  /** which surface wrote it — `mcp add` and `plugin add` may record their own installs later */
-  installedBy: "market";
+  /** which surface wrote it. `mcp add` records too, but only when it installed a PACKAGE (install-once):
+   *  that record carries the integrity hash, and a plain config line still has nothing to record. */
+  installedBy: "market" | "mcp add";
   /** where it landed: the folder, or the mcp.json that holds the entry */
   target: string;
   /** the catalog row's own version at the time, when it stated one */
@@ -45,6 +46,22 @@ export interface InstallRecord {
     source: string; sha?: string; ref?: string;
     /** which command produced the tree — so "was that ref a branch or a commit?" has an answer */
     resolvedBy?: "branch" | "commit" | "default";
+  };
+  /** an MCP server installed ONCE as an npm package (mcp/local-package.ts) instead of `npx -y` at every
+   *  start: what npm put on disk. `integrity` is npm's hash for the tarball, from the lockfile; when the
+   *  lockfile could not supply it, `missing` says so in words rather than the field being silently absent.
+   *  This is the record an `npx` line never has — it runs whatever "latest" is and leaves nothing behind. */
+  package?: {
+    name: string;
+    version: string;
+    /** the shared prefix it was installed into (~/.rovecode/mcp) */
+    prefix: string;
+    /** the bin `node` launches, absolute */
+    bin: string;
+    integrity?: string;
+    resolved?: string;
+    /** what could not be recorded and why; absent when everything above is filled */
+    missing?: string[];
   };
 }
 
@@ -128,18 +145,26 @@ export function recordFor(item: Pick<MarketItem, "kind" | "id">, scope: MarketSc
 
 /** Build the record for an install that just happened. `sha` is filled by the caller when a clone
  *  resolved one; nothing here invents it, because an unverified commit id is worse than no commit id. */
-export function buildRecord(item: MarketItem, opts: {
+export function buildRecord<T extends Pick<MarketItem, "kind" | "id" | "source" | "version">>(item: T, opts: {
   scope: MarketScope; target: string; now?: () => Date;
   digest?: { algo: "sha256"; value: string; files: number };
   git?: { source: string; sha?: string; ref?: string; resolvedBy?: "branch" | "commit" | "default" };
+  package?: NonNullable<InstallRecord["package"]>;
+  installedBy?: InstallRecord["installedBy"];
 }): InstallRecord {
   const record: InstallRecord = {
     kind: item.kind, id: item.id, source: item.source, scope: opts.scope,
     installedAt: (opts.now ? opts.now() : new Date()).toISOString(),
-    installedBy: "market", target: opts.target,
+    installedBy: opts.installedBy ?? "market", target: opts.target,
   };
   if (item.version !== undefined) record.catalogVersion = item.version;
   if (opts.digest) record.digest = opts.digest;
+  if (opts.package) {
+    // `missing` is kept only when it says something: an empty list would read as "checked, nothing missing"
+    // to one reader and as noise to the next, and the absent field already means the former
+    const { missing, ...rest } = opts.package;
+    record.package = { ...rest, ...(missing !== undefined && missing.length > 0 ? { missing } : {}) };
+  }
   if (opts.git) {
     record.git = { source: scrubUrl(opts.git.source),
       ...(opts.git.sha !== undefined ? { sha: opts.git.sha } : {}),

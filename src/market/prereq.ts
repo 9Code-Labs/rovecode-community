@@ -48,6 +48,7 @@ export interface PrereqEnv {
  *  no hint, and the plan says "not on PATH" and nothing more — which is honest and still useful. */
 const HINTS: Record<string, string> = {
   npx: "comes with Node.js — nodejs.org",
+  npm: "comes with Node.js — nodejs.org",
   node: "nodejs.org",
   uvx: "pipx install uv — astral.sh/uv",
   uv: "pipx install uv — astral.sh/uv",

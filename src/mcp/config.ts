@@ -132,8 +132,7 @@ export function normalizeEntry(name: string, raw: unknown, file: string, warning
   // as `<directory the server may touch>`, and a server still carrying one is not launched. Launching it
   // means npx starts, the server rejects its own arguments, and the failure surfaces as a connect error
   // several layers from the thing that is actually wrong — an editable line in a file rovecode named.
-  const holes = [...new Set([...(args ?? []), ...Object.values(env ?? {}), ...Object.values(headers ?? {}), ...(url !== undefined ? [url] : [])]
-    .flatMap((v) => [...v.matchAll(PLACEHOLDER_REF)].map((m) => m[0])))];
+  const holes = placeholderHoles({ args, env, headers, url });
   if (holes.length > 0 && opts.allowPlaceholders !== true) {
     warnings.push(`${file}: server "${name}" still has ${holes.join(", ")} to fill in; skipped (edit that line and it will connect)`);
     return undefined;
@@ -152,7 +151,17 @@ export function normalizeEntry(name: string, raw: unknown, file: string, warning
 /** Parse one config file. Accepts the claude-code map form
  *  `{ mcpServers: { name: {...} } }` and, additionally (ours), a
  *  `{ servers: McpServerConfig[] }` array form. */
-export function parseConfigFile(path: string, warnings: string[], envSource: Record<string, string | undefined> = process.env): McpServerConfig[] {
+/** The `<…>` placeholders an entry still carries, in file order, each once. Empty = launchable as far as
+ *  arguments go. Shared by the loader (which refuses to launch while any remain) and the listing surfaces
+ *  (which must SHOW such an entry, marked, rather than pretend it was never written). */
+export function placeholderHoles(s: { args?: string[]; env?: Record<string, string>; headers?: Record<string, string>; url?: string }): string[] {
+  return [...new Set([...(s.args ?? []), ...Object.values(s.env ?? {}), ...Object.values(s.headers ?? {}), ...(s.url !== undefined ? [s.url] : [])]
+    .flatMap((v) => [...v.matchAll(PLACEHOLDER_REF)].map((m) => m[0])))];
+}
+
+/** `opts.allowPlaceholders`: keep entries that still carry a `<…>` hole (a LISTING wants to show them, marked);
+ *  the loader leaves it off and such an entry is skipped with a warning naming the hole. */
+export function parseConfigFile(path: string, warnings: string[], envSource: Record<string, string | undefined> = process.env, opts: { allowPlaceholders?: boolean } = {}): McpServerConfig[] {
   if (!existsSync(path)) return [];
   let text: string;
   try {
@@ -176,7 +185,7 @@ export function parseConfigFile(path: string, warnings: string[], envSource: Rec
   if (json.mcpServers !== undefined) {
     if (isRecord(json.mcpServers)) {
       for (const [name, raw] of Object.entries(json.mcpServers)) {
-        const cfg = normalizeEntry(name, raw, path, warnings, envSource);
+        const cfg = normalizeEntry(name, raw, path, warnings, envSource, opts);
         if (cfg) out.push(cfg);
       }
     } else warnings.push(`${path}: "mcpServers" is not an object; ignored`);
@@ -189,7 +198,7 @@ export function parseConfigFile(path: string, warnings: string[], envSource: Rec
           warnings.push(`${path}: servers[] entry without a name; skipped`);
           continue;
         }
-        const cfg = normalizeEntry(name, raw, path, warnings, envSource);
+        const cfg = normalizeEntry(name, raw, path, warnings, envSource, opts);
         if (cfg) out.push(cfg);
       }
     } else warnings.push(`${path}: "servers" is not an array; ignored`);

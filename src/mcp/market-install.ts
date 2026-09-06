@@ -9,10 +9,11 @@
 
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { isRecord, mcpConfigFiles, normalizeEntry, parseConfigFile, type McpServerConfig } from "./config.ts";
+import { isRecord, mcpConfigFiles, normalizeEntry, parseConfigFile, placeholderHoles, type McpServerConfig } from "./config.ts";
 import type { EnvSpec, MarketEntry, MarketInstall } from "./market.ts";
 import { installLabel } from "./market.ts";
 import { mcpTrustStatus, trustMcpFile } from "./trust.ts";
+import { localPlanLines, localPrefix, npxPackage, plannedLaunchLabel, type NpxPackage } from "./local-package.ts";
 
 export type McpScope = "user" | "project";
 const SERVER_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
@@ -32,6 +33,11 @@ export interface InstallPlan {
   pending: string[];
   /** where a header placeholder maps back: variable name → header it belongs to */
   headerVars: Record<string, string>;
+  /** install ONCE (mcp/local-package.ts): the npx package this line would run, and the shared prefix npm
+   *  puts it in. Set only when the human asked for it — the default plan is today's npx line. The launch
+   *  line written to the file is then `node <bin>`, known after npm has run, so fillPlan takes it as an
+   *  argument instead of reading it from `install`. */
+  local?: { pkg: NpxPackage; prefix: string };
 }
 
 /** the server name a registry key gets in mcp.json: its last path segment, lowercased, unsafe runs → "-" */
@@ -44,7 +50,17 @@ export function defaultServerName(key: string): string {
 /** env-variable-safe spelling of a header name: `X-Api-Key` → `X_API_KEY` */
 function headerVar(name: string): string { return name.toUpperCase().replace(/[^A-Z0-9_]/g, "_").replace(/^[0-9]/, "_$&"); }
 
-export interface PlanOptions { scope: McpScope; cwd: string; home: string; /** which of entry.installs (default: the first) */ pick?: number; /** override the mcp.json name */ name?: string }
+export interface PlanOptions {
+  scope: McpScope; cwd: string; home: string;
+  /** which of entry.installs (default: the first) */
+  pick?: number;
+  /** override the mcp.json name */
+  name?: string;
+  /** install the npx package once and launch it with node (the human said yes to the offer). An error when
+   *  the chosen form is not a plain `npx <package>` line — silently falling back to npx would write a plan
+   *  the human did not approve. */
+  local?: boolean;
+}
 
 export function planInstall(entry: MarketEntry, opts: PlanOptions): InstallPlan | { error: string } {
   if (entry.installs.length === 0) return { error: `${entry.key} lists nothing rovecode can launch or connect to (no stdio package, no streamable-http remote)` };
@@ -55,6 +71,12 @@ export function planInstall(entry: MarketEntry, opts: PlanOptions): InstallPlan 
   if (!SERVER_NAME.test(name)) return { error: `"${name}" is not a usable server name (lowercase letters, digits, . _ -)` };
   const files = mcpConfigFiles(opts.cwd, opts.home);
   const file = opts.scope === "project" ? files.project : files.user!;
+  let local: InstallPlan["local"];
+  if (opts.local === true) {
+    const pkg = npxPackage(install);
+    if (pkg === undefined) return { error: `${entry.key} cannot be installed once: its launch line is not a plain \`npx <package>\` (${installLabel(install)}) — drop --local to write it as it is` };
+    local = { pkg, prefix: localPrefix(opts.home) };
+  }
   const asks: EnvSpec[] = [], headerVars: Record<string, string> = {};
   if (install.kind === "stdio") {
     for (const e of install.env) {
@@ -74,7 +96,7 @@ export function planInstall(entry: MarketEntry, opts: PlanOptions): InstallPlan 
       }
     }
   }
-  return { entry, install, scope: opts.scope, file, name, asks, pending: install.kind === "stdio" ? install.pending : [], headerVars };
+  return { entry, install, scope: opts.scope, file, name, asks, pending: install.kind === "stdio" ? install.pending : [], headerVars, ...(local ? { local } : {}) };
 }
 
 /** One `pending` fragment → the argv words it contributes. A fragment is literal words followed by one
@@ -91,8 +113,10 @@ export function pendingWords(fragment: string, answer?: string): string[] {
 }
 
 /** the raw mcp.json entry, with answers in place. Secrets: a value in the USER file, `${NAME}` in a
- *  PROJECT file (and `${NAME}` whenever the answer is empty, so a later `export NAME=…` completes it) */
-export function fillPlan(plan: InstallPlan, answers: Record<string, string>): Record<string, unknown> {
+ *  PROJECT file (and `${NAME}` whenever the answer is empty, so a later `export NAME=…` completes it).
+ *  `launch` replaces the entry's own command + args — the install-once path passes `node <bin>` here once
+ *  npm has put the bin on disk (local-package.ts localLaunch); a plan without `local` never sets it. */
+export function fillPlan(plan: InstallPlan, answers: Record<string, string>, launch?: { command: string; args: string[] }): Record<string, unknown> {
   const ref = (spec: EnvSpec): string | undefined => {
     const v = answers[spec.name];
     if (v !== undefined && v.length > 0 && !(spec.secret && plan.scope === "project")) return v;
@@ -112,7 +136,8 @@ export function fillPlan(plan: InstallPlan, answers: Record<string, string>): Re
     // prompt, `--yes` did not stop), as the placeholder itself. Dropping them, which is what this did
     // first, wrote a server that could never start and a note pointing at a line that was not there.
     const positional = install.pending.flatMap((p) => pendingWords(p, answers[p]));
-    return { command: install.command, args: [...install.args, ...positional], ...(Object.keys(env).length ? { env } : {}) };
+    const line = launch ?? { command: install.command, args: install.args };
+    return { command: line.command, args: [...line.args, ...positional], ...(Object.keys(env).length ? { env } : {}) };
   }
   const headers: Record<string, string> = {};
   for (const h of install.headers) {
@@ -151,7 +176,10 @@ export function describePlan(plan: InstallPlan, asking: "prompt" | "env" = "prom
     `  publisher  ${entry.publisher ?? "unknown"}`,
   ];
   if (entry.repository) lines.push(`  repo       ${entry.repository}`);
-  lines.push(install.kind === "stdio" ? `  runs       ${installLabel(install)}` : `  connects   ${install.url}`);
+  // install-once: the launch line the file will hold is `node <bin>`, and the rows under it say — in so many
+  // words — that a package manager runs and code lands on this machine. That is the plan being approved.
+  if (plan.local) lines.push(`  runs       ${plannedLaunchLabel(plan.local.pkg, plan.local.prefix)}`, ...localPlanLines(plan.local.pkg, plan.local.prefix));
+  else lines.push(install.kind === "stdio" ? `  runs       ${installLabel(install)}` : `  connects   ${install.url}`);
   const envNames = install.kind === "stdio" ? install.env : [];
   for (const e of envNames) {
     const how = e.default !== undefined ? `= ${e.default}` : plan.asks.includes(e) ? asked(e.secret).replace("NAME", e.name) : "(optional, left unset)";
@@ -225,17 +253,33 @@ export function serverLine(s: McpServerConfig): string {
   const what = s.transport === "stdio" ? [s.command, ...(s.args ?? [])].join(" ") : s.url ?? "";
   const env = s.env && Object.keys(s.env).length ? `  env ${Object.keys(s.env).join(", ")}` : "";
   const headers = s.headers && Object.keys(s.headers).length ? `  headers ${Object.keys(s.headers).join(", ")}` : "";
-  return `${s.name.padEnd(24)} ${s.transport.padEnd(5)} ${what}${env}${headers}${s.enabled === false ? "  (disabled)" : ""}`;
+  // an entry the loader will skip until a hand edits it says so on its own line — it is configured, not launchable
+  const holes = placeholderHoles(s);
+  const fill = holes.length ? `  (fill in ${holes.join(", ")})` : "";
+  return `${s.name.padEnd(24)} ${s.transport.padEnd(5)} ${what}${env}${headers}${fill}${s.enabled === false ? "  (disabled)" : ""}`;
 }
 
-/** every configured server with the scope it comes from, most local last (what the runtime would load) */
-export function configuredServers(cwd: string, home: string): { scope: McpScope | "harvest"; file: string; server: McpServerConfig }[] {
+/** every configured server with the scope it comes from, most local last — what the files SAY, which is
+ *  more than what the runtime would load: an entry still carrying a `<…>` placeholder is kept (serverLine
+ *  marks it), because the person who was told "fill in the directory after the install" and typed the
+ *  command the docs point at must not be told they have nothing. The loader's own view (skipping such an
+ *  entry with a warning) is loadMcpConfig. `warnings` collects what parsing had to say — an unreadable
+ *  file, invalid JSON, a nameless entry — for the caller to show; it used to be discarded here. */
+export function configuredServers(cwd: string, home: string, warnings: string[] = []): { scope: McpScope | "harvest"; file: string; server: McpServerConfig }[] {
   const files = mcpConfigFiles(cwd, home);
-  const warnings: string[] = [];
   const all = new Proxy({}, { get: () => "set" }) as Record<string, string>; // list what is configured, not what is launchable right now
   const out: { scope: McpScope | "harvest"; file: string; server: McpServerConfig }[] = [];
   for (const [scope, file] of [["user", files.user!], ["harvest", files.harvest], ["project", files.project]] as const) {
-    for (const server of parseConfigFile(file, warnings, all)) out.push({ scope, file, server });
+    for (const server of parseConfigFile(file, warnings, all, { allowPlaceholders: true })) out.push({ scope, file, server });
   }
   return out;
+}
+
+/** The `pending` fragments of a plan whose placeholder is STILL in the written entry — nobody answered for
+ *  them at the prompt (no terminal, or an empty answer). What the closing line of an install must name, and
+ *  only that: a question answered at the prompt must not leave the install telling you to go and edit a line
+ *  that now holds your answer. */
+export function unfilledPending(plan: InstallPlan, raw: Record<string, unknown>): string[] {
+  const args = Array.isArray(raw.args) ? (raw.args as unknown[]) : [];
+  return plan.pending.filter((p) => pendingWords(p).some((w) => /^<.*>$/.test(w) && args.includes(w)));
 }

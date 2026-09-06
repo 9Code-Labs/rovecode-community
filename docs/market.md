@@ -10,7 +10,7 @@ rovecode market search [query] [--kind mcp|skill|plugin]
 rovecode market info <id>
 rovecode market docs <id>
 rovecode market install <id | kind:id | git-url | npm-package> [--project] [--as name] [--pick N]
-                        [--ref <branch|tag|commit>] [--yes] [--force]
+                        [--ref <branch|tag|commit>] [--yes] [--force] [--local | --no-local]
 rovecode market remove <id | kind:id>
 rovecode market list [--all] [--kind mcp|skill|plugin]
 rovecode market update [id] [--all] [--yes] [--yes-plugins]
@@ -48,6 +48,12 @@ Installing is always four steps in this order, and none can be skipped:
 4. **Ask, then write** — `y/N` on a terminal, `--yes` in a script. Without a TTY and without `--yes`
    nothing is written; you still see the plan, which makes `rovecode market install x` safe to run just to
    read what it would do.
+
+For an MCP server that would start through `npx`, a terminal is asked one thing *before* step 2 — install the
+package once (`node`, ~0.4 s per start) or keep the npx line (as today, ~2 s per start)? — and the plan in
+step 3 is the one that runs. `--local` / `--no-local` answer it up front; `--yes`, `--json` and no terminal keep
+npx without asking. The approval in step 4 is still the gate: npm runs only after it. The whole trade, the
+numbers behind it and what goes on record are in [mcp-market.md](mcp-market.md#install-once-instead-of-npx-at-every-start---local).
 
 `--dry-run` stops after step 3 and **exits 0**. That is the difference from just leaving `--yes` off: no
 TTY and no `--yes` also shows you the plan, but exits 1, because it is reporting a refusal — correct as a

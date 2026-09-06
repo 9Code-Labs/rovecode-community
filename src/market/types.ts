@@ -203,6 +203,13 @@ export type InstallOutcome =
       envNames: string[];
       /** project scope only: whether the write was recorded as trusted */
       trusted?: boolean;
+      /** MCP only: `<…>` placeholders the written entry still carries because nobody answered for them; the
+       *  loader skips the server until a hand replaces them, so `next` says that instead of "restart" */
+      fillIn?: string[];
+      /** MCP install-once only (mcp/local-package.ts): the package npm put on disk, as recorded in
+       *  installed.json — `missing` names anything the record could not carry (an integrity hash the lockfile
+       *  did not supply), so a caller can say so rather than print a clean line over a hole */
+      package?: { name: string; version: string; prefix: string; bin: string; integrity?: string; missing?: string[] };
       /** what the human must do for it to take effect ("restart rovecode — servers are read once per process") */
       next?: string }
   | { ok: false; error: string };

@@ -88,19 +88,23 @@ test("cli: search lists curated then registry rows; info names publisher, the ex
 
 test("cli: on a terminal add shows the plan, asks y/N, asks the secret MASKED by name, writes the value into the user file and never echoes it; a second add refuses without --force; list and remove round-trip", async () => {
   const cwd = tmp("rovecode-mcpc-cwd-"), home = tmp("rovecode-mcpc-home-");
-  const no = cli(cwd, home, { tty: true, plain: ["n"], secret: "s3cret" });
+  // An npx server on a terminal is asked ONE thing before the plan — install the package once, or npx as
+  // today (the offer, mcp/local-package.ts) — and the plan it then reads is the one that runs. "n" keeps npx.
+  // The approval itself is unchanged and comes after the plan; the offer never stands in for it.
+  const no = cli(cwd, home, { tty: true, plain: ["n", "n"], secret: "s3cret" });
   expect(await no.run("add io.github.acme/widgets")).toBe(1);
-  expect(no.prompts).toEqual(["plain:install? [y/N] "]);
+  expect(no.prompts).toEqual(["plain:install widgets-mcp@1.2.0 once? [y/N] ", "plain:install? [y/N] "]);
   expect(no.out.at(-1)).toBe("nothing written");
   expect(existsSync(join(home, "mcp.json"))).toBe(false);
-  // the second plain answer is the `pending` one: a required argument only the human knows, asked in the
+  // the third plain answer is the `pending` one: a required argument only the human knows, asked in the
   // clear right after the masked secret rather than left as a hole in the file
-  const yes = cli(cwd, home, { tty: true, plain: ["y", "/srv/data"], secret: "s3cret" });
+  const yes = cli(cwd, home, { tty: true, plain: ["n", "y", "/srv/data"], secret: "s3cret" });
   expect(await yes.run("add io.github.acme/widgets")).toBe(0);
-  // the plan came BEFORE the question, the secret prompt named the variable, and stdout never saw the value
+  // the offer came first, the plan BEFORE the yes, the secret prompt named the variable, and stdout never saw the value
+  expect(yes.out.indexOf("Install it once instead?")).toBeLessThan(yes.out.indexOf("  runs       npx -y widgets-mcp@1.2.0 --mode fast"));
   expect(yes.out.indexOf("  runs       npx -y widgets-mcp@1.2.0 --mode fast")).toBeLessThan(yes.out.indexOf(`added "widgets" → ${join(home, "mcp.json")}`));
   expect(yes.out).toContain("  env        WIDGET_TOKEN (asked, masked, never shown)");
-  expect(yes.prompts).toEqual(["plain:install? [y/N] ", "secret:WIDGET_TOKEN (API token): ", "plain:--root <value>: "]);
+  expect(yes.prompts).toEqual(["plain:install widgets-mcp@1.2.0 once? [y/N] ", "plain:install? [y/N] ", "secret:WIDGET_TOKEN (API token): ", "plain:--root <value>: "]);
   expect([...yes.out, ...yes.err].join("\n")).not.toContain("s3cret");
   const user = JSON.parse(readFileSync(join(home, "mcp.json"), "utf8")) as { mcpServers: Record<string, { env: Record<string, string> }> };
   expect(user.mcpServers.widgets!.env).toEqual({ WIDGET_TOKEN: "s3cret" });
@@ -115,7 +119,11 @@ test("cli: on a terminal add shows the plan, asks y/N, asks the secret MASKED by
   expect(await again.run("add io.github.acme/widgets --yes --force")).toBe(0);
   const lst = cli(cwd, home);
   expect(await lst.run("list")).toBe(0);
-  expect(lst.out).toEqual([expect.stringMatching(/^user\s+widgets\s+stdio\s+npx -y widgets-mcp@1\.2\.0 --mode fast --root \/srv\/data  env WIDGET_TOKEN$/)]); // names, never values
+  expect(lst.out).toEqual([
+    expect.stringMatching(/^user\s+widgets\s+stdio\s+npx -y widgets-mcp@1\.2\.0 --mode fast --root \/srv\/data  env WIDGET_TOKEN$/), // names, never values
+    // an npx row gets the install-once OFFER under the list — a sentence and a command, never a rewrite
+    expect.stringMatching(/^1 server starts through npx, which re-resolves the package at every start \(~2 s each\): widgets\. To start in ~0\.4 s, reinstall with `rovecode mcp add <name> --local --force`.*Nothing changes until you do\.$/),
+  ]);
   expect(await lst.run("remove widgets --project")).toBe(1);
   expect(await lst.run("remove widgets")).toBe(0);
   expect(await lst.run("remove widgets")).toBe(1);
@@ -152,8 +160,12 @@ test("tui /mcp: the palette lists the market under a title, a second pick choose
   expect(ok.notes.some((n) => n.includes("set GITHUB_PAT in your environment") && n.includes("rovecode mcp add github"))).toBe(true);
   // deny: the card was shown, the file untouched
   const home2 = tmp("rovecode-mcpt-home-");
-  const no = fakeRenderer(["memory"], "deny");
+  // memory is an npx server, so one more pick comes first: install once, or npx as today. "npx" = today's line.
+  const no = fakeRenderer(["memory", "npx"], "deny");
   await tuiMcp({ renderer: no.renderer, cwd, home: home2, market: { offline: true } }, "memory");
+  expect(no.pickCalls[1]!.title).toBe("Memory · how to start it");
+  expect(no.pickCalls[1]!.items.map((i) => i.value)).toEqual(["local", "npx"]);
+  expect(no.pickCalls[1]!.items[0]!.description).toContain("runs npm install now");
   expect(no.approvals.length).toBe(1);
   expect(no.approvals[0]!.preview).toBe("memory ← npx -y @modelcontextprotocol/server-memory");
   expect(existsSync(join(home2, "mcp.json"))).toBe(false);
@@ -171,7 +183,7 @@ test("tui /mcp: the palette lists the market under a title, a second pick choose
   expect(c7).toEqual({ type: "http", url: "https://mcp.context7.com/mcp" });
   expect(opt.notes.some((n) => n.includes("in your environment"))).toBe(false);
   // --project lands in the repo file
-  const pr = fakeRenderer(["memory"], "once");
+  const pr = fakeRenderer(["memory", "npx"], "once");
   await tuiMcp({ renderer: pr.renderer, cwd, home: home2, market: { offline: true } }, "memory --project");
   expect(existsSync(join(cwd, ".rovecode", "mcp.json"))).toBe(true);
   expect(pr.approvals[0]!.detail).toContain(`  writes     ${join(cwd, ".rovecode", "mcp.json")}  as "memory"`);

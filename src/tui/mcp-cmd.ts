@@ -14,6 +14,8 @@ import { installLabel, searchMarket, type MarketDeps, type MarketEntry } from ".
 import { describePlan, fillPlan, namesWritten, planInstall, serverLine, writeServer, type McpScope } from "../mcp/market-install.ts";
 import { parseConfigFile } from "../mcp/config.ts";
 import { mcpTrustStatus, projectMcpFiles, trustMcpFile } from "../mcp/trust.ts";
+import { installLocalPackage, localLaunch, npxPackage } from "../mcp/local-package.ts";
+import { buildRecord, recordInstall } from "../market/manifest.ts";
 import { rovecodeHome } from "../providers/auth.ts";
 
 /** the subcommands the sextant offers after `/mcp ` (Enter completes the word, the name comes next) */
@@ -43,6 +45,8 @@ export interface McpCmdCtx {
   home?: string;
   /** registry access — tests inject a fixture fetch or `offline` */
   market?: MarketDeps;
+  /** how `npm install` runs for the install-once pick — tests inject one that writes a fake node_modules */
+  spawn?: import("../mcp/local-package.ts").Spawn;
 }
 
 const clip = (s: string, n: number): string => (s.length > n ? s.slice(0, n - 1) + "…" : s);
@@ -73,18 +77,49 @@ export async function cmdMcp(ctx: McpCmdCtx, arg: string): Promise<void> {
     if (how === null) return;
     pick = Number(how);
   }
-  const plan = planInstall(entry, { scope, cwd: ctx.cwd, home, pick });
+  // the install-once offer (mcp/local-package.ts) as one more pick, BEFORE the plan: the card the human
+  // approves is then the plan that runs. Esc here writes nothing; "as today" is the npx line unchanged.
+  const chosen = entry.installs[pick];
+  const offer = chosen !== undefined ? npxPackage(chosen) : undefined;
+  let local = false;
+  if (offer !== undefined) {
+    const how = await renderer.pickOne([
+      { value: "local", label: `install once — node starts it in ~0.4 s`, description: `runs npm install now: ${offer.spec}'s code lands under ~/.rovecode/mcp (typically 20–30 MB, one time); no network needed to start` },
+      { value: "npx", label: `run through npx at every start — as today`, description: `~2 s per start, re-resolves the package and asks the npm registry each time; nothing installed now` },
+    ], `${entry.title ?? entry.key} · how to start it`);
+    if (how === null) return;
+    local = how === "local";
+  }
+  const plan = planInstall(entry, { scope, cwd: ctx.cwd, home, pick, ...(local ? { local: true } : {}) });
   if ("error" in plan) { renderer.addSystemNote(`mcp: ${plan.error}`, "warn"); return; }
   // the approval card: title = what is being done, preview = the one line that runs, detail = the whole plan
-  const answer = await renderer.askApproval("mcp add", `${plan.name} ← ${installLabel(plan.install)}`, describePlan(plan, "env").join("\n"));
+  // (for install-once the detail says, in words, that npm runs and code lands on this machine)
+  const answer = await renderer.askApproval("mcp add", `${plan.name} ← ${plan.local ? `node ${plan.local.pkg.spec} (installed once)` : installLabel(plan.install)}`, describePlan(plan, "env").join("\n"));
   if (answer === "deny") { renderer.addSystemNote("mcp: nothing written"); return; }
+  // install-once: npm first; only its success reaches the file, and what landed goes on record
+  let launch: { command: string; args: string[] } | undefined;
+  let pkgRecord: NonNullable<Parameters<typeof buildRecord>[1]["package"]> | undefined;
+  if (plan.local) {
+    renderer.addSystemNote(`mcp: npm install ${plan.local.pkg.spec} → ${plan.local.prefix} …`);
+    const lr = await installLocalPackage(plan.local.pkg, plan.local.prefix, ctx.spawn ? { spawn: ctx.spawn } : {});
+    if (!lr.ok) { renderer.addSystemNote(`mcp: ${lr.error} — nothing written`, "error"); return; }
+    launch = localLaunch(lr.pkg, plan.local.pkg.rest);
+    pkgRecord = { name: lr.pkg.name, version: lr.pkg.version, prefix: plan.local.prefix, bin: lr.pkg.bin, missing: lr.pkg.missing,
+      ...(lr.pkg.integrity !== undefined ? { integrity: lr.pkg.integrity } : {}), ...(lr.pkg.resolved !== undefined ? { resolved: lr.pkg.resolved } : {}) };
+  }
   let trusted: boolean | undefined;
-  const raw = fillPlan(plan, {}); // no answers: required asks become ${NAME}, optional ones are left out — the file works without them
+  const raw = fillPlan(plan, {}, launch); // no answers: required asks become ${NAME}, optional ones are left out — the file works without them
   try {
     // the card just approved this exact content: a project file is trusted as written (mcp/trust.ts)
     trusted = writeServer(plan.file, plan.name, raw, scope === "project" ? { trustHome: home } : {}).trusted;
   } catch (e) { renderer.addSystemNote(`mcp: ${e instanceof Error ? e.message : String(e)}`, "error"); return; }
   renderer.addSystemNote(`mcp: added "${plan.name}" → ${plan.file}${trusted === true ? " (trusted as written)" : ""} — restart me to connect (servers are read once per process)`);
+  if (pkgRecord) {
+    recordInstall(buildRecord({ kind: "mcp", id: entry.key, source: entry.source, ...(entry.version !== undefined ? { version: entry.version } : {}) },
+      { scope, target: plan.file, package: pkgRecord, installedBy: "mcp add" }), { cwd: ctx.cwd, home });
+    renderer.addSystemNote(`mcp: installed ${pkgRecord.name} ${pkgRecord.version} once → ${plan.local!.prefix}${pkgRecord.integrity !== undefined ? " (integrity recorded in installed.json)" : ""}`);
+    if (pkgRecord.missing?.length) renderer.addSystemNote(`mcp: record incomplete: ${pkgRecord.missing.join("; ")}`, "warn");
+  }
   if (trusted === false) renderer.addSystemNote("mcp: that file already held servers you have not approved, so it is NOT trusted yet — /mcp trust shows them", "warn");
   // only the names the FILE now refers to: an optional ask that was left out is not something to go and set
   const named = namesWritten(plan, raw);
