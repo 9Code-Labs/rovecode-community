@@ -3,7 +3,7 @@
  *  beside it (ADR-002 cap): info-cmd.ts (/help /status /cost /skills /memory /export /todos
  *  /tasks), session-cmd.ts (/new /rewind /sessions /resume), checkpoints-cmd.ts, modes-cmd.ts. */
 
-import { agentLoop } from "../core/loop.ts";
+import { agentLoop, outstandingClause } from "../core/loop.ts";
 import { resetTurnFailureCount } from "../memory/tools.ts";
 import { createRuntime } from "../cli/runtime.ts";
 import { SandboxConfigError } from "../core/sandbox-config.ts";
@@ -490,6 +490,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
           lastView?.done();
           if (ev.status === "error") renderer.addSystemNote(ev.summary, "error");
           else if (ev.status !== "done") renderer.addSystemNote(`run ${ev.status}: ${ev.summary}`, "warn");
+          else if (ev.outstanding) { const c = outstandingClause(ev.outstanding); if (c !== null) renderer.addSystemNote(`done · ${c}`, "warn"); } // "done" ≠ finished: say what was left (core/loop.ts)
           // if the model produced no streaming deltas, surface the final text
           if (views.size === 0 && ev.status === "done" && ev.summary) {
             const v = renderer.beginAssistant(); v.append(ev.summary); v.done();

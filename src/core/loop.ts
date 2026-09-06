@@ -6,7 +6,7 @@
 
 import { randomUUID } from "node:crypto";
 import type {
-  AgentDefinition, Message, MessagePart, RunEvent, RunConfig, StreamEvent, StreamFn,
+  AgentDefinition, Message, MessagePart, RunEvent, RunConfig, RunOutstanding, StreamEvent, StreamFn,
   ModelRef, ToolCallPart, AgentVars, ToolContext, ToolOutput, ToolSchema,
   StopReason, TokenUsage,
 } from "./types.ts";
@@ -134,6 +134,7 @@ async function* runLoop(
   yield { type: "run_start", runId, sessionId: deps.store.id, goal };
   const model: ModelRef = def.model ?? { provider: "mock", model: "default" };
   const history: Message[] = [...deps.store.messages()];
+  const runStart = history.length; // the finish check reads this run's transcript only — an aborted call from the last run is not this run's failure
   const userMsg: Message = {
     id: randomUUID(), role: "user",
     parts: [{ kind: "text", text: goal }],
@@ -162,6 +163,8 @@ async function* runLoop(
   const startedAt = clock();
   // running spend for RunConfig.maxCostUsd (checked at the turn boundary below)
   let spentUsd = 0, unpricedTurns = 0;
+  // the finish check fires at most once per run (see the "done" exit below)
+  let nudged = false;
 
   for (let turn = 1; turn <= cfg.maxTurns; turn++) {
     // --- abort check: an abort that landed during the previous batch (or before
@@ -332,7 +335,32 @@ async function* runLoop(
         }
         continue;
       }
-      yield { type: "run_end", status: "done", summary: partsText(parts) };
+      // --- the "done" exit. This is the ONLY path to status "done", and until now its whole condition was
+      // "this turn had no tool call" — the model's silence, ratified as completion. A write that failed, an
+      // ask_user nobody answered, a run that changed nothing: all ended here as "done", exit 0, and no
+      // surface could tell them from finished work (found 2026-09-06: "Done — I created src/a.ts" after the
+      // write was rejected). Two things now happen here, and they are separate:
+      //   1. REPRESENT: run_end carries `outstanding` — what the transcript says was left (assessOutstanding).
+      //      Unconditional, so a surface can always say "done · 1 tool call failed in the last turn".
+      //   2. NUDGE, once per run, on evidence the transcripts actually contain (a failed tool call in the last
+      //      turn, an unanswered question — never "no files changed", which is what every answered question
+      //      looks like): one user-role turn naming exactly what is open and asking the model to finish it or
+      //      say why it is not needed. Both are acceptable answers. The next silence is accepted whatever it
+      //      says: a loop that will not stop is worse than one that stops early. The nudge is a turn like any
+      //      other — the turn, clock and cost ceilings above apply to it, so a spent budget ends as "budget".
+      const outstanding = assessOutstanding(history.slice(runStart), cfg.todoState?.() ?? null, nudged);
+      if (cfg.finishCheck !== false && !nudged && (outstanding.failed.length > 0 || outstanding.unansweredAsk)) {
+        nudged = true;
+        const text = finishCheckText(outstanding);
+        const fm: Message = { id: randomUUID(), role: "user", parts: [{ kind: "text", text }], parentId: history.at(-1)?.id ?? null, createdAt: Date.now() };
+        deps.store.append(fm); history.push(fm);
+        yield { type: "steer", text };
+        continue;
+      }
+      // attached only when there IS something to say: a run that answered a question (no files, no failures) ends
+      // byte-identical to before — "no files changed" is what every answered question looks like, not a finding
+      const notable = outstanding.failed.length > 0 || outstanding.unansweredAsk || (outstanding.todosOpen ?? 0) > 0 || outstanding.nudged;
+      yield { type: "run_end", status: "done", summary: partsText(parts), ...(notable ? { outstanding } : {}) };
       return;
     }
 
@@ -383,6 +411,73 @@ async function* runLoop(
     if (runAc.signal.aborted) { yield { type: "run_end", status: "stopped", summary: "run aborted" }; return; }
   }
   yield { type: "run_end", status: "budget", summary: `max turns (${cfg.maxTurns}) reached` };
+}
+
+/** What the transcript says the run left behind, read at the "done" exit. `failed`/`unansweredAsk` look at
+ *  the LAST turn that had tool calls — the one right before the final text — because that is the failure
+ *  the model walked away from; an earlier failure it went on to retry is not outstanding. `writes` counts
+ *  successful edit/write calls over the whole run. Pure over the history: no disk, no model. */
+export function assessOutstanding(history: readonly Message[], todos: { open: number; total: number } | null, nudged: boolean): RunOutstanding {
+  type Call = Extract<MessagePart, { kind: "tool_call" }>;
+  const results = new Map<string, { ok: boolean; output: string }>();
+  for (const m of history) if (m.role === "tool") for (const p of m.parts) if (p.kind === "tool_result") results.set(p.callId, { ok: p.ok, output: p.output });
+  const describe = (c: Call, output: string): string => `${c.tool}: ${(output.split("\n")[0] ?? "").slice(0, 160)}`;
+  const pathOf = (c: Call): string | null => { const a = c.args as { path?: unknown; file_path?: unknown } | null; const v = a?.path ?? a?.file_path; return typeof v === "string" ? v : null; };
+  let writes = 0;
+  let lastCalls: Call[] = [];
+  // a file the model tried to change and never managed to: a failed edit/write to a path with no later successful
+  // edit/write to the same path. Found in the scripted proof — write fails, todo_write marks the item completed,
+  // "Done": the failure was one turn before the last, masked by bookkeeping, and "last turn only" let it through
+  const unrecovered = new Map<string, string>();
+  for (const m of history) {
+    if (m.role !== "assistant") continue;
+    const calls = m.parts.filter((p): p is Call => p.kind === "tool_call");
+    if (calls.length === 0) continue;
+    lastCalls = calls;
+    for (const c of calls) {
+      if (c.tool !== "edit" && c.tool !== "write") continue;
+      const r = results.get(c.id); const path = pathOf(c) ?? c.id;
+      if (r?.ok === true) { writes++; unrecovered.delete(path); }
+      else if (r && !harnessVerdict(r.output)) unrecovered.set(path, describe(c, r.output));
+    }
+  }
+  const failed = [...unrecovered.values()];
+  let unansweredAsk = false;
+  for (const c of lastCalls) {
+    const r = results.get(c.id);
+    if (r === undefined || r.ok) continue;
+    if (c.tool === "ask_user") { unansweredAsk = true; continue; }
+    if (harnessVerdict(r.output)) continue;
+    const d = describe(c, r.output);
+    if (!failed.includes(d)) failed.push(d);
+  }
+  return { failed, unansweredAsk, writes, ...(todos && todos.total > 0 ? { todosOpen: todos.open, todosTotal: todos.total } : {}), nudged };
+}
+/** ok:false results that are the harness's or the user's decision, not the model's failure: a permission denial,
+ *  the loop guard's stub (it TOLD the model to stop repeating), an abort. Nudging "continue" past any of these would
+ *  argue with the thing that stopped the call. */
+function harnessVerdict(output: string): boolean {
+  return output.startsWith("Permission denied") || output.includes("loop guard: blocked") || output.startsWith(ABORTED_TOOL_RESULT);
+}
+export function finishCheckText(o: RunOutstanding): string {
+  const lines = ["<finish-check>", "You stopped, but this run is not in a finished state — this is a check by the harness, not a message from the user."];
+  for (const f of o.failed) lines.push(`- a tool call failed and nothing after it recovered from that: ${f}`);
+  if (o.unansweredAsk) lines.push("- your question to the user was not answered (there is no one to answer it in this run); decide with your best judgment instead of waiting");
+  if ((o.todosOpen ?? 0) > 0) lines.push(`- your own todo list still has ${o.todosOpen} of ${o.todosTotal} items open`);
+  lines.push("Either continue and finish the work now, or say plainly what is left undone and why it is not needed. This check runs once per run; your next reply ends it either way.", "</finish-check>");
+  return lines.join("\n");
+}
+
+/** The one clause a surface appends to "done" — null when there is nothing a person needs to act on.
+ *  "no files changed" is deliberately NOT here: every answered question looks like that, and a warning that
+ *  fires on "what MCPs are configured" trains people to stop reading it. Headless text mode adds it itself,
+ *  where a one-shot run that changed nothing is the whole complaint. */
+export function outstandingClause(o: RunOutstanding): string | null {
+  const parts: string[] = [];
+  if (o.failed.length > 0) parts.push(`${o.failed.length} failed tool call${o.failed.length === 1 ? "" : "s"} not recovered (${[...new Set(o.failed.map((f) => f.split(":")[0]))].join(", ")})`);
+  if (o.unansweredAsk) parts.push("its question to you went unanswered");
+  if ((o.todosOpen ?? 0) > 0) parts.push(`${o.todosOpen} of ${o.todosTotal} items still open`);
+  return parts.length > 0 ? parts.join(" · ") : null;
 }
 
 function appendToolResult(store: SessionStore, history: Message[], callId: string, out: { ok: boolean; output: string }): void {

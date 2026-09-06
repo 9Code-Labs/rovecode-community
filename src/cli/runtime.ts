@@ -611,10 +611,20 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
       const n = { input: usage.input, output: usage.output, cacheRead: usage.cacheRead ?? 0, cacheWrite: usage.cacheWrite ?? 0 };
       return costUsdTiered(n, ratesFor(info, n.input + n.cacheRead + n.cacheWrite));
     };
+    // the finish check (core/loop.ts "done" exit): on by default, ROVECODE_FINISH_CHECK=0 is the escape hatch;
+    // the todo state is read from disk at the exit so a list the model wrote this run is what gets reported
+    const todoState = (): { open: number; total: number } | null => {
+      try {
+        const items = loadTodos(join(sessionsDir, activeStore.id)).items;
+        return items.length === 0 ? null : { open: items.filter((i) => i.status !== "completed").length, total: items.length };
+      } catch { return null; }
+    };
     return (activeCfg = {
     maxTurns: runLimits.maxTurns ?? positiveInt(process.env.ROVECODE_MAX_TURNS) ?? 60,
     ...(maxSeconds !== undefined ? { maxSeconds } : {}),
     ...(maxCostUsd !== undefined ? { maxCostUsd, priceUsd } : {}),
+    finishCheck: process.env.ROVECODE_FINISH_CHECK !== "0",
+    todoState,
     // the history budget follows the model's window: a flat 200k spent a fifth of a 1M window and
     // overflowed a 128k one. ROVECODE_CONTEXT_BUDGET overrides; an unknown window keeps the old default.
     contextBudgetTokens: (() => {

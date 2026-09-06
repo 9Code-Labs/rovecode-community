@@ -44,8 +44,8 @@
  *  its 0 done / 1 otherwise, plus 130 for the (newly reachable) aborted run. */
 
 import { format } from "node:util";
-import type { Message, ModelRef, RunEvent, StreamFn } from "../core/types.ts";
-import type { LoopDeps } from "../core/loop.ts";
+import type { Message, ModelRef, RunEvent, RunOutstanding, StreamFn } from "../core/types.ts";
+import { outstandingClause, type LoopDeps } from "../core/loop.ts";
 import type { Runtime } from "./runtime.ts";
 import { costUsd, type PricingRow } from "../core/usage.ts";
 import { ModelCatalog } from "../providers/catalog.ts";
@@ -54,7 +54,7 @@ import { VALUE_FLAGS } from "./dispatch.ts";
 export type OutputMode = "text" | "json" | "ndjson";
 export const OUTPUT_MODES: readonly OutputMode[] = ["text", "json", "ndjson"];
 export type RunEndStatus = Extract<RunEvent, { type: "run_end" }>["status"];
-type RunEnd = { status: RunEndStatus; summary: string };
+type RunEnd = { status: RunEndStatus; summary: string; outstanding?: RunOutstanding };
 
 export interface RunResult {
   status: RunEndStatus;
@@ -306,6 +306,13 @@ export function createOutputSink(mode: OutputMode, opts: OutputSinkOptions): Out
       const exitCode = exitCodeFor(end?.status);
       if (mode === "text") {
         if (end) out.write(`\n${end.summary}\n`);
+        // "done" is the model's silence, not a verdict: one clause says what the transcript says was left
+        // (a failed call never recovered, an unanswered question, open todos). A run that only answered a
+        // question carries no `outstanding` at all and prints exactly the bytes it always did.
+        if (end?.status === "done" && end.outstanding) {
+          const clause = outstandingClause(end.outstanding);
+          if (clause !== null) out.write(`done · ${clause}\n`);
+        }
         return exitCode;
       }
       const result = summarize(
@@ -357,6 +364,9 @@ function summarize(
   const served = assistants.at(-1)?.origin;
   return {
     status: end.status, summary: end.summary, sessionId,
+    // what "done" left behind (core/loop.ts assessOutstanding): failed tool calls in the last turn, an
+    // unanswered ask_user, successful edit/write count, open todos, whether the finish check asked once
+    ...(end.outstanding ? { outstanding: end.outstanding } : {}),
     model: { provider: model.provider, model: model.model },
     origin: served ? { provider: served.provider, model: served.model } : null,
     usage, costUsd: cost,

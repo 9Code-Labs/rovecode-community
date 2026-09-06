@@ -199,7 +199,27 @@ export type RunEvent =
   | { type: "compaction"; strategy: string; trigger?: CompactionTrigger; tokensBefore: number; tokensAfter: number }
   | { type: "turn_end"; turn: number; stopReason: StopReason }
   | { type: "steer"; text: string }
-  | { type: "run_end"; status: "done" | "stopped" | "error" | "budget"; summary: string };
+  /** `outstanding` (status "done" only): what the run left behind when the model stopped talking — absent
+   *  when nothing is notable AND at least one file was written, so a clean run's event is exactly what it
+   *  always was. "done" alone means "the model produced a turn with no tool call"; this field is how a
+   *  surface tells that from "the work is complete" (core/loop.ts assessOutstanding). */
+  | { type: "run_end"; status: "done" | "stopped" | "error" | "budget"; summary: string; outstanding?: RunOutstanding };
+
+/** What a run that ended as "done" left behind. Every field is a fact read from the transcript or the
+ *  session's own todo list — never an interpretation of the model's words. */
+export interface RunOutstanding {
+  /** tool calls of the LAST turn that had any, which failed: `write: Write rejected: …` (first line) */
+  failed: string[];
+  /** that last turn asked the user something and got no answer (headless, declined, or aborted) */
+  unansweredAsk: boolean;
+  /** successful `edit` + `write` calls over the whole run. `bash` may have changed files too; this counts only the two file tools */
+  writes: number;
+  /** the model's own todo list, when it kept one: items not completed / all items */
+  todosOpen?: number;
+  todosTotal?: number;
+  /** the finish check (core/loop.ts) asked once for the work to be finished; this run_end is the answer it got */
+  nudged: boolean;
+}
 
 // ---------- Agent ----------
 
@@ -246,6 +266,14 @@ export interface RunConfig {
    *  asked for) — undefined when the catalog has no price. The runtime binds this to its catalog; without it
    *  maxCostUsd can never trip, which is why buildCfg always sets both together. */
   priceUsd?: (usage: TokenUsage, origin: ModelRef) => number | undefined;
+  /** The finish check (core/loop.ts, at the "done" exit): when the model stops talking right after a failed
+   *  tool call or an unanswered question to the user, ONE continuation turn names what is outstanding and asks
+   *  it to finish or say what is left. Default on; `false` (ROVECODE_FINISH_CHECK=0) turns it off. The
+   *  representation on run_end (`outstanding`) is unconditional — turning this off only stops the nudge. */
+  finishCheck?: boolean;
+  /** the model's own todo list for this session, read at the exit: open / total, or null when it kept none.
+   *  Represented on run_end; it is NOT a nudge trigger (no session on this machine has ever written one). */
+  todoState?: () => { open: number; total: number } | null;
   contextBudgetTokens: number;
   compactionThreshold: number;   // fraction of budget triggering compaction
   /** port #25: history compaction strategy (core/compaction.ts; env ROVECODE_COMPACTION); default head-summarize */

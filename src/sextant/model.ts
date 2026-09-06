@@ -5,6 +5,7 @@
  *  parameter, no Date.now()/timers/process access; `applyEvent` mutates the state in place. */
 
 import { contextHealth } from "../core/usage.ts";
+import { outstandingClause } from "../core/loop.ts";
 import { estimateTokens } from "../core/context.ts";
 import { todoCounts, type TodoItem, type TodoCounts } from "../tools/todo.ts";
 import type { TaskInfo } from "../core/tasks.ts";
@@ -177,7 +178,10 @@ export function makeApplyEvent(hooks: ApplyHooks = {}): ApplyEvent {
         if (ev.status === "done") {
           setActivity(s, "SUCCESS", "done");
           if (!sawText && ev.summary) pushRow(s, { kind: "assistant", text: ev.summary, streaming: false });
-          notify(s, "run done", now, "info", "done");
+          // "done" is the model's silence, not a verdict — one clause says what the transcript left (core/loop.ts)
+          const left = ev.outstanding ? outstandingClause(ev.outstanding) : null;
+          if (left !== null) pushRow(s, { kind: "system", tone: "warn", text: `done · ${left}` });
+          notify(s, left !== null ? `run done · ${left}` : "run done", now, left !== null ? "warn" : "info", "done");
         } else if (ev.status === "error") {
           setActivity(s, "ERROR", "error", now);
           if (ev.summary) pushRow(s, { kind: "system", tone: "error", text: ev.summary });

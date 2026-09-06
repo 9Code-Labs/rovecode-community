@@ -77,6 +77,11 @@ const requestsOf = (r: Rig, prefix: string): Message[][] => r.recorded.filter((x
 
 /** the cmdRun/TUI LoopDeps shape: rt.hooks + rt.guard + rt.cwd threaded, rt.steering as the queue; yolo so
  *  `task start` needs no approver and children inherit allow-all (their edit is allowed — and fails) */
+// These tests count REQUESTS around an edit that fails on a missing file and a model that then stops — exactly the
+// shape the finish check (core/loop.ts, test/unit/finish-check.test.ts) adds one turn to. The subject here is the
+// reflection nudge's isolation between parent and child, so the finish check is off for this file.
+process.env.ROVECODE_FINISH_CHECK = "0";
+
 async function drive(rt: Runtime, stream: StreamFn, goal: string, deadlineMs = 20_000): Promise<RunEvent[]> {
   const events: RunEvent[] = [];
   const def = rt.buildDef({ provider: "mock", model: "default" });

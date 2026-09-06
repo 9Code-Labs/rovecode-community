@@ -214,6 +214,9 @@ const ENV = `env — every ROVECODE_* setting
   ROVECODE_MAX_SECONDS  the same as a wall clock, or "off". Every surface honours it, but only
                     one-shot runs have a DEFAULT (1200 s) — the TUI has no clock unless this sets one
   ROVECODE_MAX_COST   the same in dollars for one run (--max-cost on a one-shot run), or "off"; no default
+  ROVECODE_FINISH_CHECK=0  turn off the once-per-run finish check: when the model stops right after a failed tool
+                    call or an unanswered question, it is asked ONCE to finish or say what is left; the next
+                    reply ends the run either way. "done · …" on run_end still names what was left
   ROVECODE_HOME       credentials + user-scope providers/commands dir (default ~/.rovecode)
 providers: built in — kaesra openai anthropic deepseek groq openrouter ollama lmstudio
             together mistral cerebras fireworks perplexity xai moondream vllm
