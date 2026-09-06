@@ -31,7 +31,12 @@ export interface CliInvocation {
  *  providers/registry.ts parseAddArgs). parseCli only skips the value when locating cmd;
  *  the owners still read it themselves, and `rest` keeps post-command values
  *  (cmdAuth/export.ts/output.ts drop their own). Add here when a new value flag lands. */
-export const VALUE_FLAGS: ReadonlySet<string> = new Set(["--resume", "--key", "--out", "--output", "--pet", "--effort", "--protocol", "--key-env", "--model", "--scope", "--max-turns", "--max-seconds"]);
+/** Every flag that takes a value. A flag missing from this set does not merely parse oddly: its VALUE
+ *  becomes a prompt word. `rovecode run "yazi golgesi gozukmuyor" --max-cost 0.15` sent the model
+ *  "yazi golgesi gozukmuyor 0.15", and the model read the stray number as the shadow's opacity and used
+ *  it. --max-cost landed in 60456d6 without being added here; the same class of bug had just been fixed
+ *  for every other value flag in the same commit, which is exactly why the table has to be one list. */
+export const VALUE_FLAGS: ReadonlySet<string> = new Set(["--resume", "--key", "--out", "--output", "--pet", "--effort", "--protocol", "--key-env", "--model", "--scope", "--max-turns", "--max-seconds", "--max-cost"]);
 
 /** file extensions a stray argv word tends to carry: code, docs, data. Not a guess at natural language —
  *  a word that ends like a file is treated like one, a word that does not is left alone */

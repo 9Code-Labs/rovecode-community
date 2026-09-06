@@ -3,6 +3,7 @@
  *  run — the run_start event's goal carries it. */
 
 import { expect, test } from "bun:test";
+import { VALUE_FLAGS, parseCli } from "../../src/cli/dispatch.ts";
 import { PassThrough } from "node:stream";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -79,3 +80,17 @@ test("end to end: the piped text is in the run's goal; stdin 'ignore' costs no w
     expect(skipped.goal).toBe("hello there");
   } finally { rmSync(cwd, { recursive: true, force: true }); rmSync(env.ROVECODE_HOME, { recursive: true, force: true }); }
 }, 30_000);
+
+test("every value flag's value stays out of the prompt — including --max-cost, which was sending its number to the model", () => {
+  // Measured, not hypothetical: `run "yazi golgesi gozukmuyor" --max-cost 0.15` stored the first user
+  // message as "yazi golgesi gozukmuyor 0.15", and the model used the stray 0.15 as the CSS opacity it
+  // then wrote. --max-cost landed without being added to VALUE_FLAGS, one commit after the same class of
+  // bug was fixed for every other flag. This asserts the WHOLE table rather than the one flag, so the
+  // next value flag cannot repeat it.
+  for (const flag of VALUE_FLAGS) {
+    const argv = ["bun", "main.ts", "run", "fix the thing", flag, "SENTINEL"];
+    const words = runPromptWords(parseCli(argv), argv);
+    expect(words.join(" ")).toBe("fix the thing");
+    expect(words).not.toContain("SENTINEL");
+  }
+});
