@@ -43,6 +43,27 @@ function sdk(): Promise<Sdk> {
 /** one turn of the event loop — a timer, not a microtask, so painters and input get to run in between */
 const yieldToLoop = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
+/** Commands that fetch the server’s package before running it, so a first launch is a download. */
+const PACKAGE_RUNNERS = new Set(["npx", "npx.cmd", "uvx", "uvx.exe", "pipx", "pipx.exe", "bunx", "bunx.exe"]);
+/** the budget a runner-launched server gets: enough for a cold fetch on a slow line */
+export const RUNNER_CONNECT_MS = 90_000;
+
+/** is this server launched through a package runner rather than an installed binary? */
+export function isPackageRunner(config: Pick<McpServerConfig, "transport" | "command">): boolean {
+  if (config.transport !== "stdio" || config.command === undefined) return false;
+  const base = config.command.split(/[\\/]/).pop() ?? config.command;
+  return PACKAGE_RUNNERS.has(base.toLowerCase());
+}
+
+/** What a timeout MEANS, said in terms the reader can act on. "Request timed out" is true and useless. */
+export function runnerTimeoutMessage(config: Pick<McpServerConfig, "name" | "transport" | "command">, budgetMs: number): string {
+  const head = `connect to MCP server "${config.name}" timed out after ${Math.round(budgetMs / 1000)}s`;
+  if (!isPackageRunner(config)) return head;
+  const runner = (config.command ?? "the runner").split(/[\\/]/).pop();
+  return `${head} — ${runner} downloads the server's package on first use. Try again (the download is cached), `
+    + `or install it once so it starts without the network: rovecode mcp add ${config.name} --local --force`;
+}
+
 // ---------- manager ----------
 
 /** Pagination guard: no sane server needs 50 tool-list pages; beyond this we
@@ -132,11 +153,16 @@ export class McpManager {
   private async open(config: McpServerConfig): Promise<Client> {
     const transport = await this.buildTransport(config);
     const client = new (await sdk()).Client({ name: "rovecode", version: "0.1.0" });
+    // A package runner downloads before it runs, and a download is not a hang. Measured on this machine:
+    // a first-ever `uvx mcp-server-time` took over 10 s and lost to the default budget — the user saw
+    // "Request timed out" for a server that was working perfectly, and would have seen it again on the
+    // next start because nothing had finished caching. `npx -y` is the same shape (7 s cold, 47 MB).
+    const budget = isPackageRunner(config) ? Math.max(this.connectTimeout, RUNNER_CONNECT_MS) : this.connectTimeout;
     try {
       await withTimeout(
-        client.connect(transport, { timeout: this.connectTimeout }),
-        this.connectTimeout + 2_000,
-        `connect to MCP server "${config.name}" timed out`,
+        client.connect(transport, { timeout: budget }),
+        budget + 2_000,
+        runnerTimeoutMessage(config, budget),
       );
     } catch (err) {
       await client.close().catch(() => {});
