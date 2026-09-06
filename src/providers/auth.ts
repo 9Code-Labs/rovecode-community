@@ -69,8 +69,9 @@ export interface StoredCredential {
 const userHome = (): string => (process.platform === "win32" ? process.env.USERPROFILE : process.env.HOME) || homedir();
 
 export function rovecodeHome(): string {
-  const home = process.env.ROVECODE_HOME ?? join(userHome(), ".rovecode");
-  migrateLegacyHome(home);
+  const explicit = process.env.ROVECODE_HOME;
+  const home = explicit ?? join(userHome(), ".rovecode");
+  migrateLegacyHome(home, { explicit: explicit !== undefined });
   return home;
 }
 
@@ -79,19 +80,31 @@ export function rovecodeHome(): string {
  *  COPIES the old one into it — copy, not move: the old directory is left exactly as it was, so
  *  downgrading to an older build keeps working and nothing is destroyed if this goes wrong.
  *
- *  Runs once per process, only when the new home does not exist yet and the old one does. An
- *  explicit ROVECODE_HOME is honoured the same way, which is what makes it testable. Any failure is
- *  swallowed: a migration that cannot run must not stop the agent from starting — the user simply
- *  sees "no provider configured" and runs `rovecode connect`. */
+ *  Runs once per process, only when the new home does not exist yet and the old one does, and ONLY for
+ *  the default home. An explicit ROVECODE_HOME used to be migrated the same way "which is what makes it
+ *  testable", and that was a real hazard rather than a convenience: pointing ROVECODE_HOME at a fresh
+ *  path — the ordinary way to get an isolated home for a test, a script or a clean-room check — silently
+ *  filled it with a copy of the old credentials. It billed two real API calls during this repository's
+ *  own release verification (2026-09-06) before anyone noticed the scratch home was not scratch. Tests
+ *  that need to exercise the migration pass `legacyDir`; nothing else copies a user's keys into a path
+ *  they chose for isolation.
+ *
+ *  Any failure is swallowed: a migration that cannot run must not stop the agent from starting — the
+ *  user simply sees "no provider configured" and runs `rovecode connect`. */
 let migrated = false;
-function migrateLegacyHome(home: string): void {
-  if (migrated) return;
-  migrated = true;
+export function migrateLegacyHome(home: string, opts: { explicit?: boolean; legacyDir?: string; note?: (line: string) => void } = {}): void {
+  if (migrated && opts.legacyDir === undefined) return;
+  if (opts.legacyDir === undefined) migrated = true;
   try {
     if (existsSync(home)) return;                        // already living in the new place
-    const legacy = join(userHome(), ".cumulus");
+    const legacy = opts.legacyDir ?? join(userHome(), ".cumulus");
+    // an explicit ROVECODE_HOME is a request for THIS directory, not for a copy of another one. The
+    // injected legacyDir does not override it: a test that wants the explicit case must SEE the refusal.
+    if (opts.explicit === true) return;
     if (home === legacy || !existsSync(legacy)) return;
     cpSync(legacy, home, { recursive: true });
+    // and it says so: a copy of someone's credentials appearing in a new directory is not a silent event
+    (opts.note ?? ((l: string) => console.error(l)))(`migrated ${legacy} → ${home} (the config directory was renamed; the old one is untouched)`);
     // the credentials file carries the 0600 the old one had only on POSIX; re-assert it here
     const creds = join(home, "credentials.json");
     if (existsSync(creds) && process.platform !== "win32") chmodSync(creds, 0o600);

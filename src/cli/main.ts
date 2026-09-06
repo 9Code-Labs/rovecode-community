@@ -249,6 +249,14 @@ async function cmdAuth(rest: string[]): Promise<void> {
   const provider = args[0];
   if (action === "list") {
     const entries = listProviders();
+    // --json was ACCEPTED and ignored here, so a script asking for a document got prose and exit 0. The
+    // redacted form is what goes in it — the whole point of this listing is that the value never leaves.
+    // process.argv, not `rest`: dispatch strips flags out of cli.rest, which is why --key is read the
+    // same way two lines above. Reading `rest` here made the flag look accepted and do nothing.
+    if (process.argv.includes("--json")) {
+      console.log(JSON.stringify({ path: credentialsPath(), credentials: entries.map((e) => ({ provider: e.provider, keyName: e.keyName, redacted: e.redacted })) }, null, 2));
+      return;
+    }
     if (entries.length === 0) {
       console.log(`no stored credentials (${credentialsPath()}) — run: rovecode auth set <provider>`);
       return;
@@ -298,7 +306,21 @@ async function cmdProvider(words: string[]): Promise<void> {
 
   const reg = new ProviderRegistry(process.cwd());
   const [action, ...rest] = words;
-  if (action === undefined || action === "list") { console.log(formatProviderList(reg, { all: rest.includes("--all") })); return; }
+  if (action === undefined || action === "list") {
+    if (rest.includes("--json")) {
+      const dflt = reg.defaultRef();
+      // the same filter formatProviderList applies: without --all, only what is configured or not built in
+      const showAll = rest.includes("--all");
+      const rows = reg.list().filter((p) => showAll || isConfigured(p) || p.scope !== "builtin").map((p) => ({
+        id: p.id, protocol: p.protocol, baseUrl: p.baseUrl, keyEnv: p.keyEnv,
+        defaultModel: p.defaultModel ?? null, configured: isConfigured(p), scope: p.scope ?? null,
+      }));
+      console.log(JSON.stringify({ default: dflt ?? null, providers: rows, warnings: reg.warnings() }, null, 2));
+      return;
+    }
+    console.log(formatProviderList(reg, { all: rest.includes("--all") }));
+    return;
+  }
   if (action === "add") {
     const parsed = parseAddArgs(rest);
     if ("error" in parsed) { console.error(`error: ${parsed.error}`); process.exit(2); }

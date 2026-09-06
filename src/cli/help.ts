@@ -64,7 +64,8 @@ const ADVANCED = `advanced — the full command reference
                               exit 0 connected · 1 the test call failed (config still written) · 2 usage
   rovecode smoke-tui            render check: full pipeline into an 80x24 terminal emulator (dev-only)
   rovecode smoke-tui --sextant  render check: the sextant surface at 160x44 through the full pipeline (no emulator needed)
-  rovecode run "<prompt>"       run an agent task (--yolo = ${MODE_AUTO}; a scripted mock answers when no provider is configured)
+  rovecode run "<prompt>"       run an agent task (--yolo = ${MODE_AUTO}; with no provider configured this is a
+                            startup error, exit 2 — ROVECODE_MOCK=1 asks for the scripted mock on purpose)
                             "/name args" expands a custom command (.rovecode/commands/<name>.md, else ~/.rovecode/commands)
                             the way the TUI does; an unknown /name is sent verbatim; model:/mode: frontmatter is
                             TUI-only and not applied headlessly
