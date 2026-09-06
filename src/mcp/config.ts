@@ -28,6 +28,9 @@ export function mcpConfigFiles(cwd: string, home?: string): { user?: string; har
 }
 
 const VAR_REF = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
+/** an unfilled market placeholder: `<directory the server may touch>`. Angle brackets around prose, which
+ *  is not something a real argument, URL or header value looks like. */
+const PLACEHOLDER_REF = /<[^<>]*[a-z][^<>]*>/g;
 /** `${NAME}` → env value; every missing name lands in `missing` (the caller decides that it is fatal) */
 export function expandVars(text: string, env: Record<string, string | undefined>, missing: string[]): string {
   return text.replace(VAR_REF, (_m, name: string) => { const v = env[name]; if (v === undefined) { missing.push(name); return ""; } return v; });
@@ -57,7 +60,7 @@ export function message(err: unknown): string {
 
 /** Normalize one server entry (claude-code `.mcp.json` style or ours). Returns
  *  undefined (and records a warning) when the entry cannot produce a usable config. */
-export function normalizeEntry(name: string, raw: unknown, file: string, warnings: string[], envSource: Record<string, string | undefined> = process.env): McpServerConfig | undefined {
+export function normalizeEntry(name: string, raw: unknown, file: string, warnings: string[], envSource: Record<string, string | undefined> = process.env, opts: { allowPlaceholders?: boolean } = {}): McpServerConfig | undefined {
   if (!isRecord(raw)) {
     warnings.push(`${file}: server "${name}" is not an object; skipped`);
     return undefined;
@@ -122,6 +125,17 @@ export function normalizeEntry(name: string, raw: unknown, file: string, warning
   if (missing.length > 0) {
     // an empty key would launch a server that fails on its first call; naming the variable is the fix
     warnings.push(`${file}: server "${name}" needs ${[...new Set(missing)].map((m) => `\${${m}}`).join(", ")} set in the environment; skipped`);
+    return undefined;
+  }
+  // The other half of the same rule, for the values a market install could not fill: a required argument
+  // that only the human knows (which directory the filesystem server may touch) is written into the file
+  // as `<directory the server may touch>`, and a server still carrying one is not launched. Launching it
+  // means npx starts, the server rejects its own arguments, and the failure surfaces as a connect error
+  // several layers from the thing that is actually wrong — an editable line in a file rovecode named.
+  const holes = [...new Set([...(args ?? []), ...Object.values(env ?? {}), ...Object.values(headers ?? {}), ...(url !== undefined ? [url] : [])]
+    .flatMap((v) => [...v.matchAll(PLACEHOLDER_REF)].map((m) => m[0])))];
+  if (holes.length > 0 && opts.allowPlaceholders !== true) {
+    warnings.push(`${file}: server "${name}" still has ${holes.join(", ")} to fill in; skipped (edit that line and it will connect)`);
     return undefined;
   }
 

@@ -54,7 +54,7 @@ test("cli: search lists curated then registry rows; info names publisher, the ex
   expect(h.out).toContain("  publisher  github.com/acme");
   expect(h.out).toContain("  install 0  runs     npx -y widgets-mcp@1.2.0 --mode fast");
   expect(h.out).toContain("             env WIDGET_TOKEN (secret) — API token");
-  expect(h.out).toContain("             needs --root");
+  expect(h.out).toContain("             needs --root <value>");
   // no TTY, no --yes: the plan is shown, nothing is written
   h.out.length = 0;
   expect(await h.run("add io.github.acme/widgets")).toBe(1);
@@ -68,9 +68,9 @@ test("cli: search lists curated then registry rows; info names publisher, the ex
   // --yes without a TTY for a PROJECT file: the secret is a ${NAME} reference anyway → written
   expect(await h.run("add io.github.acme/widgets --yes --project --as wid")).toBe(0);
   const proj = JSON.parse(readFileSync(join(cwd, ".rovecode", "mcp.json"), "utf8")) as { mcpServers: Record<string, unknown> };
-  expect(proj.mcpServers.wid).toEqual({ command: "npx", args: ["-y", "widgets-mcp@1.2.0", "--mode", "fast"], env: { WIDGET_TOKEN: "${WIDGET_TOKEN}" } });
+  expect(proj.mcpServers.wid).toEqual({ command: "npx", args: ["-y", "widgets-mcp@1.2.0", "--mode", "fast", "--root", "<value>"], env: { WIDGET_TOKEN: "${WIDGET_TOKEN}" } });
   expect(h.out).toContain("set WIDGET_TOKEN in your environment — the file only names them");
-  expect(h.out).toContain("fill in before use: --root (edit the args in that file)");
+  expect(h.out).toContain("fill in before use: --root <value> — edit the args in that file; until then this server is skipped");
   expect(h.prompts).toEqual([]); // no terminal: nothing was asked
   // usage errors are exit 2, one line: an unknown subcommand, no subcommand, a missing name, a flag the subcommand does not take
   expect(await h.run("nonsense")).toBe(2);
@@ -93,22 +93,29 @@ test("cli: on a terminal add shows the plan, asks y/N, asks the secret MASKED by
   expect(no.prompts).toEqual(["plain:install? [y/N] "]);
   expect(no.out.at(-1)).toBe("nothing written");
   expect(existsSync(join(home, "mcp.json"))).toBe(false);
-  const yes = cli(cwd, home, { tty: true, plain: ["y"], secret: "s3cret" });
+  // the second plain answer is the `pending` one: a required argument only the human knows, asked in the
+  // clear right after the masked secret rather than left as a hole in the file
+  const yes = cli(cwd, home, { tty: true, plain: ["y", "/srv/data"], secret: "s3cret" });
   expect(await yes.run("add io.github.acme/widgets")).toBe(0);
   // the plan came BEFORE the question, the secret prompt named the variable, and stdout never saw the value
   expect(yes.out.indexOf("  runs       npx -y widgets-mcp@1.2.0 --mode fast")).toBeLessThan(yes.out.indexOf(`added "widgets" → ${join(home, "mcp.json")}`));
   expect(yes.out).toContain("  env        WIDGET_TOKEN (asked, masked, never shown)");
-  expect(yes.prompts).toEqual(["plain:install? [y/N] ", "secret:WIDGET_TOKEN (API token): "]);
+  expect(yes.prompts).toEqual(["plain:install? [y/N] ", "secret:WIDGET_TOKEN (API token): ", "plain:--root <value>: "]);
   expect([...yes.out, ...yes.err].join("\n")).not.toContain("s3cret");
   const user = JSON.parse(readFileSync(join(home, "mcp.json"), "utf8")) as { mcpServers: Record<string, { env: Record<string, string> }> };
   expect(user.mcpServers.widgets!.env).toEqual({ WIDGET_TOKEN: "s3cret" });
-  const again = cli(cwd, home, { tty: true, secret: "other" });
+  expect((user.mcpServers.widgets as unknown as { args: string[] }).args).toEqual(["-y", "widgets-mcp@1.2.0", "--mode", "fast", "--root", "/srv/data"]);
+  expect(yes.out.join("\n")).not.toContain("fill in before use"); // it was filled in, at the prompt
+  // two answers: the refused --yes run asks before it discovers the clash, the --force run asks again.
+  // Answering both matters — a --force reinstall that left the argument blank would REPLACE a working
+  // server with one the loader then skips.
+  const again = cli(cwd, home, { tty: true, secret: "other", plain: ["/srv/data", "/srv/data"] });
   expect(await again.run("add io.github.acme/widgets --yes")).toBe(1);
   expect(again.err.at(-1)).toMatch(/already has a server named "widgets"/);
   expect(await again.run("add io.github.acme/widgets --yes --force")).toBe(0);
   const lst = cli(cwd, home);
   expect(await lst.run("list")).toBe(0);
-  expect(lst.out).toEqual([expect.stringMatching(/^user\s+widgets\s+stdio\s+npx -y widgets-mcp@1\.2\.0 --mode fast  env WIDGET_TOKEN$/)]); // names, never values
+  expect(lst.out).toEqual([expect.stringMatching(/^user\s+widgets\s+stdio\s+npx -y widgets-mcp@1\.2\.0 --mode fast --root \/srv\/data  env WIDGET_TOKEN$/)]); // names, never values
   expect(await lst.run("remove widgets --project")).toBe(1);
   expect(await lst.run("remove widgets")).toBe(0);
   expect(await lst.run("remove widgets")).toBe(1);

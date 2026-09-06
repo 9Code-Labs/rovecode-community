@@ -413,9 +413,12 @@ export class SextantRenderer implements Renderer {
             const r = await this.ctx.reloadMcp();
             const failed = r.failed.find((f) => r.added.includes(f.name));
             text = text.replace(/ · restart rovecode[^·]*/, "");
+            // `skipped` before `added`: an entry the loader refused never reaches `added`, so without this
+            // the install read "installed" and then said nothing at all about why no tools appeared.
+            const skipped = r.skipped.length > 0 ? ` · ${r.skipped.join(" · ")}` : "";
             text += failed
               ? ` · ${failed.name} did not connect: ${failed.error}`
-              : r.added.length > 0 ? ` · connected as ${r.added.join(", ")} — no restart needed` : "";
+              : r.added.length > 0 ? ` · connected as ${r.added.join(", ")} — no restart needed${skipped}` : skipped;
           } catch { /* the install stands on its own */ }
         }
         const m = this.state.market;

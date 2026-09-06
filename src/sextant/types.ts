@@ -443,7 +443,7 @@ export interface SextantAttach {
    *  installing an MCP server so the answer is "connected" rather than "restart rovecode" — the tools
    *  that reach a server (`mcp_list`, `mcp_call`) dispatch by name, so nothing else has to change.
    *  Absent when the surface has no runtime behind it (the smoke harness, the tests). */
-  reloadMcp?(): Promise<{ added: string[]; removed: string[]; failed: { name: string; error: string }[] }>;
+  reloadMcp?(): Promise<{ added: string[]; removed: string[]; failed: { name: string; error: string }[]; skipped: string[] }>;
   /** `--pet <name>`; the renderer's own option is the fallback */
   petName?: string;
   /** names of the images staged for the NEXT user message (tui/attach.ts stage on the active store),

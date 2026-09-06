@@ -131,7 +131,7 @@ export interface Runtime {
    *  `market install mcp:<id>` calls so a fresh server is usable in the session that installed it
    *  rather than after a restart. Never throws: a server that will not connect comes back in `failed`
    *  and simply stays unavailable, exactly as at boot. */
-  reloadMcp(): Promise<{ added: string[]; removed: string[]; failed: { name: string; error: string }[] }>;
+  reloadMcp(): Promise<{ added: string[]; removed: string[]; failed: { name: string; error: string }[]; skipped: string[] }>;
   /** port #8 config snapshot (AGENTS.md/CLAUDE.md/… harvested cwd-upward ONCE
    *  at construction, for prompt-cache stability) incl. dropped/truncated
    *  source stubs for /status. Mid-session config edits are intentionally not
@@ -370,10 +370,13 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   for (const w of mcpWarnings) pluginWarn(`mcp: ${w}`);
   // Reading the three files is its own function because it happens twice: once here, and again whenever
   // something installs a server and wants it usable without a restart (reloadMcp below).
-  const readMcpConfigs = (): McpServerConfig[] => {
+  // `warn` is an OUT parameter rather than a swallowed local: a server that is skipped — an unset ${NAME},
+  // an unfilled <placeholder>, an untrusted project file — is the one thing the human most needs to hear
+  // after installing something, and dropping the reason here is what made a failed install look like a
+  // successful one that simply did nothing.
+  const readMcpConfigs = (warn: string[] = []): McpServerConfig[] => {
     const byName = new Map<string, McpServerConfig>();
     for (const p of activePlugins) for (const c of p.mcp) if (!byName.has(c.name)) byName.set(c.name, c);
-    const warn: string[] = [];
     const files = existsSync(join(pluginHome, "mcp.json"))
       || existsSync(join(cwd, ".rovecode", "mcp.json"))
       || existsSync(join(cwd, ".mcp.json"));
@@ -407,20 +410,21 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
    *  is no manager and `mcp_list`/`mcp_call` were never registered, so installing your first server used
    *  to leave the model with no way to reach it at all. Here the manager is created and the two tools are
    *  registered at that moment. Servers already connected are left alone (see McpManager.sync). */
-  const reloadMcp = async (): Promise<{ added: string[]; removed: string[]; failed: { name: string; error: string }[] }> => {
-    const configs = readMcpConfigs();
+  const reloadMcp = async (): Promise<{ added: string[]; removed: string[]; failed: { name: string; error: string }[]; skipped: string[] }> => {
+    const skipped: string[] = [];
+    const configs = readMcpConfigs(skipped);
     if (mcp === null) {
-      if (configs.length === 0) return { added: [], removed: [], failed: [] };
+      if (configs.length === 0) return { added: [], removed: [], failed: [], skipped };
       const manager = new (lazyMcp().client.McpManager)(configs);
       mcp = manager;
       registerMcpTools(manager);
       const r = await manager.connect();
       mcpReady = Promise.resolve();
-      return { added: configs.map((c) => c.name), removed: [], failed: r.failed };
+      return { added: configs.map((c) => c.name), removed: [], failed: r.failed, skipped };
     }
     const { added, removed } = await mcp.sync(configs);
     const r = added.length > 0 ? await mcp.connect() : { failed: [] as { name: string; error: string }[] };
-    return { added, removed, failed: r.failed };
+    return { added, removed, failed: r.failed, skipped };
   };
 
   // boot-time view of the default provider — only the router's role table is pinned to it; every

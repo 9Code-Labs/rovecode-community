@@ -122,13 +122,20 @@ export function infoLines(item: MarketItem, cwd: string, home: string): string[]
 }
 
 /** ask for the plan's variables; null = the human said no or there is no way to ask */
-async function askFor(plan: { asks: { name: string; secret: boolean; description?: string }[] }, deps: { secret: (p: string) => Promise<string>; plain: (p: string) => Promise<string>; tty: boolean; err: (l: string) => void }): Promise<Record<string, string>> {
+async function askFor(plan: { asks: { name: string; secret: boolean; description?: string }[]; pending?: string[] }, deps: { secret: (p: string) => Promise<string>; plain: (p: string) => Promise<string>; tty: boolean; err: (l: string) => void }): Promise<Record<string, string>> {
   const answers: Record<string, string> = {};
   for (const a of plan.asks) {
     if (!deps.tty) { deps.err(`${a.name} is not set — it will be written as \${${a.name}} and read from your environment`); continue; }
     const label = `${a.name}${a.description ? ` (${a.description})` : ""}: `;
     const v = (await (a.secret ? deps.secret(label) : deps.plain(label))).trim();
     if (v.length > 0) answers[a.name] = v;
+  }
+  // a `pending` value is a required argument only the human knows (the directory the filesystem server may
+  // touch). It is never secret, and it is keyed by the placeholder text, which is what fillPlan reads.
+  for (const p of plan.pending ?? []) {
+    if (!deps.tty) continue; // written as the placeholder; the loader names it rather than launching
+    const v = (await deps.plain(`${p}: `)).trim();
+    if (v.length > 0) answers[p] = v;
   }
   return answers;
 }

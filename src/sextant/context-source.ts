@@ -40,7 +40,7 @@ export interface LiveRuntime {
   // runtime's types — which is exactly what the overlay must not do. It is narrowed where it is read.
   buildDef(ref: { provider: string; model: string; effort: "auto" }): { systemPrompt: unknown };
   /** optional: the market overlay uses it after installing an MCP server (types.ts SextantAttach) */
-  reloadMcp?(): Promise<{ added: string[]; removed: string[]; failed: { name: string; error: string }[] }>;
+  reloadMcp?(): Promise<{ added: string[]; removed: string[]; failed: { name: string; error: string }[]; skipped: string[] }>;
 }
 
 /** Pull the two fixed rows out of a runtime that is ALREADY running.

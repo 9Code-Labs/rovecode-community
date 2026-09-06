@@ -77,6 +77,19 @@ export function planInstall(entry: MarketEntry, opts: PlanOptions): InstallPlan 
   return { entry, install, scope: opts.scope, file, name, asks, pending: install.kind === "stdio" ? install.pending : [], headerVars };
 }
 
+/** One `pending` fragment → the argv words it contributes. A fragment is literal words followed by one
+ *  `<hole>` — "--root <path>" or "<directory the server may touch>" — so the flag survives whether or not
+ *  anybody answered, and the hole is either the answer or the placeholder itself. Written into the file
+ *  unanswered it is not a silent failure: mcp/config.ts refuses to launch a server that still carries one
+ *  and names the line. Split on the hole rather than on whitespace, because a hole is usually a sentence. */
+export function pendingWords(fragment: string, answer?: string): string[] {
+  const m = /^(.*?)\s*(<[^<>]*>)\s*$/.exec(fragment);
+  const filled = answer !== undefined && answer.length > 0;
+  if (!m) return [filled ? answer : fragment];          // no hole at all: an older catalog's bare hint
+  const lead = m[1]!.length > 0 ? m[1]!.split(/\s+/) : [];
+  return [...lead, filled ? answer : m[2]!];
+}
+
 /** the raw mcp.json entry, with answers in place. Secrets: a value in the USER file, `${NAME}` in a
  *  PROJECT file (and `${NAME}` whenever the answer is empty, so a later `export NAME=…` completes it) */
 export function fillPlan(plan: InstallPlan, answers: Record<string, string>): Record<string, unknown> {
@@ -94,7 +107,12 @@ export function fillPlan(plan: InstallPlan, answers: Record<string, string>): Re
       const v = ref(e);
       if (v !== undefined) env[e.name] = v;
     }
-    return { command: install.command, args: [...install.args], ...(Object.keys(env).length ? { env } : {}) };
+    // `pending` is the entry's required positional arguments — the filesystem server's directory, say.
+    // They go into args either as the human's answer or, when nobody could be asked (the TUI has no
+    // prompt, `--yes` did not stop), as the placeholder itself. Dropping them, which is what this did
+    // first, wrote a server that could never start and a note pointing at a line that was not there.
+    const positional = install.pending.flatMap((p) => pendingWords(p, answers[p]));
+    return { command: install.command, args: [...install.args, ...positional], ...(Object.keys(env).length ? { env } : {}) };
   }
   const headers: Record<string, string> = {};
   for (const h of install.headers) {
@@ -143,7 +161,7 @@ export function describePlan(plan: InstallPlan, asking: "prompt" | "env" = "prom
     const vars = Object.entries(plan.headerVars).filter(([, hn]) => hn === h.name).map(([v]) => v);
     lines.push(`  header     ${h.name}: ${vars.length ? `${h.template ?? `{${vars[0]}}`}  ← ${vars.join(", ")} ${asked(h.secret).replace("NAME", vars[0]!)}` : h.template ?? ""}${h.required ? "" : "  optional"}`);
   }
-  for (const p of plan.pending) lines.push(`  needs      ${p} — add it to args in the file after installing`);
+  for (const p of plan.pending) lines.push(`  needs      ${p} — ${asking === "env" ? "written as the placeholder; fill it in and the server connects" : "asked here; unanswered it is written as the placeholder"}`);
   lines.push(`  writes     ${plan.file}  as "${plan.name}"${asking === "prompt" && plan.scope === "project" && plan.asks.some((a) => a.secret) ? "  (secrets stay out of this file: ${NAME} is read from your environment)" : ""}`);
   return lines;
 }
@@ -170,7 +188,11 @@ function writeShape(file: string, shape: FileShape, secret: boolean): void {
  *  that home's store right after the write (mcp/trust.ts) — the "trust my own" half of the gate. */
 export function writeServer(file: string, name: string, raw: Record<string, unknown>, opts: { replace?: boolean; trustHome?: string } = {}): McpServerConfig & { trusted?: boolean } {
   const warnings: string[] = [];
-  const cfg = normalizeEntry(name, raw, file, warnings, new Proxy({}, { get: () => "set" }) as Record<string, string>);
+  // allowPlaceholders: this validates the SHAPE of an entry the human just approved, and an unanswered
+  // `pending` hole is part of that entry by design — writing it is how the human gets a line to edit. The
+  // loader (parseConfigFile) applies the same check without the exemption, so the server is named and
+  // skipped until it is filled rather than launched into an argument error.
+  const cfg = normalizeEntry(name, raw, file, warnings, new Proxy({}, { get: () => "set" }) as Record<string, string>, { allowPlaceholders: true });
   if (!cfg) throw new Error(warnings.join("; ") || `${name}: not a valid server entry`);
   const shape = readShape(file);
   if (shape.servers[name] !== undefined && !opts.replace) throw new Error(`${file} already has a server named "${name}" — remove it first, or add --force`);

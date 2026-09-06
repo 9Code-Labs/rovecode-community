@@ -68,7 +68,7 @@ test("registry JSON is re-typed and capped: npm/pypi/oci become exact launch lin
   expect(entries.map((e) => e.key)).toEqual(["io.github.acme/widgets", "com.example/py", "io.github.acme/box", "ai.smithery/remote", "io.github.acme/dotnet"]);
   const [widgets, py, box, remote, dotnet] = entries as [MarketEntry, MarketEntry, MarketEntry, MarketEntry, MarketEntry];
   // npm: runtimeHint npx, the fixture's own -y is not doubled, version pinned, the valued named arg inlined, the required empty one pending
-  expect(widgets.installs).toEqual([{ kind: "stdio", runtime: "npx", command: "npx", args: ["-y", "widgets-mcp@1.2.0", "--mode", "fast"], pending: ["--root"],
+  expect(widgets.installs).toEqual([{ kind: "stdio", runtime: "npx", command: "npx", args: ["-y", "widgets-mcp@1.2.0", "--mode", "fast"], pending: ["--root <value>"],
     env: [{ name: "WIDGET_TOKEN", required: true, secret: true, description: "API token" }, { name: "WIDGET_REGION", required: false, secret: false, default: "eu" }] }]);
   expect(widgets).toMatchObject({ title: "Widgets", version: "1.2.0", publisher: "github.com/acme", repository: "https://github.com/acme/widgets", source: "registry" });
   expect(widgets.status).toBeUndefined();
@@ -172,17 +172,24 @@ test("planInstall + describePlan + fillPlan: the preview names the exact command
   expect(user.name).toBe("widgets");
   expect(user.file).toBe(join(home, "mcp.json"));
   expect(user.asks.map((a) => a.name)).toEqual(["WIDGET_TOKEN"]); // WIDGET_REGION has a value: not a question
-  expect(user.pending).toEqual(["--root"]);
+  // a required flag with no value is a FRAGMENT, not a bare flag: appending "--root" alone would write a
+  // server that launches and then rejects its own arguments (see pendingWords)
+  expect(user.pending).toEqual(["--root <value>"]);
   const lines = describePlan(user);
   expect(lines).toContain("  runs       npx -y widgets-mcp@1.2.0 --mode fast");
   expect(lines).toContain("  source     MCP registry (registry.modelcontextprotocol.io)");
   expect(lines).toContain("  publisher  github.com/acme");
   expect(lines).toContain("  env        WIDGET_TOKEN (asked, masked, never shown)");
   expect(lines).toContain("  env        WIDGET_REGION = eu  optional");
-  expect(lines).toContain("  needs      --root — add it to args in the file after installing");
+  expect(lines).toContain("  needs      --root <value> — asked here; unanswered it is written as the placeholder");
   expect(lines.at(-1)).toBe(`  writes     ${join(home, "mcp.json")}  as "widgets"`);
   expect(lines.join("\n")).not.toContain("s3cret");
-  expect(fillPlan(user, { WIDGET_TOKEN: "s3cret" })).toEqual({ command: "npx", args: ["-y", "widgets-mcp@1.2.0", "--mode", "fast"], env: { WIDGET_TOKEN: "s3cret", WIDGET_REGION: "eu" } });
+  // unanswered, the hole is written into args — visible, editable, and refused by the loader until it is
+  // filled. Dropping it wrote a server that could never start and a note pointing at a line that was not there.
+  expect(fillPlan(user, { WIDGET_TOKEN: "s3cret" })).toEqual({ command: "npx", args: ["-y", "widgets-mcp@1.2.0", "--mode", "fast", "--root", "<value>"], env: { WIDGET_TOKEN: "s3cret", WIDGET_REGION: "eu" } });
+  // answered, the flag survives and the hole becomes the answer
+  expect((fillPlan(user, { WIDGET_TOKEN: "s3cret", "--root <value>": "/srv/data" }) as { args: string[] }).args)
+    .toEqual(["-y", "widgets-mcp@1.2.0", "--mode", "fast", "--root", "/srv/data"]);
   // project scope: the secret never lands in the repo file even when answered
   const proj = planInstall(widgets, { scope: "project", cwd, home, name: "wid" }) as InstallPlan;
   expect(proj.file).toBe(join(cwd, ".rovecode", "mcp.json"));

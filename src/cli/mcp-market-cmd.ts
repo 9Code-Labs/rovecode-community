@@ -10,7 +10,7 @@
 import { readSecret } from "../providers/auth.ts";
 import { rovecodeHome } from "../providers/auth.ts";
 import { installLabel, marketInfo, searchMarket, type MarketDeps, type MarketEntry } from "../mcp/market.ts";
-import { configuredServers, describePlan, fillPlan, namesWritten, planInstall, removeServer, serverLine, writeServer, type InstallPlan, type McpScope } from "../mcp/market-install.ts";
+import { configuredServers, describePlan, fillPlan, namesWritten, pendingWords, planInstall, removeServer, serverLine, writeServer, type InstallPlan, type McpScope } from "../mcp/market-install.ts";
 import { mcpConfigFiles, parseConfigFile } from "../mcp/config.ts";
 import { mcpTrustStatus, projectMcpFiles, trustMcpFile, untrustMcpFile } from "../mcp/trust.ts";
 import { createInterface } from "node:readline";
@@ -109,6 +109,15 @@ export async function askPlan(plan: InstallPlan, deps: { secret: (p: string) => 
     answers[a.name] = a.secret ? await deps.secret(label) : await deps.plain(label);
     if (a.required && answers[a.name]!.length === 0 && !(a.secret && plan.scope === "project")) { deps.err(`${a.name} is required`); return null; }
   }
+  // `pending` is a required argument only the human knows — a directory, a database URL. It is never a
+  // secret, so it is asked in the clear and keyed by the placeholder text itself (fillPlan reads it back
+  // under that key). Off a terminal it stays as the placeholder in the file, which the loader then names
+  // instead of launching a server that would reject its own arguments.
+  for (const p of plan.pending) {
+    if (!deps.tty) continue;
+    const v = (await deps.plain(`${p}: `)).trim();
+    if (v.length > 0) answers[p] = v;
+  }
   return answers;
 }
 
@@ -185,7 +194,10 @@ export async function cmdMcp(args: string[], deps: McpCliDeps = {}): Promise<num
       } catch (e) { err(e instanceof Error ? e.message : String(e)); return 1; }
       out(`added "${plan.name}" → ${plan.file}${trusted === true ? "  (trusted on this machine as written)" : ""}`);
       if (trusted === false) out(`NOT trusted yet: that file already held servers you have not approved — rovecode mcp show, then rovecode mcp trust`);
-      if (plan.pending.length) out(`fill in before use: ${plan.pending.join(", ")} (edit the args in that file)`);
+      // only what is STILL a placeholder: answering the question at the prompt should not leave the
+      // install telling you to go and edit a line that now holds your answer
+      const unfilled = plan.pending.filter((p) => (pendingWords(p) as string[]).some((w) => (raw.args as string[] | undefined)?.includes(w) === true && /^<.*>$/.test(w)));
+      if (unfilled.length) out(`fill in before use: ${unfilled.join(", ")} — edit the args in that file; until then this server is skipped`);
       const named = namesWritten(plan, raw); // only what the file now refers to (a project file's secrets, an unanswered required value)
       if (named.length) out(`set ${named.join(", ")} in your environment — the file only names them`);
       out("restart rovecode to connect (servers are read once per process)");
