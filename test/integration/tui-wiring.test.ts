@@ -348,3 +348,40 @@ test("wsl rung + failing fake probe: runTui({exitOnClose:false}) rejects with Sa
     rmSync(cwd, { recursive: true, force: true });
   }
 }, 20_000);
+
+// ---------- TuiAppOptions.permission: an in-process caller can ASK for ask-mode ----------
+
+/** The asymmetry nobody will remember in three months: `yolo: false` is "no flag" and lets a user settings
+ *  file that says "auto" win, while `permission: "ask"` is the flag rung and beats that file AND the env var.
+ *  The env var keeps working for people who use it — this adds a way in, it does not replace one. */
+test("permission option: 'ask' beats a user settings file saying auto and beats ROVECODE_PERMISSION; passing nothing still lets the env, then the file, win", async () => {
+  const { home, restore } = scopedHome();
+  writeFileSync(join(home, "settings.json"), JSON.stringify({ permission: "auto" }));
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-tuiwire-"));
+  const savedEnv = { P: process.env.ROVECODE_PERMISSION, Y: process.env.ROVECODE_YOLO, A: process.env.ROVECODE_ACCEPT_EDITS };
+  delete process.env.ROVECODE_PERMISSION; delete process.env.ROVECODE_YOLO; delete process.env.ROVECODE_ACCEPT_EDITS;
+  /** boot one TUI, read the level the first status carried, quit */
+  const startLevelOf = async (opts: { permission?: "ask" | "accept-edits" | "auto"; yolo?: boolean }): Promise<string> => {
+    const fake = new FakeRenderer();
+    const app = runTui({ renderer: fake, stream: mockStream({ turns: [textTurn("x")] }), cwd, ...opts, exitOnClose: false, model: "scripted" });
+    await waitFor(() => fake.statuses.length > 0, 8000, "first status");
+    const s = fake.statuses[0]!;
+    fake.hooks.onExit();
+    await app;
+    return s.permission ?? (s.yolo ? "auto" : "ask");
+  };
+  try {
+    expect(await startLevelOf({})).toBe("auto");                          // nothing said → the user file wins
+    expect(await startLevelOf({ yolo: false })).toBe("auto");             // false is "no flag", NOT "ask" — the wart the option exists for
+    expect(await startLevelOf({ permission: "ask" })).toBe("ask");        // mutation: drop opts.permission from flagLevel → "auto"
+    process.env.ROVECODE_PERMISSION = "accept-edits";
+    expect(await startLevelOf({})).toBe("accept-edits");                  // the env var still works and still beats the file
+    expect(await startLevelOf({ permission: "ask" })).toBe("ask");        // and the option beats the env var, like a CLI flag does
+  } finally {
+    if (savedEnv.P === undefined) delete process.env.ROVECODE_PERMISSION; else process.env.ROVECODE_PERMISSION = savedEnv.P;
+    if (savedEnv.Y === undefined) delete process.env.ROVECODE_YOLO; else process.env.ROVECODE_YOLO = savedEnv.Y;
+    if (savedEnv.A === undefined) delete process.env.ROVECODE_ACCEPT_EDITS; else process.env.ROVECODE_ACCEPT_EDITS = savedEnv.A;
+    restore();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}, 30_000);

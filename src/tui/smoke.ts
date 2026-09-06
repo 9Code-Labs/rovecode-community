@@ -33,8 +33,7 @@ export async function runTuiSmoke(): Promise<void> {
 
   // pinned, not inherited: this smoke asserts approval cards, and a ~/.rovecode/settings.json with
   // "permission":"auto" would allow everything silently (`yolo: false` is "no flag" to app.ts, not "ask")
-  process.env.ROVECODE_PERMISSION = "ask";
-  const app = runTui({ renderer, stream, cwd, yolo: false, exitOnClose: false, model: "scripted" });
+  const app = runTui({ renderer, stream, cwd, permission: "ask", exitOnClose: false, model: "scripted" });
 
   // type a prompt into the (focused) editor and submit
   term.sendInput("hello rovecode");

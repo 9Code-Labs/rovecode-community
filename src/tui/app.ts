@@ -29,7 +29,9 @@ import { compactionNote } from "./replay-marker.ts";
 import { previewDiff } from "../coding/diff.ts";
 import { discoverCommands, commandsForPalette, dispatchCustomCommand, type CustomCommandCtx } from "./commands.ts";
 import type { Renderer, AssistantView, SlashCommand, StatusInfo } from "./renderer.ts";
-import { PiTuiRenderer } from "./pi-renderer.ts";
+// pi-renderer.ts (and the vendored pi-tui under it) costs ~27 MB resident; a sextant session never
+// constructs it, so it is required where it is constructed, not imported here (tests: pi-renderer-lazy)
+type PiRendererMod = typeof import("./pi-renderer.ts");
 import { buildSextantAttach, SEXTANT_LOCAL_NAMES } from "./sextant-attach.ts";
 import type { ModelRef, PermissionLevel, RunEvent, StreamFn } from "../core/types.ts";
 import { thinkingLine } from "../providers/thinking.ts";
@@ -94,6 +96,12 @@ export interface TuiAppOptions {
   pet?: string;
   /** start in the middle permission tier (`--accept-edits`, ROVECODE_ACCEPT_EDITS=1) */
   acceptEdits?: boolean;
+  /** the permission level as an explicit ASK from an in-process caller — the same rung as a CLI flag, so it
+   *  beats ROVECODE_PERMISSION and both settings files. `yolo`/`acceptEdits` can only demand a WIDER
+   *  level; `yolo: false` is "no flag", and a user settings file saying "auto" then wins. A smoke whose
+   *  assertion is "an approval card appears" needs this to say "ask" and mean it. Leaving it undefined
+   *  changes nothing: the env var and the files keep their say. */
+  permission?: PermissionLevel;
   /** `--effort <level>`; overrides ROVECODE_EFFORT for this session */
   effort?: ThinkingEffort;
 }
@@ -169,7 +177,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
       throw e;
     }
   })();
-  const renderer: Renderer = opts.renderer ?? new PiTuiRenderer({ cwd: rt.cwd });
+  const renderer: Renderer = opts.renderer ?? new (require("./pi-renderer.ts") as PiRendererMod).PiTuiRenderer({ cwd: rt.cwd }); // eslint-disable-line @typescript-eslint/no-require-imports
   _trace("renderer created");
   rt.setAskUser((q, signal) => renderer.askQuestion(q, signal)); // port #33: ask_user → the question overlay (Esc/abort dismisses it via signal)
   const sessionsDir = join(rt.cwd, ".rovecode", "sessions");
@@ -201,7 +209,10 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   if (opts.effort !== undefined) rt.setEffort(opts.effort);
   // one resolved answer instead of two independent booleans: flag → env → project file → user file →
   // "ask" (core/settings.ts). This is what makes `/yolo --save` survive the terminal closing.
-  const startLevel = resolvePermission(rt.cwd, opts.yolo === true ? "auto" : opts.acceptEdits === true ? "accept-edits" : undefined, { ROVECODE_PERMISSION: process.env.ROVECODE_PERMISSION, ROVECODE_YOLO: process.env.ROVECODE_YOLO, ROVECODE_ACCEPT_EDITS: process.env.ROVECODE_ACCEPT_EDITS });
+  // opts.permission is the flag rung for in-process callers; yolo/acceptEdits stay the boolean flags they were
+  // (true = demand, false = say nothing) — see TuiAppOptions.permission for why false cannot mean "ask"
+  const flagLevel: PermissionLevel | undefined = opts.permission ?? (opts.yolo === true ? "auto" : opts.acceptEdits === true ? "accept-edits" : undefined);
+  const startLevel = resolvePermission(rt.cwd, flagLevel, { ROVECODE_PERMISSION: process.env.ROVECODE_PERMISSION, ROVECODE_YOLO: process.env.ROVECODE_YOLO, ROVECODE_ACCEPT_EDITS: process.env.ROVECODE_ACCEPT_EDITS });
   const state: TuiState = {
     yolo: startLevel === "auto",
     acceptEdits: startLevel === "accept-edits",

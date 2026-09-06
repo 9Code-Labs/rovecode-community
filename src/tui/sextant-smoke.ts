@@ -50,9 +50,8 @@ export async function sextantSmoke(opts: { cols?: number; rows?: number; deadlin
   // The whole assertion below is "two approval cards appear", so the permission level is pinned here rather
   // than inherited from the machine: a ~/.rovecode/settings.json with "permission":"auto" allowed the write
   // and the edit without a card and the smoke FAILED with "approval cards seen 0/2". `yolo: false` cannot
-  // pin it — app.ts treats false as "no flag" and lets the settings file win (env sits above the file).
-  process.env.ROVECODE_PERMISSION = "ask";
-  const app = runTui({ renderer, stream, cwd, yolo: false, exitOnClose: false, model: "scripted" });
+  // pin it — app.ts treats false as "no flag" and lets the settings file win; `permission` is the flag rung.
+  const app = runTui({ renderer, stream, cwd, permission: "ask", exitOnClose: false, model: "scripted" });
   io.feed("hello rovecode\r");
   const deadline = Date.now() + (opts.deadlineMs ?? 15_000);
   const cardFrames: string[] = [];
