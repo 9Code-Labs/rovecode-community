@@ -434,16 +434,20 @@ const rIx = process.argv.indexOf("--resume");
 const rArg = rIx !== -1 ? process.argv[rIx + 1] : undefined;
 const resumeId = rArg !== undefined && !rArg.startsWith("-") ? rArg : undefined;
 if (cmd === "" || cmd === "chat" || cmd === "repl") {
-  // The intro (core/intro.ts) covers the real wait and nothing more: it starts before the TUI module is
-  // even loaded, paints while that import and the runtime's boot happen, and finishes the moment the
-  // screen is about to be taken over. There is no sleep anywhere in it — on a warm start it is a glimpse,
-  // and on a cold one (skills, plugins, MCP servers to read) it plays out because there was that much to
-  // wait for. `--plain` gets none of it: that path is for pipes and scripts.
+  // The intro (core/intro.ts) plays centred on a cleared screen while the session boots underneath it.
+  // Unlike the first version it has a duration of its own (~0.9s), because the shipped CLI is one bundled
+  // file and the boot it was covering is not slow enough to see. That cost is real and it is opt-out:
+  // --no-intro, ROVECODE_INTRO=0, --plain, or anything that is not a terminal.
+  const introOff = process.argv.includes("--no-intro") || process.env.ROVECODE_INTRO === "0";
   const { startIntro } = await import("../core/intro.ts");
   const intro = startIntro({
-    write: (t) => process.stdout.write(t), tty: process.stdout.isTTY === true && !cli.plain, version: pkg.version,
+    write: (t) => process.stdout.write(t), tty: process.stdout.isTTY === true && !cli.plain && !introOff,
+    version: pkg.version, ...(process.stdout.columns ? { columns: process.stdout.columns } : {}),
+    ...(process.stdout.rows ? { rows: process.stdout.rows } : {}),
   });
   intro.status("loading");
+  // the imports happen UNDER the animation rather than after it: the only wall time the intro adds is
+  // whatever is left of the show once the session is otherwise ready
   const { runTui } = await import("../tui/app.ts");
   const { pickRenderer } = await import("../tui/sextant-io.ts");
   if (cli.plain) {
@@ -452,10 +456,10 @@ if (cmd === "" || cmd === "chat" || cmd === "repl") {
     await runRepl({ yolo: cli.yolo });
   } else {
     intro.status("starting the session");
-    // finish before runTui, not after: runTui enters the alternate screen and never returns until the
-    // session ends, so an intro still holding the cursor would be left painting into a screen it no
-    // longer owns. The card it hands over to is the one in core/voice.ts.
-    intro.finish();
+    // wait for the show to finish and hand back a clean screen, THEN start the TUI: runTui enters the
+    // alternate screen and never returns until the session ends, so an intro still painting would be
+    // writing into a screen it no longer owns. The card it hands over to is in core/voice.ts.
+    await intro.done;
     await runTui({ yolo: cli.yolo, acceptEdits: cli.acceptEdits, ...(cli.effort !== undefined ? { effort: cli.effort } : {}), sessionId: resumeId, renderer: pickRenderer(cli, process.env, process.stdout), ...(cli.pet !== undefined ? { pet: cli.pet } : {}) });
   }
 } else if (known.has(cmd)) {

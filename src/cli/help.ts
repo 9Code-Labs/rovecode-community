@@ -44,8 +44,10 @@ const ADVANCED = `advanced — the full command reference
                             on a colour TTY of at least 100x30 (truecolor, or 256 colours through the
                             quantizer), else the classic pi-tui chat;
                             --classic forces the classic chat · --pet <name> names the pet · --plain = readline REPL
+                            --no-intro (or ROVECODE_INTRO=0) skips the ~0.9s opening animation
   rovecode chat · rovecode repl  the same as bare rovecode (repl still needs --plain for the readline REPL)
-  rovecode --help | -h          this help (only with no command in front of it) · rovecode --version prints the version
+  rovecode --help | -h          this help (only with no command in front of it) · rovecode --version prints the
+                            version to stdout and the update check’s answer to stderr
   rovecode --resume <id>        open the TUI resuming a session (full id or unique prefix)
   rovecode "prompt"             one-shot task (same as run)
   rovecode setup                connect a model step by step (TTY only; piped stdin prints the recipe and exits 2)
