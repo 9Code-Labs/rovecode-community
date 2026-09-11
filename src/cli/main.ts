@@ -468,7 +468,7 @@ async function cmdTrace(sessionId: string): Promise<void> {
   }
 }
 
-const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "plugin", "mcp", "market", "context", "doctor", "auth", "provider", "model", "models", "setup", "connect", "trace", "help", "chat", "repl", "smoke-tui", "acp", "serve", "export"]);
+const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "plugin", "mcp", "market", "context", "doctor", "auth", "login", "account", "logout", "provider", "model", "models", "setup", "connect", "trace", "help", "chat", "repl", "smoke-tui", "acp", "serve", "export"]);
 // --resume <id> · --resume (no id) · --continue: the last two reopen the newest session that holds something
 // (cli/resume.ts). Resolved only for the TUI branch below, so `rovecode run … --continue` costs no session scan.
 const resumeId = (cmd === "" || cmd === "chat" || cmd === "repl")
@@ -535,6 +535,9 @@ if (cmd === "" || cmd === "chat" || cmd === "repl") {
     case "connect": process.exitCode = await cmdConnect(argvAfter("connect")); break;
     case "help": cmdHelp(cli.rest[0] ?? ""); break;
     case "auth": await cmdAuth(cli.rest); break;
+    case "login": process.exitCode = await (await import("./account-cmd.ts")).cmdLogin(); break;
+    case "account": process.exitCode = await (await import("./account-cmd.ts")).cmdAccount(); break;
+    case "logout": process.exitCode = await (await import("./account-cmd.ts")).cmdLogout(); break;
     case "provider": await cmdProvider(argvAfter("provider")); break;
     case "model": await cmdModel(argvAfter("model")); break;
     case "models": await cmdModel(["list", ...argvAfter("models")]); break;

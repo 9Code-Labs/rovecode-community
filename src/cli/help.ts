@@ -23,6 +23,7 @@ everyday
   --effort auto|off|low|medium|high  how hard I think before answering (/effort in the TUI, ROVECODE_EFFORT=…)
   rovecode provider list|add|remove|test  endpoints in ~/.rovecode/providers.json — live, no restart
   rovecode auth set <id>          store an API key (hidden prompt) · auth list · auth remove <id>
+  rovecode login                  link this machine to your rovecode account (a code you approve on the site)
   rovecode doctor · --resume <id>  what is wrong with my setup, in one pass · reopen a session (export <id> → markdown)
 
 safety
@@ -125,6 +126,11 @@ const ADVANCED = `advanced — the full command reference
   rovecode auth set <provider> [--key <name>]  store an API key (prompts on stdin; ~/.rovecode/credentials.json)
   rovecode auth list            stored providers + key names (values redacted)
   rovecode auth remove <provider>  delete a stored credential
+  rovecode login [--api <url>]   link this machine to a rovecode account: prints a code to approve at
+                              <url>/cli-auth, then stores the issued token in ~/.rovecode/account.json
+                              (--token rc_live_… links a hand-pasted key instead; --json for scripts)
+  rovecode account [--json]    the linked account, its API base and when it was linked
+  rovecode logout              unlink: remove ~/.rovecode/account.json
   rovecode provider list [--all]  providers with a key + every providers.json entry, and the default provider/model
   rovecode provider add <id> <baseUrl> [--protocol openai|anthropic] [--key-env NAME] [--model <id>] [--no-key]
                               [--project | --user | --scope user|project] [--key]

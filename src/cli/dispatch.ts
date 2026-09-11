@@ -36,7 +36,7 @@ export interface CliInvocation {
  *  "yazi golgesi gozukmuyor 0.15", and the model read the stray number as the shadow's opacity and used
  *  it. --max-cost landed in 60456d6 without being added here; the same class of bug had just been fixed
  *  for every other value flag in the same commit, which is exactly why the table has to be one list. */
-export const VALUE_FLAGS: ReadonlySet<string> = new Set(["--resume", "--key", "--out", "--output", "--pet", "--effort", "--protocol", "--key-env", "--model", "--scope", "--max-turns", "--max-seconds", "--max-cost"]);
+export const VALUE_FLAGS: ReadonlySet<string> = new Set(["--resume", "--key", "--out", "--output", "--pet", "--effort", "--protocol", "--key-env", "--model", "--scope", "--max-turns", "--max-seconds", "--max-cost", "--api", "--token"]);
 
 /** file extensions a stray argv word tends to carry: code, docs, data. Not a guess at natural language —
  *  a word that ends like a file is treated like one, a word that does not is left alone */
