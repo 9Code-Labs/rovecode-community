@@ -22,8 +22,7 @@ everyday
   rovecode market search <q>   MCP servers, skills and plugins on one shelf; install any with market install <id>
   --effort auto|off|low|medium|high  how hard I think before answering (/effort in the TUI, ROVECODE_EFFORT=…)
   rovecode provider list|add|remove|test  endpoints in ~/.rovecode/providers.json — live, no restart
-  rovecode auth set <id>          store an API key (hidden prompt) · auth list · auth remove <id>
-  rovecode login                  link this machine to your rovecode account (a code you approve on the site)
+  rovecode auth set <id> · login  store an API key (hidden prompt) · link this machine to your rovecode account
   rovecode doctor · --resume <id>  what is wrong with my setup, in one pass · reopen a session (export <id> → markdown)
 
 safety

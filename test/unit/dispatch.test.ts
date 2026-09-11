@@ -93,7 +93,7 @@ test("VALUE_FLAGS is the inventory of every value flag main.ts/export.ts/output.
   // --protocol --key-env --model --scope: `rovecode provider add` (providers/registry.ts parseAddArgs)
   // This list is the point of the test: --max-cost shipped in 60456d6 WITHOUT being added here, so
   // `run "…" --max-cost 0.15` sent the model the word "0.15" and it used the number as a CSS opacity.
-  expect([...VALUE_FLAGS].sort()).toEqual(["--effort", "--key", "--key-env", "--max-cost", "--max-seconds", "--max-turns", "--model", "--out", "--output", "--pet", "--protocol", "--resume", "--scope"]); // --max-*: cli/run-limits.ts
+  expect([...VALUE_FLAGS].sort()).toEqual(["--api", "--effort", "--key", "--key-env", "--max-cost", "--max-seconds", "--max-turns", "--model", "--out", "--output", "--pet", "--protocol", "--resume", "--scope", "--token"]); // --max-*: cli/run-limits.ts; --api/--token: cli/account-cmd.ts login
 });
 
 test("--accept-edits is a boolean flag, never the command", () => {
