@@ -11,6 +11,14 @@
   "description": "Rovecode: a coding agent for the terminal. Research-derived harness on Bun/TypeScript with evidence-based ports from open-source harnesses (sextant TUI, MCP, ACP, headless server, repo-map, shadow-git checkpoints, execpolicy, model routers).",
   "type": "module",
   "module": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./extensions": "./src/public-api.ts",
+    "./plugins": "./src/plugins/index.ts",
+    "./providers": "./src/providers/stream.ts",
+    "./package.json": "./package.json"
+  },
   "bin": {
     "rovecode": "bin/rovecode.ts"
   },
@@ -34,9 +42,11 @@
     "typecheck": "tsc --noEmit",
     "check": "node scripts/build-model-index.mjs --check && tsc --noEmit && bun test",
     "smoke": "bun src/cli/main.ts smoke-tui --sextant",
-    "publish:site": "bash scripts/publish-site-data.sh",
     "build:model-index": "node scripts/build-model-index.mjs",
-    "ci": "bun run typecheck && bun test && bun run build:cli"
+    "check:boundary": "node scripts/check-public-boundary.mjs",
+    "check:links": "node scripts/check-doc-links.mjs",
+    "ci": "bun run check:boundary && bun run check:links && bun run typecheck && bun test && bun run build:cli",
+    "release:check": "bun run ci && npm pack --dry-run"
   },
   "dependencies": {
     "@ast-grep/napi": "^0.45.3",

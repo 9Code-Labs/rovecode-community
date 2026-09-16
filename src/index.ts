@@ -15,3 +15,6 @@ export { lineHash, fileTag, readAnchored, renderAnchored, applyEdits, readTool, 
 export type { AnchoredFile, EditOp, EditFailure, EditResult } from "./coding/hashline.ts";
 export { MemoryStore, defaultLimits } from "./memory/store.ts";
 export type { MemoryRecord, MemoryKind, MemoryLimits } from "./memory/store.ts";
+
+/** Curated extension API; prefer the `rovecode/extensions` package subpath. */
+export * from "./public-api.ts";

@@ -9,6 +9,13 @@ Hashes on entries before 0.3.2 name commits in the checkout rovecode shared with
 
 ## Unreleased
 
+### Open-core boundary and supported APIs
+
+- Added explicit package exports for the core, extension, plugin, and provider APIs, with contract tests and a documented 0.x compatibility policy.
+- Added a CI-enforced one-way dependency boundary: public source cannot import private, hosted, commercial, or control-plane overlays.
+- Added local documentation-link validation and a manual signed release checklist.
+- Replaced the licensed Gitleaks Action with a checksum-pinned open-source CLI invocation and pinned all CI actions to immutable commits.
+
 ### Connect wizard: endpoint doors and the active model list
 
 - A "your own URL" row in the wizard's provider list no longer fails with `unknown provider` when
@@ -49,8 +56,7 @@ Hashes on entries before 0.3.2 name commits in the checkout rovecode shared with
 - Plain git commands, compaction, shell commands and model turns share busy/interrupt/quit handling.
   EOF during a pending commit draft cancels it without committing or consuming another model turn.
 - The Nimbus submission history is reconciled without replacing Rovecode's product tree. See
-  [the integration record](docs/main-integration.md) for the resolution, validation and differences
-  intentionally retained; this is not a wholesale import of the Nimbus snapshot.
+  The integration retained Rovecode’s product tree rather than importing an unrelated snapshot wholesale.
 
 ### Added
 
@@ -454,7 +460,7 @@ start. Numbers are measurements from the commit that reports them, on the machin
 - Live checks: a sitemap walk with axe (0 findings on 15 pages) and a Chromium + Firefox + WebKit pass; the copy button reports failure instead of claiming success (4c4278a, 1ca96f9)
 - `/docs/` is live: 7 pages × 15 locales, the deploy default (`--no-docs` builds the landing alone); one h1 per page and keyboard-scrollable code blocks (6624432, 6964982, 18241ac, 2d9a9e9)
 - `deploy-site.sh --check` runs the live walk after the flip and rolls the release back when a page fails; live-check exits non-zero on failure and checks a preview URL where it lives (e0fc4ae, 529217f)
-- One command deploys site/ to the VPS; docs/deploy.md covers the server, the release layout, the CI key and what is still open; the webtop container is gone and port 3001 is closed (b04262f, 47ce15c, f1b51d0, 53773a8)
+- Historical website deployment details were removed from the public core repository; the website is maintained separately.
 - The site's frames, design.json and facts.json describe what actually ships (de35af2, ffddf2c, aee0f63)
 - Round 12, Y3 · Sabah sisi: a softer visual system on the same content — periwinkle ground, white 24 px cards with one shadow, pills, Manrope + JetBrains Mono, a two-tone blue accent that meets 4.6:1 on every small text; og.png and favicons follow; live-check 120 pages clean, design_audit 0 findings, Lighthouse mobile 91 (live was 87) (c1c8c09)
 

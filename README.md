@@ -372,6 +372,10 @@ mcp/ acp/ server/ tui/ sextant/  surfaces over the same loop (no second loop
 eval/                  scripted-provider gauntlet + deterministic benches
 ```
 
+## Supported extension API
+
+Distributed integrations should import only `rovecode/extensions`, `rovecode/plugins`, or `rovecode/providers`; deep `src/` imports are internal. See [API stability](docs/api-stability.md), [extension interfaces](docs/extensions.md), and the [open-core architecture](docs/open-core-architecture.md). Public code is mechanically prevented from importing private overlays.
+
 ## Configuration
 
 Defaults < project config chunks (harvested, capped) < env < CLI flags.
@@ -672,7 +676,7 @@ tokens, cache hits, and catalog-priced spend.
   either file asks again) and `mcp untrust` revokes it. User-scope servers need no gate. `rovecode trust` is the same
   store one level up: it approves the MCP files together with `hooks.ts`, `sandbox.json` and the command-bearing
   settings keys in one step (see Project trust above).
-- **Market** (`src/market`, `docs/market.md`): one shelf over all three — `rovecode market search|info|docs|
+- **Market** (`src/market`, [`docs/mcp-market.md`](docs/mcp-market.md)): one shelf over all three — `rovecode market search|info|docs|
   install|remove|list|update|sources|verify|validate` (each with `--json`) and `/market` in the TUI find MCP
   servers, skills and plugins
   and install any of them with one command. A single argument resolves five shapes (bare id, `kind:id`, a git URL,
@@ -692,34 +696,6 @@ tokens, cache hits, and catalog-priced spend.
   `.rovecode/design.json`) and `design_audit`, which counts template patterns in source and reports them as
   *slop* only while nothing is recorded, or as *deviation* from what the project chose. `ROVECODE_DESIGN=off`
   drops the section for runs with no UI in them.
-- **Site** ([9Code-Labs/rovecode-site](https://github.com/9Code-Labs/rovecode-site), `docs/deploy.md`):
-  the landing page, the docs and the market — Vite + React, prerendered once per language, no runtime.
-  It moved out of this repository on 2026-09-06 and builds without reading anything outside itself.
-  What stays here is the content it renders: `bun run publish:site` regenerates `docs.json`,
-  `market.json` and `facts.json` from `docs/*.md`, `src/market/catalogs/`, `src/mcp/market-catalog.ts`
-  and `plugins/`, and pushes them there. Deploying is `bun run deploy` in that repo. Live at
-  [64.177.43.110](http://64.177.43.110/) until there is a domain.
-
-## License & notices
-
-Rovecode is free software under the GNU Affero General Public License v3.0 — see `LICENSE`.
-Copyright (C) 2026 9Code Labs. You may use, study, modify and redistribute it; every copy and every
-derivative must keep this license and its copyright notices, and if you run a modified rovecode as a
-network service you must offer its complete source to the users of that service.
-
-Third-party attributions (Apache-2.0 NOTICE entries + MIT credits): `THIRD_PARTY_NOTICES.md`
-(shipped in the npm tarball). No code from crush (FSL), claw-code, nanocoder, iflow, or the Claude
-Agent SDK.
-
-## What wave 3 added (`PORTS.md` §Wave-3)
-
-Landed, not planned. Ports #21–#39: mid-turn cancellation, first-class grep/glob/ls tools,
-retry-with-backoff, approval diff previews, compaction v2, background subagents, sandbox rung config,
-reflection retries, hooks v2, custom slash commands, web fetch, todo/ask_user tools, image input,
-JSON/NDJSON output modes, session export, OTel spans.
-
-### Not built
-
 - **#47 external agentic-CLI lanes** — the one wave-4 row that was never implemented here. Measured
   2026-09-06 rather than assumed: `claude -p` and `opencode run` already work through the `bash` tool
   today, in print mode, without a TTY. What makes a lane a real feature rather than a shortcut is the

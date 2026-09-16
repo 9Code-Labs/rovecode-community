@@ -43,3 +43,7 @@ Do not cherry-pick private commits when their metadata or mixed content is unsui
 The project remains pre-1.0: patch releases fix defects, minor releases may evolve extension APIs with migration notes, and removals require deprecation where practical. Tags and GitHub releases are created manually after CI; package publication is intentionally manual until trusted provenance automation is established. The lockfile and Bun version are committed. AGPL-3.0-only is intentional for this extraction; third-party obligations are listed in `THIRD_PARTY_NOTICES.md`.
 
 Public decisions happen in issues/PRs under `GOVERNANCE.md`. Vulnerabilities use GitHub private vulnerability reporting per `SECURITY.md`, never public issues. Stable interfaces will be explicitly exported and documented rather than inferred from internal paths.
+
+## Implemented boundary controls
+
+The package now exposes documented `rovecode/extensions`, `rovecode/plugins`, and `rovecode/providers` entry points. Contract tests pin those exports, and `scripts/check-public-boundary.mjs` rejects imports from private/commercial/hosted overlay namespaces. This makes the public side enforceable today. The target private downstream still needs to consume these package exports and enforce its complementary import rule.
