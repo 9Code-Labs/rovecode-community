@@ -1,0 +1,7 @@
+{
+  "api": 1,
+  "name": "notes",
+  "version": "0.1.0",
+  "description": "Two tools: notes_add appends a dated line to .rovecode/notes.md, notes_list reads it back — a scratchpad that survives the session.",
+  "entry": "index.ts"
+}

@@ -1,0 +1,10 @@
+# synthetic fixture derived from docs/agentic-clis.md event tables — not a recording
+{"type":"thread.started","thread_id":"thr-codex-1"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"Look at the guard first."}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"bash -lc 'ls tests'","aggregated_output":"","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"bash -lc 'ls tests'","aggregated_output":"guard.test.ts\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_2","type":"todo_list","items":[{"text":"read requireAuth","completed":true},{"text":"write vitest cases","completed":false}]}}
+{"type":"item.completed","item":{"id":"item_3","type":"file_change","changes":[{"path":"tests/guard.test.ts","kind":"add"},{"path":"src/guard.ts","kind":"update"}],"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_4","type":"agent_message","text":"Added 4 vitest cases for requireAuth."}}
+{"type":"turn.completed","usage":{"input_tokens":5300,"cached_input_tokens":2000,"output_tokens":800}}

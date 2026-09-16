@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.rovecode/
+.env
+.env.*
+!.env.example
+*.log
+*.tgz
+.DS_Store
+coverage/

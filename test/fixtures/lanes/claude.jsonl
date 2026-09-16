@@ -1,0 +1,12 @@
+# synthetic fixture derived from docs/agentic-clis.md event tables — not a recording
+{"type":"system","subtype":"init","cwd":"/work/lane-claude","session_id":"sess-claude-1","tools":["Read","Edit","Write","Bash"],"model":"claude-sonnet-4-5","permissionMode":"acceptEdits"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"I will add the session helper."}]},"parent_tool_use_id":null,"session_id":"sess-claude-1"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Edit","input":{"file_path":"src/auth/session.ts","old_string":"a","new_string":"b"}}]},"parent_tool_use_id":null,"session_id":"sess-claude-1"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"The file has been updated."}]},"parent_tool_use_id":null,"session_id":"sess-claude-1"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_2","name":"Write","input":{"file_path":"src/auth/session.test.ts","content":"test"}}]},"parent_tool_use_id":null,"session_id":"sess-claude-1"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_2","content":[{"type":"text","text":"File created successfully"}]}]},"parent_tool_use_id":null,"session_id":"sess-claude-1"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_3","name":"Bash","input":{"command":"npm run typecheck"}}]},"parent_tool_use_id":null,"session_id":"sess-claude-1"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_3","content":"ok","is_error":false}]},"parent_tool_use_id":null,"session_id":"sess-claude-1"}
+this line is not json
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Done: sessions implemented, typecheck green."}]},"parent_tool_use_id":null,"session_id":"sess-claude-1"}
+{"type":"result","subtype":"success","is_error":false,"duration_ms":41000,"duration_api_ms":39000,"num_turns":5,"result":"Done: sessions implemented, typecheck green.","session_id":"sess-claude-1","total_cost_usd":0.0421,"usage":{"input_tokens":1200,"cache_creation_input_tokens":300,"cache_read_input_tokens":8000,"output_tokens":450},"permission_denials":[]}

@@ -1,0 +1,11 @@
+{
+  "default": "local/example-model",
+  "providers": {
+    "local": {
+      "baseUrl": "http://127.0.0.1:11434/v1",
+      "protocol": "openai",
+      "noKey": true,
+      "defaultModel": "example-model"
+    }
+  }
+}

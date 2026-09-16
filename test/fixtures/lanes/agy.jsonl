@@ -1,0 +1,8 @@
+# synthetic fixture derived from docs/agentic-clis.md event tables — not a recording
+{"type":"init","conversation_id":"conv-agy-1","model":"gemini-3.5-flash-medium"}
+{"type":"step_update","step_type":"text","text_delta":"Planning the change"}
+{"type":"step_update","step_type":"text","text_delta":".\nEditing README"}
+{"type":"step_update","step_type":"tool_call","tool":{"name":"write_file","args":{"path":"README.md","content":"..."}}}
+{"type":"step_update","step_type":"tool_call","tool":{"name":"command","args":{"command":"git diff --stat"},"output":"1 file changed"}}
+{"type":"step_update","step_type":"text","text_delta":" done"}
+{"type":"result","status":"SUCCESS","response":"Added a comment to README.","usage":{"input_tokens":700,"output_tokens":120}}

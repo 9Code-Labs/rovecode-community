@@ -1,0 +1,7 @@
+{
+  "api": 1,
+  "name": "safety-net",
+  "version": "0.1.0",
+  "description": "A second look before a destructive shell command, and a nudge when a test run prints FAIL.",
+  "entry": "index.ts"
+}

@@ -1,0 +1,11 @@
+/* A palette written the way a current Tailwind project writes one: bare HSL triplets on custom
+   properties, consumed as hsl(var(--x)). There is not one hex literal in this file. */
+:root {
+  --background: 0 0% 100%;
+  --foreground: 222.2 47.4% 11.2%;
+  --primary: 38 92% 50%;
+  --ring: 271 81% 56%;
+  --destructive: 0 84% 60%;
+}
+.brand { color: hsl(var(--primary)); }
+.plain { color: hsl(174, 62%, 47%); }

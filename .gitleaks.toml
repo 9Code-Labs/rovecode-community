@@ -1,0 +1,8 @@
+title = "Rovecode gitleaks configuration"
+
+[allowlist]
+description = "Synthetic credential fixtures and typed event field names; reviewed during bootstrap"
+paths = [
+  '''^test/unit/(auth-login-cli|auth-login-sse|auth|oauth-store|provider-config|provider-registry|responses-stream)\.test\.ts$''',
+  '''^src/lanes/events\.ts$'''
+]

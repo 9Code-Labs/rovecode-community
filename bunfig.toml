@@ -1,0 +1,5 @@
+# The suite must not read the machine it runs on: test/helpers/isolate-home.ts points ROVECODE_HOME at an
+# empty temp directory before any test file loads, so a developer's installed skills, plugins, MCP servers
+# and credentials cannot decide whether the tests pass. Tests that want their own home still set one.
+[test]
+preload = ["./test/helpers/isolate-home.ts"]

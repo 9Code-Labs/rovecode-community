@@ -1,0 +1,8 @@
+{
+  "api": 1,
+  "name": "conventional-commits",
+  "version": "0.1.0",
+  "description": "/commit writes a Conventional Commits message for the staged diff; the skill teaches the format and this project's scopes.",
+  "commands": "commands",
+  "skills": "skills"
+}

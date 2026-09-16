@@ -1,0 +1,11 @@
+# SYNTHETIC fixture in the SDK `client.event.subscribe()` stream shape (message.part.updated / session.idle) — NOT the `opencode run --format json` CLI shape, which is the REAL capture opencode-live-run.jsonl (2026-09-03); not a recording
+{"type":"message.part.updated","properties":{"part":{"id":"prt_1","sessionID":"ses_oc_1","messageID":"msg_1","type":"text","text":"Reading the auth module","time":{"start":1,"end":2}}}}
+{"type":"message.part.updated","properties":{"part":{"id":"prt_2","sessionID":"ses_oc_1","messageID":"msg_1","type":"tool","tool":"bash","callID":"call_1","state":{"status":"running","input":{"command":"npm test"}}}}}
+{"type":"message.part.updated","properties":{"part":{"id":"prt_2","sessionID":"ses_oc_1","messageID":"msg_1","type":"tool","tool":"bash","callID":"call_1","state":{"status":"completed","input":{"command":"npm test"},"output":"18 passed","metadata":{"exit":0}}}}}
+{"type":"message.part.updated","properties":{"part":{"id":"prt_3","sessionID":"ses_oc_1","messageID":"msg_1","type":"tool","tool":"edit","callID":"call_2","state":{"status":"completed","input":{"filePath":"src/auth/session.ts","oldString":"a","newString":"b"},"output":"edited"}}}}
+{"type":"message.part.updated","properties":{"part":{"id":"prt_4","sessionID":"ses_oc_1","messageID":"msg_1","type":"tool","tool":"write","callID":"call_3","state":{"status":"completed","input":{"filePath":"src/auth/index.ts","content":"x"},"output":"written"}}}}
+{"type":"permission.updated","properties":{"id":"per_1","sessionID":"ses_oc_1","type":"bash","title":"Run git push?","metadata":{}}}
+{"type":"message.part.updated","properties":{"part":{"id":"prt_5","sessionID":"ses_oc_1","messageID":"msg_1","type":"text","text":"Sessions wired; tests green.","time":{"start":3}}}}
+{"type":"message.part.updated","properties":{"part":{"id":"prt_5","sessionID":"ses_oc_1","messageID":"msg_1","type":"text","text":"Sessions wired; tests green.","time":{"start":3,"end":4}}}}
+{"type":"message.updated","properties":{"info":{"id":"msg_1","sessionID":"ses_oc_1","role":"assistant","tokens":{"input":900,"output":210,"reasoning":0,"cache":{"read":100,"write":0}},"cost":0.0031}}}
+{"type":"session.idle","properties":{"sessionID":"ses_oc_1"}}
