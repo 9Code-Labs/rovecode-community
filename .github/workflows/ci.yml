@@ -20,6 +20,7 @@ jobs:
         with: { bun-version-file: .bun-version }
       - run: bun install --frozen-lockfile
       - run: bun run check:boundary
+      - run: bun run check:product-boundary
       - run: bun run check:links
       - run: bun run typecheck
       - run: bun test

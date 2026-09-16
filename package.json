@@ -44,8 +44,9 @@
     "smoke": "bun src/cli/main.ts smoke-tui --sextant",
     "build:model-index": "node scripts/build-model-index.mjs",
     "check:boundary": "node scripts/check-public-boundary.mjs",
+    "check:product-boundary": "node scripts/check-product-boundary.mjs",
     "check:links": "node scripts/check-doc-links.mjs",
-    "ci": "bun run check:boundary && bun run check:links && bun run typecheck && bun test && bun run build:cli",
+    "ci": "bun run check:boundary && bun run check:product-boundary && bun run check:links && bun run typecheck && bun test && bun run build:cli",
     "release:check": "bun run ci && npm pack --dry-run"
   },
   "dependencies": {

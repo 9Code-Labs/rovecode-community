@@ -106,7 +106,8 @@ test("never a secret: a stored key and an env key are named by NAME only; the le
   const s = scratch();
   const SECRET = "sk-ant-doctor-must-never-print-this-9f8e7d";
   writeFileSync(join(s.home, "credentials.json"), JSON.stringify({ anthropic: { type: "api", key: SECRET } }));
-  mkdirSync(join(s.env.USERPROFILE!, ".cumulus"));
+  const platformHome = process.platform === "win32" ? s.env.USERPROFILE! : s.env.HOME!;
+  mkdirSync(join(platformHome, ".cumulus"));
   mkdirSync(join(s.cwd, ".rovecode", "checkpoints", "sess-1"), { recursive: true });
   writeFileSync(join(s.cwd, ".rovecode", "checkpoints", "sess-1", "blob"), Buffer.alloc(201 * 1024 * 1024, 0));
   const out: string[] = [];

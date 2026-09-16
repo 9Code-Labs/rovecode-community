@@ -374,7 +374,7 @@ eval/                  scripted-provider gauntlet + deterministic benches
 
 ## Supported extension API
 
-Distributed integrations should import only `rovecode/extensions`, `rovecode/plugins`, or `rovecode/providers`; deep `src/` imports are internal. See [API stability](docs/api-stability.md), [extension interfaces](docs/extensions.md), and the [open-core architecture](docs/open-core-architecture.md). Public code is mechanically prevented from importing private overlays.
+Distributed integrations should import only `rovecode/extensions`, `rovecode/plugins`, or `rovecode/providers`; deep `src/` imports are internal. See [API stability](docs/api-stability.md), [extension interfaces](docs/extensions.md), the [authentication boundary](docs/authentication-boundary.md), and the [open-core architecture](docs/open-core-architecture.md). Public code is mechanically prevented from importing private overlays or hosted product-auth/control-plane contracts. Generic local provider and MCP authentication remain part of the usable open-source core.
 
 ## Configuration
 

@@ -12,7 +12,7 @@ This repository is the useful local coding-agent core, not a reduced demo.
 | `src/eval`, `test` | Public core | Deterministic eval and regression primitives |
 | `src/telemetry` | Public optional | Explicitly configured OpenTelemetry; disabled by default |
 | `src/lanes`, `market`, bundled plugins | Public optional | Local integrations/catalogs with trust gates |
-| Website/auth/deployment repository | Excluded | Separate system and not extraction source material |
+| Website, hosted product-auth, dashboard, and deployment repositories | Excluded | Separate systems and not extraction source material |
 | Hosted account/control-plane, billing, managed services, private connectors | Private overlay | Commercial/operational concerns; no dependency from public code |
 | Production credentials, inventories, customer data, logs/sessions, internal docs | Excluded | Secrets/privacy/operations |
 | Current single-package module graph | Needs refactor | Exported coherently now; stable package seams remain to be made explicit |
@@ -46,4 +46,4 @@ Public decisions happen in issues/PRs under `GOVERNANCE.md`. Vulnerabilities use
 
 ## Implemented boundary controls
 
-The package now exposes documented `rovecode/extensions`, `rovecode/plugins`, and `rovecode/providers` entry points. Contract tests pin those exports, and `scripts/check-public-boundary.mjs` rejects imports from private/commercial/hosted overlay namespaces. This makes the public side enforceable today. The target private downstream still needs to consume these package exports and enforce its complementary import rule.
+The package now exposes documented `rovecode/extensions`, `rovecode/plugins`, and `rovecode/providers` entry points. Contract tests pin those exports, and `scripts/check-public-boundary.mjs` rejects imports from private/commercial/hosted overlay namespaces. `scripts/check-product-boundary.mjs` separately excludes hosted account auth, billing, entitlement, dashboard, website, and control-plane contracts while preserving generic local provider and MCP authentication. See [authentication boundary](authentication-boundary.md). This makes the public side enforceable today. The target private downstream still needs to consume these package exports and enforce its complementary import rule.

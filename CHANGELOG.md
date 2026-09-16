@@ -13,6 +13,7 @@ Hashes on entries before 0.3.2 name commits in the checkout rovecode shared with
 
 - Added explicit package exports for the core, extension, plugin, and provider APIs, with contract tests and a documented 0.x compatibility policy.
 - Added a CI-enforced one-way dependency boundary: public source cannot import private, hosted, commercial, or control-plane overlays.
+- Added a separate product-auth boundary that excludes account, billing, entitlement, website/dashboard, and control-plane contracts while retaining generic local provider and MCP authentication.
 - Added local documentation-link validation and a manual signed release checklist.
 - Replaced the licensed Gitleaks Action with a checksum-pinned open-source CLI invocation and pinned all CI actions to immutable commits.
 

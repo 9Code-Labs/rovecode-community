@@ -143,7 +143,7 @@ test("externalResource: a file → its real parent dir + `\\*`; an existing dire
   expect(externalResource(join(dir, "sub"))).toBe(join(dir, "sub", "*"));
   expect(externalResource(join(dir, "sub") + sep)).toBe(join(dir, "sub", "*"));
   expect(externalResource(join(dir, "new", "deep.txt"))).toBe(join(dir, "new", "*"));
-  expect(externalResource(dir.toLowerCase() === dir ? join(dir, "a.txt") : join(dir.toLowerCase(), "a.txt"))).toBe(join(dir, "*")); // case collapses (win32) or is literal (POSIX, same spelling)
+  if (win) expect(externalResource(join(dir.toLowerCase(), "a.txt"))).toBe(join(dir, "*")); // Windows path case collapses
   const root = parse(dir).root;
   expect(externalResource(join(root, "rovecode-p81-no-such-file.txt"))).toBe(root + "*");
   expect(externalResource(root)).toBe(root + "*");
@@ -155,7 +155,8 @@ test("resolveRoots: values resolve against `base` (the launch dir), come back ca
   const base = real("rovecode-ws-roots-");
   const cwd = join(base, "cwd"), lib = join(base, "lib"), other = join(base, "other");
   for (const d of [cwd, lib, join(lib, "sub"), other, join(cwd, "inside")]) mkdirSync(d, { recursive: true });
-  const r = resolveRoots(cwd, ["lib", other, "./lib", join(lib, "sub"), join(cwd, "inside"), lib.toLowerCase() === lib ? lib + sep : lib.toLowerCase()], base);
+  const caseDuplicate = win && lib.toLowerCase() !== lib ? lib.toLowerCase() : lib + sep;
+  const r = resolveRoots(cwd, ["lib", other, "./lib", join(lib, "sub"), join(cwd, "inside"), caseDuplicate], base);
   expect(r.dirs).toEqual([lib, other]);
   expect(r.notes.length).toBe(1);
   expect(r.notes[0]).toStartWith("rovecode: --add-dir:");
@@ -199,7 +200,8 @@ test("WorkspaceRoots: canonical cwd, `allow file.external <dir>\\*` and `allow f
   expect(none.describe()).toBe("");
   expect(none.promptLine()).toBe("");
   expect(none.checkpointNote()).toBe("");
-  const roots = new WorkspaceRoots(cwd.toLowerCase() === cwd ? cwd : cwd.toLowerCase(), resolveRoots(cwd, [lib]));
+  const spelledCwd = win && cwd.toLowerCase() !== cwd ? cwd.toLowerCase() : cwd;
+  const roots = new WorkspaceRoots(spelledCwd, resolveRoots(cwd, [lib]));
   expect(roots.cwd).toBe(cwd);
   expect(roots.dirs).toEqual([lib]);
   expect(roots.rules()).toEqual([{ action: EXTERNAL_ACTION, resource: join(lib, "*"), effect: "allow" }]);
