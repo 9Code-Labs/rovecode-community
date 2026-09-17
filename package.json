@@ -47,7 +47,9 @@
     "check:product-boundary": "node scripts/check-product-boundary.mjs",
     "check:links": "node scripts/check-doc-links.mjs",
     "ci": "bun run check:boundary && bun run check:product-boundary && bun run check:links && bun run typecheck && bun test && bun run build:cli",
-    "release:check": "bun run ci && npm pack --dry-run"
+    "release:check": "bun run ci && npm pack --dry-run",
+    "release:stage": "bun run scripts/stage-release.ts",
+    "quality:offline": "bun run scripts/harness-quality.ts"
   },
   "dependencies": {
     "@ast-grep/napi": "^0.45.3",

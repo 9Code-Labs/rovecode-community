@@ -1,25 +1,7 @@
-/** PORT #36 — single-binary build + smoke gate.
+/** Single-binary build + hermetic smoke gate.
  *
- *  `bun run scripts/build.ts` (= `bun run build`):
- *    1. bun build --compile src/cli/main.ts --outfile dist/rovecode[.exe]
- *    2. smokes the BINARY (not the source tree):
- *       a. --version prints exactly package.json's version
- *       b. --help exits 0 and prints usage
- *       c. one-shot `run` in a fresh temp workspace — git-initialised, holding
- *          one small .ts file — with ROVECODE_* and *_API_KEY scrubbed from the env
- *          and ROVECODE_HOME pointed at an empty dir (a host `rovecode auth set`
- *          credential beats env, port #37, and would steer resolveProvider onto
- *          a real endpoint): must take the mock-provider path and exit 0 AND
- *          leave a repo-map tags
- *          cache naming that file's symbol. That proves the createRuntime→
- *          agentLoop pipeline works inside the binary and that the embedded
- *          @ast-grep/napi native addon actually PARSED source (an empty dir only
- *          showed it loaded; runtime.ts swallows extraction failures into a null
- *          chunk, so the persisted cache is the one observable).
- *
- *  The compile is deliberately NOT part of `bun test` (too slow for the suite);
- *  test/integration/packaging.test.ts covers the package invariants instead.
- *  Exit code: 0 only when the build and all three smokes pass. */
+ * The binary is tested without credentials or network: version/help, typo guard,
+ * fail-closed no-provider run, and the deterministic terminal render smoke. */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -70,30 +52,22 @@ check("--version", ver.exitCode === 0 && ver.stdout.trim() === pkg.version,
 
 // 2b. --help ------------------------------------------------------------
 const help = run([outfile, "--help"]);
-check("--help", help.exitCode === 0 && help.stdout.includes("commands:") && help.stdout.includes("rovecode"),
+check("--help", help.exitCode === 0 && help.stdout.includes("rovecode — a coding agent") && help.stdout.includes("start here"),
   `exit=${help.exitCode} stdout=${JSON.stringify(help.stdout.slice(0, 120))}`);
 
-// 2c. one-shot mock run + repo-map extraction ---------------------------
-// Fresh temp cwd: keeps .rovecode/ session/checkpoint artifacts out of the repo
-// and guarantees no .rovecode/mcp.json / project config is picked up. It is a
-// REAL (tiny) workspace: the repo map only builds when source files exist, and
-// `git init` exercises the git ls-files enumeration path the binary uses.
-// ROVECODE_HOME → an empty dir beside it: the user-scope credential store must not
-// leak in (the env scrub cannot see ~/.rovecode/credentials.json).
+// 2c. typo guard + fail-closed offline run -------------------------------
 const smokeDir = mkdtempSync(join(tmpdir(), "rovecode-smoke-"));
 try {
-  const PROBE_SYMBOL = "smokeProbeSymbol";
-  writeFileSync(join(smokeDir, "probe.ts"), `export function ${PROBE_SYMBOL}(): number { return 42; }\n`);
-  const gi = Bun.spawnSync(["git", "init", "-q"], { cwd: smokeDir, stdout: "pipe", stderr: "pipe" });
-  if (gi.exitCode !== 0) console.warn("warn: git init failed in the smoke dir — enumeration falls back to the walk");
-  const oneShot = run([outfile, "run", "packaging smoke"], { cwd: smokeDir, env: { ROVECODE_HOME: join(smokeDir, ".rovecode-home") } });
-  // the tags cache is persisted only after a successful extraction over probe.ts
-  const cachePath = join(smokeDir, ".rovecode", "cache", "repomap.json");
-  const cache = existsSync(cachePath) ? readFileSync(cachePath, "utf8") : "";
-  check("one-shot mock run + repo-map extraction",
-    oneShot.exitCode === 0 && oneShot.stdout.includes("Rovecode mock provider") && cache.includes(PROBE_SYMBOL),
-    `exit=${oneShot.exitCode} stdout=${JSON.stringify(oneShot.stdout.slice(0, 200))} stderr=${JSON.stringify(oneShot.stderr.slice(0, 200))}`
-    + ` cache=${cache ? JSON.stringify(cache.slice(0, 200)) : "(absent)"}`);
+  const home = join(smokeDir, ".rovecode-home");
+  const typo = run([outfile, "doctor", "--definitely-not-a-real-flag"], { cwd: smokeDir, env: { ROVECODE_HOME: home } });
+  check("typo guard", typo.exitCode === 2 && /unknown (flag|command)/i.test(typo.stderr),
+    `exit=${typo.exitCode} stderr=${JSON.stringify(typo.stderr.slice(0, 200))}`);
+  const offline = run([outfile, "run", "offline packaging smoke"], { cwd: smokeDir, env: { ROVECODE_HOME: home } });
+  check("offline no-provider fails closed without network", offline.exitCode === 2 && /no provider configured/i.test(offline.stderr),
+    `exit=${offline.exitCode} stdout=${JSON.stringify(offline.stdout.slice(0, 100))} stderr=${JSON.stringify(offline.stderr.slice(0, 200))}`);
+  const tui = run([outfile, "smoke-tui", "--sextant"], { cwd: smokeDir, env: { ROVECODE_HOME: home } });
+  check("terminal receiver render smoke", tui.exitCode === 0 && tui.stdout.includes("smoke-tui --sextant: PASS") && tui.stdout.includes("╭────────────╮"),
+    `exit=${tui.exitCode} stdout=${JSON.stringify(tui.stdout.slice(-200))}`);
 } finally {
   rmSync(smokeDir, { recursive: true, force: true });
 }

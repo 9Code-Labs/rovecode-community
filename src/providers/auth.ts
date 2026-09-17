@@ -30,7 +30,7 @@ import { createInterface } from "node:readline";
 import { Writable } from "node:stream";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { createRequire } from "node:module";
+import modelIndex from "./models-index.json";
 
 /** The provider index, loaded ONLY when something asks for a key name.
  *
@@ -45,15 +45,8 @@ import { createRequire } from "node:module";
  *
  *  `require` rather than `await import` because `keyNameFor` is synchronous and called from synchronous
  *  code; making it async would push the change through a dozen call sites to save nothing extra. */
-let snapshotCache: Record<string, { env?: string[] } | undefined> | null = null;
-function snapshotProvidersLazy(): Record<string, { env?: string[] } | undefined> {
-  if (snapshotCache === null) {
-    const req = createRequire(import.meta.url);
-    const m = req("./models-index.json") as { providers?: Record<string, { env?: string[] }> };
-    snapshotCache = m.providers ?? {};
-  }
-  return snapshotCache;
-}
+const snapshotProvidersLazy = (): Record<string, { env?: string[] } | undefined> =>
+  (modelIndex as { providers?: Record<string, { env?: string[] }> }).providers ?? {};
 
 export interface StoredCredential {
   type: "api";

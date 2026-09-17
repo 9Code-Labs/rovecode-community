@@ -1,4 +1,4 @@
-/** Port #45 — rovecode, the weather-cloud pet of the sextant surface: sprite + quip tables, observation
+/** Port #45 — rovecode, the CRT receiver companion of the sextant surface: sprite + quip tables, observation
  *  of written lines, moods derived from real activity, storms, sleep, pokes. Ported from the user's own
  *  sextant v0.4.0 prototype `src/pet.js` (user-owned; the mock typing/scenario hooks are gone — every
  *  input is a RunEvent-derived call from the renderer). PURE: every method takes `now`; no wall clock,
@@ -36,7 +36,7 @@ export type QuipKind =
   | "sleep" | "todo" | "long" | "failLine" | "risk" | "spawn" | "laneDone" | "laneFail" | "merge" | "thinking"
   | "fetch" | "crew" | "tinker"; // the network, a child's progress, housekeeping (providers/skills/memory/MCP) — acts no older kind covers
 
-/** what the cloud says on events; `{n} {f} {q} {r} {a} {d} {changed}` are filled from the event data.
+/** what the receiver says on events; `{n} {f} {q} {r} {a} {d} {changed}` are filled from the event data.
  *  `poke` is ordered so the first poke greets ("hi.") and later pokes cycle the pool. */
 export const QUIPS: Readonly<Record<QuipKind, readonly string[]>> = {
   start: ["on it.", "let's see what we've got.", "rolling in."],
@@ -50,19 +50,19 @@ export const QUIPS: Readonly<Record<QuipKind, readonly string[]>> = {
   permission: ["your call ▸", "need a nod from you."],
   allowed: ["thanks ♥", "♥ on it."],
   denied: ["okay, hands off.", "fair. stopping."],
-  edit: ["raining code on {f}.", "sprinkling {f}.", "a light shower over {f}."],
-  write: ["a fresh {f}.", "new file, new weather: {f}."],
+  edit: ["tuning {f}.", "editing {f}.", "adjusting {f}."],
+  write: ["a fresh {f}.", "new signal: {f}."],
   remove: ["blowing {f} away.", "bye, {f}."],
-  run: ["thunder time.", "rumble rumble.", "charging up…"],
-  pass: ["{r}. sunny skies.", "clear skies ☼ {r}.", "{r}. told you."],
+  run: ["powering the tool.", "running the tool.", "charging up…"],
+  pass: ["{r}. signal clear.", "clear signal · {r}.", "{r}. locked."],
   fail: ["{r}. GRR.", "red. i hate red.", "{r}. fixing it. NOW."],
-  error: ["storm's here.", "who wrote THAT.", "no. no no no.", "grr."],
-  done: ["all clear ☼", "nice work, us.", "sun's out."],
-  stopped: ["okay, stopping.", "pausing the rain."],
-  fresh: ["fresh sky.", "clean slate."],
-  theme: ["ooh, new sky.", "i like this light."],
+  error: ["signal fault.", "who wrote THAT.", "no. no no no.", "grr."],
+  done: ["all clear.", "nice work, us.", "signal locked."],
+  stopped: ["okay, stopping.", "standing by."],
+  fresh: ["fresh channel.", "clean slate."],
+  theme: ["new display mode.", "display tuned."],
   poke: ["hi.", "hehe.", "♪", "that tickles.", "yes?"],
-  idle: ["humming ♪", "ready when you are.", "the files look calm.", "nice day for a refactor.", "♪ ♪"],
+  idle: ["humming ♪", "ready when you are.", "channel is quiet.", "ready for a refactor.", "♪ ♪"],
   sleep: ["zzz…", "…", "mm."],
   todo: ["one down.", "{d}/{n}. moving.", "check.", "that's {d} of {n}."],
   long: ["still going. hang tight.", "big one. i'm here."],
@@ -80,7 +80,7 @@ export const QUIPS: Readonly<Record<QuipKind, readonly string[]>> = {
 /** the word for `elapsedMs` into a reasoning phase: one step every 4 s — slow enough to read, fast enough that 15 s changes it three times */
 export const thinkingWord = (elapsedMs: number): string => QUIPS.thinking[Math.floor(Math.max(0, elapsedMs) / 4000) % QUIPS.thinking.length] ?? "thinking";
 
-/** what the cloud notices in lines being written (first matching row wins, per line) */
+/** what the receiver notices in lines being written (first matching row wins, per line) */
 export const OBSERVE: readonly (readonly [RegExp, string])[] = [
   [/httpOnly/i, "httpOnly. good call."],
   [/secure:\s*true/, "secure cookie ♥"],
@@ -106,7 +106,7 @@ export const OBSERVE: readonly (readonly [RegExp, string])[] = [
   [/redirect\(/, "and… redirect."],
   [/async /, "async. i'll wait."],
 ];
-/** what the cloud notices in lines being removed */
+/** what the receiver notices in lines being removed */
 export const OBSERVE_DEL: readonly (readonly [RegExp, string])[] = [
   [/legacy/i, "goodbye, legacy."],
   [/new Map\(\)/, "bye, in-memory Map."],
@@ -141,7 +141,7 @@ export interface MoodCtx {
   changed: number;
   /** the prompt has text — the eyes glance at the input */
   typing: boolean;
-  /** first 1.3 s after boot — the cloud opens its eyes last, no ambient hums yet */
+  /** first 1.3 s after boot — the receiver powers on its eyes last, no ambient hums yet */
   booting: boolean;
 }
 
@@ -185,7 +185,7 @@ export interface Pet {
   /** immediate reaction to an output line (a red test line storms at once) */
   react(kind: ReactKind, now: number): void;
   event(kind: PetEventKind, data: PetEventData | undefined, now: number): void;
-  /** the user is typing; the cloud guesses the command ("/help? sure.") */
+  /** the user is typing; the receiver suggests the command ("/help? sure.") */
   suggest(label: string, now: number): void;
   /** a click: jump + hearts + a greeting; event("poke") is the same call — both count the poke, so the first
    *  says "hi." and later pokes cycle the pool (the integration may use either) */
@@ -295,7 +295,7 @@ export function createPet(opts: { name?: string; seed?: number } = {}): Pet {
     }
     if (found == null) return;
     P.nextObserveAt = now + OBSERVE_GAP_MS;
-    // an edit's event quip ("raining code on x.ts.") keeps the floor; the observation follows it
+    // an edit's event quip ("tuning x.ts.") keeps the floor; the observation follows it
     if (eventQuipActive(now)) P.pendingObserve = { text: found, at: now };
     else say(found, now, 3200, "observe");
   }
@@ -333,7 +333,7 @@ export function createPet(opts: { name?: string; seed?: number } = {}): Pet {
     // floor (ten reads name the first file), a different routine kind waits MIN_DWELL_MS (the time to read six
     // words); verdicts, refusals, asks and the user's pokes always take it
     if (!URGENT_KINDS.has(kind) && eventQuipActive(now) && (kind === P.lastEventKind || now - P.lastQuipAt < MIN_DWELL_MS)) {
-      if (GLANCE_KINDS.includes(kind)) glance(1, now, 2600); // the cloud still looks over at the work
+      if (GLANCE_KINDS.includes(kind)) glance(1, now, 2600); // the receiver still looks over at the work
       return;
     }
     P.lastEventKind = kind;

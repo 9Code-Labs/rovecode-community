@@ -1,7 +1,7 @@
 # Rovecode
 
 A coding agent for the terminal. The cockpit is a panelled TUI called sextant; the mascot is a
-weather cloud whose mood follows the run. Under the hood, rovecode is a research-derived harness in
+compact CRT receiver companion whose face follows the run. Under the hood, rovecode is a research-derived harness in
 TypeScript on Bun: instead of inventing architecture it ports evidence-based patterns from open-source
 harnesses (pi, opencode, codex, cline, aider, gemini-cli, oh-my-pi, hermes-agent, senpi, prime-agent,
 OpenHands) — every port traces to file:line in a snapshotted source and lands only after an independent
@@ -77,7 +77,7 @@ make the one command scripts call to identify a build wait on the network.
 
 On a terminal, `rovecode` opens with a ~1.1 s intro centred on a cleared screen (`src/core/intro.ts`): the
 ROVECODE mark fills in left to right, a hairline frame draws inward from the four corners until the halves meet,
-the cloud mascot leans down out of that top line, and the mark breathes once. The session boots underneath it, in
+the receiver companion powers on beneath that top line, and the mark breathes once. The session boots underneath it, in
 parallel, so the only wall time this adds is whatever is left of the show once the session is otherwise ready.
 Skip it with `--no-intro` or `ROVECODE_INTRO=0`; nothing is drawn into a pipe or under `--plain`, and it never
 reads stdin, so keys typed during it reach the session. It hands over to a card that names the version, the connected
@@ -240,7 +240,7 @@ a panelled cockpit instead of a chat log — `files` (git tree with M/A/D, touch
 approval preview before it, `$` run output with PASS/FAIL chips, `∷` the crew board over background tasks)
 · `messages` (compact tool rows `· read x … N lines` `~ edit x +a −b` `$ run cmd`, the ONE modal card for
 approvals and `ask_user`, the prompt with `/` suggestions and `@file` mentions) · `plan` (the session's
-todos + crew) · `usage` (tokens, context bar, cost) · `rovecode`, the weather-cloud pet whose mood follows
+todos + crew) · `usage` (tokens, context bar, cost) · `rovecode`, the CRT receiver companion whose face follows
 the run. `rovecode` picks it when stdout is a TTY of at least 100×30 that renders truecolor (`COLORTERM`,
 `WT_SESSION`, `TERM_PROGRAM` vscode/iTerm/WezTerm/ghostty, kitty/`-direct` `TERM`) or 256 colors (a
 `*-256color` `TERM` with no `COLORTERM`, painted through the xterm-256 quantizer); `ROVECODE_TUI=sextant|classic`

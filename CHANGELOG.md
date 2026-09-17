@@ -474,3 +474,10 @@ start. Numbers are measurements from the commit that reports them, on the machin
 
 - The suite runs on Linux: eleven Windows-only assumptions fixed, three of them product gaps (HOME honoured for the config directory, backslash session ids refused everywhere, drive-letter paths relativized on POSIX); the backslash-cwd git check is Windows-only (1dfd3fa, d24c590)
 - The two headless surfaces are tested through the real process: a `serve` SSE run, an `acp` stdio session, and the MCP child reaped on exit (6aa25aa)
+
+### CRT receiver companion and first-party artifacts
+
+- Replaced the cloud/weather mascot painter with a compact terminal-native CRT receiver while retaining `--pet` and `ROVECODE_PET` as compatibility aliases.
+- Added deterministic receiver state/layout snapshots and removed ambient sprite sway to avoid flicker.
+- Fixed the single-binary build smoke, which still expected a removed mock-provider path, and fixed JSON model-index loading inside compiled binaries.
+- Added Windows x64 release staging, checksums, manifest contract, extracted-artifact smoke instructions, and a measured offline harness quality report.

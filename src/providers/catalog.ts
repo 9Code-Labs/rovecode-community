@@ -8,6 +8,7 @@
 import { readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ProviderMap, Model } from "@opencode-ai/models";
+import modelIndex from "./models-index.json";
 import { LOCAL_MODELS, PRICE_NOTES, PRICE_TIERS, type LocalModel, type PriceTier } from "./catalog-local.ts";
 
 // Loaded lazily on the first lookup() so that importing catalog.ts costs nothing — the TUI paints its
@@ -19,14 +20,7 @@ import { LOCAL_MODELS, PRICE_NOTES, PRICE_TIERS, type LocalModel, type PriceTier
 // is this model's window and price". The trimmed index is 1.1 MB. scripts/build-model-index.mjs
 // generates it and `--check` fails when it and the installed package disagree, so an upgrade cannot
 // leave the catalog quietly describing the previous release.
-let _snapshot: ProviderMap | null = null;
-function snapshotProviders(): ProviderMap {
-  if (_snapshot === null) {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    _snapshot = (require("./models-index.json") as { providers: ProviderMap }).providers;
-  }
-  return _snapshot;
-}
+const snapshotProviders = (): ProviderMap => (modelIndex as unknown as { providers: ProviderMap }).providers;
 
 export interface ModelInfo {
   provider: string;

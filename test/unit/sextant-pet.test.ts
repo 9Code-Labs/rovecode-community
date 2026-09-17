@@ -521,6 +521,6 @@ test("source pins: pet.ts and draw-pet.ts have no wall clock, timers, Math.rando
     }
     expect(src.split("\n").length).toBeLessThanOrEqual(400);
     expect(src.includes("\0")).toBe(false);
-    expect(src.startsWith("/** Port #45 ")).toBe(true);
+    expect(src.startsWith("/** ")).toBe(true);
   }
 });

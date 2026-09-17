@@ -2,7 +2,7 @@
  *
  *  Four acts, all of them Berkay's picks (2026-09-06). The mark fills in left to right — chosen over a
  *  checklist that ticks itself off and a single progress bar. A hairline frame draws inward from the four
- *  corners until the halves meet — chosen over a shimmer pass and a rain of blocks. The cloud mascot leans
+ *  corners until the halves meet — chosen over a shimmer pass and a rain of blocks. The receiver companion powers on
  *  down out of the frame's top line — chosen over raining the letters into place and rising from the
  *  bottom. Then the mark breathes once. Centred on a cleared screen, and it hands over to the session's
  *  card (core/voice.ts).
