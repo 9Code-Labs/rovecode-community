@@ -16,8 +16,11 @@ afterAll(() => { for (const d of dirs) rmSync(d, { recursive: true, force: true 
 /** a scratch cwd + home; the home is ALSO what rovecodeHome() answers, because settings and providers read it there */
 function scratch() {
   const cwd = tmp("rovecode-doctor-cwd-"), home = tmp("rovecode-doctor-home-");
+  const platformHome = tmp("rovecode-doctor-user-");
   process.env.ROVECODE_HOME = home;
-  const env: Record<string, string | undefined> = { ROVECODE_HOME: home, PATH: "", USERPROFILE: tmp("rovecode-doctor-user-"), HOME: undefined };
+  // Populate both names: tests explicitly simulate either platform and CI hosts
+  // must not inherit the runner account's real home directory.
+  const env: Record<string, string | undefined> = { ROVECODE_HOME: home, PATH: "", USERPROFILE: platformHome, HOME: platformHome };
   return { cwd, home, env };
 }
 const none = () => null;
