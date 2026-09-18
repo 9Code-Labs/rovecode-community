@@ -123,13 +123,16 @@ test("OpenAI: the stored accountId rides as chatgpt-account-id on the streaming 
   expect(requests[2]!.headers["authorization"]).toBe("Bearer k-0123456789");
 });
 
-test("structural pin: main.ts builds its streaming adapter ONLY through providerStreaming — at both sites (resolveStream and cmdRun) — and never calls openaiCompatStreaming directly", () => {
+test("structural pin: resolveStream uses providerStreaming; cmdRun keeps the runtime's wrapped provider chain", () => {
   const src = readFileSync(resolve(import.meta.dir, "..", "..", "src", "cli", "main.ts"), "utf8");
   const code = src.split("\n").filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).map((l) => l.replace(/\/\/.*$/, ""));
   // MUTATION TARGET (a site reverted to openaiCompatStreaming({ baseUrl, apiKey }) — the headerless call): caught here
   expect(code.filter((l) => l.includes("openaiCompatStreaming"))).toEqual([]);
-  expect(code.filter((l) => l.includes("providerStreaming(")).length).toBe(2);
-  expect(src).toContain('process.env.ROVECODE_STREAM === "sse"');
+  expect(code.filter((l) => l.includes("providerStreaming(")).length).toBe(1);
+  const cmdRun = src.slice(src.indexOf("async function cmdRun("), src.indexOf("async function cmdGauntlet("));
+  expect(cmdRun).toContain("await bootRuntime(");
+  expect(cmdRun).not.toContain("stream: sse");
+  expect(cmdRun).not.toContain("providerStreaming(");
   // the helper itself is the one place the streaming adapter is given the config's headers (and the oauth wrap)
   const stream = readFileSync(resolve(import.meta.dir, "..", "..", "src", "providers", "stream.ts"), "utf8");
   expect(stream).toContain("export function providerStreaming(cfg: ProviderConfig, oauth: OAuthSeamDeps = {}): StreamFn");

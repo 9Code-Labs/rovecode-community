@@ -8,7 +8,7 @@
  *  Error-turn shaping (abort vs error; HTTP status + Retry-After side-channel, port #23) lives in stream-errors.ts.
  *  Message lowering (harness parts → wire content, incl. port #34 image blocks) lives in wire-messages.ts. */
 
-import type { StreamFn, Message, AssistantTurn, StreamEvent, ModelRef, StopReason } from "../core/types.ts";
+import type { StreamFn, Message, AssistantTurn, StreamEvent, ModelRef, StopReason, StreamOptions } from "../core/types.ts";
 import { partsText } from "../core/loop.ts";
 import { applyAnthropicCacheBoundaries } from "./cache.ts";
 import { normalizeUsage } from "../core/usage.ts";
@@ -18,7 +18,8 @@ import { supportsImages } from "./catalog.ts";
 import { profileWire } from "./profiles.ts";
 import { anthropicThinking, thinkingBudget, thinkingPlan, type AnthropicThinkingShape } from "./thinking.ts";
 import { toOpenAiMessages, toAnthropicMessages, toOpenAiToolSchemas, asToolSchema, type WireOptions } from "./wire-messages.ts";
-import { sseLines } from "./sse.ts";
+import { sseData } from "./sse.ts";
+import { rejectProviderError, openAiStop, anthropicStop, parseToolArgs, validateToolCalls } from "./response-validation.ts";
 import { oauthStream, resolveOAuthProviderConfig, type OAuthSeamDeps } from "./oauth/seam.ts";
 import { openaiResponsesStream } from "./responses.ts"; // the /responses wire (aion port #75)
 import { openAiWire } from "./wire-select.ts"; // chat vs responses, per call
@@ -244,7 +245,7 @@ export function openaiCompatStream(opts: AdapterOptions): StreamFn {
 
 /** Streaming variant: emits text_delta events as they arrive, then the final turn. */
 export function openaiCompatStreaming(opts: AdapterOptions): StreamFn {
-  return async function* (model: ModelRef, messages: Message[], options?: { signal?: AbortSignal; tools?: unknown[] }): AsyncGenerator<StreamEvent> {
+  return async function* (model: ModelRef, messages: Message[], options?: StreamOptions): AsyncGenerator<StreamEvent> {
     let turn: AssistantTurn;
     let buffer = "";
     const toolArgs = new Map<number, { id: string; name: string; args: string }>();
@@ -271,13 +272,15 @@ export function openaiCompatStreaming(opts: AdapterOptions): StreamFn {
         return;
       }
       if (isJsonBody(res)) { yield { type: "turn", turn: parseOpenAiResponse(await res.json()) }; return; }
-      let finish: StopReason = "end_turn";
+      let finish: StopReason | undefined;
       let usage: AssistantTurn["usage"] = { input: 0, output: 0 };
-      for await (const line of sseLines(res.body)) {
+      for await (const line of sseData(res.body, options)) {
         const ev = JSON.parse(line) as {
+          error?: unknown;
           choices?: { delta?: { content?: string | null; reasoning_content?: string | null; tool_calls?: { index?: number; id?: string; function?: { name?: string; arguments?: string } }[] }; finish_reason?: string | null }[];
           usage?: unknown;
         };
+        rejectProviderError(ev);
         const c = ev.choices?.[0];
         if (c?.delta?.content) { buffer += c.delta.content; yield { type: "text_delta", text: c.delta.content }; }
         // reasoning slices (GLM / DeepSeek-style `reasoning_content`): surfaced exactly like Anthropic's
@@ -285,13 +288,14 @@ export function openaiCompatStreaming(opts: AdapterOptions): StreamFn {
         if (c?.delta?.reasoning_content) yield { type: "reasoning_delta", text: c.delta.reasoning_content };
         for (const tc of c?.delta?.tool_calls ?? []) {
           const idx = tc.index ?? 0;
-          const cur = toolArgs.get(idx) ?? { id: tc.id ?? `tc${idx}`, name: tc.function?.name ?? "", args: "" };
+          // Start empty: the first name fragment is appended below, just like later fragments.
+          const cur = toolArgs.get(idx) ?? { id: tc.id ?? "", name: "", args: "" };
           if (tc.id) cur.id = tc.id;
           if (tc.function?.name) cur.name += tc.function.name;
           if (tc.function?.arguments) cur.args += tc.function.arguments;
           toolArgs.set(idx, cur);
         }
-        if (c?.finish_reason) finish = c.finish_reason === "tool_calls" ? "tool_use" : c.finish_reason === "length" ? "length" : "end_turn";
+        if (c?.finish_reason) finish = openAiStop(c.finish_reason);
         if (ev.usage) {
           // same normalization as the JSON adapters (parseOpenAiResponse/parseAnthropicResponse):
           // cached_tokens subtracted from the inclusive prompt count, cacheRead/Write carried
@@ -299,13 +303,13 @@ export function openaiCompatStreaming(opts: AdapterOptions): StreamFn {
           usage = { input: u.input, output: u.output, cacheRead: u.cacheRead || undefined, cacheWrite: u.cacheWrite || undefined };
         }
       }
+      if (finish === undefined) throw new Error("OpenAI stream ended without a finish reason");
       const parts: AssistantTurn["parts"] = [];
       if (buffer) parts.push({ kind: "text", text: buffer });
       for (const [, tc] of [...toolArgs].sort((a, b) => a[0] - b[0])) {
-        let args: unknown = {};
-        try { args = JSON.parse(tc.args || "{}"); } catch { args = { _raw: tc.args }; }
-        parts.push({ kind: "tool_call", id: tc.id, tool: tc.name, args });
+        parts.push({ kind: "tool_call", id: tc.id, tool: tc.name, args: parseToolArgs(tc.args, finish === "length") });
       }
+      validateToolCalls(parts, finish);
       turn = { parts, stopReason: finish, usage };
     } catch (e) {
       turn = failedTurn(e, options?.signal, buffer); // mid-stream abort: the deltas already streamed survive as the turn's text
@@ -323,11 +327,11 @@ export function openaiCompatStreaming(opts: AdapterOptions): StreamFn {
  *  JSON adapter produces. Block ORDER is preserved: parts are emitted by block index, so a text
  *  block before a tool_use stays before it. */
 export function anthropicStreaming(opts: AdapterOptions): StreamFn {
-  return async function* (model: ModelRef, messages: Message[], options?: { signal?: AbortSignal; tools?: unknown[] }): AsyncGenerator<StreamEvent> {
+  return async function* (model: ModelRef, messages: Message[], options?: StreamOptions): AsyncGenerator<StreamEvent> {
     let turn: AssistantTurn;
     let buffer = "";
     /** open + finished blocks by wire index; `json` accumulates an input_json_delta */
-    const blocks = new Map<number, { kind: "text"; text: string } | { kind: "tool"; id: string; name: string; json: string } | { kind: "thinking" }>();
+    const blocks = new Map<number, { kind: "text"; text: string } | { kind: "tool"; id: string; name: string; json: string; input: unknown } | { kind: "thinking" }>();
     try {
       const system = messages.filter((m) => m.role === "system").map((m) => partsText(m.parts)).join("\n");
       const rest: Record<string, unknown> = {};
@@ -354,14 +358,14 @@ export function anthropicStreaming(opts: AdapterOptions): StreamFn {
         return;
       }
       if (isJsonBody(res)) { yield { type: "turn", turn: parseAnthropicResponse(await res.json()) }; return; }
-      let stop: StopReason = "end_turn";
+      let stop: StopReason | undefined;
       let usage: AssistantTurn["usage"] = { input: 0, output: 0 };
-      for await (const line of sseLines(res.body)) {
+      events: for await (const line of sseData(res.body, options)) {
         const ev = JSON.parse(line) as {
           type?: string;
           index?: number;
           message?: { usage?: unknown };
-          content_block?: { type?: string; id?: string; name?: string };
+          content_block?: { type?: string; id?: string; name?: string; text?: string; input?: unknown };
           delta?: { type?: string; text?: string; partial_json?: string; thinking?: string; stop_reason?: string | null };
           usage?: unknown;
           error?: { type?: string; message?: string };
@@ -374,9 +378,13 @@ export function anthropicStreaming(opts: AdapterOptions): StreamFn {
           }
           case "content_block_start": {
             const i = ev.index ?? 0;
-            if (ev.content_block?.type === "tool_use") blocks.set(i, { kind: "tool", id: ev.content_block.id ?? `tc${i}`, name: ev.content_block.name ?? "unknown", json: "" });
+            if (ev.content_block?.type === "tool_use") blocks.set(i, { kind: "tool", id: ev.content_block.id ?? "", name: ev.content_block.name ?? "", json: "", input: ev.content_block.input === undefined ? {} : ev.content_block.input });
             else if (ev.content_block?.type === "thinking" || ev.content_block?.type === "redacted_thinking") blocks.set(i, { kind: "thinking" });
-            else blocks.set(i, { kind: "text", text: "" });
+            else {
+              const text = ev.content_block?.text ?? "";
+              blocks.set(i, { kind: "text", text });
+              if (text) { buffer += text; yield { type: "text_delta", text }; }
+            }
             break;
           }
           case "content_block_delta": {
@@ -397,7 +405,7 @@ export function anthropicStreaming(opts: AdapterOptions): StreamFn {
             break;
           }
           case "message_delta": {
-            if (ev.delta?.stop_reason === "max_tokens") stop = "length";
+            if (ev.delta?.stop_reason) stop = anthropicStop(ev.delta.stop_reason);
             // the output count only exists here; the input side stays as message_start reported it
             if (ev.usage !== undefined) {
               const u = normalizeUsage(ev.usage);
@@ -405,6 +413,8 @@ export function anthropicStreaming(opts: AdapterOptions): StreamFn {
             }
             break;
           }
+          case "message_stop":
+            break events;
           // a mid-stream `error` event ends the turn with what was already streamed
           case "error":
             throw new Error(ev.error?.message ?? "anthropic stream error");
@@ -412,15 +422,15 @@ export function anthropicStreaming(opts: AdapterOptions): StreamFn {
             break;
         }
       }
+      if (stop === undefined) throw new Error("Anthropic stream ended without a finish reason");
       const parts: AssistantTurn["parts"] = [];
       for (const [, b] of [...blocks].sort((a, z) => a[0] - z[0])) {
         if (b.kind === "thinking") continue; // reasoning never becomes a part
         if (b.kind === "text") { if (b.text) parts.push({ kind: "text", text: b.text }); continue; }
-        let args: unknown = {};
-        try { args = JSON.parse(b.json || "{}"); } catch { args = { _raw: b.json }; }
+        const args = b.json ? parseToolArgs(b.json, stop === "length") : b.input;
         parts.push({ kind: "tool_call", id: b.id, tool: b.name, args });
-        stop = "tool_use";
       }
+      validateToolCalls(parts, stop);
       turn = { parts, stopReason: stop, usage };
     } catch (e) {
       turn = failedTurn(e, options?.signal, buffer); // mid-stream abort: the deltas already streamed survive as the turn's text
@@ -468,37 +478,40 @@ export function anthropicStream(opts: AdapterOptions): StreamFn {
 // ---------- parsing ----------
 
 function parseOpenAiResponse(json: unknown): AssistantTurn {
+  rejectProviderError(json);
   const j = json as {
     choices: { message: { content: string | null; tool_calls?: { id: string; function: { name: string; arguments: string } }[] }; finish_reason: string | null }[];
     usage?: { prompt_tokens: number; completion_tokens: number };
   };
   const c = j.choices?.[0];
+  if (!c?.message) throw new Error("invalid OpenAI response: missing assistant message");
+  const stop = openAiStop(c.finish_reason);
   const parts: AssistantTurn["parts"] = [];
   if (c?.message.content) parts.push({ kind: "text", text: c.message.content });
   for (const tc of c?.message.tool_calls ?? []) {
-    let args: unknown = {};
-    try { args = JSON.parse(tc.function.arguments || "{}"); } catch { args = { _raw: tc.function.arguments }; }
+    const args = parseToolArgs(tc.function.arguments, stop === "length");
     parts.push({ kind: "tool_call", id: tc.id, tool: tc.function.name, args });
   }
-  const stop = (c?.message.tool_calls?.length ?? 0) > 0
-    ? "tool_use"
-    : c?.finish_reason === "length" ? "length" : "end_turn";
+  validateToolCalls(parts, stop);
   const u = normalizeUsage(j.usage);
   return { parts, stopReason: stop, usage: { input: u.input, output: u.output, cacheRead: u.cacheRead || undefined, cacheWrite: u.cacheWrite || undefined } };
 }
 
 function parseAnthropicResponse(json: unknown): AssistantTurn {
+  rejectProviderError(json);
   const j = json as {
     content: { type: string; text?: string; id?: string; name?: string; input?: unknown }[];
     stop_reason: string | null;
     usage: { input_tokens: number; output_tokens: number };
   };
+  if (!Array.isArray(j.content)) throw new Error("invalid Anthropic response: missing content array");
+  const stop = anthropicStop(j.stop_reason);
   const parts: AssistantTurn["parts"] = [];
-  for (const b of j.content ?? []) {
+  for (const b of j.content) {
     if (b.type === "text" && b.text) parts.push({ kind: "text", text: b.text });
-    if (b.type === "tool_use" && b.id) parts.push({ kind: "tool_call", id: b.id, tool: b.name ?? "unknown", args: b.input ?? {} });
+    if (b.type === "tool_use") parts.push({ kind: "tool_call", id: b.id ?? "", tool: b.name ?? "", args: b.input });
   }
-  const stop = (j.content ?? []).some((b) => b.type === "tool_use") ? "tool_use" : j.stop_reason === "max_tokens" ? "length" : "end_turn";
+  validateToolCalls(parts, stop);
   const u = normalizeUsage(j.usage);
   return { parts, stopReason: stop, usage: { input: u.input, output: u.output, cacheRead: u.cacheRead || undefined, cacheWrite: u.cacheWrite || undefined } };
 }

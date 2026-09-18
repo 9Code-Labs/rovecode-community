@@ -22,7 +22,7 @@ Three things end the retrying rather than the attempts running out, and each say
 retry budget (60 s total), the run's own deadline from `--max-seconds`, and a hint longer than either.
 
 `ROVECODE_FIRST_BYTE_TIMEOUT_MS` (default 60000) bounds only the wait for the **first** byte. Once the model is
-talking the body may take as long as it takes — a long answer is not a hung request.
+talking the SSE body has a separate idle timeout; active chunks reset that idle timer.
 
 ## What changed on 2026-09-04
 
@@ -36,10 +36,26 @@ Kept for anyone who knew the old behaviour; the right-hand column is what ships.
 | **400 / 401 / 403 / 404** | not retried | unchanged: the error stands at once |
 | **socket reset mid-stream, after tokens arrived** | retried — and the router could advance the chain too: the answer streamed AGAIN under the first | **not retried, not re-driven**: the turn ends with the partial text kept as its parts (the transcript stores it, the summary shows it above the error) and the error `… — the connection dropped after part of the answer had arrived; not retried, a retry would repeat it` |
 | **socket reset before any token** | retried | retried (nothing to duplicate) |
-| **no response before the first byte** | hung until Ctrl-C — the run's wall clock is checked only between turns | `fetchFirstByte`: 60 s (`ROVECODE_FIRST_BYTE_TIMEOUT_MS`) on the wait for headers only; a timeout is a transport failure `no response from api.anthropic.com within 60 s`, retried; the body may take as long as the model talks |
+| **no response before the first byte** | hung until Ctrl-C — the run's wall clock is checked only between turns | `fetchFirstByte`: 60 s (`ROVECODE_FIRST_BYTE_TIMEOUT_MS`) on the wait for headers only; a timeout is a transport failure `no response from api.anthropic.com within 60 s`, retried; SSE body reads have a separate 120 s idle timeout |
 | **abort (Ctrl-C, Esc Esc) during the backoff** | the sleep woke at once, no retry | unchanged |
 | **`--max-seconds` deadline** | unknown to the retry: a 30 s Retry-After could overshoot the clock | the loop passes `StreamOptions.deadlineAt`; a wait that would end past it is not taken: `anthropic: overloaded (HTTP 529) — not retried: the run's time limit is closer than the 8 s wait: Overloaded` |
 | retry budget per turn | 60 s total | unchanged (60 s); the note says `not retried: the 30 s wait would pass the retry budget` |
+
+## Stream integrity
+
+The shared SSE reader handles split UTF-8, CRLF, multi-line data frames and an unterminated final line.
+`ROVECODE_STREAM_IDLE_TIMEOUT_MS` bounds silence between body chunks (default 120000 ms).
+Chat Completions and Anthropic SSE reads also honor abort and the absolute run deadline.
+The `sseLines` compatibility export remains available to the Responses adapter.
+
+EOF without a finish reason, HTTP 200 error envelopes, malformed tool arguments, missing/duplicate IDs
+and empty tool-use turns are errors, never permission to execute tools. Length-limited calls remain
+non-executable. The core loop rejects missing terminal turns and pairs calls in error/budget turns with
+failed results so a later resume has no orphan calls. Headless SSE runs use the runtime's full provider
+chain, including OAuth refresh, middleware, retries and routing.
+
+Coverage: `test/unit/stream-integrity.test.ts`, `test/integration/loop-integrity.test.ts`,
+`test/unit/tool-stream-regressions.test.ts`, `test/integration/cli-tool-stream.test.ts`.
 
 ## Idempotency
 

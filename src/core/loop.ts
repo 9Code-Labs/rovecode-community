@@ -303,6 +303,17 @@ async function* runLoop(
       return;
     }
 
+    // Error/budget turns can contain salvaged calls from custom streams. They must never execute,
+    // but every persisted call still needs a result so a later resume is wire-well-formed.
+    if (stopReason === "error" || stopReason === "budget") {
+      for (const p of parts) if (p.kind === "tool_call") {
+        appendToolResult(deps.store, history, p.id, { ok: false, output: `Tool not executed: provider ${stopReason}` });
+      }
+    }
+    if (stopReason === "budget") {
+      yield { type: "run_end", status: "budget", summary: partsText(parts) || "provider budget reached" };
+      return;
+    }
     // --- error stops: the run ends in 'error', never a fake 'done' ---
     if (stopReason === "error") {
       const errText = turnResult.error ?? "provider stream failed";
@@ -542,10 +553,26 @@ export interface TurnOutcome {
 /** Drive one provider turn: yields the text and reasoning deltas as they arrive (the caller turns
  *  them into RunEvents), returns the terminal turn as the outcome. tool_call_delta is not surfaced. */
 async function* collectTurn(stream: StreamFn, model: ModelRef, messages: Message[], tools?: ToolSchema[], signal?: AbortSignal, deadlineAt?: number): AsyncGenerator<Extract<StreamEvent, { type: "text_delta" | "reasoning_delta" }>, TurnOutcome> {
-  let outcome: TurnOutcome = { parts: [], stopReason: "end_turn", usage: { input: 0, output: 0 } };
-  for await (const ev of stream(model, messages, { tools, signal, ...(deadlineAt !== undefined ? { deadlineAt } : {}) })) {
-    if (ev.type === "text_delta" || ev.type === "reasoning_delta") yield ev;
-    else if (ev.type === "turn") { outcome = { parts: ev.turn.parts, stopReason: ev.turn.stopReason, usage: ev.turn.usage, error: ev.turn.error, origin: servedBy(ev.turn) }; }
+  let outcome: TurnOutcome | undefined;
+  let text = "";
+  let error = "provider stream ended without a terminal turn";
+  try {
+    for await (const ev of stream(model, messages, { tools, signal, ...(deadlineAt !== undefined ? { deadlineAt } : {}) })) {
+      if (ev.type === "text_delta" || ev.type === "reasoning_delta") {
+        if (ev.type === "text_delta") text += ev.text;
+        yield ev;
+      } else if (ev.type === "turn") {
+        outcome = { parts: ev.turn.parts, stopReason: ev.turn.stopReason, usage: ev.turn.usage, error: ev.turn.error, origin: servedBy(ev.turn) };
+      }
+    }
+  } catch (e) {
+    error = e instanceof Error ? e.message : String(e);
+    // A throw after a provisional terminal event also invalidates that turn's tool calls.
+    outcome = undefined;
+  }
+  if (!outcome) return { parts: text ? [{ kind: "text", text }] : [], stopReason: signal?.aborted ? "aborted" : "error", usage: { input: 0, output: 0 }, error };
+  if (outcome.stopReason === "tool_use" && !outcome.parts.some((p) => p.kind === "tool_call")) {
+    return { ...outcome, stopReason: "error", error: "provider requested tool use without any tool calls" };
   }
   return outcome;
 }
