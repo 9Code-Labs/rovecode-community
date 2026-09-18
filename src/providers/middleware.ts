@@ -333,8 +333,9 @@ export function withToolCallParsing(stream: StreamFn, opts?: MiddlewareOptions):
     const parseOpts = known === undefined ? opts : { ...opts, tools: known };
     const lowered = lowerNonNativeContext(messages, options, opts?.lowerContext);
     for await (const event of stream(model, lowered.messages, lowered.options)) {
-      if (event.type !== "turn" || event.turn.parts.some((p) => p.kind === "tool_call")) {
-        yield event; // native tool calls / deltas: byte-identical passthrough
+      if (event.type !== "turn" || (event.turn.stopReason !== "end_turn" && event.turn.stopReason !== "tool_use") || event.turn.parts.some((p) => p.kind === "tool_call")) {
+        // Never promote a failed, aborted or truncated response into executable tool calls.
+        yield event; // native tool calls / deltas / unsuccessful turns: byte-identical passthrough
         continue;
       }
       const parts: MessagePart[] = [];

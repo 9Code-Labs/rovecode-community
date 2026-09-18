@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased — tool-calling stream integrity
+
+- Fix duplicated OpenAI streaming tool names and preserve length-limit stops before tool execution.
+- Keep headless SSE runs on the runtime's OAuth-aware provider, middleware, retry and router chain.
+- Reject incomplete responses, malformed tool arguments and invalid call identities before dispatch.
+- Bound SSE silence with `ROVECODE_STREAM_IDLE_TIMEOUT_MS` (120000 ms default); honor abort and chat/Anthropic stream deadlines.
+- Preserve failed-call results and reject missing terminal turns so failed sessions remain resumable.
+- Compatibility: retain the `sseLines` export for the Responses adapter; malformed responses now fail instead of reporting success.
+
 What changed for the person using rovecode, newest first. Every line ends with the commit that carries
 the change (hashes on `main`). Numbers are measurements from the commit that reports them, on the
 machine it names.

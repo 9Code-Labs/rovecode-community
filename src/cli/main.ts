@@ -67,7 +67,7 @@ async function cmdRun(prompt: string): Promise<void> {
   const { SandboxConfigError } = await import("../core/sandbox-config.ts");
   const { WorkspaceRootError } = await import("../core/workspace.ts");
   const { parseAddDirs } = await import("./run-flags.ts");
-  const { mockStream, textTurn, resolveProvider, providerStreaming } = await import("../providers/stream.ts");
+  const { mockStream, textTurn } = await import("../providers/stream.ts");
   const { MOCK_PROVIDER_TEXT } = await import("../core/voice.ts");
   const { summarizePlugins } = await import("../plugins/index.ts");
   const { resolvePermission } = await import("../core/settings.ts");
@@ -82,13 +82,9 @@ async function cmdRun(prompt: string): Promise<void> {
   const rawOut = { write: process.stdout.write.bind(process.stdout) };
   if (mode !== "text") guardStdout(process.stderr);
   const yolo = process.argv.includes("--yolo") || process.env.ROVECODE_YOLO === "1";
-  const providerCfg = resolveProvider();
-  // through the ONE streaming builder, so the config's headers (GitHub Copilot's editor headers, a proxy's
-  // org id) and an OAuth token's refresh reach this request too — the headerless adapter call used to drop them
-  const sse = providerCfg && process.env.ROVECODE_STREAM === "sse"
-    ? providerStreaming(providerCfg)
-    : undefined;
-  const rt = await bootRuntime({ ...(sse ? { stream: sse } : {}), ...(addDirs.length > 0 ? { addDirs } : {}) }).catch((e: unknown): never => {
+  // Runtime owns protocol/wire selection, OAuth refresh, middleware, retries and routing.
+  // The legacy "sse" opt-in must not inject a raw adapter that bypasses that chain.
+  const rt = await bootRuntime({ ...(addDirs.length > 0 ? { addDirs } : {}) }).catch((e: unknown): never => {
     if (e instanceof SandboxConfigError || e instanceof WorkspaceRootError) { console.error(`error: ${e.message}`); process.exit(2); }
     throw e;
   });

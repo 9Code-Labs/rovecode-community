@@ -233,8 +233,9 @@ const ENV = `env — every ROVECODE_* setting
   ROVECODE_RETRY_BASE_MS  cap of the FIRST backoff, ms (default 1000; full jitter; a Retry-After hint is a floor)
                     It doubles per attempt up to 20 s, and a server hint can raise the wait, never shorten it
   ROVECODE_FIRST_BYTE_TIMEOUT_MS  how long a provider may go without ANY response before the request
-                    counts as failed and is retried (default 60000). Only the FIRST byte is on this clock:
-                    once the model is talking, the body may take as long as it takes
+                    counts as failed and is retried (default 60000; covers response headers)
+  ROVECODE_STREAM_IDLE_TIMEOUT_MS  maximum silence between SSE body chunks (default 120000)
+                    Active streams can run longer; chat/Anthropic SSE reads also honor the run deadline
   ROVECODE_WEBFETCH_TIMEOUT_MS  web_fetch request timeout in ms (default 30000)
   EXA_API_KEY         optional Exa key for web_search; without it the search runs keyless against the
                     same hosted endpoint. Read only where the tool is registered, never stored, and

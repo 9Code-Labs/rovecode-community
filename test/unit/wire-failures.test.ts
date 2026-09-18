@@ -157,9 +157,11 @@ test("the run's deadline (--max-seconds): a wait that would end past it is not t
   expect(gaveUp[0]).toMatchObject({ why: "deadline", delayMs: 8000, retryAfterMs: 8000, status: 529 });
   expect(describeGiveUp(gaveUp[0]!)).toBe("anthropic: overloaded (HTTP 529) — not retried: the run's time limit is closer than the 8 s wait: Overloaded");
   // with room before the deadline the same header is simply the floor
-  queue([fail(529, "Overloaded", { "anthropic-ratelimit-tokens-reset": new Date(1_000_000 + 8_000).toISOString() }), new Response(ANTHROPIC_OK, { status: 200 })]);
+  // This attempt reaches the real SSE reader, which now enforces the absolute run deadline too.
+  const now = Date.now();
+  queue([fail(529, "Overloaded", { "anthropic-ratelimit-tokens-reset": new Date(now + 8_000).toISOString() }), new Response(ANTHROPIC_OK, { status: 200 })]);
   const n2: RetryNote[] = [];
-  await drive(wrap(anthropicStreaming({ baseUrl: "http://stub.invalid/v1", apiKey: "k" }), n2, [], {}), M, { deadlineAt: 1_000_000 + 60_000 });
+  await drive(wrap(anthropicStreaming({ baseUrl: "http://stub.invalid/v1", apiKey: "k" }), n2, [], { now: () => now }), M, { deadlineAt: now + 60_000 });
   expect(sleeps).toEqual([8000]);
   expect(n2[0]!.retryAfterMs).toBe(8000);
 });
