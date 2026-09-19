@@ -24,7 +24,7 @@ import { expect, test } from "bun:test";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const BIN = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "bin", "rovecode.ts");
+const BIN = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "bin", "rovecode.js");
 
 /** the child hits the REAL default provider's /models endpoint, and that endpoint can legitimately
  *  take tens of seconds under load (measured 638 rows, 30 s+ on a slow evening, 2026-09-10) — the

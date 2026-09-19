@@ -14,7 +14,7 @@ import { join, resolve } from "node:path";
 const root = resolve(import.meta.dir, "..", "..");
 const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
   name: string; version: string; private?: boolean;
-  bin: Record<string, string>; files: string[];
+  bin: Record<string, string>; files: string[]; exports?: Record<string, string>;
   engines?: Record<string, string>; scripts: Record<string, string>;
 };
 
@@ -41,9 +41,9 @@ describe("packaging: package.json publish invariants", () => {
     expect(Boolean(pkg.private)).toBe(false);
   });
 
-  test("name + semver version", () => {
+  test("name + semver version (a prerelease suffix is allowed — the npm channel ships betas)", () => {
     expect(pkg.name).toBe("rovecode");
-    expect(pkg.version).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(pkg.version).toMatch(/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/);
   });
 
   test("bin.rovecode points at an existing file with a bun shebang", () => {
@@ -56,22 +56,29 @@ describe("packaging: package.json publish invariants", () => {
     expect(readFileSync(abs, "utf8").startsWith("#!/usr/bin/env bun")).toBe(true);
   });
 
-  test("files[] entries all exist on disk", () => {
+  test("files[] entries all exist on disk — except dist, which prepack builds", () => {
     expect(pkg.files.length).toBeGreaterThan(0);
-    for (const f of pkg.files) expect(existsSync(join(root, f))).toBe(true);
+    for (const f of pkg.files) if (f !== "dist") expect(existsSync(join(root, f))).toBe(true);
+    // dist is a BUILD PRODUCT, never committed: the prepack hook is what puts it in the tarball
+    expect(pkg.scripts["prepack"]).toContain("build:npm");
+    expect(pkg.scripts["build:npm"]).toBeDefined();
   });
 
-  test("files[] ships the runtime tree, tsconfig, and the NOTICE", () => {
-    // tsconfig ships so the installed source stays typecheckable in place
-    // (`bun x tsc --noEmit` with the repo's flags). It is NOT read by Bun at
-    // runtime — bun 1.3.14 transpiles byte-identically with the file absent or
-    // useDefineForClassFields flipped — so this pins a typecheck contract only.
-    for (const required of ["src", "vendor", "tsconfig.json", "THIRD_PARTY_NOTICES.md"]) {
+  test("files[] ships the DIST tree only: bin + dist + the NOTICE, and no readable source", () => {
+    // The npm build is minified on purpose; this public repository IS its AGPL source (the
+    // description and the README say so), so the tarball carries no src/, vendor/ or tsconfig.
+    for (const required of ["bin", "dist", "THIRD_PARTY_NOTICES.md"]) {
       expect(pkg.files).toContain(required);
     }
-    // bin target must live inside a shipped dir (src/ for source entry, bin/ for the wrapper)
+    for (const forbidden of ["src", "vendor", "tsconfig.json"]) {
+      expect(pkg.files).not.toContain(forbidden);
+    }
     const binTarget = pkg.bin["rovecode"]!;
-    expect(binTarget.startsWith("src/") || binTarget.startsWith("bin/")).toBe(true);
+    expect(binTarget.startsWith("bin/")).toBe(true);
+    // every library export answers from the built bundles
+    for (const [sub, target] of Object.entries(pkg.exports ?? {})) {
+      if (sub !== "./package.json") expect(target.startsWith("./dist/lib/")).toBe(true);
+    }
   });
 
   test("NOTICE copy is non-hollow (Apache attributions present)", () => {
@@ -83,7 +90,7 @@ describe("packaging: package.json publish invariants", () => {
 
   test("engines pins bun; core scripts present", () => {
     expect(pkg.engines?.["bun"]).toMatch(/^>=\d/);
-    for (const s of ["build", "test", "typecheck", "gauntlet"]) {
+    for (const s of ["build", "test", "typecheck", "gauntlet", "build:npm", "prepack"]) {
       expect(pkg.scripts[s]).toBeDefined();
     }
     expect(pkg.scripts["build"]).toContain("scripts/build.ts");
@@ -100,10 +107,12 @@ describe("packaging: --version", () => {
   }, 30_000);
 });
 
-/** Simulate the published tree without a second install: src + vendor +
- *  package.json copied under dist/ (gitignored, and INSIDE the repo so every
- *  runtime dependency still resolves upward to the real node_modules); `fn` gets
- *  the copy's root and its main.ts. Always removed afterwards. */
+/** The smoke-tui classification (a failed RESOLUTION of the devDependency is "dev-only"; any other
+ *  import failure propagates as itself) is pinned from a SOURCE tree — the published tarball is the
+ *  minified dist, which inherits exactly this logic through the bundle, and a minified tree cannot be
+ *  surgically broken the way the second test below needs. src + vendor + package.json are copied under
+ *  dist/ (gitignored, and INSIDE the repo so every runtime dependency still resolves upward to the
+ *  real node_modules); `fn` gets the copy's root and its main.ts. Always removed afterwards. */
 function withCopiedTree(fn: (pkgDir: string, main: string) => void): void {
   mkdirSync(join(root, "dist"), { recursive: true });
   const pkgDir = mkdtempSync(join(root, "dist", "pkg-smoke-"));

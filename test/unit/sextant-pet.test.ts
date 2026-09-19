@@ -498,7 +498,7 @@ test("name defaults to rovecode and is capped at 14 chars; INNER spans the outli
   expect(createPet().state.name).toBe("rovecode");
   expect(createPet({ name: "cumulonimbus-maximus" }).state.name).toBe("cumulonimbus-m");
   expect(SPRITE.every((r) => r.length === 18)).toBe(true);
-  expect(INNER[0]).toEqual([7, 12]);
+  expect(INNER[0]).toEqual([4, 13]); // the two-lobe crown: leftmost lobe wall to rightmost
   expect(INNER[3]).toEqual([2, 16]);
 });
 
@@ -521,6 +521,6 @@ test("source pins: pet.ts and draw-pet.ts have no wall clock, timers, Math.rando
     }
     expect(src.split("\n").length).toBeLessThanOrEqual(400);
     expect(src.includes("\0")).toBe(false);
-    expect(src.startsWith("/** ")).toBe(true);
+    expect(src.startsWith("/** Port #45 ")).toBe(true);
   }
 });

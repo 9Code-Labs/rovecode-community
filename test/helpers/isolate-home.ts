@@ -27,7 +27,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /** variables kept even though they match the ROVECODE_ prefix */
-const KEEP = new Set(["ROVECODE_HOME", "ROVECODE_FUZZ_SEED", "ROVECODE_FUZZ_ROUNDS"]);
+const KEEP = new Set(["ROVECODE_HOME", "ROVECODE_NO_UPDATE_CHECK", "ROVECODE_FUZZ_SEED", "ROVECODE_FUZZ_ROUNDS"]);
 
 /** Is this a variable the code under test reads to reach a provider, a release check, or a knob? */
 export function isProviderEnvName(name: string): boolean {
@@ -49,6 +49,15 @@ export function scrubProviderEnv(env: Record<string, string | undefined> = proce
 }
 
 scrubProviderEnv();
+
+// The update check must not reach GitHub from the suite: its last-resort token is a SPAWNED
+// `gh auth token` (core/update-check.ts), which the env scrub above cannot see, so on a machine with
+// gh logged in a real "update available: …" note landed in TUI renderers mid-assertion during long
+// full runs (measured 2026-09-19: three failures whose received text was the release note — every one
+// passed in isolation). checkForUpdate honors this variable only when no test seam is injected; the
+// update-check unit tests all inject fetchFn/cacheFile and exercise the real logic. In KEEP above so
+// a test's own scrubProviderEnv() call keeps the floor.
+process.env.ROVECODE_NO_UPDATE_CHECK = "1";
 
 if (process.env.ROVECODE_HOME === undefined) {
   const home = mkdtempSync(join(tmpdir(), "rovecode-test-home-"));

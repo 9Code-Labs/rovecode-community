@@ -62,7 +62,7 @@ test("start: raw mode + the enter sequence, then a first frame; after the boot r
   const f = renderer.frameText();
   for (const p of ["─ files ─", "─ code ─", "─ messages ─", "─ plan ─", "─ usage ─", "─ rovecode ─"]) expect(f).toContain(p);
   expect(f).toContain("◆ rovecode  ·  repo");                                // the cwd basename until attach()
-  expect(f).toMatch(/night · v\d+\.\d+\.\d+ ─╯$/);                         // footer: theme · package version
+  expect(f).toMatch(/night · v\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)? ─╯$/);        // footer: theme · package version (a beta suffix is allowed)
   const before = renderer.frames;
   await new Promise((r) => setTimeout(r, 100));                           // the live 40 ms interval ticks (idle repaint after 170 ms of clock)
   advance(200);

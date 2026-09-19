@@ -205,12 +205,19 @@ export class ProviderRegistry {
     return `no API key for provider "${p.id}" — I can't call it without one. ${next(`rovecode auth set ${p.id}`)} (masked prompt) · or /provider key ${p.id} <key> in the TUI · or set ${p.keyEnv}`;
   }
 
-  async models(id: string): Promise<{ ok: true; models: string[]; source: "file" | "endpoint" } | { ok: false; error: string }> {
+  /** The provider's model ids: providers.json `models` when it lists them, else the endpoint's
+   *  /models through the memory+disk cache (stream.ts fetchModels) — a warm cache answers in the
+   *  same tick, so `/models` and the suggestion box open instantly instead of waiting on the
+   *  slowest configured provider. `force` bypasses both layers (setup/connect flows want the
+   *  network's truth right now); `background` lets a stale disk hit revalidate itself while the
+   *  caller proceeds — long-lived surfaces only (a pending fetch keeps a Bun process alive, so a
+   *  one-shot CLI command must not set it; stream.ts fetchModels header). */
+  async models(id: string, opts: { force?: boolean; background?: boolean } = {}): Promise<{ ok: true; models: string[]; source: "file" | "endpoint" } | { ok: false; error: string }> {
     const p = this.get(id);
     if (p === undefined) return { ok: false, error: `unknown provider "${id}" — known: ${this.ids().join(" ")}` };
     if (p.models !== undefined && p.models.length > 0) return { ok: true, models: p.models, source: "file" };
     if (!isConfigured(p)) return { ok: false, error: this.keyHint(p) };
-    const list = await fetchModels(toWireConfig(p), true);
+    const list = await fetchModels(toWireConfig(p), opts);
     return { ok: true, models: list.map((m) => m.id), source: "endpoint" };
   }
 

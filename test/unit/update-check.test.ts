@@ -57,14 +57,17 @@ describe("checkForUpdate", () => {
     expect(s).toMatchObject({ latest: "0.3.0", newer: true });
   });
 
-  test("without a token it says why, and does not claim to be up to date", async () => {
+  test("without a token it asks ANONYMOUSLY — the community repository is public; a token would only raise the rate limit", async () => {
+    let auth: unknown = "sentinel";
     const s = await checkForUpdate("0.2.0", {
       token: undefined, ghToken: async () => undefined, cacheFile: cache(),
-      fetchFn: (() => { throw new Error("must not be called"); }) as unknown as typeof fetch,
+      fetchFn: (async (_u: unknown, init?: RequestInit) => {
+        auth = (init?.headers as Record<string, string> | undefined)?.["authorization"];
+        return new Response(JSON.stringify({ tag_name: "v0.3.0", html_url: "https://x" }), { status: 200 });
+      }) as unknown as typeof fetch,
     });
-    expect(s.latest).toBeUndefined();
-    expect(s.reason).toContain("GITHUB_TOKEN");
-    expect(updateLine(s, true)).toContain("GITHUB_TOKEN");
+    expect(s).toMatchObject({ latest: "0.3.0", newer: true });
+    expect(auth).toBeUndefined(); // no authorization header on the anonymous request
   });
 
   test("a repository with no releases yet is a reason, not a failure", async () => {

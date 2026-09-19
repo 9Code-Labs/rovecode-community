@@ -7,7 +7,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRuntime } from "../../src/cli/runtime.ts";
-import type { ApprovalRequest, ToolCallPart, ToolContext } from "../../src/core/types.ts";
+import { textTurn } from "../../src/providers/stream.ts";
+import type { ApprovalRequest, Message, StreamFn, ToolCallPart, ToolContext } from "../../src/core/types.ts";
 import { scratchHome, writeTrustedMcpJson } from "../helpers/mcp-trust.ts";
 
 const tmpDirs: string[] = [];
@@ -72,6 +73,7 @@ describe("createRuntime MCP wiring", () => {
     const rt = createRuntime({ cwd: makeTmp(), stream: null });
     expect(rt.mcp).toBeNull();
     expect(rt.registry.list().some((t) => t.schema.name.startsWith("mcp_"))).toBe(false);
+    expect(rt.systemPrompt()).not.toContain("# MCP"); // no servers → the section costs nothing
   });
 });
 
@@ -111,4 +113,49 @@ describe("createRuntime does not connect MCP servers before the first frame", ()
       McpManager.prototype.connect = origConnect;
     }
   });
+});
+
+describe("the MCP environment reaches the model AND its children", () => {
+  test("the system prompt names the configured servers, and a task child's registry carries mcp_list + mcp_call", async () => {
+    const dir = makeTmp();
+    writeTrustedMcpJson(dir, { toy: { command: "rovecode-not-a-real-binary-child" } });
+    const childTools: string[][] = [];
+    const userText = (messages: Message[]): string =>
+      messages.filter((m) => m.role === "user")
+        .flatMap((m) => m.parts.map((p) => (p.kind === "text" ? p.text : "")))
+        .join(" ");
+    const stream: StreamFn = async function* (_m, messages, options) {
+      if (userText(messages).startsWith("CHILD")) {
+        childTools.push((options?.tools ?? []).map((t) => t.name));
+        yield { type: "turn", turn: textTurn("child done") };
+        return;
+      }
+      yield { type: "turn", turn: textTurn("parent idle") };
+    };
+    const rt = createRuntime({ cwd: dir, stream });
+    try {
+      // the environment is NAMED for the model: generic house tools in a long tool list were
+      // invisible in practice — servers connected, and the agent behaved as if they had not
+      expect(rt.systemPrompt()).toContain("# MCP");
+      expect(rt.systemPrompt()).toContain("toy");
+
+      const cfg = rt.buildCfg(true); // yolo: a task start prompts nobody
+      const out = await rt.registry.dispatch(
+        callPart("task", { action: "start", goal: "CHILD work" }), ctx(dir), undefined, cfg.permissionRules, cfg.approval, () => {},
+      );
+      expect(out.ok).toBe(true);
+      const id = /task (t\d+) \(/.exec(out.output)?.[1];
+      expect(id).toBeDefined();
+      const info = await rt.tasks.result(id!, { timeoutMs: 20_000 });
+      expect(info?.status).toBe("done");
+      // the child reaches the SAME environment: the house tools ride in its own registry...
+      expect(childTools.length).toBe(1);
+      expect(childTools[0]).toContain("mcp_list");
+      expect(childTools[0]).toContain("mcp_call");
+      expect(childTools[0]).toContain("read"); // ...beside the core coding tools
+    } finally {
+      rt.tasks.cancelAll();
+      await rt.mcp?.close();
+    }
+  }, 30_000);
 });

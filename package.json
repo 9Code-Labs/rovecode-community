@@ -1,6 +1,6 @@
 {
   "name": "rovecode",
-  "version": "0.3.2",
+  "version": "0.4.0-beta.0",
   "license": "AGPL-3.0-only",
   "author": "9Code Labs",
   "repository": {
@@ -8,25 +8,25 @@
     "url": "git+https://github.com/9Code-Labs/rovecode-community.git"
   },
   "homepage": "https://github.com/9Code-Labs/rovecode-community#readme",
-  "description": "Rovecode: a coding agent for the terminal. Research-derived harness on Bun/TypeScript with evidence-based ports from open-source harnesses (sextant TUI, MCP, ACP, headless server, repo-map, shadow-git checkpoints, execpolicy, model routers).",
+  "description": "Rovecode: a coding agent for the terminal. Research-derived harness on Bun/TypeScript with evidence-based ports from open-source harnesses (sextant TUI, MCP, ACP, headless server, repo-map, shadow-git checkpoints, execpolicy, model routers). The npm tarball ships the minified bundle; this public repository is its AGPL source.",
   "type": "module",
-  "module": "src/index.ts",
-  "types": "src/index.ts",
+  "module": "./dist/lib/index.js",
   "exports": {
-    ".": "./src/index.ts",
-    "./extensions": "./src/public-api.ts",
-    "./plugins": "./src/plugins/index.ts",
-    "./providers": "./src/providers/stream.ts",
+    ".": "./dist/lib/index.js",
+    "./extensions": "./dist/lib/public-api.js",
+    "./plugins": "./dist/lib/plugins.js",
+    "./providers": "./dist/lib/providers.js",
     "./package.json": "./package.json"
   },
   "bin": {
-    "rovecode": "bin/rovecode.ts"
+    "rovecode": "bin/rovecode.js"
   },
   "files": [
     "bin",
-    "src",
-    "vendor",
-    "tsconfig.json",
+    "dist",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
     "THIRD_PARTY_NOTICES.md"
   ],
   "engines": {
@@ -35,6 +35,11 @@
   "scripts": {
     "build": "bun run scripts/build.ts",
     "build:cli": "bun -e \"require('node:fs').rmSync('dist/cli', { recursive: true, force: true })\" && bun build --target=bun --splitting --sourcemap=external src/cli/main.ts --outdir dist/cli && bun -e \"require('node:fs').copyFileSync('src/providers/models-index.json', 'dist/cli/models-index.json')\" && bun run smoke:cli && bun run smoke:dist",
+    "build:npm": "bun run build:npm:cli && bun run build:npm:lib && bun run smoke:npm",
+    "build:npm:cli": "bun -e \"require('node:fs').rmSync('dist/cli', { recursive: true, force: true })\" && bun build --target=bun --minify --splitting --packages=external src/cli/main.ts --outdir dist/cli && bun -e \"require('node:fs').copyFileSync('src/providers/models-index.json', 'dist/cli/models-index.json')\"",
+    "build:npm:lib": "bun -e \"require('node:fs').rmSync('dist/lib', { recursive: true, force: true })\" && bun build --target=bun --minify --packages=external src/index.ts --outfile dist/lib/index.js && bun build --target=bun --minify --packages=external src/public-api.ts --outfile dist/lib/public-api.js && bun build --target=bun --minify --packages=external src/plugins/index.ts --outfile dist/lib/plugins.js && bun build --target=bun --minify --packages=external src/providers/stream.ts --outfile dist/lib/providers.js && bun -e \"require('node:fs').copyFileSync('src/providers/models-index.json', 'dist/lib/models-index.json')\"",
+    "smoke:npm": "bun dist/cli/main.js --version && bun dist/cli/main.js smoke-tui --sextant",
+    "prepack": "bun run build:npm",
     "smoke:cli": "bun dist/cli/main.js --version",
     "smoke:dist": "bun dist/cli/main.js smoke-tui --sextant",
     "test": "bun test",
@@ -47,7 +52,7 @@
     "check:product-boundary": "node scripts/check-product-boundary.mjs",
     "check:links": "node scripts/check-doc-links.mjs",
     "ci": "bun run check:boundary && bun run check:product-boundary && bun run check:links && bun run typecheck && bun test && bun run build:cli",
-    "release:check": "bun run ci && npm pack --dry-run",
+    "release:check": "bun run ci && bun run build:npm && npm pack --dry-run",
     "release:stage": "bun run scripts/stage-release.ts",
     "quality:offline": "bun run scripts/harness-quality.ts"
   },
@@ -72,6 +77,7 @@
   },
   "publishConfig": {
     "access": "public",
-    "provenance": true
+    "provenance": true,
+    "tag": "beta"
   }
 }

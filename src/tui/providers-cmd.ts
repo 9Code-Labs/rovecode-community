@@ -39,7 +39,7 @@ export const MODEL_COMMAND = { name: "model", description: "Switch the model I u
  *  provider that errors or lists nothing drops out silently here; `/models` is where the reasons show. */
 export async function listModelIds(reg: Pick<Runtime["providers"], "list" | "models">): Promise<string[]> {
   const ids = reg.list().filter(isConfigured).map((p) => p.id);
-  const results = await Promise.all(ids.map(async (id) => ({ id, r: await reg.models(id) })));
+  const results = await Promise.all(ids.map(async (id) => ({ id, r: await reg.models(id, { background: true }) })));
   return results.flatMap(({ id, r }) => (r.ok ? r.models.map((m) => `${id}/${m}`) : []));
 }
 export const SETUP_COMMAND = { name: "setup", description: "Connect a model step by step: provider, model, key, one test call", group: "start here" };
@@ -114,7 +114,7 @@ export async function cmdModels(ctx: ProviderCmdCtx, arg: string): Promise<void>
   if (ids.length === 0) { note(ctx, `no provider is configured yet. ${next("/connect")}`, "warn"); return; }
 
   note(ctx, ids.length === 1 ? `fetching ${ids[0]} models…` : `fetching models from ${ids.length} providers…`);
-  const results = await Promise.all(ids.map(async (id) => ({ id, r: await reg.models(id) })));
+  const results = await Promise.all(ids.map(async (id) => ({ id, r: await reg.models(id, { background: true }) })));
 
   const items: PickItem[] = [];
   const problems: string[] = [];

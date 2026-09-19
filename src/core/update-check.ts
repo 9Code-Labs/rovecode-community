@@ -1,10 +1,11 @@
 /** Is there a newer rovecode than the one running?
  *
- *  The release channel is GitHub Releases on 9Code-Labs/rovecode (Berkay's call, 2026-09-06). That
- *  repository is private, so the check needs a token — and the honest consequence is written into the
- *  result rather than hidden: with no token the answer is "unknown, and here is why", never "you are up
- *  to date". A version check that reports "current" when it could not look is worse than no check, since
- *  it is indistinguishable from a real answer.
+ *  The release channel is GitHub Releases on 9Code-Labs/rovecode-community (Berkay's call, 2026-09-06;
+ *  pointed at the public community fork for the npm build, 2026-09-19). The repository is PUBLIC, so
+ *  the check works anonymously — `GITHUB_TOKEN`, `GH_TOKEN` or a `gh auth login` only raise the rate
+ *  limit. Failures stay honest: when the check could not look, the result says why instead of claiming
+ *  "you are up to date". A version check that reports "current" when it could not look is worse than no
+ *  check, since it is indistinguishable from a real answer.
  *
  *  Three rules, because this runs at startup:
  *  - **It never blocks.** The caller fires it and paints; the answer arrives or it does not.
@@ -51,7 +52,7 @@ export interface UpdateCheckOptions {
   ghToken?: () => Promise<string | undefined>;
 }
 
-const REPO = "9Code-Labs/rovecode";
+const REPO = "9Code-Labs/rovecode-community";
 const TTL_MS = 6 * 60 * 60 * 1000;
 // 8s, not the 3s this started with. Nothing waits on this — the card is already painted and the notice
 // arrives when it arrives — so the only thing a short timeout buys is the wrong answer on exactly the run
@@ -111,6 +112,16 @@ function ghAuthToken(): Promise<string | undefined> {
 }
 
 export async function checkForUpdate(current: string, opts: UpdateCheckOptions = {}): Promise<UpdateStatus> {
+  // ROVECODE_NO_UPDATE_CHECK=1 disables the check outright — no cache read, no `gh` spawn, no socket.
+  // The test preload sets it (test/helpers/isolate-home.ts): the token comes from a SPAWNED `gh auth
+  // token`, which the env scrub cannot see, so on a machine with gh logged in a real "update available"
+  // note used to land in TUI tests mid-assertion during long full runs (measured 2026-09-19: three
+  // failures whose received text was the release note). An injected seam (fetchFn/token/cacheFile/
+  // ghToken) means the caller is exercising the check itself — those runs are not disabled.
+  const noSeam = opts.fetchFn === undefined && opts.token === undefined && opts.cacheFile === undefined && opts.ghToken === undefined;
+  if (noSeam && process.env.ROVECODE_NO_UPDATE_CHECK === "1") {
+    return { current, newer: false, from: "cache", reason: "ROVECODE_NO_UPDATE_CHECK=1" };
+  }
   const now = (opts.now ?? Date.now)();
   const cacheFile = opts.cacheFile ?? join(rovecodeHome(), "update-check.json");
   const ttl = opts.ttlMs ?? TTL_MS;
@@ -118,23 +129,23 @@ export async function checkForUpdate(current: string, opts: UpdateCheckOptions =
   const cached = readCache(cacheFile, ttl, now);
   if (cached) return { ...cached, current, newer: cached.latest !== undefined && isNewer(cached.latest, current) };
 
-  // GITHUB_TOKEN, then GH_TOKEN, then whatever `gh auth login` already stored — most people who can read
-  // a private repository at all have the CLI logged in, and making them export a variable to be told about
-  // an update is a step they will not take. The token is used and dropped: it never enters the cache.
+  // GITHUB_TOKEN, then GH_TOKEN, then whatever `gh auth login` already stored — OPTIONAL for this
+  // build: the community release repository is public, so the check works anonymously (GitHub's
+  // unauthenticated rate limit is 60/h per IP, and this asks at most once every six hours). A token
+  // only raises the limit. The token is used and dropped: it never enters the cache.
   if (opts.cacheOnly === true) {
     return { current, newer: false, from: "cache", reason: "not asked yet — rovecode checks at startup, at most once every six hours" };
   }
   const token = opts.token ?? process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN ?? await (opts.ghToken ?? ghAuthToken)();
-  if (!token) {
-    // not cached: a token may appear before the next start, and caching "no token" would hide it
-    return { current, newer: false, from: "network", reason: "the release repository is private and no GITHUB_TOKEN is set (or `gh auth login`)" };
-  }
 
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), opts.timeoutMs ?? TIMEOUT_MS);
   try {
     const res = await (opts.fetchFn ?? fetch)(`https://api.github.com/repos/${opts.repo ?? REPO}/releases/latest`, {
-      headers: { accept: "application/vnd.github+json", authorization: `Bearer ${token}`, "user-agent": "rovecode" },
+      headers: {
+        accept: "application/vnd.github+json", "user-agent": "rovecode",
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
       signal: ac.signal,
     });
     if (res.status === 404) {

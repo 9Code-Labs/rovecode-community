@@ -134,7 +134,9 @@ export function createTaskTool(tasks: TaskManager, opts: TaskToolOptions = {}): 
         "at once with a task id; the child works while you continue, and a note lands in this conversation " +
         "when it finishes (do not poll). Read its state or output with the `task_status` tool (status/result/list " +
         "— never prompts); `cancel` aborts a task. Children see only `goal` (write it self-contained). " +
-        `At most ${tasks.maxConcurrent} run concurrently; extra starts queue FIFO. ` +
+        `At most ${tasks.maxConcurrent} run concurrently; extra starts queue FIFO — so for independent parts of a ` +
+        "wider request, issue their starts together in one turn and they run side by side while you keep the " +
+        "dependent steps. " +
         "`isolated` runs the child in a git worktree copy and merges its file changes back as a patch on success. " +
         `\`agent\` may also name an EXTERNAL agentic-CLI lane — ${ADAPTER_IDS.join(" | ")} — which runs \`goal\` in that CLI ` +
         "instead of in one of our agents. A lane always works in its own worktree, its diff merges back like any " +

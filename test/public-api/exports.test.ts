@@ -4,11 +4,13 @@ import { HOOKS_API_VERSION, PLUGIN_API_VERSION, ToolRegistry, providerStream } f
 
 describe("supported package API", () => {
   test("declares only documented subpath exports", () => {
+    // dist-only tarball (0.4.0-beta.0): the published exports answer from the minified lib bundles
+    // that `prepack` → build:npm produces; this repository's src/ is the AGPL source of those bundles
     expect(pkg.exports).toEqual({
-      ".": "./src/index.ts",
-      "./extensions": "./src/public-api.ts",
-      "./plugins": "./src/plugins/index.ts",
-      "./providers": "./src/providers/stream.ts",
+      ".": "./dist/lib/index.js",
+      "./extensions": "./dist/lib/public-api.js",
+      "./plugins": "./dist/lib/plugins.js",
+      "./providers": "./dist/lib/providers.js",
       "./package.json": "./package.json",
     });
   });

@@ -473,11 +473,13 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   const mcpConfigs = [...mcpByName.values()];
   let mcp: McpManager | null = null;
   let mcpReady: Promise<void> = Promise.resolve();
-  /** register mcp_list/mcp_call once; they dispatch by server name, so a new server needs no new tool */
-  const registerMcpTools = (manager: McpManager): void => {
-    for (const t of lazyMcp().tools.createMcpTools(manager)) {
-      registry.register({ ...t, execute: async (a, c) => { await mcpReady; return t.execute(a, c); } });
-    }
+  /** mcp_list/mcp_call bound to a manager, behind the first-connect gate. Shared by the root registry
+   *  and every child's (childRegistry): ONE manager, one set of server processes for the whole session. */
+  const mcpToolsFor = (manager: McpManager): Tool[] =>
+    lazyMcp().tools.createMcpTools(manager).map((t) => ({ ...t, execute: async (a, c) => { await mcpReady; return t.execute(a, c); } }));
+  /** register them once PER REGISTRY; they dispatch by server name, so a new server needs no new tool */
+  const registerMcpTools = (manager: McpManager, reg: ToolRegistry = registry): void => {
+    for (const t of mcpToolsFor(manager)) reg.register(t);
   };
   if (mcpConfigs.length > 0) {
     const mcpMod = lazyMcp();
@@ -649,7 +651,15 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   const systemPrompt = (cwdOverride?: string): string => {
     const skillsIndex = buildSkillsIndex(skillStore);
     const memoryIndex = blocks.renderForPrompt();
-    return `You are Rovecode, an interactive coding agent in ${cwdOverride ?? cwd}. Use read/edit/write/bash tools. Edits require line hashes from read output. Match the length of an answer to the task: a line for a lookup, the full thing for a plan, a design or a review — never pad, never truncate work that was asked for.${skillsIndex ? "\n\n# Skills\n" + skillsIndex : ""}${memoryIndex ? "\n\n# Memory\n" + memoryIndex : ""}${roots.promptLine()}`;
+    // Configured MCP servers are NAMED in the prompt: mcp_list/mcp_call look generic in a tool
+    // list, and a model never told the environment exists does not discover it on its own — the
+    // servers were connected but the agent behaved as if they were not (Berkay, 2026-09-19).
+    // No servers → no section → the zero idle-token invariant of the lazy disclosure stands.
+    const mcpNames = mcp?.serverNames() ?? [];
+    const mcpIndex = mcpNames.length > 0
+      ? `# MCP\nMCP servers configured for this session: ${mcpNames.join(", ")}. mcp_list returns their tools and which are connected; mcp_call {server, tool, args} runs one (argument schema: mcp_list {server, tool, schema:true}). When a task fits one of these servers, use it rather than working around it.`
+      : "";
+    return `You are Rovecode, an interactive coding agent in ${cwdOverride ?? cwd}. Use read/edit/write/bash tools. Edits require line hashes from read output. Match the length of an answer to the task: a line for a lookup, the full thing for a plan, a design or a review — never pad, never truncate work that was asked for.${skillsIndex ? "\n\n# Skills\n" + skillsIndex : ""}${memoryIndex ? "\n\n# Memory\n" + memoryIndex : ""}${mcpIndex ? "\n\n" + mcpIndex : ""}${roots.promptLine()}`;
   };
 
   // ROVECODE_EFFORT is the boot default; /effort and --effort move it at runtime
@@ -823,7 +833,9 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   // agentLoop, so a child inherits its parent's model and policy; deriveChildRules turns
   // prompt→deny). ONE SteeringQueue per runtime: surfaces hand it to agentLoop and
   // completion notes land in the parent's next turn (loop.ts:136). Children get the core
-  // coding/search/skill tools (no MCP/memory/eval-cell/checkpoints in v1) plus nested
+  // coding/search/skill tools, the SAME MCP environment through the SAME manager (a subagent
+  // that cannot see the environment is not a subagent; policy still decides reach — under gated
+  // rules mcp_call's prompt becomes a deny for children while mcp_list stays a read), and nested
   // `task` (kind spawn, bound to THEIR depth + steering queue, so the depth cap governs
   // nesting) and `task_status` (kind read: a child collects ITS children's results without
   // a prompt nobody could answer — MED-2 split, tools/task.ts header).
@@ -838,6 +850,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     // there and merge back there, or an isolated child's lane writes into the user's live tree past the
     // isolation the child itself is held to. ChildContext.dir is the same value runChild passed as cwd.
     if (child) table.push(createTaskTool(tasks, { parentDepth: child.depth, notify: child.steering, caller: child.taskId, owner: child.signal, agents: agentRowsList, parentDir: child.dir ?? childCwd, parentTools: () => new Set(reg.list().map((t) => t.schema.name)) }), createTaskStatusTool(tasks, { caller: child.taskId }));
+    if (mcp) table.push(...mcpToolsFor(mcp)); // the child reaches the parent's servers; restrictTools below still filters by the definition's allow-list
     // the definition's allow-list is a FILTER over this table ∩ the STARTING registry's names — never wider (main's "*" keeps
     // the table). The starting registry is the root's for a root start, the spawning CHILD's for a nested one
     // (ChildContext.parentTools): a restricted agent that has `task` cannot hand `main` — or any definition — a wider set than its own.

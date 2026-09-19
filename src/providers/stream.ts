@@ -10,6 +10,9 @@
 
 import type { StreamFn, Message, AssistantTurn, StreamEvent, ModelRef, StopReason } from "../core/types.ts";
 import { partsText } from "../core/loop.ts";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { rovecodeHome } from "./auth.ts";
 import { applyAnthropicCacheBoundaries } from "./cache.ts";
 import { normalizeUsage } from "../core/usage.ts";
 import { BUILTIN_PROVIDERS, buildSnapshot, pickDefault } from "./provider-config.ts";
@@ -59,26 +62,142 @@ export interface ModelCatalogEntry {
   type?: string;
 }
 
-// ---------- catalog (fetched, cached) ----------
+// ---------- catalog (fetched, memory + disk cached, stale-while-revalidate) ----------
+//
+// A provider's model list changes maybe once a week, but every `/models`, every suggestion box and
+// every `provider_list` tool call used to wait on the endpoint: `registry.models()` passed force=true,
+// and the memory cache died with the process, so the picker took as long as the slowest configured
+// provider (measured: seconds on a cold start, which reads as "broken" rather than "fetching").
+//
+// Now the answer is layered: memory (TTL below) -> disk (<ROVECODE_HOME>/cache/models.json, served
+// stale up to DISK_STALE_MS while a background revalidation refreshes it) -> network. A disk hit
+// returns in the same tick, so the picker opens instantly and silently corrects itself. Rules that
+// keep the cache honest:
+//   - an EMPTY fetch (endpoint down, no /models route, bad JSON) is written to NEITHER layer over a
+//     good entry — only a non-empty list reaches the disk, and a failed force-refresh keeps the
+//     previous memory entry instead of poisoning it for the TTL;
+//   - a sub-second blip must not be visible: a NETWORK-layer failure (reset, refused, DNS) is retried
+//     once immediately, and a still-empty answer is remembered for only FAIL_TTL_MS, not the full
+//     TTL — a 1-2 s dropout hides the list for at most half a minute, never five; an HTTP answer
+//     (404: no /models route, 401: bad key) is a real answer and is not retried;
+//   - the key is `id + baseUrl` in BOTH layers: the same provider id re-pointed at another gateway
+//     (or two test servers on two ports) must not serve each other's list;
+//   - force=true still means "the network, now" (setup/connect flows want the truth), and a disk
+//     entry older than DISK_STALE_MS is treated as missing;
+//   - the background revalidation of a stale disk hit is OPT-IN (`background: true`) and bounded by
+//     BG_TIMEOUT_MS: Bun keeps a process alive for a pending fetch (measured: a dangling socket held
+//     a CLI exit for 21 s), so a one-shot command like `rovecode model list` must never leave one —
+//     it serves the stale list and exits clean. The long-lived surfaces (the TUI's /models and its
+//     suggestion box, which exit through an explicit process.exit) opt in. Every foreground attempt
+//     carries its own FETCH_TIMEOUT_MS cap for the same reason: a hanging endpoint used to hold the
+//     socket for Bun's ~21 s default, twice with the blip retry.
 
-const catalogCache = new Map<string, { models: ModelCatalogEntry[]; fetchedAt: number }>();
-const CATALOG_TTL_MS = 5 * 60_000;
+interface CatalogEntry { models: ModelCatalogEntry[]; fetchedAt: number }
+const catalogCache = new Map<string, CatalogEntry>();
+const CATALOG_TTL_MS = 5 * 60_000;             // a memory hit inside this window never revalidates
+const FAIL_TTL_MS = 30_000;                    // an EMPTY answer is remembered this briefly (blip guard)
+const DISK_STALE_MS = 14 * 24 * 60 * 60_000;   // beyond this a disk entry is not served at all
+const FETCH_TIMEOUT_MS = 10_000;               // cap per foreground attempt (Bun's default: ~21 s)
+const BG_TIMEOUT_MS = 4_000;                   // a background revalidation never extends a life meaningfully
+const MODELS_CACHE_FILE = "models.json";
+/** one background revalidation per key at a time */
+const revalidating = new Set<string>();
 
-export async function fetchModels(cfg: ProviderConfig, force = false): Promise<ModelCatalogEntry[]> {
-  const hit = catalogCache.get(cfg.id);
-  if (!force && hit && Date.now() - hit.fetchedAt < CATALOG_TTL_MS) return hit.models;
-  const url = cfg.baseUrl.replace(/\/$/, "") + "/models";
-  let models: ModelCatalogEntry[] = [];
+const catalogKey = (cfg: ProviderConfig): string => `${cfg.id} ${cfg.baseUrl.replace(/\/$/, "")}`;
+
+function modelsCachePath(): string { return join(rovecodeHome(), "cache", MODELS_CACHE_FILE); }
+
+function readDiskCache(): Record<string, CatalogEntry> {
   try {
-    const res = await fetch(url, { headers: authHeaders(cfg) });
-    if (res.ok) {
-      const json = (await res.json()) as { data?: { id: string; owned_by?: string; type?: string }[] };
-      models = (json.data ?? []).map((m) => ({ id: m.id, ownedBy: m.owned_by, type: m.type }));
-    }
-  } catch { /* errors are empty catalog — provider seam never throws */ }
-  catalogCache.set(cfg.id, { models, fetchedAt: Date.now() });
-  return models;
+    const parsed: unknown = JSON.parse(readFileSync(modelsCachePath(), "utf8"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, CatalogEntry> : {};
+  } catch { return {}; } // missing / unreadable / malformed: treated as an empty cache
 }
+
+function writeDiskCache(key: string, entry: CatalogEntry): void {
+  try {
+    const all = readDiskCache();
+    all[key] = entry;
+    mkdirSync(join(rovecodeHome(), "cache"), { recursive: true });
+    writeFileSync(modelsCachePath(), JSON.stringify(all));
+  } catch { /* best-effort: a failed cache write must not fail the fetch */ }
+}
+
+/** the /models round-trip itself; errors are an empty list (the provider seam never throws).
+ *  A NETWORK-layer failure (the socket a 1-2 s blip kills) is retried once immediately unless
+ *  `retry: false`; an HTTP status — including 404 "no /models route" and 401 "bad key" — is the
+ *  endpoint's real answer and is not retried. Every attempt is capped by AbortSignal.timeout. */
+async function fetchModelsFromNetwork(cfg: ProviderConfig, opts: { retry?: boolean; timeoutMs?: number } = {}): Promise<ModelCatalogEntry[]> {
+  const url = cfg.baseUrl.replace(/\/$/, "") + "/models";
+  const timeoutMs = opts.timeoutMs ?? FETCH_TIMEOUT_MS;
+  const attempts = opts.retry === false ? 1 : 2;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const res = await fetch(url, { headers: authHeaders(cfg), signal: AbortSignal.timeout(timeoutMs) });
+      if (!res.ok) return [];
+      const json = (await res.json()) as { data?: { id: string; owned_by?: string; type?: string }[] };
+      return (json.data ?? []).map((m) => ({ id: m.id, ownedBy: m.owned_by, type: m.type }));
+    } catch {
+      if (attempt + 1 >= attempts) return [];
+    }
+  }
+}
+
+/** background half of stale-while-revalidate: the caller already got the disk answer. OPT-IN only
+ *  (fetchModels `background: true`): a pending fetch keeps a Bun process alive, so a one-shot CLI
+ *  command must never leave one dangling; the surfaces that opt in exit through process.exit. */
+function revalidateInBackground(cfg: ProviderConfig, key: string): void {
+  if (revalidating.has(key)) return;
+  revalidating.add(key);
+  void fetchModelsFromNetwork(cfg, { retry: false, timeoutMs: BG_TIMEOUT_MS }).then((models) => {
+    if (models.length > 0) {
+      const entry: CatalogEntry = { models, fetchedAt: Date.now() };
+      catalogCache.set(key, entry);
+      writeDiskCache(key, entry);
+    }
+  }).finally(() => { revalidating.delete(key); });
+}
+
+export interface FetchModelsOptions {
+  /** bypass both cache layers: the network, now (setup/connect flows) */
+  force?: boolean;
+  /** a stale disk hit may leave a bounded background refresh running (long-lived surfaces only) */
+  background?: boolean;
+}
+
+export async function fetchModels(cfg: ProviderConfig, opts: FetchModelsOptions = {}): Promise<ModelCatalogEntry[]> {
+  const key = catalogKey(cfg);
+  const now = Date.now();
+  if (opts.force !== true) {
+    const mem = catalogCache.get(key);
+    if (mem && now - mem.fetchedAt < CATALOG_TTL_MS) return mem.models;
+    const disk = readDiskCache()[key];
+    if (disk && Array.isArray(disk.models) && disk.models.length > 0 && typeof disk.fetchedAt === "number" && now - disk.fetchedAt < DISK_STALE_MS) {
+      catalogCache.set(key, disk); // the next call inside the TTL is a pure memory hit
+      if (opts.background === true && now - disk.fetchedAt >= CATALOG_TTL_MS) revalidateInBackground(cfg, key);
+      return disk.models;
+    }
+  }
+  const models = await fetchModelsFromNetwork(cfg);
+  if (models.length > 0) {
+    const entry: CatalogEntry = { models, fetchedAt: Date.now() };
+    catalogCache.set(key, entry);
+    writeDiskCache(key, entry);
+    return models;
+  }
+  // an empty answer is either a dead endpoint or a provider with no /models route: keep whatever
+  // the caches already hold (stale beats empty), and remember the failure in memory for FAIL_TTL_MS
+  // only (back-dated stamp) — long enough that a broken endpoint is not hammered per keystroke,
+  // short enough that a blip does not hide the list for the full TTL
+  const failStamp = Date.now() - (CATALOG_TTL_MS - FAIL_TTL_MS);
+  const prev = catalogCache.get(key);
+  if (prev && prev.models.length > 0) { catalogCache.set(key, { models: prev.models, fetchedAt: failStamp }); return prev.models; }
+  catalogCache.set(key, { models: [], fetchedAt: failStamp });
+  return [];
+}
+
+/** Drop the in-memory layer (tests; the disk layer follows ROVECODE_HOME). */
+export function clearModelsCache(): void { catalogCache.clear(); revalidating.clear(); }
 
 function authHeaders(cfg: ProviderConfig): Record<string, string> {
   return {

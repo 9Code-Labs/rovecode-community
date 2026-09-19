@@ -104,12 +104,12 @@ test("the GLM profile's section is persona, then voice examples, then the workin
   expect(GLM_53_PLAIN_PROFILE.promptSection).toBe(GLM_53_AGENT_CONTRACT);
 });
 
-test("the working agreement: markdown sections, 700-1300 words, no model or vendor names, ASCII punctuation, no shouting", () => {
+test("the working agreement: markdown sections, 700-1500 words, no model or vendor names, ASCII punctuation, no shouting", () => {
   const s = GLM_53_AGENT_CONTRACT;
   expect(s.startsWith("# ")).toBe(true);
   const words = s.split(/\s+/).filter(Boolean).length;
   expect(words).toBeGreaterThanOrEqual(700);
-  expect(words).toBeLessThanOrEqual(1300); // 1218 with # Finishing (2026-09-06); the ceiling is a brake on drift, not a target
+  expect(words).toBeLessThanOrEqual(1500); // 1485 with # Planning (2026-09-19); the ceiling is a brake on drift, not a target
   expect(s).not.toMatch(/claude|anthropic|sonnet|opus|\bglm\b|z\.ai|zhipu|openai|gpt/i);
   expect(s).not.toMatch(/[–—‘’“”…]/); // en/em dash, curly quotes, ellipsis
   expect(s).not.toMatch(/\b(CRITICAL|MUST|NEVER|ALWAYS|IMPORTANT)\b/); // calm register: no shouted rules
@@ -139,6 +139,29 @@ test("the working agreement says to FINISH: a # Finishing section with the read-
   // the worked recap — the strongest teacher in the prompt — no longer hands an implied part back as a menu item
   expect(s).not.toContain("say so if you want the flag documented");
   expect(s).toContain("README: the flag is listed under export.");
+});
+
+test("the working agreement PLANS and DELEGATES: a # Planning section between Shell and Scope with the todo discipline and the workflow split; the reporting section no longer carries duplicate todo mechanics", () => {
+  const s = GLM_53_AGENT_CONTRACT;
+  expect(s).toContain("\n# Planning\n");
+  expect(s.indexOf("# Planning")).toBeGreaterThan(s.indexOf("# Shell"));
+  expect(s.indexOf("# Planning")).toBeLessThan(s.indexOf("# Scope and quality"));
+  // plan first, specific items, real thresholds
+  expect(s).toContain("A non-trivial request gets a plan before the first edit.");
+  expect(s).toContain("not vague phases");
+  expect(s).toContain("Three or more steps get a list; a single straightforward task does not.");
+  // follow the plan: one in_progress, completed means verified, rewrite on change, reminder stays unmentioned
+  expect(s).toContain("The list is then followed, not posted.");
+  expect(s).toContain("Exactly one item `in_progress` at a time; `completed` only when that item's verification passed, never on intent");
+  expect(s).toContain("<plan-reminder>");
+  // the workflow split: independent parts to concurrent subagents, dependent parts kept, combined result verified
+  expect(s).toContain("A wide request becomes a workflow instead of one long solo run.");
+  expect(s).toContain("`isolated` when the part edits files");
+  expect(s).toContain("issue independent starts together in one turn and they run concurrently");
+  expect(s).toContain("verify the combined work, not the summaries.");
+  // the mechanics live in # Planning now; the reporting section keeps compaction + the subagent note only
+  expect(s).not.toContain("For three or more steps keep a `todo_write` list");
+  expect(s).toContain("A sub-agent started with `task` sees only its `goal`");
 });
 
 test("the Sonnet 5 persona: 600-900 words, names the role, is a CLOSED role (stays Sonnet 5 when asked, no sincerity break, never the underlying vendor), ASCII punctuation, calm register", () => {

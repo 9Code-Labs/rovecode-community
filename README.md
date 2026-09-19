@@ -1,7 +1,7 @@
 # Rovecode
 
 A coding agent for the terminal. The cockpit is a panelled TUI called sextant; the mascot is a
-compact CRT receiver companion whose face follows the run. Under the hood, rovecode is a research-derived harness in
+weather cloud whose mood follows the run. Under the hood, rovecode is a research-derived harness in
 TypeScript on Bun: instead of inventing architecture it ports evidence-based patterns from open-source
 harnesses (pi, opencode, codex, cline, aider, gemini-cli, oh-my-pi, hermes-agent, senpi, prime-agent,
 OpenHands) — every port traces to file:line in a snapshotted source and lands only after an independent
@@ -45,11 +45,15 @@ repository for now).
 
 ## Install
 
-Requires [Bun](https://bun.sh) ≥ 1.3.14 (the CLI entry is TypeScript, executed by bun — node cannot run it).
+Requires [Bun](https://bun.sh) ≥ 1.3.14 on PATH (both the published bundle and the source are executed by bun — node cannot run them).
 
 ```bash
-# from source
-git clone https://github.com/9Code-Labs/rovecode.git && cd rovecode && bun install
+# from npm — the published minified bundle (beta channel until a stable is cut)
+npm install -g rovecode@beta
+rovecode --version
+
+# from source (this repository is the bundle's AGPL source)
+git clone https://github.com/9Code-Labs/rovecode-community.git && cd rovecode-community && bun install
 bun run src/cli/main.ts --help          # or: bun link → `rovecode` on PATH
 bun run build:cli                       # optional: pre-bundle (TUI cold start ~230 ms → ~80 ms); re-run after git pull
 
@@ -57,18 +61,20 @@ bun run build:cli                       # optional: pre-bundle (TUI cold start ~
 bun run build                           # scripts/build.ts → dist/rovecode(.exe) + smoke
 dist/rovecode.exe --version
 
-# from an npm tarball (npm pack) — global install shims to bun via the shebang
-npm install -g ./rovecode-0.3.1.tgz
+# from a locally packed tarball — npm pack runs the minified build:npm through prepack
+npm pack && npm install -g ./rovecode-0.4.0-beta.0.tgz
 ```
 
-Not yet published to the npm registry (name availability unverified). Releases are cut on
-[GitHub Releases](https://github.com/9Code-Labs/rovecode/releases) — v0.3.1 is the current one — and there is no
-self-update: `git pull` and rebuild, or reinstall the binary. Rovecode does tell you when that is worth doing: the
-TUI's startup card carries `update available: 0.3.0 → 0.4.0 · <release url>` when a newer release exists. The check
+Published to npm as [`rovecode`](https://www.npmjs.com/package/rovecode): the tarball carries the minified
+bundle, and THIS repository is its source, as the AGPL requires (`npm install -g rovecode` — the beta
+channel is `rovecode@beta`). Releases are cut on
+[GitHub Releases](https://github.com/9Code-Labs/rovecode-community/releases), and there is no
+self-update: reinstall from npm, or `git pull` and rebuild. Rovecode does tell you when that is worth doing: the
+TUI's startup card carries `update available: 0.3.2 → 0.4.0 · <release url>` when a newer release exists. The check
 (`src/core/update-check.ts`) asks GitHub once every six hours (cached in `~/.rovecode/update-check.json`), never
-blocks the start and never throws. The repository is private, so it needs `GITHUB_TOKEN`, `GH_TOKEN` or a
-`gh auth login`; without one the result is "unknown — the release repository is private and no token is set",
-never "up to date", and the card prints nothing rather than a guess. Only a real newer release produces a line
+blocks the start and never throws. The repository is public, so the check works anonymously; `GITHUB_TOKEN`,
+`GH_TOKEN` or a `gh auth login` only raise the rate limit. When the check could not look,
+the card prints nothing rather than a guess. Only a real newer release produces a line
 on the card — `rovecode --version` prints the version to stdout alone (so a script can still read it) and, on
 stderr, whatever the last check found. It reads the cache and never opens a socket: a courtesy line must not
 make the one command scripts call to identify a build wait on the network.
@@ -77,7 +83,7 @@ make the one command scripts call to identify a build wait on the network.
 
 On a terminal, `rovecode` opens with a ~1.1 s intro centred on a cleared screen (`src/core/intro.ts`): the
 ROVECODE mark fills in left to right, a hairline frame draws inward from the four corners until the halves meet,
-the receiver companion powers on beneath that top line, and the mark breathes once. The session boots underneath it, in
+the cloud mascot leans down out of that top line, and the mark breathes once. The session boots underneath it, in
 parallel, so the only wall time this adds is whatever is left of the show once the session is otherwise ready.
 Skip it with `--no-intro` or `ROVECODE_INTRO=0`; nothing is drawn into a pipe or under `--plain`, and it never
 reads stdin, so keys typed during it reach the session. It hands over to a card that names the version, the connected
@@ -240,7 +246,7 @@ a panelled cockpit instead of a chat log — `files` (git tree with M/A/D, touch
 approval preview before it, `$` run output with PASS/FAIL chips, `∷` the crew board over background tasks)
 · `messages` (compact tool rows `· read x … N lines` `~ edit x +a −b` `$ run cmd`, the ONE modal card for
 approvals and `ask_user`, the prompt with `/` suggestions and `@file` mentions) · `plan` (the session's
-todos + crew) · `usage` (tokens, context bar, cost) · `rovecode`, the CRT receiver companion whose face follows
+todos + crew) · `usage` (tokens, context bar, cost) · `rovecode`, the weather-cloud pet whose mood follows
 the run. `rovecode` picks it when stdout is a TTY of at least 100×30 that renders truecolor (`COLORTERM`,
 `WT_SESSION`, `TERM_PROGRAM` vscode/iTerm/WezTerm/ghostty, kitty/`-direct` `TERM`) or 256 colors (a
 `*-256color` `TERM` with no `COLORTERM`, painted through the xterm-256 quantizer); `ROVECODE_TUI=sextant|classic`

@@ -125,3 +125,29 @@ test("runChild: allow-all parent actually lets the child execute tools (FW2-P en
     rmSync(sessions, { recursive: true, force: true });
   }
 }, 30_000);
+
+test("runChild advertises the child's own registry to the child's model (options.tools) — a native child used to see NO tools at all", async () => {
+  const root = mkdtempSync(join(tmpdir(), "rovecode-rules-root-"));
+  const sessions = mkdtempSync(join(tmpdir(), "rovecode-rules-sess-"));
+  const peek = countedTool("peek", "read");
+  const seen: string[][] = [];
+  const watching: StreamFn = async function* (_m, _msgs, options) {
+    seen.push((options?.tools ?? []).map((t) => t.name));
+    yield { type: "turn", turn: textTurn("done") };
+  };
+  try {
+    const res = await runChild({
+      defs: new Map([["worker", { name: "worker", systemPrompt: "w", tools: ["*"] }]]),
+      stream: watching,
+      registryFactory: () => { const r = new ToolRegistry(); r.register(peek.tool); return r; },
+      rootDir: root, sessionsDir: sessions,
+      baseConfig: cfg(allowAll),
+    }, { agent: "worker", goal: "advertise" });
+    expect(res.ok).toBe(true);
+    expect(seen.length).toBeGreaterThan(0);
+    for (const names of seen) expect(names).toEqual(["peek"]); // the child registry, on EVERY turn
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(sessions, { recursive: true, force: true });
+  }
+}, 30_000);

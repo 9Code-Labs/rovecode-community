@@ -126,6 +126,6 @@ test("real timers: a running spinner still animates at the frame rate", async ()
   loop.start();
   const f0 = loop.frames;
   await new Promise((r) => setTimeout(r, 500));
-  expect(loop.frames - f0).toBeGreaterThanOrEqual(8);                  // ≥ 16 fps of the nominal 25 even on a loaded CI box
+  expect(loop.frames - f0).toBeGreaterThanOrEqual(6);                  // ≥ 12 fps of the nominal 25; the 8-floor flaked at 7 on a saturated full-suite box (measured 2026-09-19) — this pin catches a stalled spinner, not a slow machine
   loop.stop();
 });
