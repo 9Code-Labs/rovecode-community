@@ -9,10 +9,10 @@ import type { ActivityState, SextantState } from "./types.ts";
 
 // ------------------------------------------------------------------ data tables (pet.js:10-85)
 
-/** outline cloud in the panels' rounded-line language: 18 cells wide, 6 rows; the crown is TWO lobes, not one flat run — the flat-topped box read as a television (Berkay, 2026-09-19) */
+/** outline cloud in the panels' rounded-line language: 18 cells wide, 6 rows; the crown is THREE touching lobes — a small one, a wide middle, a small one — because that is what a cumulus reads as at this size (flat top read as a television, two lobes as a brow; Berkay, 2026-09-19) */
 export const SPRITE: readonly string[] = [
-  "    ╭───╮ ╭──╮    ",
-  "   ╭╯   ╰─╯  ╰─╮  ",
+  "    ╭─╮╭──╮╭─╮    ",
+  "   ╭╯ ╰╯  ╰╯ ╰─╮  ",
   "  ╭╯           ╰╮ ",
   "  │             │ ",
   "  ╰╮           ╭╯ ",

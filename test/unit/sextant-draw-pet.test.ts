@@ -23,11 +23,10 @@ function frame(pet: Pet, s: SextantState, now: number, rect: Rect | null = RECT,
   return scr;
 }
 const born = (seed = 1): Pet => { const pet = createPet({ seed }); pet.tick(T0); return pet; };
-/** y of the sprite's first row and x of its first column (the left lobe ╭───╮ sits at sprite column 4;
- *  the dip between the lobes carries interior shading, so the search anchors on the lobe alone) */
+/** y of the sprite's first row and x of its first column (the ╭─╮╭──╮╭─╮ crown starts at sprite column 4) */
 function sprite(scr: GridScreen, rect: Rect = RECT): { top: number; sx: number } {
   for (let y = rect.y + 1; y < rect.y + rect.h - 1; y++) {
-    const i = scr.row(y).indexOf("╭───╮");
+    const i = scr.row(y).indexOf("╭─╮╭──╮╭─╮");
     if (i >= 0) return { top: y, sx: i - 4 };
   }
   throw new Error("sprite not found:\n" + scr.toText());
@@ -225,7 +224,7 @@ describe("storm frames", () => {
     expect(f.at(sx + 12, top + 2)!.ch).toBe("╱");
     expect(f.at(sx + 6, top + 2)!.fg).toBe(theme.err);
     expect(f.at(sx + 9, top + 4)!.ch).toBe("∩");
-    expect(f.at(sx + 6, top + 1)!.ch).toBe("░"); // the row-1 interior under the left lobe
+    expect(f.at(sx + 5, top + 1)!.ch).toBe("░"); // the row-1 interior under the left lobe
     expect(f.at(sx + 4, top + 3)!.ch).toBe("░");
     expect(f.at(sx, top)!.ch).toBe(" "); // outside the outline: the row-0 corner stays empty
     expect(f.at(sx + 7, top)!.fg).toBe(theme.warn); // lit outline

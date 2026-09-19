@@ -125,4 +125,8 @@ export interface Renderer {
    *  store, tasks, model + context window, usage math. Called exactly once by runTui, after runtime
    *  construction and before start(). */
   attach?(ctx: SextantAttach): void;
+  /** OPTIONAL (sextant): /mouse — turn terminal mouse tracking off so the terminal's own drag
+   *  selection works again (select + copy across panels), or back on for clicks/scrollbars. A
+   *  renderer that never captures the mouse (classic, fakes) omits it and the command says so. */
+  setMouse?(on: boolean): void;
 }

@@ -182,7 +182,7 @@ describe("the mascot", () => {
     expect(mergeCloudIntoLine(line, 0)).toBe(line);                  // nothing until the frame has closed
     expect(cloudRows(0).join("")).toBe("");
     const leaning = mergeCloudIntoLine(line, INTRO_STEPS);
-    expect(leaning).toContain("╭───╮─╭──╮");                           // the lobed crown cuts into the line; the dip between the lobes lets it show through
+    expect(leaning).toContain("╭─╮╭──╮╭─╮");                           // the lobed crown cuts into the line; the dip between the lobes lets it show through
     expect(leaning).toHaveLength(line.length);                       // ...without widening it
     expect(leaning.startsWith("╭─")).toBe(true);
     // the reserved rows are constant from the first step to the last: the mark cannot jump

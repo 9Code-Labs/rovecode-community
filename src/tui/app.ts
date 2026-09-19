@@ -331,12 +331,31 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     return thinkingLine(ref, rt.providers.get(state.provider)?.protocol ?? "openai", { shape: anthropicShapeFor(ref) });
   };
 
+  /** the /mouse toggle's memory: sextant starts with tracking ON (enterSequence), the app mirrors it */
+  let mouseOn = true;
   const handleSlash = (text: string): boolean => {
     const [cmd, ...rest] = text.slice(1).split(/\s+/);
     const arg = rest.join(" ").trim();
     switch (cmd) {
       case "exit": case "quit": close(); return true;
       case "help": lazyInfoCmd().cmdHelp(infoCtx); return true;
+      case "mouse": {
+        const want = (arg.length > 0 ? arg : "toggle").toLowerCase();
+        if (want !== "on" && want !== "off" && want !== "toggle") {
+          renderer.addSystemNote(`usage: /mouse on | off | toggle — "off" hands the drag to the terminal so you can select and copy text`, "warn");
+          return true;
+        }
+        if (!renderer.setMouse) {
+          renderer.addSystemNote("this view never captures the mouse — select and copy with the terminal as usual");
+          return true;
+        }
+        mouseOn = want === "toggle" ? !mouseOn : want === "on";
+        renderer.setMouse(mouseOn);
+        renderer.addSystemNote(mouseOn
+          ? "mouse on — clicks, panel focus and scrollbar dragging are back"
+          : "mouse off — drag to select and copy text in any panel; /mouse on brings the clicks back (Shift+drag also works while the mouse is on)");
+        return true;
+      }
       case "effort": {
         const want = arg.trim();
         if (want.length === 0) { renderer.addSystemNote(effortNote(rt.effort, receives(rt.effort))); return true; }

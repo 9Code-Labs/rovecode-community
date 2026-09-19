@@ -37,7 +37,8 @@ dialect in `thinking.ts`, not the caller.
 | **Anthropic Messages**, budget shape — measured on claude-sonnet-4-5, claude-haiku-4-5; reached by flipping after the effort shape's 400 | — | `thinking: {type: "disabled"}` | `thinking: {type: "enabled", budget_tokens: 2048 / 8192 / 24576}`; `max_tokens` raised to at least budget + 4096 | measured |
 | OpenAI-compat · **OpenRouter** (any model, `provider === "openrouter"`) | — | `reasoning: {enabled: false}` | `reasoning: {effort: "low"/"medium"/"high"}` | doc |
 | OpenAI-compat · **GLM-5.3 / 5.3-flash** (`glm-5.3`) | — | — (cannot be disabled; the endpoint default is max) | `reasoning_effort: "low" / "high" / "max"` (+ the profile's `thinking: {type: "enabled", clear_thinking: false}`); under `ROVECODE_PROFILE=off` the plain OpenAI word goes instead — that A/B is what the switch is for | measured |
-| OpenAI-compat · **GLM 4.5 – 5.x** other than 5.3 (`glm`) | — | `thinking: {type: "disabled"}` | `thinking: {type: "enabled"}` (no levels) | doc |
+| OpenAI-compat · **GLM gen-5** other than 5.3 (`glm-5.x`) | — | `thinking: {type: "disabled"}` — best effort, gen-5 endpoints may ignore it (measured ignored on kaesra `dash/glm-5.2-fast-preview`) | `reasoning_effort: "low" / "high" / "max"` (medium rounds up) — the on/off-only mapping this replaced sent the same body for every level and the dial did nothing | measured (kaesra dash, 2026-09-19) |
+| OpenAI-compat · **GLM 4.5 – 4.x** (`glm`) | — | `thinking: {type: "disabled"}` | `thinking: {type: "enabled"}` (no levels) | doc |
 | OpenAI-compat · **DeepSeek** chat / V3.x (`deepseek`) | — | `thinking: {type: "disabled"}` | `thinking: {type: "enabled"}` (no levels) | doc |
 | OpenAI-compat · **DeepSeek** reasoner / R1 | — | — (always thinks) | — | doc |
 | OpenAI-compat · **Qwen / QwQ** on DashScope and most hosts (`qwen`) | — | `enable_thinking: false` | `enable_thinking: true, thinking_budget: 2048 / 8192 / 24576` | doc |

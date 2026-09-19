@@ -46,6 +46,14 @@ test("the matrix, OpenAI-compatible wire: each family's vocabulary, medium round
   expect(fields("glm-4.6", "high")).toEqual({ thinking: { type: "enabled" } });
   expect(fields("glm-4.7", "off")).toEqual({ thinking: { type: "disabled" } });
   expect(fields("glm-5", "off")).toEqual({ thinking: { type: "disabled" } });
+  // GLM gen-5 below 5.3 speaks the gen-5 vocabulary, not the 4.x on/off switch: a dial that sent the
+  // SAME body for low, medium and high is the "effort uygulanamıyor" bug (measured on kaesra dash,
+  // 2026-09-19: reasoning_effort accepted and it moves completion tokens, thinking:disabled ignored)
+  expect(fields("dash/glm-5.2-fast-preview", "low")).toEqual({ reasoning_effort: "low" });
+  expect(fields("glm-5.2", "medium")).toEqual({ reasoning_effort: "high" });
+  expect(fields("glm-5.2", "high")).toEqual({ reasoning_effort: "max" });
+  expect(says("glm-5", "off")).toMatch(/may ignore/);
+  expect(dialectFor(ref("dash/glm-5.2-fast-preview"))).toBe("glm-5.x");
   expect(dialectFor(ref("glm-4.5-air"))).toBe("glm");
   expect(dialectFor(ref("glm-4"))).toBe("openai-compatible default"); // GLM-4 had no thinking switch
   // DeepSeek

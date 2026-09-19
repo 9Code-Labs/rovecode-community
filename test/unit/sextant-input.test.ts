@@ -2,8 +2,8 @@
  *  mouse press/release/wheel/drag, a CSI split across chunks, bracketed paste as ONE event, the
  *  unknown-CSI sink, and the enter/leave control strings. */
 
-import { describe, expect, it } from "bun:test";
-import { MAX_CSI, enterSequence, leaveSequence, mouseKind, parseInput } from "../../src/sextant/input.ts";
+import { describe, expect, it, test } from "bun:test";
+import { MAX_CSI, enterSequence, leaveSequence, mouseKind, mouseOffSequence, mouseOnSequence, parseInput } from "../../src/sextant/input.ts";
 import type { InputEvent, MouseEvent } from "../../src/sextant/types.ts";
 
 const CSI = "\x1b[";
@@ -182,4 +182,13 @@ describe("sextant input: enter/leave control strings", () => {
     for (const tail of ["?1049l", "?25h", "?1006l", "?2004l"]) expect(leaveSequence()).toContain(CSI + tail);
     expect(leaveSequence().endsWith(CSI + "?1049l")).toBe(true);
   });
+});
+
+test("the /mouse toggle sequences: exactly the enter sequence's mouse bytes, and their exact inverse", () => {
+  const CSI = "\x1b[";
+  expect(mouseOnSequence()).toBe(CSI + "?1000h" + CSI + "?1002h" + CSI + "?1006h");
+  expect(mouseOffSequence()).toBe(CSI + "?1006l" + CSI + "?1002l" + CSI + "?1000l");
+  expect(enterSequence(true)).toContain(mouseOnSequence());   // enter's mouse bytes ARE the toggle's on bytes
+  expect(enterSequence(false)).not.toContain("?1000h");       // and without them when started mouse-off
+  for (const tail of ["?1000l", "?1002l", "?1006l"]) expect(leaveSequence()).toContain(CSI + tail); // leave always disables
 });

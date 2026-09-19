@@ -117,3 +117,15 @@ export function enterSequence(mouse = true): string {
 export function leaveSequence(): string {
   return CSI + "?2004l" + CSI + "?1006l" + CSI + "?1002l" + CSI + "?1000l" + CSI + "0m" + CSI + "?7h" + CSI + "?25h" + CSI + "?1049l";
 }
+
+/** The runtime mouse toggle (/mouse): with tracking ON the terminal hands every drag to the app and
+ *  native text selection is dead — a terminal cannot select what it is reporting. OFF gives the drag
+ *  back to the terminal (select + copy as usual, in every panel at once); ON restores clicks, focus
+ *  and scrollbar dragging. Most terminals also bypass reporting while Shift is held, which is why
+ *  shift+drag stays the quick path and /mouse off is the comfortable one. */
+export function mouseOnSequence(): string {
+  return CSI + "?1000h" + CSI + "?1002h" + CSI + "?1006h";
+}
+export function mouseOffSequence(): string {
+  return CSI + "?1006l" + CSI + "?1002l" + CSI + "?1000l";
+}

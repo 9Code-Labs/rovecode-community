@@ -52,8 +52,8 @@ const FRAME_GROWTH = 3;
  *  drift — test/unit/intro.test.ts asserts these rows are identical to the ones the TUI paints, so the
  *  intro's cloud and the session's cloud are the same cloud or the suite fails. */
 const CLOUD_OUTLINE: readonly string[] = [
-  "    ╭───╮ ╭──╮    ",
-  "   ╭╯   ╰─╯  ╰─╮  ",
+  "    ╭─╮╭──╮╭─╮    ",
+  "   ╭╯ ╰╯  ╰╯ ╰─╮  ",
   "  ╭╯           ╰╮ ",
   "  │             │ ",
   "  ╰╮           ╭╯ ",

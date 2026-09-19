@@ -30,7 +30,7 @@ import { fixedFrom, loadContext } from "./context-source.ts";
 import { hunksFromUnified, setAgentsPainter } from "./draw-code.ts";
 import { fuzzy } from "./engine.ts";
 import { spawnGitAsync, toAsync, type GitRunner, type GitRunnerAsync } from "./git-status.ts";
-import { enterSequence, leaveSequence } from "./input.ts";
+import { enterSequence, leaveSequence, mouseOffSequence, mouseOnSequence } from "./input.ts";
 import { ESC_WINDOW_MS, type KeyCtx } from "./keys.ts";
 import { initialState, makeApplyEvent, planCounts, pushToast, setCrew, setPlan, setUsage } from "./model.ts";
 import { suggestions } from "./overlays.ts";
@@ -87,6 +87,9 @@ export class SextantRenderer implements Renderer {
   private unsubTasks: (() => void) | null = null;
   private started = false;
   private stopped = false;
+  /** terminal mouse tracking (clicks, focus, scrollbar drags) — /mouse flips it so the terminal's own
+   *  select+copy works; the app cannot receive what the terminal stops reporting */
+  private mouseTracking = true;
   /** between setBusy(true) and setBusy(false): the event stream owns the rows */
   private busy = false;
   private dropNotes = 0;
@@ -168,6 +171,16 @@ export class SextantRenderer implements Renderer {
   /** parse input held by the ESC-hold timer now (tests) */
   flushInput(): void { this.loop.flushInput(); }
 
+  /** /mouse: hand the drag back to the terminal (native select + copy) or take it back (clicks,
+   *  focus, scrollbar dragging). Idempotent; before the terminal is entered the state simply rides
+   *  into the enter sequence. */
+  setMouse(on: boolean): void {
+    if (this.mouseTracking === on) return;
+    this.mouseTracking = on;
+    if (this.terminalEntered && !this.stopped) this.io.write(on ? mouseOnSequence() : mouseOffSequence());
+  }
+  get mouse(): boolean { return this.mouseTracking; }
+
   // ------------------------------------------------------------------ lifecycle
   start(hooks: RendererHooks, options?: RendererStartOptions): void | Promise<void> {
     if (this.started) return;
@@ -181,7 +194,7 @@ export class SextantRenderer implements Renderer {
         options?.onReveal?.();
         this.terminalEntered = true;
         this.io.enterRaw();
-        this.io.write(enterSequence(true));
+        this.io.write(enterSequence(this.mouseTracking));
       }, options?.beforeReveal !== undefined);
     };
     if (!options?.beforeReveal) { reveal(); return; }

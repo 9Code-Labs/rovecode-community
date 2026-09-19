@@ -110,7 +110,19 @@ const DIALECTS: readonly Dialect[] = [
       if (profile === null) return word(l, "ROVECODE_PROFILE=off: the plain word, not GLM's low | high | max");
       return word(profile.reasoningEffort(l)!, "GLM's words are low | high | max; medium rounds up");
     } },
-  { id: "glm", matches: id(/(^|[/:])glm-(4\.[5-9]|4\.\d{2,}|5(\.\d+)?)(?=[-:]|$)/i), plan: (l) => onOff(l !== "off", "GLM") },
+  // GLM generation 5 below 5.3 (5.3 itself is the profile row above): gen-5 speaks reasoning_effort
+  // low | high | max, NOT the 4.x on/off switch. Measured 2026-09-19 against kaesra's
+  // dash/glm-5.2-fast-preview: the field is accepted (HTTP 200) and it MOVES the model — one sample
+  // of a small math task reasoned 1233 completion tokens at "low" vs 1438 at "max", while the
+  // on/off-only mapping sent the SAME body for low, medium and high (the dial did nothing, which is
+  // exactly the "effort uygulanamıyor" report). `thinking: {type: "disabled"}` was IGNORED by that
+  // endpoint (1216 reasoning tokens with it), so "off" sends the explicit disable as a best effort
+  // and says honestly that a gen-5 endpoint may ignore it.
+  { id: "glm-5.x", matches: id(/(^|[/:])glm-5(\.\d+)?(?=[-:]|$)/i),
+    plan: (l) => l === "off"
+      ? { fields: { thinking: { type: "disabled" } }, says: 'thinking: { type: "disabled" } (best effort — GLM gen-5 endpoints may ignore it; measured ignored on kaesra dash)' }
+      : word(l === "low" ? "low" : l === "medium" ? "high" : "max", "GLM gen-5 words are low | high | max; medium rounds up") },
+  { id: "glm", matches: id(/(^|[/:])glm-(4\.[5-9]|4\.\d{2,})(?=[-:]|$)/i), plan: (l) => onOff(l !== "off", "GLM") },
   { id: "deepseek", matches: id(/deepseek/i),
     plan: (l, m) => /reasoner|r1/i.test(m.model) ? nothing(`${m.model} always thinks — no dial`) : onOff(l !== "off", "DeepSeek") },
   { id: "qwen", matches: id(/(^|[/:])(qwen|qwq)/i),

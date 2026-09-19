@@ -12,7 +12,7 @@ import { join } from "node:path";
 import type { RunEvent } from "../../src/core/types.ts";
 import type { TaskInfo } from "../../src/core/tasks.ts";
 import type { GitRunner, GitRunnerAsync } from "../../src/sextant/git-status.ts";
-import { enterSequence, leaveSequence } from "../../src/sextant/input.ts";
+import { enterSequence, leaveSequence, mouseOffSequence, mouseOnSequence } from "../../src/sextant/input.ts";
 import { SextantRenderer } from "../../src/sextant/sextant-renderer.ts";
 import type { SextantAttach, ToolRow } from "../../src/sextant/types.ts";
 import type { RendererHooks } from "../../src/tui/renderer.ts";
@@ -35,6 +35,25 @@ function make(o: { cols?: number; rows?: number; cwd?: string; env?: Record<stri
   return { io, renderer, spy, hooks, feed, advance, at: () => now, frame: () => { renderer.tick(); return renderer.frameText(); } };
 }
 const ev = (r: SextantRenderer, e: RunEvent): void => r.onEvent(e);
+
+test("/mouse: setMouse hands the drag to the terminal and takes it back, idempotently; a pre-start toggle rides into the enter sequence", () => {
+  const { io, renderer } = make();
+  const before = io.writes.length;
+  renderer.setMouse(false);
+  expect(io.writes.slice(before).join("")).toBe(mouseOffSequence()); // tracking off: the terminal selects again
+  renderer.setMouse(false);
+  expect(io.output().split(mouseOffSequence()).length - 1).toBe(1); // idempotent: one burst, not two
+  const mid = io.writes.length;
+  renderer.setMouse(true);
+  expect(io.writes.slice(mid).join("")).toBe(mouseOnSequence());
+  expect(renderer.mouse).toBe(true);
+
+  const off = make({ start: false });
+  off.renderer.setMouse(false);           // flipped BEFORE start...
+  void off.renderer.start(off.hooks);
+  expect(off.io.output().startsWith(enterSequence(false))).toBe(true); // ...so the enter sequence carries no mouse bytes
+  off.renderer.stop();
+});
 /** let queued microtasks run (the approval queue opens a card through a promise chain) */
 const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 /** a promise that must settle within `ms` — a hung card promise is a failure, not a stuck runner */
