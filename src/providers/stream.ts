@@ -210,6 +210,45 @@ function authHeaders(cfg: ProviderConfig): Record<string, string> {
 
 // ---------- factories ----------
 
+/** The leading balanced {...} of `s`, or null — bracket counting that respects strings and escapes.
+ *  Only called on arguments that FAILED JSON.parse, to test one specific proxy pathology. */
+function leadingJsonObject(s: string): string | null {
+  const start = s.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < s.length; i++) {
+    const ch = s[i]!;
+    if (inStr) {
+      if (esc) esc = false;
+      else if (ch === "\\") esc = true;
+      else if (ch === '"') inStr = false;
+      continue;
+    }
+    if (ch === '"') inStr = true;
+    else if (ch === "{") depth++;
+    else if (ch === "}") { depth--; if (depth === 0) return s.slice(0, i + 1); }
+  }
+  return null;
+}
+
+/** SSE-accumulated tool arguments. A proxy family REPEATS the whole arguments object in every delta
+ *  instead of streaming fragments (the same bug that repeats the tool NAME — the accumulator above
+ *  absorbs that half), so the buffer holds the identical JSON two or more times: "{…}{…}". An EXACT
+ *  repeat of a parseable leading object is that pathology and nothing a model can legitimately
+ *  produce — rescue the first copy; anything else keeps the honest `_raw` fallback. */
+function parseStreamedArgs(raw: string): unknown {
+  try { return JSON.parse(raw || "{}"); } catch {
+    const first = leadingJsonObject(raw);
+    if (first !== null) {
+      const rest = raw.slice(first.length);
+      if (rest.length > 0 && rest.length % first.length === 0 && rest === first.repeat(rest.length / first.length)) {
+        try { return JSON.parse(first); } catch { /* not the pathology after all */ }
+      }
+    }
+    return { _raw: raw };
+  }
+}
+
 const optsOf = (cfg: ProviderConfig): AdapterOptions => ({ baseUrl: cfg.baseUrl, apiKey: cfg.apiKey, ...(cfg.headers !== undefined ? { headers: cfg.headers } : {}) });
 
 /** `oauth`: the seam's injectable clock/fetch/store/provider list (tests drive a fake endpoint); production passes nothing */
@@ -404,9 +443,19 @@ export function openaiCompatStreaming(opts: AdapterOptions): StreamFn {
         if (c?.delta?.reasoning_content) yield { type: "reasoning_delta", text: c.delta.reasoning_content };
         for (const tc of c?.delta?.tool_calls ?? []) {
           const idx = tc.index ?? 0;
-          const cur = toolArgs.get(idx) ?? { id: tc.id ?? `tc${idx}`, name: tc.function?.name ?? "", args: "" };
+          const cur = toolArgs.get(idx) ?? { id: tc.id ?? `tc${idx}`, name: "", args: "" };
           if (tc.id) cur.id = tc.id;
-          if (tc.function?.name) cur.name += tc.function.name;
+          const n = tc.function?.name;
+          if (n) {
+            // Two wire behaviors exist in the wild: providers that SPLIT the tool name across deltas
+            // (fragments must concatenate) and proxies that REPEAT the whole name in every chunk.
+            // Seeding the name in the initializer AND appending it here doubled every name on the
+            // very first delta ("ls" arrived as "lsls", "bash" as "bashbash") and the run died on
+            // `unknown tool`: an exact repeat of what we hold is idempotent, anything else is a
+            // genuine fragment and appends.
+            if (cur.name === "") cur.name = n;
+            else if (n !== cur.name) cur.name += n;
+          }
           if (tc.function?.arguments) cur.args += tc.function.arguments;
           toolArgs.set(idx, cur);
         }
@@ -421,9 +470,7 @@ export function openaiCompatStreaming(opts: AdapterOptions): StreamFn {
       const parts: AssistantTurn["parts"] = [];
       if (buffer) parts.push({ kind: "text", text: buffer });
       for (const [, tc] of [...toolArgs].sort((a, b) => a[0] - b[0])) {
-        let args: unknown = {};
-        try { args = JSON.parse(tc.args || "{}"); } catch { args = { _raw: tc.args }; }
-        parts.push({ kind: "tool_call", id: tc.id, tool: tc.name, args });
+        parts.push({ kind: "tool_call", id: tc.id, tool: tc.name, args: parseStreamedArgs(tc.args) });
       }
       turn = { parts, stopReason: finish, usage };
     } catch (e) {
