@@ -8,7 +8,7 @@ OpenHands) — every port traces to file:line in a snapshotted source and lands 
 fresh-context critic verifies it against a pre-written bar (ledger: `PORTS.md`, kept outside this
 repository for now).
 
-![The sextant TUI at 160×44 cells: the files tree with git statuses, the code panel on src/auth/callback.ts with edited lines highlighted, the messages panel with read and edit tool rows and an approval card asking to run bun test, the plan at step 1 of 4, usage at 13% context, and the rovecode cloud pet waiting for a nod.](https://raw.githubusercontent.com/9Code-Labs/rovecode-site/main/public/shots/approval-160x44.png)
+![The sextant TUI at 160×44 cells: the files tree with git statuses, the code panel on src/auth/callback.ts with edited lines highlighted, the messages panel with read and edit tool rows and an approval card asking to run bun test, the plan at step 1 of 4, usage at 13% context, and the rovecode cloud pet waiting for a nod.](https://raw.githubusercontent.com/9Code-Labs/rovecode-community/main/docs/assets/approval-160x44.png)
 
 ## Status (2026-09-04, post wave 4)
 
@@ -38,7 +38,7 @@ repository for now).
   - **run budgets** — `--max-turns` / `--max-seconds`, so a spiral ends in a result instead of an outside kill
   - a decided **wire-failure policy** (`docs/wire-failures.md`): what is retried, what is never retried after
     text has arrived, and the wait announced while it happens
-  - the **site** ([its own repo](https://github.com/9Code-Labs/rovecode-site), 15 languages, prerendered, [live](http://64.177.43.110/)) and the CI/CD workflows
+  - the **site** ([live at rovecode.dev](https://rovecode.dev), 15 languages, prerendered) and the CI/CD workflows
     that build and ship it
   - **sextant** gained mouse and scrollbar dragging, the page tab strip, the notices history and prompt suggestions
   - **startup** is lazy: `rovecode --help` no longer boots the TUI, the loop, the runtime or the plugin scanner
