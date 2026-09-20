@@ -6,7 +6,7 @@ import { test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadSettings, loadSettingsScoped, readSettingsFile, resolvePermission, saveSetting, settingsPath } from "../../src/core/settings.ts";
+import { loadSettings, loadSettingsScoped, readSettingsFile, resolveEffort, resolvePermission, saveSetting, settingsPath } from "../../src/core/settings.ts";
 import { trustProjectFiles } from "../helpers/mcp-trust.ts";
 
 let home: string; let cwd: string; let saved: string | undefined;
@@ -29,6 +29,17 @@ const writeProject = (o: unknown) => { mkdirSync(join(cwd, ".rovecode"), { recur
 test("nothing anywhere: the deny-default stands", () => {
   expect(loadSettings(cwd)).toEqual({});
   expect(resolvePermission(cwd, undefined, {})).toBe("ask");
+});
+
+test("resolveEffort: the same ladder — flag beats env, env beats files, project beats user, the floor is auto", () => {
+  expect(resolveEffort(cwd, undefined, {})).toBe("auto");
+  writeUser({ effort: "medium" });
+  expect(resolveEffort(cwd, undefined, {})).toBe("medium");
+  writeProject({ effort: "low" });
+  expect(resolveEffort(cwd, undefined, {})).toBe("low"); // project pins the repo's dial
+  expect(resolveEffort(cwd, undefined, { ROVECODE_EFFORT: "high" })).toBe("high");
+  expect(resolveEffort(cwd, "off", { ROVECODE_EFFORT: "high" })).toBe("off");
+  expect(resolveEffort(cwd, undefined, { ROVECODE_EFFORT: "turbo" })).toBe("low"); // a bad env word is no answer at all
 });
 
 test("the project file beats the user file, key by key", () => {

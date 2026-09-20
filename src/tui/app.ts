@@ -357,12 +357,27 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
         return true;
       }
       case "effort": {
-        const want = arg.trim();
-        if (want.length === 0) { renderer.addSystemNote(effortNote(rt.effort, receives(rt.effort))); return true; }
+        const words = arg.split(/\s+/).filter((w) => w.length > 0);
+        const save = words.includes("--save");
+        const want = words.filter((w) => w !== "--save").join(" ").trim();
+        if (want.length === 0) {
+          if (!save) { renderer.addSystemNote(effortNote(rt.effort, receives(rt.effort))); return true; }
+          renderer.addSystemNote("usage: /effort auto | off | low | medium | high [--save [--project]]", "warn"); return true;
+        }
         const level = parseEffort(want);
-        if (level === undefined) { renderer.addSystemNote(`"${want}" is not a level — ${THINKING_EFFORTS.join(" · ")}`, "warn"); return true; }
+        if (level === undefined) { renderer.addSystemNote(`"${want}" is not a level — ${THINKING_EFFORTS.join(" · ")} [--save]`, "warn"); return true; }
         rt.setEffort(level);
         renderer.addSystemNote(effortNote(level, receives(level)));
+        if (save) {
+          // settings.json is read at boot (core/settings.ts resolveEffort), so --save makes this the
+          // default of every future session, not just this one; --project pins it to this repo
+          try {
+            const path = saveSetting("effort", level, words.includes("--project") ? "project" : "user", rt.cwd);
+            renderer.addSystemNote(`saved: effort ${level} is the default now (${path})`);
+          } catch (e) {
+            renderer.addSystemNote(`could not save it: ${e instanceof Error ? e.message : String(e)}`, "warn");
+          }
+        }
         pushStatus(); return true;
       }
       case "accept-edits":

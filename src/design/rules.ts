@@ -138,11 +138,27 @@ export const DESIGN_RULES: string = [
 
 /** The prompt section for a project: the rules, plus either the recorded direction or the instruction
  *  to establish one. Read at buildDef (once per run start), like the model profile, so the system
- *  prefix stays byte-stable within a run for the prompt cache. */
-export function designPromptSection(cwd: string): string {
+ *  prefix stays byte-stable within a run for the prompt cache.
+ *
+ *  STAGED (measured 2026-09-20): a project with NO recorded direction used to carry the whole ~2.2k
+ *  token proposal on every request — the largest single item in the default prompt after the tool
+ *  schemas, paid by every session that never touches an interface. Such a project now gets a stub
+ *  that names the protocol and the tool carrying it; `design_direction {action:"get"}` returns the
+ *  full ban list on demand (the MCP lazy-disclosure pattern: zero idle tokens, the words arrive the
+ *  moment the work does). Once a direction IS recorded — the project has declared itself
+ *  design-relevant — the full section rides again, exactly as before. ROVECODE_DESIGN=full restores
+ *  the old always-on form; =off still drops the section entirely (cli/runtime.ts buildDef). */
+export function designPromptSection(cwd: string, env: Record<string, string | undefined> = process.env): string {
   const direction = loadDirection(cwd);
   if (direction === null) {
-    return `${DESIGN_RULES}\n\n## This project\n\nNo design direction is recorded yet (.rovecode/design.json). The next interface work in this project starts with the proposal above.`;
+    if ((env["ROVECODE_DESIGN"] ?? "").trim().toLowerCase() === "full") {
+      return `${DESIGN_RULES}\n\n## This project\n\nNo design direction is recorded yet (.rovecode/design.json). The next interface work in this project starts with the proposal above.`;
+    }
+    return [
+      "# Design",
+      "",
+      `No design direction is recorded yet (.rovecode/design.json). Before ANY interface work, call design_direction {action:"get"}: it returns this project's design protocol (the defaults to climb out of, the ban list, how to propose). Then propose THREE distinct directions and let the human choose; design_audit checks later screens against the recorded direction.`,
+    ].join("\n");
   }
   // A provisional direction is built to exactly like a chosen one, but the heading must not tell the
   // model "do not re-ask" about the one question that is still open. renderDirection carries the rest.

@@ -108,6 +108,9 @@ test("design_direction get reports nothing recorded, set records what the human 
     const empty = await tool.execute({ action: "get" }, ctx(dir));
     expect(empty.ok).toBe(true);
     expect(empty.output).toContain("No design direction recorded");
+    // lazy disclosure (the staged prompt): the full protocol rides in THIS answer, not in every
+    // request's system prompt — the stub in rules.ts points here
+    expect(empty.output).toContain("This question is about NEW work");
 
     const set = await tool.execute({ action: "set", name: "ink band", corners: "sharp" }, ctx(dir));
     expect(set.ok).toBe(true);

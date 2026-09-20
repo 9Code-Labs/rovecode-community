@@ -19,7 +19,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { rovecodeHome } from "../providers/auth.ts";
 import { isTrustedFile, untrustedFileNote } from "./trust.ts";
-import { THINKING_EFFORTS, type PermissionLevel, type ThinkingEffort } from "./types.ts";
+import { parseEffort, THINKING_EFFORTS, type PermissionLevel, type ThinkingEffort } from "./types.ts";
 
 export type SettingsScope = "user" | "project";
 
@@ -167,4 +167,17 @@ export function resolvePermission(cwd: string, flag: PermissionLevel | undefined
   if (env.ROVECODE_YOLO === "1") return "auto";
   if (env.ROVECODE_ACCEPT_EDITS === "1") return "accept-edits";
   return loadSettings(cwd).permission ?? "ask";
+}
+
+/** The effort this run starts at — the same precedence sentence as resolvePermission: a flag is
+ *  about this run, ROVECODE_EFFORT about this shell, the files about this place, and the floor is
+ *  "auto" (the endpoint's own default stands). The `effort` key existed in the file schema from the
+ *  start but nothing read it: a `/effort low` died with the terminal, so every launch was back to
+ *  the model's default thinking budget — on a reasoning-heavy default that is the difference between
+ *  a 5 s answer and a 30 s one (measured, 2026-09-20). */
+export function resolveEffort(cwd: string, flag: ThinkingEffort | undefined, env: Record<string, string | undefined> = {}): ThinkingEffort {
+  if (flag !== undefined) return flag;
+  const fromEnv = parseEffort(env["ROVECODE_EFFORT"]);
+  if (fromEnv !== undefined) return fromEnv;
+  return loadSettings(cwd).effort ?? "auto";
 }

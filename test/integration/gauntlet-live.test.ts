@@ -75,10 +75,11 @@ test("runTaskLive sends the product prompt (base + GLM profile section, identity
       expect(sysText).toContain(GLM_53_PROFILE.promptSection.slice(0, 60));
       // the live gauntlet measures the PRODUCT prompt, so it carries the design section too; order is
       // base -> profile -> design (cli/runtime.ts buildDef), and the scratch workspace has no
-      // design.json, so it is the "choose a direction first" variant
+      // design.json, so it is the staged stub variant: the full proposal rides in design_direction's
+      // get answer, not on every request (rules.ts designPromptSection)
       expect(sysText).toContain(GLM_53_PROFILE.promptSection);
-      expect(sysText.indexOf(GLM_53_PROFILE.promptSection)).toBeLessThan(sysText.indexOf("# Interface design"));
-      expect(sysText.endsWith("No design direction is recorded yet (.rovecode/design.json). The next interface work in this project starts with the proposal above.")).toBe(true);
+      expect(sysText.indexOf(GLM_53_PROFILE.promptSection)).toBeLessThan(sysText.indexOf("# Design"));
+      expect(sysText.endsWith("design_audit checks later screens against the recorded direction.")).toBe(true);
       expect(sysText).not.toContain("You are being evaluated");
       expect(sysText).not.toContain("# Project context");
       expect(sysText).not.toContain("# Repo map");

@@ -35,12 +35,16 @@ test("design_audit applies to both: writing UI and changing how an existing scre
   expect(check).toContain("After writing UI, or changing how an existing screen looks (the black background, the shadow, the\nbigger heading included), run `design_audit` on the source you touched");
 });
 
-test("a project with no recorded direction still gets the proposal instruction for its NEXT new UI — the boundary does not weaken the new-work case", () => {
+test("a project with no recorded direction gets the STUB that points at the protocol tool — the ~2.2k-token proposal rides on demand, not on every request; ROVECODE_DESIGN=full restores the always-on form", () => {
   const cwd = mkdtempSync(join(tmpdir(), "rovecode-design-rules-"));
   try {
     const section = designPromptSection(cwd);
     expect(section).toContain("No design direction is recorded yet");
-    expect(section).toContain("The next interface work in this project starts with the proposal above.");
-    expect(section).toContain("This question is about NEW work");
+    expect(section).toContain('design_direction {action:"get"}');
+    expect(section.length).toBeLessThan(1000); // the stub: zero idle tokens until interface work asks
+    expect(section).not.toContain("This question is about NEW work"); // that rides in the tool's answer now
+    const full = designPromptSection(cwd, { ROVECODE_DESIGN: "full" });
+    expect(full).toContain("The next interface work in this project starts with the proposal above.");
+    expect(full).toContain("This question is about NEW work");
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });

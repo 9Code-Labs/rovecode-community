@@ -59,6 +59,7 @@ import { recallTool } from "../memory/recall.ts";
 import { configureExecutor, type SpawnRunner } from "../core/executor.ts";
 import { loadSandboxConfig, unavailableRungError, type SandboxConfig } from "../core/sandbox-config.ts";
 import { loadTodos, planReminder, todoTools } from "../tools/todo.ts";
+import { resolveEffort } from "../core/settings.ts";
 import { noteVerifyCost, resolveForGate, runVerify, VERIFY_TIMEOUT_MS, type VerifyResolver } from "../core/verify-gate.ts";
 import { SteeringQueue } from "../core/loop.ts";
 import { TaskManager } from "../core/tasks.ts";
@@ -666,7 +667,9 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   // default "auto": no thinking field on the wire, the provider's own default stands (Claude 5: adaptive,
   // high). The old default "off" sent an explicit `thinking: disabled` and switched off the reasoning the
   // model does by itself — most of "we are not getting the model's real performance" (Berkay, 2026-09-04).
-  let effort: ThinkingEffort = parseEffort(process.env.ROVECODE_EFFORT) ?? "auto";
+  // Resolution (core/settings.ts resolveEffort): flag (rt.setEffort right after boot) → ROVECODE_EFFORT
+  // → project settings.json → user settings.json → "auto" — so `/effort low --save` survives the terminal.
+  let effort: ThinkingEffort = resolveEffort(cwd, undefined, process.env);
 
   /** models the catalog knows CANNOT do native tool calling get the senpi-format prompt block (port #7); unknown models
    *  attempt native first. Force: ROVECODE_TOOL_MIDDLEWARE=1. One rule for the root def and for a child's (runChild). */

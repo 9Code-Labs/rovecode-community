@@ -21,6 +21,7 @@ import {
   designPath, loadDirection, parseDirection, renderDirection, saveDirection,
   type DesignDirection,
 } from "../design/direction.ts";
+import { DESIGN_RULES } from "../design/rules.ts";
 
 /** Resolve a caller-supplied path against the run's cwd and refuse to leave it: an audit is about
  *  THIS project's files, and a read tool that wanders is a read tool nobody can reason about. */
@@ -125,8 +126,11 @@ export function designDirectionTool(): Tool {
       const a = (args && typeof args === "object" ? args : {}) as Record<string, unknown>;
       if (a["action"] === "get") {
         const d = loadDirection(ctx.cwd);
+        // No direction: the get IS the lazy-disclosure drop of the full protocol (rules.ts
+        // designPromptSection ships only a stub in the prompt until a direction exists) — the
+        // ban list arrives the moment interface work actually asks for it, not on every request.
         return d === null
-          ? { ok: true, output: `No design direction recorded for this project (${designPath(ctx.cwd)} does not exist). Propose three distinct directions and let the human choose before writing UI. If nothing here can ask a human, build ONE and record it with provisional: true.` }
+          ? { ok: true, output: `No design direction recorded for this project (${designPath(ctx.cwd)} does not exist). Here is the protocol:\n\n${DESIGN_RULES}\n\nPropose three distinct directions and let the human choose before writing UI. If nothing here can ask a human, build ONE and record it with provisional: true.` }
           : { ok: true, output: renderDirection(d), data: d };
       }
       if (a["action"] !== "set") return { ok: false, output: "design_direction: action must be \"get\" or \"set\"." };

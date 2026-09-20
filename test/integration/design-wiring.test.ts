@@ -39,14 +39,32 @@ test("auto (yolo) allows design_direction without an approver, like every other 
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 
-test("the system prompt carries the ban list, and asks for a direction before any UI is written", () => {
+test("the system prompt carries the design STUB and asks for a direction before any UI is written — the ban list itself rides in design_direction's get answer, not in every request", () => {
   const cwd = tmpCwd();
+  try {
+    const prompt = createRuntime({ cwd, stream: null }).buildDef(MODEL).systemPrompt;
+    expect(prompt).toContain("# Design");
+    expect(prompt).toContain("No design direction is recorded yet");
+    expect(prompt).toContain('design_direction {action:"get"}');
+    // staged context (measured 2026-09-20): the ~2.2k-token proposal is lazy-disclosed, not idle weight
+    expect(prompt).not.toContain("# Interface design");
+    expect(prompt).not.toContain("Amber, orange and gold");
+  } finally { rmSync(cwd, { recursive: true, force: true }); }
+});
+
+test("ROVECODE_DESIGN=full restores the always-on proposal in the prompt", () => {
+  const cwd = tmpCwd();
+  const saved = process.env.ROVECODE_DESIGN;
+  process.env.ROVECODE_DESIGN = "full";
   try {
     const prompt = createRuntime({ cwd, stream: null }).buildDef(MODEL).systemPrompt;
     expect(prompt).toContain("# Interface design");
     expect(prompt).toContain("Amber, orange and gold");
     expect(prompt).toContain("No design direction is recorded yet");
-  } finally { rmSync(cwd, { recursive: true, force: true }); }
+  } finally {
+    if (saved === undefined) delete process.env.ROVECODE_DESIGN; else process.env.ROVECODE_DESIGN = saved;
+    rmSync(cwd, { recursive: true, force: true });
+  }
 });
 
 test("once a direction is recorded the prompt carries it instead, and stops asking", () => {
