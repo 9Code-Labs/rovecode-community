@@ -383,7 +383,8 @@ test("`/ex` + shift+wheel over the `/exit` suggestion row scrolls instead of cli
   expect(renderer.state.input.text).toBe("/ex");
   expect(renderer.state.messages.some((m) => m.kind === "user")).toBe(false);   // nothing was submitted
   at = rowOf();
-  io.feed(`\x1b[<0;${at.x + 1};${at.y + 1}M`); renderer.flushInput();           // the plain click runs the row
+  io.feed(`\x1b[<0;${at.x + 1};${at.y + 1}M`); renderer.flushInput();           // press: the chat drag-select gesture holds it…
+  io.feed(`\x1b[<0;${at.x + 1};${at.y + 1}m`); renderer.flushInput();           // …release: the click runs the row (a real click is always press+release)
   await deadline(app, 8000, "runTui after clicking /exit");
   expect(renderer.active).toBe(false);
   for (const seq of LEAVE) expect(io.output().slice(-400)).toContain(seq);

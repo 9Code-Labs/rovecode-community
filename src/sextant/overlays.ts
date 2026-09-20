@@ -414,7 +414,7 @@ export const HELP_KEYS: readonly (readonly [string, string])[] = [
   ["⌃← ⌃→", "prompt: jump by word"],
   ["home end", "prompt: line start · end (end re-sticks the tail)"],
   ["pgup pgdn", "scroll messages · end sticks to the tail"],
-  ["mouse", "click · wheel · drag a scrollbar — ⇧drag selects text to copy; /mouse off gives the drag to the terminal"],
+  ["mouse", "click · wheel · drag a scrollbar — drag over the chat to select and copy it"],
   ["@file", "mention a file (picker)"],
 ];
 

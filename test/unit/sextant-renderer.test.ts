@@ -601,3 +601,62 @@ test("a keystroke paints without waiting for the frame timer — the echo must n
   io.feed("typed after the session ended");
   expect(paints).toBe(0);
 });
+
+// ---------- chat text selection (selection.ts): drag copies, a click still clicks ----------
+
+/** SGR mouse bytes (1-based on the wire, parseInput makes them 0-based events) */
+const mPress = (x: number, y: number): string => `\x1b[<0;${x + 1};${y + 1}M`;
+const mDrag = (x: number, y: number): string => `\x1b[<32;${x + 1};${y + 1}M`;
+const mRelease = (x: number, y: number): string => `\x1b[<0;${x + 1};${y + 1}m`;
+
+test("drag over the chat selects and copies on release (OSC 52 + a toast); the transcript is untouched", () => {
+  const { io, renderer, feed, advance } = make();
+  renderer.state.messages.push({ kind: "assistant", text: "COPYME-TOKEN-123", streaming: false, id: "sel-1" });
+  advance(200); // a direct state push marks nothing dirty; the idle-repaint window makes the tick paint
+  const frame = renderer.frameText().split("\n");
+  const y = frame.findIndex((l) => l.includes("COPYME-TOKEN-123"));
+  expect(y).toBeGreaterThan(0);
+  const x0 = frame[y]!.indexOf("COPYME-TOKEN-123");
+  const x1 = x0 + "COPYME-TOKEN-123".length - 1;
+
+  feed(mPress(x0, y));
+  feed(mDrag(Math.floor((x0 + x1) / 2), y));
+  feed(mDrag(x1, y));
+  const mid = io.output();
+  expect(mid).not.toContain("\x1b]52;c;"); // nothing is copied until the button is released
+  feed(mRelease(x1, y));
+
+  const m = /\x1b\]52;c;([A-Za-z0-9+/=]+)\x07/.exec(io.output());
+  expect(m).not.toBeNull();
+  const copied = Buffer.from(m![1]!, "base64").toString("utf8");
+  expect(copied).toBe("COPYME-TOKEN-123");
+  expect(renderer.state.toasts.some((t) => t.text.includes("copied 16 characters"))).toBe(true);
+  expect(renderer.state.messages.filter((m) => m.kind === "system" && (m as { text: string }).text.includes("copied")).length).toBe(0); // the toast is a toast, not a transcript row
+});
+
+test("a press that never moves is replayed on release: the click still clicks (messages focus)", () => {
+  const { renderer, feed } = make();
+  renderer.state.focus = "code";
+  const r = renderer.state; // the messages panel: a bare press+release lands in its fall-through
+  renderer.tick();
+  const frame = renderer.frameText().split("\n");
+  const y = frame.findIndex((l) => l.includes("─ messages ─")) + 3; // inside the panel, below its border
+  feed(mPress(60, y));
+  expect(r.focus).toBe("code"); // held: the press has not fired yet
+  feed(mRelease(60, y));
+  expect(r.focus).toBe("messages"); // released without a drag: replayed verbatim
+});
+
+test("any key cancels a selection in progress; Esc-hold and wheel are untouched by the gesture", () => {
+  const { io, renderer, feed, advance } = make();
+  renderer.state.messages.push({ kind: "assistant", text: "COPYME-TOKEN-123", streaming: false, id: "sel-2" });
+  advance(200);
+  const frame = renderer.frameText().split("\n");
+  const y = frame.findIndex((l) => l.includes("COPYME-TOKEN-123"));
+  const x0 = frame[y]!.indexOf("COPYME-TOKEN-123");
+  feed(mPress(x0, y));
+  feed(mDrag(x0 + 8, y));
+  feed("\x1b"); // a key mid-gesture: the selection dies with it
+  feed(mRelease(x0 + 8, y));
+  expect(io.output()).not.toContain("\x1b]52;c;"); // no copy after a cancel
+});

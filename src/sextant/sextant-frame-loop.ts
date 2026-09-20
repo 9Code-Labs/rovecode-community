@@ -22,6 +22,8 @@ import { drawWizard } from "./draw-wizard.ts";
 import { drawContext } from "./draw-context.ts";
 import { petEnabled, type Pet } from "./pet.ts";
 import { Screen } from "./screen.ts";
+import { TextSelection } from "./selection.ts";
+import { mix } from "./theme.ts";
 import { cardHits } from "./card-hits.ts";
 import { fileRowHits } from "./panel-hits.ts";
 import { followTailIfAtEnd, scrollThumbHits } from "./scroll-hits.ts";
@@ -93,6 +95,8 @@ export class FrameLoop {
   private hits: HitZone[] = [];
   /** the grabbed zone (a scrollbar thumb) and the row it was pressed on; outlives the per-frame hits */
   private readonly drag = { zone: null as HitZone | null, y0: 0 };
+  /** drag-select over the messages panel: held presses, the tint rect and the OSC 52 copy (selection.ts) */
+  private readonly selection: TextSelection;
   private rows: TreeRow[] = [];
   /** frames painted (tests: "a render happened") */
   frames = 0;
@@ -100,6 +104,15 @@ export class FrameLoop {
   constructor(private readonly d: FrameLoopDeps) {
     const { cols, rows } = d.io.size();
     this.L = layoutFn(cols, rows, this.layoutOpts());
+    this.selection = new TextSelection({
+      state: d.state,
+      messagesRect: () => this.L.messages,
+      hits: () => this.hits,
+      screenText: () => this.screen?.toText() ?? null,
+      write: (seq) => { d.io.write(seq); },
+      markDirty: () => this.markDirty(),
+      forward: (ev, now) => this.forward(ev, now),
+    });
   }
 
   private layoutOpts(): { pet: boolean } { return { pet: petEnabled(this.d.io.env) }; }
@@ -135,7 +148,7 @@ export class FrameLoop {
       } else { ready?.(); this.d.io.write(text); }
     } }, cols, rows, { truecolor: this.d.truecolor });
     this.unsubs.push(this.d.io.onInput((chunk) => this.feed(chunk)));
-    this.unsubs.push(this.d.io.onResize((c, r) => { this.screen?.resize(c, r); this.markDirty(); }));
+    this.unsubs.push(this.d.io.onResize((c, r) => { this.screen?.resize(c, r); this.selection.cancel(); this.markDirty(); }));
     this._pace = FRAME_MS;
     this.arm(FRAME_MS);
     this.render(this.d.clock());
@@ -164,6 +177,7 @@ export class FrameLoop {
     if (this.timer) { clearTimeout(this.timer); this.timer = null; }
     if (this.holdTimer) { clearTimeout(this.holdTimer); this.holdTimer = null; }
     this.held = "";
+    this.selection.cancel();
     for (const u of this.unsubs) u();
     this.unsubs = [];
   }
@@ -209,6 +223,15 @@ export class FrameLoop {
     const now = this.d.clock();
     this.markDirty(); // and wake: the tick that follows this key (onTick: file reload) must come in one frame, not one sleep
     if (this.d.beforeInput?.(ev, now)) return;
+    // the chat stays copyable without a mode or a permission: a drag over the messages panel is a
+    // text selection (selection.ts) — a press that never moves is replayed, so clicks are untouched
+    if (ev.type === "key" && this.selection.active) this.selection.cancel();
+    if (ev.type === "mouse" && this.selection.onMouseEvent(ev, now)) return;
+    this.forward(ev, now);
+  }
+
+  /** the normal input pipeline (also how a held press is replayed when it never became a drag) */
+  private forward(ev: InputEvent, now: number): void {
     const kc = this.d.keyCtx();
     const ctx: KeyCtx = { layout: this.L, hooks: kc.hooks, local: kc.local, hits: this.hits, rows: this.rows, fuzzy, drag: this.drag };
     handleInput(this.d.state, ev, ctx, now);
@@ -313,6 +336,9 @@ export class FrameLoop {
         ...(hit.confirm ? { key: { type: "key" as const, name: "enter" } } : {}),
       });
     }
+    // the drag-selection tint (selection.ts): over the messages panel, under any overlay
+    const hl = this.selection.highlight();
+    if (hl) scr.tint(hl.x, hl.y, hl.w, hl.h, mix(theme.bg, theme.accent, 0.35));
     drawSuggest(scr, L.messages, s, suggestions(s, s.files.paths, fuzzy).slice(0, MAX_SUGGESTIONS), theme, hits);
     const paletteCursor = drawPalette(scr, L, theme, s, fuzzy, hits);
     const marketCursor = drawMarket(scr, L, theme, s, fuzzy, hits);
