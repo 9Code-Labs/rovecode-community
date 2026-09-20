@@ -1,0 +1,38 @@
+# Mirror this repository to Berkay's personal private copy on EVERY push (any branch or tag).
+#
+# Needs one secret: MIRROR_PAT — a fine-grained personal access token (owner: KaramelliS) with
+# Contents: Read and write on the mirror repository below. Without the secret the job says so and
+# exits GREEN: a mirror that cannot run is not a reason to paint every push red.
+#
+# The push uses explicit refspecs with --prune instead of `push --mirror` on purpose: a mirrored
+# clone carries GitHub's read-only refs/pull/* and the destination refuses them, which would fail
+# an otherwise perfect sync.
+name: mirror
+on:
+  push:
+  create:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: mirror every head and tag to the personal copy
+        env:
+          PAT: ${{ secrets.MIRROR_PAT }}
+          SRC: ${{ github.repository }}
+          DST: KaramelliS/rovecode-community
+        run: |
+          if [ -z "$PAT" ]; then
+            echo "::notice::MIRROR_PAT is not set — mirror sync skipped. Create a fine-grained PAT (owner KaramelliS, repo $DST, Contents: Read and write) and add it as this repo's MIRROR_PAT secret."
+            exit 0
+          fi
+          git clone --mirror "https://x-access-token:${{ github.token }}@github.com/$SRC.git" src.git
+          cd src.git
+          git push --force --prune "https://x-access-token:$PAT@github.com/$DST.git" \
+            '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*'
+          echo "mirrored $SRC -> $DST"
