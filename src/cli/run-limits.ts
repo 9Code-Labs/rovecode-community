@@ -5,7 +5,7 @@
  *  object. The loop checks the clock at each turn boundary (core/loop.ts) and ends with status "budget". */
 
 export interface RunLimits {
-  /** RunConfig.maxTurns override; unset = the runtime default (60) */
+  /** RunConfig.maxTurns override; unset = the runtime default (unlimited) */
   maxTurns?: number;
   /** RunConfig.maxSeconds; unset = no clock */
   maxSeconds?: number;

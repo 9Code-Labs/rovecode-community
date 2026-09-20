@@ -714,7 +714,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
    *  merely STARTS with the cwd (…/repo-backup) does not match, because the separator is in the glob. */
   const insideCwd = `${cwd.replace(/[\/]$/, "")}${sep}*`;
 
-  // run ceilings (cli/run-limits.ts): a surface's explicit limits, else the environment, else 60 turns and no
+  // run ceilings (cli/run-limits.ts): a surface's explicit limits, else the environment, else UNLIMITED turns and no
   // clock — the TUI and serve/acp get the env knobs for free, `rovecode run` adds its flags + a 20-minute default
   let runLimits: RunLimits = {};
   const buildCfg = (permission: PermissionLevel | boolean, approval?: ApprovalFn): RunConfig => {
@@ -754,7 +754,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
       };
     };
     return (activeCfg = {
-    maxTurns: runLimits.maxTurns ?? positiveInt(process.env.ROVECODE_MAX_TURNS) ?? 60,
+    maxTurns: runLimits.maxTurns ?? positiveInt(process.env.ROVECODE_MAX_TURNS) ?? Number.MAX_SAFE_INTEGER,
     ...(verifyOn ? { verify: verifyGate() } : {}),
     ...(maxSeconds !== undefined ? { maxSeconds } : {}),
     ...(maxCostUsd !== undefined ? { maxCostUsd, priceUsd } : {}),
