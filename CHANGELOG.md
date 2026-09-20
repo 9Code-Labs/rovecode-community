@@ -491,3 +491,15 @@ start. Numbers are measurements from the commit that reports them, on the machin
 - The update check asks THIS public repository and works anonymously (a token only raises the rate limit); `ROVECODE_NO_UPDATE_CHECK=1` disables the check outright — the test suite sets it, since the `gh auth token` spawn used to leak a real "update available" note into TUI tests mid-assertion.
 - npm packaging is dist-only from here: the tarball ships the MINIFIED bundle (`prepack` runs `build:npm`; this public repository is the AGPL source the package points at), `bin/rovecode.js` prefers dist and falls back to src in an unbuilt checkout, the library exports answer from `dist/lib/*`, and the version moves to 0.4.0-beta.0 published under the `beta` dist-tag.
 - A test-suite flake and a fixture gap fixed on the way: the spinner frame-rate floor dropped 8→6 frames per 500 ms (the 8-floor flaked at 7 on a saturated box), and the suite's home isolation keeps `ROVECODE_NO_UPDATE_CHECK` across per-test scrubs.
+
+### 0.4.0-beta.1 — the second npm beta (2026-09-20)
+
+Everything after beta.0, measured rather than assumed:
+
+- fix: a tool NAME repeated by a proxy no longer doubles into `unknown tool lsls` (the SSE accumulator was seed+append; an exact repeat is now idempotent, genuine fragments still concatenate), and arguments repeated whole per delta (`{…}{…}`) are rescued when the repeat is exact
+- feat: GLM generation 5 below 5.3 gets its real effort vocabulary (`reasoning_effort low|high|max`) — the on/off mapping it replaced sent one identical body for low, medium and high
+- feat: the chat is drag-copyable — select text in the messages panel, release, it is on the clipboard (OSC 52) with a toast; motionless clicks replay verbatim, scrollbars/cards/palette untouched; `/mouse on|off|toggle` still hands the whole terminal back for native selection
+- feat: staged context — the ~2.2k-token design proposal now rides as a stub until a direction is recorded, and `design_direction {action:"get"}` lazy-discloses the full protocol (system prompt measured 18.2k → 10.0k chars; the whole request −20%)
+- feat: the effort dial persists — `resolveEffort` reads settings.json (flag → env → project → user → auto) and `/effort low --save [--project]` writes it
+- pet: the crown is a three-lobe cumulus
+- the library half is verified from the INSTALLED tarball now: all four export subpaths resolve and a real `agentLoop` runs to "done" through the minified bundle (lib smoke)
