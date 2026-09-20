@@ -11,7 +11,8 @@
  *  - **It never blocks.** The caller fires it and paints; the answer arrives or it does not.
  *  - **It never throws.** Offline, rate-limited, no token, a repository that has no releases yet — each
  *    is a reason string, and the surface can decide whether to say anything.
- *  - **It asks rarely.** The answer is cached in ~/.rovecode/update-check.json for six hours, so opening
+ *  - **It asks rarely.** The answer is cached per release repo in ~/.rovecode/update-check-<repo>.json
+ *    for six hours, so opening
  *    the terminal twenty times in an afternoon is one request. A cache that cannot be read or written is
  *    not an error either; it just means asking again. */
 
@@ -123,7 +124,12 @@ export async function checkForUpdate(current: string, opts: UpdateCheckOptions =
     return { current, newer: false, from: "cache", reason: "ROVECODE_NO_UPDATE_CHECK=1" };
   }
   const now = (opts.now ?? Date.now)();
-  const cacheFile = opts.cacheFile ?? join(rovecodeHome(), "update-check.json");
+  // The cache is keyed PER REPO: a machine that runs two builds pointed at two release repos (the
+  // private dev one and the public community one share ~/.rovecode) used to answer each other's
+  // question — "no release published yet" from one silenced the other's real "update available"
+  // (observed 2026-09-20).
+  const repo = opts.repo ?? REPO;
+  const cacheFile = opts.cacheFile ?? join(rovecodeHome(), `update-check-${repo.replace(/[^\w.-]+/g, "_")}.json`);
   const ttl = opts.ttlMs ?? TTL_MS;
 
   const cached = readCache(cacheFile, ttl, now);

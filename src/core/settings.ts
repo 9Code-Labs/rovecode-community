@@ -41,6 +41,10 @@ export interface Settings {
    *  you already have, rather than a flag you have to remember every launch. Since 2026-09-07 the signal
    *  fires only while the terminal is UNFOCUSED (tui/notify.ts; `notify_when: "always"` restores every run). */
   bell?: boolean;
+  /** update this installation in the BACKGROUND at TUI boot when the cached update check says a newer
+   *  release exists (core/update.ts). It never blocks the session and never swaps the running
+   *  process — the note says "restart to run it". ROVECODE_AUTO_UPDATE=1 turns it on without a file. */
+  autoUpdate?: boolean;
   /** the notification method (tui/notify.ts): auto (default — an OSC 9 toast on Ghostty / iTerm2 / kitty / Warp /
    *  WezTerm, the bell everywhere else) | bell | osc9 | osc777. ROVECODE_NOTIFY overrides it (off = `bell: false`). */
   notify?: "auto" | "bell" | "osc9" | "osc777";
@@ -81,6 +85,7 @@ function sanitize(raw: unknown): Settings {
   if (typeof r.permission === "string" && PERMISSIONS.includes(r.permission)) out.permission = r.permission as PermissionLevel;
   if (typeof r.effort === "string" && (THINKING_EFFORTS as readonly string[]).includes(r.effort)) out.effort = r.effort as ThinkingEffort;
   if (typeof r.bell === "boolean") out.bell = r.bell; // "off"/"no" are not false: a string is ignored, the bell stays on
+  if (typeof r.autoUpdate === "boolean") out.autoUpdate = r.autoUpdate; // same rule: only a real boolean counts
   if (typeof r.notify === "string" && ["auto", "bell", "osc9", "osc777"].includes(r.notify)) out.notify = r.notify as Settings["notify"];
   if (r.notify_when === "unfocused" || r.notify_when === "always") out.notify_when = r.notify_when;
   // notify_command: one non-blank string (the argv grammar lives in tui/notify-seq.ts parseArgv); blank means "not set"
@@ -180,4 +185,11 @@ export function resolveEffort(cwd: string, flag: ThinkingEffort | undefined, env
   const fromEnv = parseEffort(env["ROVECODE_EFFORT"]);
   if (fromEnv !== undefined) return fromEnv;
   return loadSettings(cwd).effort ?? "auto";
+}
+
+/** Does boot run the update plan in the background when the cached check says "newer"? The env word
+ *  is for one shell; the file is the durable answer (project file over user file, as everywhere). */
+export function autoUpdateEnabled(cwd: string, env: Record<string, string | undefined> = {}): boolean {
+  if (env["ROVECODE_AUTO_UPDATE"] === "1") return true;
+  return loadSettings(cwd).autoUpdate === true;
 }

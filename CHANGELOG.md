@@ -503,3 +503,10 @@ Everything after beta.0, measured rather than assumed:
 - feat: the effort dial persists — `resolveEffort` reads settings.json (flag → env → project → user → auto) and `/effort low --save [--project]` writes it
 - pet: the crown is a three-lobe cumulus
 - the library half is verified from the INSTALLED tarball now: all four export subpaths resolve and a real `agentLoop` runs to "done" through the minified bundle (lib smoke)
+
+### 0.4.0-beta.2 — self-update (2026-09-20)
+
+- `rovecode update` (and `/update` in the TUI): detects how THIS copy was installed — npm (global vs project, decided from `npm prefix -g`), a source checkout (`git pull --ff-only` + `bun install`, plus `build:cli` when a dist was built), or a compiled binary (no self-swap yet: the releases page, said plainly) — and runs the right plan. The channel follows the running version: a beta stays on `beta` unless `--channel` says otherwise. `--check` only looks.
+- `"autoUpdate": true` in settings.json (or `ROVECODE_AUTO_UPDATE=1`): when the boot-time update check finds a newer release, the plan runs in the BACKGROUND — the session is never blocked, the running process never swapped; the note says "restart rovecode to run the new version".
+- the update-check cache is keyed PER RELEASE REPO (`update-check-<repo>.json`): two builds on one machine (private dev + public community) used to answer each other's question — observed live, where the community's "no release published yet" silenced the dev build's real answer.
+- nothing swaps a live process: on Windows the files under a running bun are replaced while it runs, so the promise is deliberately "updated — restart", not a mid-session hot-swap.

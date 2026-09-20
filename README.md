@@ -68,10 +68,14 @@ npm pack && npm install -g ./rovecode-0.4.0-beta.0.tgz
 Published to npm as [`rovecode`](https://www.npmjs.com/package/rovecode): the tarball carries the minified
 bundle, and THIS repository is its source, as the AGPL requires (`npm install -g rovecode` — the beta
 channel is `rovecode@beta`). Releases are cut on
-[GitHub Releases](https://github.com/9Code-Labs/rovecode-community/releases), and there is no
-self-update: reinstall from npm, or `git pull` and rebuild. Rovecode does tell you when that is worth doing: the
+[GitHub Releases](https://github.com/9Code-Labs/rovecode-community/releases). `rovecode update` updates
+this installation the way it was installed (npm: `npm install -g rovecode@<channel>`; a source checkout:
+`git pull` + `bun install`; the channel follows the running version, so a beta stays on beta), and
+`"autoUpdate": true` in settings.json (or `ROVECODE_AUTO_UPDATE=1`) runs that plan in the background at
+boot when the check finds a newer release — the session is never blocked or swapped; the note says
+restart. A compiled binary does not replace itself yet and says where the new artifact is. Rovecode does tell you when that is worth doing: the
 TUI's startup card carries `update available: 0.3.2 → 0.4.0 · <release url>` when a newer release exists. The check
-(`src/core/update-check.ts`) asks GitHub once every six hours (cached in `~/.rovecode/update-check.json`), never
+(`src/core/update-check.ts`) asks GitHub once every six hours (cached per release repo in `~/.rovecode/update-check-<repo>.json`), never
 blocks the start and never throws. The repository is public, so the check works anonymously; `GITHUB_TOKEN`,
 `GH_TOKEN` or a `gh auth login` only raise the rate limit. When the check could not look,
 the card prints nothing rather than a guess. Only a real newer release produces a line

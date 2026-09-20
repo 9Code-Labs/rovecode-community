@@ -483,7 +483,7 @@ async function cmdTrace(sessionId: string): Promise<void> {
   }
 }
 
-const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "plugin", "skills", "mcp", "market", "context", "doctor", "auth", "provider", "model", "models", "setup", "connect", "trace", "help", "chat", "repl", "smoke-tui", "acp", "serve", "export", "sessions", "trust"]);
+const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "plugin", "skills", "mcp", "market", "context", "doctor", "auth", "provider", "model", "models", "setup", "connect", "trace", "help", "chat", "repl", "smoke-tui", "acp", "serve", "export", "sessions", "trust", "update"]);
 if (cmd === "" || cmd === "chat" || cmd === "repl") {
   // The intro covers actual preparation, not only module imports. Plain chat loads no TUI graph.
   await (await import("./start-chat.ts")).startChat(cli);
@@ -523,6 +523,7 @@ if (cmd === "" || cmd === "chat" || cmd === "repl") {
     case "auth": await cmdAuth(cli.rest); break;
     case "provider": await cmdProvider(argvAfter("provider")); break;
     case "model": await cmdModel(argvAfter("model")); break;
+    case "update": process.exitCode = await (await import("./update-cmd.ts")).cmdUpdate(argvAfter("update"), pkg.version, import.meta.path); break;
     case "models": await cmdModel(["list", ...argvAfter("models")]); break;
     // an id is required: without one this built a store on the empty id, printed nothing and exited 0 —
     // a silent success a reader takes for "this session has no messages"

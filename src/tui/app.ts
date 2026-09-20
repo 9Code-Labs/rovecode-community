@@ -49,7 +49,7 @@ import type { ApprovalFn, ModelRef, PermissionLevel, RunEvent, ThinkingEffort } 
 import { thinkingLine } from "../providers/thinking.ts";
 import { anthropicShapeFor } from "../providers/stream.ts";
 import { parseEffort, THINKING_EFFORTS } from "../core/types.ts";
-import { resolvePermission, saveSetting } from "../core/settings.ts";
+import { autoUpdateEnabled, resolvePermission, saveSetting } from "../core/settings.ts";
 import { TUI_COMMANDS, type TuiAppOptions } from "./tui-commands.ts"; // options/table extraction port
 export { TUI_COMMANDS, type TuiAppOptions } from "./tui-commands.ts"; // existing import paths keep working
 import { join } from "node:path";
@@ -339,6 +339,18 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     switch (cmd) {
       case "exit": case "quit": close(); return true;
       case "help": lazyInfoCmd().cmdHelp(infoCtx); return true;
+      case "update": {
+        // background by design: the check + plan + commands run while the session lives; every line
+        // lands as a note, and a success ends in "restart rovecode to run the new version"
+        renderer.addSystemNote("update: checking…");
+        void import("../cli/update-cmd.ts")
+          .then(({ updateFlow }) => updateFlow(arg.length > 0 ? arg.split(/\s+/) : [], {
+            version: pkg.version, entry: import.meta.path,
+            log: (line) => renderer.addSystemNote(`update: ${line}`, /failed|error/i.test(line) ? "warn" : undefined),
+          }))
+          .catch((e: unknown) => renderer.addSystemNote(`update failed: ${e instanceof Error ? e.message : String(e)}`, "warn"));
+        return true;
+      }
       case "mouse": {
         const want = (arg.length > 0 ? arg : "toggle").toLowerCase();
         if (want !== "on" && want !== "off" && want !== "toggle") {
@@ -776,7 +788,21 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     version: pkg.version,
   });
   // The update fetch stays outside the note emitter: fresh sessions only, never blocking the first prompt.
-  if (boot.id === undefined) void checkForUpdate(pkg.version).then((s) => { const l = updateLine(s); if (l !== null) renderer.addSystemNote(l); }).catch(() => {});
+  if (boot.id === undefined) void checkForUpdate(pkg.version).then((s) => {
+    const l = updateLine(s);
+    if (l !== null) renderer.addSystemNote(l);
+    // autoUpdate (settings.json `autoUpdate` / ROVECODE_AUTO_UPDATE=1): run the update plan in the
+    // BACKGROUND — it never blocks or reboots this session; the note says restart when it lands
+    if (s.newer && autoUpdateEnabled(rt.cwd, process.env)) {
+      renderer.addSystemNote("auto-update: a newer release is out — updating in the background…");
+      void import("../cli/update-cmd.ts")
+        .then(({ updateFlow }) => updateFlow([], {
+          version: pkg.version, entry: import.meta.path,
+          log: (line) => renderer.addSystemNote(`update: ${line}`, /failed|error/i.test(line) ? "warn" : undefined),
+        }))
+        .catch(() => {});
+    }
+  }).catch(() => {});
   watchProviders(provCtx()); // follow a default-model change made elsewhere; announce the first provider
   if (!opts.startup) await ready();
   await closedP;

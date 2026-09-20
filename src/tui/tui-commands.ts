@@ -79,6 +79,7 @@ export const TUI_COMMANDS: SlashCommand[] = [
   { name: "config", description: "The settings this session actually loaded: /config [all] — files, set keys, ROVECODE_* env", group: "start here", choices: ["all"] },
   MCP_COMMAND, // mcp-cmd.ts: /mcp [query] — pick a server in the palette, approve the exact plan on the card, it lands in mcp.json
   { name: "status", description: "Provider, model, turns, tokens, sandbox", group: "info" },
+  { name: "update", description: "Update this installation in the background: /update [--check] [--channel beta|latest] — npm or source checkout; a restart runs the new version", group: "info" },
   { name: "cost", description: "Tokens, cache hits and the USD estimate (/cost refresh updates prices)", group: "info" },
   { name: "todos", description: "My step list for the current task", group: "info" },
   { name: "tasks", description: "Background subagents: /tasks [cancel <id>|cancel all]", group: "info" },

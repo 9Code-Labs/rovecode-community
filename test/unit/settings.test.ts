@@ -6,7 +6,7 @@ import { test, expect, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadSettings, loadSettingsScoped, readSettingsFile, resolveEffort, resolvePermission, saveSetting, settingsPath } from "../../src/core/settings.ts";
+import { autoUpdateEnabled, loadSettings, loadSettingsScoped, readSettingsFile, resolveEffort, resolvePermission, saveSetting, settingsPath } from "../../src/core/settings.ts";
 import { trustProjectFiles } from "../helpers/mcp-trust.ts";
 
 let home: string; let cwd: string; let saved: string | undefined;
@@ -40,6 +40,18 @@ test("resolveEffort: the same ladder — flag beats env, env beats files, projec
   expect(resolveEffort(cwd, undefined, { ROVECODE_EFFORT: "high" })).toBe("high");
   expect(resolveEffort(cwd, "off", { ROVECODE_EFFORT: "high" })).toBe("off");
   expect(resolveEffort(cwd, undefined, { ROVECODE_EFFORT: "turbo" })).toBe("low"); // a bad env word is no answer at all
+});
+
+test("autoUpdate: off unless a real boolean says so — the env word is per-shell, the file is durable", () => {
+  expect(autoUpdateEnabled(cwd, {})).toBe(false);
+  expect(autoUpdateEnabled(cwd, { ROVECODE_AUTO_UPDATE: "1" })).toBe(true);
+  writeUser({ autoUpdate: "yes" }); // a string is not a boolean: ignored, stays off
+  expect(autoUpdateEnabled(cwd, {})).toBe(false);
+  writeUser({ autoUpdate: true });
+  expect(autoUpdateEnabled(cwd, {})).toBe(true);
+  writeProject({ autoUpdate: false });
+  expect(autoUpdateEnabled(cwd, {})).toBe(false); // the project file wins, key by key
+  expect(autoUpdateEnabled(cwd, { ROVECODE_AUTO_UPDATE: "1" })).toBe(true); // the shell word still forces it on
 });
 
 test("the project file beats the user file, key by key", () => {
