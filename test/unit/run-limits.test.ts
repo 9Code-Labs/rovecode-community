@@ -81,14 +81,14 @@ test("parseRunLimits: flags beat env beats the headless default; --max-seconds o
   expect(positiveInt("-1")).toBeUndefined();
 });
 
-test("runtime: buildCfg takes ROVECODE_MAX_TURNS / ROVECODE_MAX_SECONDS, setRunLimits beats them, and without either it is 60 turns and no clock", async () => {
+test("runtime: buildCfg takes ROVECODE_MAX_TURNS / ROVECODE_MAX_SECONDS, setRunLimits beats them, and without either it is UNLIMITED turns and no clock", async () => {
   const cwd = tmp();
   const saved = { t: process.env.ROVECODE_MAX_TURNS, s: process.env.ROVECODE_MAX_SECONDS };
   try {
     delete process.env.ROVECODE_MAX_TURNS; delete process.env.ROVECODE_MAX_SECONDS;
     const rt = createRuntime({ cwd, stream: null });
     const plain = rt.buildCfg(false);
-    expect(plain.maxTurns).toBe(60);
+    expect(plain.maxTurns).toBe(Number.MAX_SAFE_INTEGER);;
     expect("maxSeconds" in plain).toBe(false);
     process.env.ROVECODE_MAX_TURNS = "7"; process.env.ROVECODE_MAX_SECONDS = "300";
     expect(rt.buildCfg(false)).toMatchObject({ maxTurns: 7, maxSeconds: 300 });
