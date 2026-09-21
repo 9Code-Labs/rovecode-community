@@ -719,5 +719,7 @@ tokens, cache hits, and catalog-priced spend.
   and name the account it spends from. (`opencode` also writes `.opencode/` and `docs/` into the working
   directory even when it fails, and on Windows a nested shell layer ate the backslashes of an absolute
   path and produced a file literally named `C:UsersberkaycikAppData…banana.txt`.)
-- **Publishing**: no npm package; the binary is built locally (see Known limitations)
+- **Publishing**: the npm package (`rovecode`) ships the minified bundle from this repository via the
+  `prepack` hook; the repo itself stays the AGPL source. `npm install -g rovecode@beta` for the beta
+  channel, `rovecode` for the latest stable cut.
 - **Linux/macOS CI**: POSIX paths are exercised in tests, but only Windows is gated
