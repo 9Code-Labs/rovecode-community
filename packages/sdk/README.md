@@ -1,4 +1,4 @@
-# @rovecode/sdk
+# @rovecode-labs/sdk
 
 Embed the [rovecode](https://github.com/9Code-Labs/rovecode-community) coding-agent harness in your
 own Bun/TypeScript process — sessions, streamed prompts, background subagent tasks, and the live
@@ -6,11 +6,11 @@ agent tree. **One client = one engine**: the SDK boots the same runtime the CLI 
 loop), so everything the CLI can do, your process can do.
 
 ```bash
-bun add @rovecode/sdk
+bun add @rovecode-labs/sdk
 ```
 
 ```ts
-import { createClient, mockStream } from "@rovecode/sdk";
+import { createClient, mockStream } from "@rovecode-labs/sdk";
 
 const rc = await createClient({ cwd: process.cwd() }); // resolves your configured provider
 const session = await rc.session.create();
@@ -37,7 +37,7 @@ await rc.close();
 ## Testing
 
 ```ts
-import { createClient, mockStream, textTurn } from "@rovecode/sdk";
+import { createClient, mockStream, textTurn } from "@rovecode-labs/sdk";
 
 const rc = await createClient({ cwd: tmp, stream: mockStream({ turns: [textTurn("done")] }) });
 ```

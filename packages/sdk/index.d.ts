@@ -1,4 +1,4 @@
-/** @rovecode/sdk — public type surface.
+/** @rovecode-labs/sdk — public type surface.
  *  The runtime types (RunEvent, TaskInfo…) live in the rovecode source tree; here they are
  *  structural aliases so the SDK is usable without the AGPL source checkout. Shapes are
  *  pinned by test/unit/sdk-client.test.ts in rovecode-community. */
