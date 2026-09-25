@@ -80,6 +80,19 @@ export interface RovecodeClient {
   };
   agent: { tree(sessionId: string): AgentNode[] };
   events: { subscribe(fn: (e: SdkEvent) => void): () => void };
+  /** learning surface: graph of learned knowledge, skill drafts from session
+   *  transcripts, nudges for repeated work. Drafts are proposals — save is explicit. */
+  learn: {
+    graph(): LearningGraph;
+    draftSkill(sessionId: string): SkillDraft | null;
+    saveSkill(draft: SkillDraft, opts?: { overwrite?: boolean }): { ok: true; path: string } | { ok: false; reason: string };
+    nudges(opts?: { last?: number; minRepeat?: number }): LearningNudge[];
+  };
+  /** scoped memory blocks: "memory" = project MEMORY.md, "user" = home USER.md */
+  memory: {
+    read(block: "memory" | "user"): string;
+    add(block: "memory" | "user", text: string): BlockEditResult;
+  };
   close(): Promise<void>;
 }
 

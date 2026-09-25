@@ -1,6 +1,6 @@
 {
   "name": "@rovecode-labs/sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "AGPL-3.0-only",
   "author": "9Code Labs",
   "repository": {
@@ -9,7 +9,7 @@
     "directory": "packages/sdk"
   },
   "homepage": "https://github.com/9Code-Labs/rovecode-community#readme",
-  "description": "Embed the rovecode coding-agent harness in your own Bun/TypeScript process: sessions, streamed prompts, background subagent tasks, and the live agent tree — one client, one engine.",
+  "description": "Embed the rovecode coding-agent harness in your own Bun/TypeScript process: sessions, streamed prompts, background subagent tasks, and the live agent tree \u2014 one client, one engine.",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",

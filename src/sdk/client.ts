@@ -13,9 +13,14 @@ import { join } from "node:path";
 import type { ApprovalFn, ModelRef, RunEvent, StreamFn } from "../core/types.ts";
 import type { RunConfig } from "../core/types.ts";
 import { agentLoop, SteeringQueue } from "../core/loop.ts";
-import { listSessions, type SessionSummary } from "../core/session.ts";
+import { listSessions, SessionStore, type SessionSummary } from "../core/session.ts";
 import type { TaskId, TaskInfo, TaskStatus, WaitOptions } from "../core/tasks.ts";
 import { bootRuntime, type Runtime } from "../cli/runtime.ts";
+import { SkillStore } from "../skills/index.ts";
+import { openScopedMemory } from "../memory/scope.ts";
+import type { BlockName, BlockEditResult } from "../memory/blocks.ts";
+import { buildLearningGraph, type LearningGraph } from "../learning/graph.ts";
+import { draftSkillFromSession, learningNudges, saveSkillDraft, type LearningNudge, type SkillDraft } from "../learning/draft.ts";
 
 /** A node in the live subagent tree (TaskManager flattened, parent edge explicit). */
 export interface AgentNode {
@@ -66,6 +71,20 @@ export interface RovecodeClient {
   };
   agent: { tree(sessionId: string): AgentNode[] };
   events: { subscribe(fn: (e: SdkEvent) => void): () => void };
+  /** learning surface (Hermes-inspired, pattern-level): the graph of what the agent has
+   *  learned (skills + memory chunks), skills drafted from session transcripts, and nudges
+   *  pointing at repeated work worth persisting. Drafts are PROPOSALS — save is explicit. */
+  learn: {
+    graph(): LearningGraph;
+    draftSkill(sessionId: string): SkillDraft | null;
+    saveSkill(draft: SkillDraft, opts?: { overwrite?: boolean }): { ok: true; path: string } | { ok: false; reason: string };
+    nudges(opts?: { last?: number; minRepeat?: number }): LearningNudge[];
+  };
+  /** the scoped memory blocks (MEMORY = project, USER = home) the agent reads each run */
+  memory: {
+    read(block: BlockName): string;
+    add(block: BlockName, text: string): BlockEditResult;
+  };
   close(): Promise<void>;
 }
 
@@ -127,6 +146,17 @@ export async function createClient(opts: ClientOptions = {}): Promise<RovecodeCl
     const rt = runtimes.get(id);
     if (!rt) throw new Error(`unknown session '${id}' — session.create() it first (SDK v1 tracks live sessions only)`);
     return rt;
+  }
+
+  // the learning/memory surface reads STORES, not a booted loop — a live session's runtime
+  // (plugin skills included) wins, else a fresh SkillStore / scoped BlockStore over cwd
+  function learnStores(): { skillStore: SkillStore; blocks: import("../memory/blocks.ts").BlockStore } {
+    const live = [...runtimes.values()][0];
+    if (live) return { skillStore: live.skillStore, blocks: live.blockStore };
+    return {
+      skillStore: new SkillStore(cwd),
+      blocks: openScopedMemory({ cwd, sessionsDir: sessionsRoot, sessionId: "__learn__" }).blocks,
+    };
   }
 
   return {
@@ -210,6 +240,26 @@ export async function createClient(opts: ClientOptions = {}): Promise<RovecodeCl
     },
     events: {
       subscribe(fn) { listeners.add(fn); return () => { listeners.delete(fn); }; },
+    },
+    learn: {
+      graph() {
+        const { skillStore, blocks } = learnStores();
+        return buildLearningGraph({ skillStore, blocks });
+      },
+      draftSkill(sessionId) {
+        return draftSkillFromSession(new SessionStore(sessionsRoot, sessionId));
+      },
+      saveSkill(draft, saveOpts) {
+        return saveSkillDraft(cwd, draft, saveOpts);
+      },
+      nudges(nudgeOpts) {
+        const { skillStore } = learnStores();
+        return learningNudges({ sessionsRoot, skillStore, ...(nudgeOpts?.last !== undefined ? { last: nudgeOpts.last } : {}), ...(nudgeOpts?.minRepeat !== undefined ? { minRepeat: nudgeOpts.minRepeat } : {}) });
+      },
+    },
+    memory: {
+      read(block) { return learnStores().blocks.liveText(block); },
+      add(block, text) { return learnStores().blocks.add(block, text); },
     },
     async close(): Promise<void> {
       for (const rt of runtimes.values()) {

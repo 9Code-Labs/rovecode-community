@@ -9,6 +9,16 @@ Hashes on entries before 0.3.2 name commits in the checkout rovecode shared with
 
 ## Unreleased
 
+### Learning surface (Hermes-inspired, pattern-level)
+
+- `rovecode/sdk` + `@rovecode-labs/sdk@0.2.0` — new `rc.learn` and `rc.memory` surfaces
+  (`src/learning/`): `learn.graph()` renders what the agent has learned (skills + MEMORY/USER
+  chunks as nodes; declared `related_skills` and lexical-overlap edges), `learn.draftSkill(id)`
+  condenses a finished session's transcript into a SKILL.md PROPOSAL (deterministic — no LLM;
+  evidence attached), `learn.saveSkill(draft)` writes it to the PROJECT skills dir explicitly
+  (never implicit, never global), `learn.nudges()` flags repeated workflows no skill covers.
+  `memory.read/add` round-trip the scoped MEMORY/USER blocks.
+
 ### SDK, mission control, and workflows
 
 - Added `rovecode/sdk`: the embeddable client (`createClient` — sessions, streamed prompts,
