@@ -57,6 +57,9 @@ export interface TaskInfo {
   isolated: boolean;
   /** the child's depth (parent depth + 1; root-started tasks run at 1) */
   depth: number;
+  /** the RUNNING task that started this one (StartOptions.caller); absent for
+   *  root-started tasks — the sdk/dashboard agent tree hangs on this edge */
+  parent?: TaskId;
   status: TaskStatus;
   createdAt: number;
   startedAt?: number;
@@ -380,6 +383,7 @@ export class TaskManager {
         agent: req.agent, goal: goal.length > 200 ? goal.slice(0, 199) + "…" : goal,
         // a lane is ALWAYS isolated: it works in its own worktree and its diff comes back as a patch
         isolated: lane !== null || req.isolated === true, depth, status: "queued", createdAt: Date.now(),
+        ...(opts.caller !== undefined ? { parent: opts.caller } : {}),
         ...(lane ? { kind: "external" as const, permissions: lanePermissions(lane, this.lanes.env) } : {}),
         ...(batch ? { batch: batch.id, ...(batch.label !== undefined ? { batchLabel: batch.label } : {}) } : {}),
       },

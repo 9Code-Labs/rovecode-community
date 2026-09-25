@@ -9,6 +9,21 @@ Hashes on entries before 0.3.2 name commits in the checkout rovecode shared with
 
 ## Unreleased
 
+### SDK, mission control, and workflows
+
+- Added `rovecode/sdk`: the embeddable client (`createClient` — sessions, streamed prompts,
+  background tasks, live `agent_tree_update` frames) over the same runtime the CLI boots, published
+  as the `./sdk` subpath export.
+- Added `rovecode serve` observation surfaces: `GET /events` (a global SSE bus: session_created,
+  agent_tree_update, every RunEvent) and `GET /ui`, a zero-build mission-control dashboard.
+- Added `rovecode workflow run <file.ts> [--resume <runId>]` / `workflow list`: DAG workflows
+  (`defineWorkflow`) of agent + gate steps with retry, token budget, and JSONL checkpoint-resume;
+  steps appear in the mission-control agent tree.
+- Added `rovecode plugin init` (scaffold) and `rovecode plugin test` (dry harness), and optional
+  manifest `permissions` declarations enforced before tool execution.
+- `TaskInfo` gains `parent` (the task that spawned this one), which the SDK agent tree and the
+  dashboard hang on.
+
 ### Open-core boundary and supported APIs
 
 - Added explicit package exports for the core, extension, plugin, and provider APIs, with contract tests and a documented 0.x compatibility policy.

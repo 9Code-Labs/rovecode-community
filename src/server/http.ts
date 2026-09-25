@@ -34,6 +34,19 @@ import { agentLoop, SteeringQueue } from "../core/loop.ts";
 import { listSessions } from "../core/session.ts";
 import type { ModelRef, RunEvent, StreamFn } from "../core/types.ts";
 import { buildOpenApiDoc } from "./openapi.ts";
+import { dashboardHtml } from "./dashboard.ts";
+import { agentTree } from "../sdk/client.ts";
+
+/** Server-level event bus (SDK F2 — the visual-tracking surface): a LIVE TAP of
+ *  everything the server does — session_created, agent_tree_update (from the
+ *  per-session TaskManager.subscribe), and every RunEvent of every run. GET /events
+ *  streams it as SSE; GET /ui serves the zero-build dashboard that consumes it.
+ *  Render-only, NOT a log: replay is the session JSONL's job, so a client that
+ *  connects mid-run gets a hello snapshot + live frames, nothing retroactive. */
+type BusFrame =
+  | { readonly type: "session_created"; readonly session: string }
+  | { readonly type: "agent_tree_update"; readonly session: string; readonly tree: unknown }
+  | { readonly type: "run_event"; readonly session: string; readonly event: RunEvent };
 
 export const DEFAULT_PORT = 4100;
 export const DEFAULT_HOSTNAME = "127.0.0.1";
@@ -158,6 +171,12 @@ export function startServer(opts: ServerOptions = {}): RovecodeServer {
   const sessionsRoot = join(cwd, ".rovecode", "sessions");
   const yolo = opts.yolo ?? false;
   const sessions = new Map<string, SessionEntry>();
+  // bus frames are pre-encoded SSE "data:" lines so one send reaches every client
+  const bus = new Set<(frame: string) => void>();
+  const busSend = (frame: BusFrame): void => {
+    const line = `data: ${JSON.stringify(frame)}\n\n`;
+    for (const listener of [...bus]) { try { listener(line); } catch { bus.delete(listener); } }
+  };
 
   const createSession = async (): Promise<Response> => {
     const id = randomUUID();
@@ -173,6 +192,14 @@ export function startServer(opts: ServerOptions = {}): RovecodeServer {
       throw e; // never-throw seam below turns anything else into a JSON 500
     }
     sessions.set(id, { runtime, running: false, abort: null });
+    busSend({ type: "session_created", session: id });
+    // agent-tree frames: the runtime's TaskManager emits {tasks} on every change;
+    // agentTree() (sdk/client.ts) shapes them into the parent→children tree the
+    // dashboard renders. Same synthesis the SDK does in-process (SdkEvent).
+    // agent-tree frames: the runtime's TaskManager emits the changed task on every
+    // transition; agentTree() (sdk/client.ts) shapes the full list into the
+    // parent→children tree the dashboard renders. Same synthesis the SDK does in-process.
+    runtime.tasks.subscribe(() => busSend({ type: "agent_tree_update", session: id, tree: agentTree(runtime.tasks.list()) }));
     return json({ id }, 201);
   };
 
@@ -211,7 +238,43 @@ export function startServer(opts: ServerOptions = {}): RovecodeServer {
     }, rt.steering); // port #26: the session's queue — background-task notes land on the next prompt
     entry.running = true;
     entry.abort = ac;
-    return sseResponse(run, () => { entry.running = false; entry.abort = null; }, () => ac.abort());
+    return sseResponse(tapped(run, (event) => busSend({ type: "run_event", session: id, event })), () => { entry.running = false; entry.abort = null; }, () => ac.abort());
+  };
+
+  /** The tap: a passthrough async generator that also forwards every event to the
+   *  bus. Delegation (yield* → return/throw) preserves cancel semantics — the SSE
+   *  pump aborting the original generator still unwinds it exactly once. */
+  async function* tapped(run: AsyncGenerator<RunEvent>, send: (event: RunEvent) => void): AsyncGenerator<RunEvent> {
+    const it = run[Symbol.asyncIterator]();
+    try {
+      while (true) {
+        const r = await it.next();
+        if (r.done) return;
+        send(r.value);
+        yield r.value;
+      }
+    } finally {
+      if (it.return) await it.return(undefined);
+    }
+  }
+
+  /** GET /events — the bus as SSE. First frame is a hello snapshot (known session
+   *  ids); from then on frames are live. idleTimeout 0 keeps it open forever — the
+   *  stream is the server lifetime, not a run lifetime. */
+  const events = (): Response => {
+    const stream = new ReadableStream<string>({
+      start(controller) {
+        const listener = (frame: string): void => {
+          try { controller.enqueue(frame); } catch { bus.delete(listener); }
+        };
+        bus.add(listener);
+        controller.enqueue(`data: ${JSON.stringify({ type: "hello", sessions: [...sessions.keys()] })}\n\n`);
+      },
+    });
+    return new Response(
+      stream.pipeThrough(new TransformStream<string, Uint8Array>({ transform(chunk, c) { c.enqueue(new TextEncoder().encode(chunk)); } })),
+      { headers: { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" } },
+    );
   };
 
   /** DELETE /session/:id/prompt — cancel the in-flight run (port #21). Aborting
@@ -247,6 +310,8 @@ export function startServer(opts: ServerOptions = {}): RovecodeServer {
     const t = /^\/session\/([^/]+)\/tasks$/.exec(path);
     if (req.method === "GET" && t) return listTasks(t[1]!);
     if (req.method === "GET" && path === "/sessions") return json(listSessions(sessionsRoot));
+    if (req.method === "GET" && path === "/events") return events();
+    if (req.method === "GET" && path === "/ui") return new Response(dashboardHtml(), { headers: { "content-type": "text/html; charset=utf-8" } });
     if (req.method === "GET" && path === "/doc") return json(buildOpenApiDoc(api.url));
     return json({ error: `no route for ${req.method} ${path}` }, 404);
   };

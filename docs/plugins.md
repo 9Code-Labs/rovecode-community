@@ -98,7 +98,19 @@ rovecode plugin remove <name> [--project]
 rovecode plugin enable|disable <name>
 rovecode plugin trust|untrust <name>
 rovecode plugin show <name>
+rovecode plugin init <name> [--project]   # scaffold a plugin folder (manifest, entry, test, README)
+rovecode plugin test [path]               # validate + activate in a dry harness, then run plugin.test.ts
 ```
+
+### Declaring permissions
+
+A plugin MAY declare `"permissions": ["file.read", "shell.exec", …]` in its `plugin.json` — the policy
+actions its tools need (kind → action: read→file.read, write→file.write, execute→shell.exec,
+spawn→spawn, memory→memory.write, network→net.fetch). Declared plugins get each tool wrapped at
+activation: a call whose kind-action the manifest did not declare fails BEFORE execute with a message
+naming the plugin and the missing declaration. `permissions: []` is a meaningful promise (read-only in
+effect); an absent field is legacy unrestricted. `rovecode plugin init` scaffolds an empty declaration
+so new plugins start explicit.
 
 Aliases: `ls` = `list` (also what bare `rovecode plugin` does), `rm` = `remove`, `info` = `show`;
 `rovecode plugin help` prints the usage. A usage error exits 2, a failed operation exits 1.

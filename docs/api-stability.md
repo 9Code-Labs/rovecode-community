@@ -8,6 +8,9 @@ Rovecode is pre-1.0. The supported programmatic surface is intentionally smaller
 - `rovecode/extensions` — the curated provider, tool, hook, and plugin extension API.
 - `rovecode/plugins` — plugin discovery/manifest API.
 - `rovecode/providers` — provider adapter API.
+- `rovecode/sdk` — the embeddable client (`createClient`: sessions, streamed prompts, background
+  tasks, the live agent tree). Boots the same runtime the CLI boots; `stream: mockStream(…)` makes
+  it testable without a provider. New in 0.4.0; see docs/design/sdk-blueprint.md.
 
 Do not import `rovecode/src/...` or repository-relative internal modules from a distributed extension. Those paths are implementation details and are not present in the package export map.
 

@@ -649,6 +649,19 @@ tokens, cache hits, and catalog-priced spend.
 
 ## Extending
 
+- **SDK** (`rovecode/sdk`, `src/sdk`, `docs/design/sdk-blueprint.md`): embed the harness in your own
+  TypeScript/Bun process — `import { createClient } from "rovecode/sdk"`, then
+  `const rc = createClient({ cwd })`, `const s = await rc.session.create()`, and
+  `for await (const ev of s.prompt({ text })) …` streams every `RunEvent` plus `agent_tree_update`
+  frames for live subagent trees. One client = one engine: the SDK boots the same runtime the CLI
+  boots (no second loop), and `stream: mockStream(…)` makes it testable with no provider.
+- **Workflows** (`rovecode workflow run <file.ts>`, `src/workflow/engine.ts`): a file that
+  `export default defineWorkflow({ name, steps })` — a DAG of `agent` steps (run through the
+  TaskManager, so they appear in `serve`'s `/ui` agent tree) and `gate` steps (human approval),
+  with per-step retry, a token budget, and a JSONL checkpoint in `.rovecode/workflows/` that
+  `--resume <runId>` continues after a crash. `rovecode workflow list` shows known runs.
+- **Mission control** (`rovecode serve` → `GET /ui` + `GET /events`): a zero-build dark dashboard
+  over a global SSE bus — sessions, every run's live event stream, and the per-session agent tree.
 - **Plugins** (`src/plugins`, `docs/plugins.md`): a folder with a `plugin.json` that bundles the things below —
   an in-process entry module (tools + hooks), `commands/*.md`, `skills/**/SKILL.md`, MCP servers — so one
   `rovecode plugin add <folder|git-url>` installs all of it and `rovecode plugin list` shows all of it. User scope

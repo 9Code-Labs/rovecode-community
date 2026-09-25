@@ -31,6 +31,12 @@ export interface PluginManifest {
   skills?: string;
   /** MCP servers keyed by name, `.rovecode/mcp.json` entry shape */
   mcp?: Record<string, unknown>;
+  /** Permission declaration (sdk-blueprint.md §6.5): the policy actions this plugin's tools
+   *  may take — file.read, file.write, shell.exec, spawn, memory.write, net.fetch. A plugin
+   *  tool whose kind maps outside the declaration is refused at activation-time wrapping:
+   *  the user reads this list BEFORE installing (plugin show / market info) and a quiet
+   *  capability grab becomes a loud load-time refusal. Absent = legacy unrestricted. */
+  permissions?: string[];
 }
 
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -75,8 +81,15 @@ export function parseManifest(text: string, file: string, warnings: string[]): P
     if (isRecord(raw["mcp"])) m.mcp = raw["mcp"];
     else warnings.push(`${file}: "mcp" must be an object of servers keyed by name — ignored`);
   }
+  if (raw["permissions"] !== undefined) {
+    const p = raw["permissions"];
+    if (Array.isArray(p) && p.every((x) => typeof x === "string" && /^[a-z][a-z0-9.*-]{0,63}$/.test(x))) {
+      m.permissions = p.slice(0, 16);
+      if (p.length > 16) warnings.push(`${file}: "permissions" capped at 16 entries`);
+    } else warnings.push(`${file}: "permissions" must be an array of action names (e.g. "shell.exec") — ignored`);
+  }
   for (const key of Object.keys(raw)) {
-    if (!["name", "version", "description", "api", "entry", "commands", "skills", "mcp"].includes(key)) warnings.push(`${file}: unknown field "${key}" ignored`);
+    if (!["name", "version", "description", "api", "entry", "commands", "skills", "mcp", "permissions"].includes(key)) warnings.push(`${file}: unknown field "${key}" ignored`);
   }
   return m;
 }
@@ -88,5 +101,6 @@ export function contributions(m: PluginManifest): string[] {
   if (m.commands) out.push(`commands: ${m.commands}/`);
   if (m.skills) out.push(`skills: ${m.skills}/`);
   if (m.mcp) out.push(`mcp: ${Object.keys(m.mcp).join(", ") || "(none)"}`);
+  if (m.permissions) out.push(`permissions: ${m.permissions.length > 0 ? m.permissions.join(", ") : "(none — read-only)"}`);
   return out;
 }
