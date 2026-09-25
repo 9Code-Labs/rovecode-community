@@ -1,0 +1,51 @@
+{
+  "name": "@rovecode/sdk",
+  "version": "0.1.0",
+  "license": "AGPL-3.0-only",
+  "author": "9Code Labs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/9Code-Labs/rovecode-community.git",
+    "directory": "packages/sdk"
+  },
+  "homepage": "https://github.com/9Code-Labs/rovecode-community#readme",
+  "description": "Embed the rovecode coding-agent harness in your own Bun/TypeScript process: sessions, streamed prompts, background subagent tasks, and the live agent tree — one client, one engine.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "bun": ">=1.3.14"
+  },
+  "scripts": {
+    "build": "bun build --target=bun --minify --packages=external ../../src/sdk/index.ts --outfile dist/index.js",
+    "prepack": "bun run build",
+    "smoke": "bun test ./smoke.test.ts"
+  },
+  "dependencies": {
+    "@ast-grep/napi": "^0.45.3",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "tokenlens": "^1.3.1"
+  },
+  "keywords": [
+    "rovecode",
+    "coding-agent",
+    "agent",
+    "sdk",
+    "llm",
+    "harness",
+    "subagents",
+    "workflows"
+  ]
+}

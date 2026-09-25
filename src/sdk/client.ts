@@ -197,7 +197,7 @@ export async function createClient(opts: ClientOptions = {}): Promise<RovecodeCl
       start(sessionId, req) {
         const rt = requireRuntime(sessionId);
         return rt.tasks.start(
-          { agent: req.agent ?? "default", goal: req.goal, isolated: req.isolated === true },
+          { agent: req.agent ?? "main", goal: req.goal, isolated: req.isolated === true },
           { ...(req.label !== undefined ? { label: req.label } : {}) },
         );
       },

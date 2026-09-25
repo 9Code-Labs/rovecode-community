@@ -651,8 +651,8 @@ tokens, cache hits, and catalog-priced spend.
 
 - **SDK** (`rovecode/sdk`, `src/sdk`, `docs/design/sdk-blueprint.md`): embed the harness in your own
   TypeScript/Bun process — `import { createClient } from "rovecode/sdk"`, then
-  `const rc = createClient({ cwd })`, `const s = await rc.session.create()`, and
-  `for await (const ev of s.prompt({ text })) …` streams every `RunEvent` plus `agent_tree_update`
+  `const rc = await createClient({ cwd })`, `const s = await rc.session.create()`, and
+  `for await (const ev of s.prompt("…")) …` streams every `RunEvent` plus `agent_tree_update`
   frames for live subagent trees. One client = one engine: the SDK boots the same runtime the CLI
   boots (no second loop), and `stream: mockStream(…)` makes it testable with no provider.
 - **Workflows** (`rovecode workflow run <file.ts>`, `src/workflow/engine.ts`): a file that
