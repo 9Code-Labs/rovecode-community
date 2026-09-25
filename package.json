@@ -1,6 +1,6 @@
 {
   "name": "rovecode",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "license": "AGPL-3.0-only",
   "author": "9Code Labs",
   "repository": {
@@ -11,6 +11,12 @@
   "description": "Rovecode: a coding agent for the terminal. Research-derived harness on Bun/TypeScript with evidence-based ports from open-source harnesses (sextant TUI, MCP, ACP, headless server, repo-map, shadow-git checkpoints, execpolicy, model routers).",
   "type": "module",
   "module": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./sdk": "./src/sdk/index.ts",
+    "./package.json": "./package.json",
+    "./*": "./*"
+  },
   "bin": {
     "rovecode": "bin/rovecode.ts"
   },

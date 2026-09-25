@@ -31,3 +31,27 @@ jobs:
       # to do with the commit, so it is NOT here — see .github/workflows/catalogs.yml.
       - name: plugins.json is regenerated
         run: bun scripts/build-plugin-catalog.mjs --check
+
+  # Offline eval gate (eval P0-6): deterministic scripted-provider runs, patch/test-based
+  # grading, trajectory record → replay roundtrip, the 5-pattern stuck detector and secrets
+  # redaction — all without network or keys. Budgeted: the script itself runs in seconds;
+  # the ceiling here exists for the artifact upload, not the eval.
+  eval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      - run: bun install --frozen-lockfile
+      - name: offline eval
+        run: bun scripts/eval-offline.ts
+      - name: upload trajectories
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-trajectories
+          path: .eval-results/
+          if-no-files-found: ignore
+          retention-days: 7

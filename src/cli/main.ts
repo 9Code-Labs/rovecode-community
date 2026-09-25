@@ -468,7 +468,7 @@ async function cmdTrace(sessionId: string): Promise<void> {
   }
 }
 
-const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "plugin", "mcp", "market", "context", "doctor", "auth", "login", "account", "logout", "provider", "model", "models", "setup", "connect", "trace", "help", "chat", "repl", "smoke-tui", "acp", "serve", "export"]);
+const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "plugin", "mcp", "market", "context", "doctor", "auth", "login", "account", "logout", "provider", "model", "models", "setup", "connect", "trace", "help", "chat", "repl", "smoke-tui", "acp", "serve", "export", "workflow"]);
 // --resume <id> · --resume (no id) · --continue: the last two reopen the newest session that holds something
 // (cli/resume.ts). Resolved only for the TUI branch below, so `rovecode run … --continue` costs no session scan.
 const resumeId = (cmd === "" || cmd === "chat" || cmd === "repl")
@@ -549,6 +549,7 @@ if (cmd === "" || cmd === "chat" || cmd === "repl") {
       await cmdTrace(id); break;
     }
     case "export": (await import("./export.ts")).cmdExport(process.argv); break;
+    case "workflow": process.exitCode = await (await import("./workflow-cmd.ts")).cmdWorkflow(argvAfter("workflow")); break;
     case "smoke-tui": {
       if (process.argv.includes("--sextant")) { await (await import("../tui/sextant-smoke.ts")).runSextantSmoke(); break; }
       const smoke = await import("../tui/smoke.ts").catch((e: unknown) => {
@@ -570,21 +571,21 @@ if (cmd === "" || cmd === "chat" || cmd === "repl") {
       // an orderly stop on SIGTERM/SIGINT (systemd, Ctrl-C on a POSIX host): session_close hooks, MCP close and
       // task cancelAll run instead of the default kill. On Windows a signal is TerminateProcess — no handler runs.
       for (const sig of ["SIGTERM", "SIGINT"] as const) process.once(sig, () => { void Promise.resolve(srv.stop()).then(() => process.exit(0), () => process.exit(1)); });
-      console.log(`rovecode server listening on ${srv.url} — POST /session · POST /session/:id/prompt (SSE) · DELETE /session/:id/prompt · GET /session/:id/tasks · GET /sessions · GET /doc`);
+      console.log(`rovecode server listening on ${srv.url} — POST /session · POST /session/:id/prompt (SSE) · DELETE /session/:id/prompt · GET /session/:id/tasks · GET /sessions · GET /events (SSE bus) · GET /ui (mission control) · GET /doc`);
       break;
     }
     default: cmdHelp(); break;
   }
 } else {
-  // An unknown first word is a one-shot prompt — and a prompt is billed. A word shaped like a PATH
-  // (./x, C:\x, foo.ts, a name that exists on disk) is far more often a mistyped or misplaced argument
-  // than a prompt, so it is not sent silently: a person at a terminal is asked, a script is refused with
-  // exit 2 (the usage class), and `rovecode run <word>` is the explicit way to send it regardless.
-  // Sentences are never guarded — only the single path-shaped word (dispatch.ts pathShaped).
-  const { pathShaped } = await import("./dispatch.ts");
-  if (pathShaped(cmd)) {
+  // An unknown first word is a one-shot prompt — and a prompt is billed. Paths and likely command
+  // typos are therefore never sent silently. Sentences remain prompts; `run` is the explicit escape hatch.
+  const { pathShaped, suggestCommand } = await import("./dispatch.ts");
+  const suggestion = cli.rest.length === 0 ? suggestCommand(cmd, known) : undefined;
+  if (pathShaped(cmd) || suggestion !== undefined) {
     const words = process.argv.slice(process.argv.indexOf(cmd)).map((w) => (/\s/.test(w) ? JSON.stringify(w) : w)).join(" ");
-    const why = `"${cmd}" looks like a path, not a prompt. A bare prompt is sent to your provider and billed; for a command see \`rovecode help\`, to send it as a prompt anyway: rovecode run ${words}`;
+    const why = suggestion !== undefined
+      ? `unknown command "${cmd}". Did you mean \`rovecode ${suggestion}\`? A bare prompt is sent to your provider and billed; to send this word as a prompt anyway: rovecode run ${words}`
+      : `"${cmd}" looks like a path, not a prompt. A bare prompt is sent to your provider and billed; for a command see \`rovecode help\`, to send it as a prompt anyway: rovecode run ${words}`;
     if (!process.stdin.isTTY || !process.stderr.isTTY) { console.error(`error: ${why}`); process.exit(2); }
     const { askLine } = await import("./setup.ts");
     const answer = (await askLine(`${why}\nSend it as a prompt? [y/N] `)).trim().toLowerCase();

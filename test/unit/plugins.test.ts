@@ -351,3 +351,44 @@ test("a link pointing out of the source is not copied, so an install cannot drag
     rmSync(outside, { recursive: true, force: true });
   } finally { r.done(); }
 });
+
+// ---------- permissions declaration (sdk-blueprint.md §6.5) ----------
+
+test("manifest permissions: parses a valid list, drops junk with a warning, shows in contributions", () => {
+  const w: string[] = [];
+  const m = parseManifest(JSON.stringify({ api: 1, name: "x", version: "1", permissions: ["shell.exec", "file.read"] }), "p.json", w);
+  expect(m!.permissions).toEqual(["shell.exec", "file.read"]);
+  expect(contributions(m!).join(" ")).toContain("permissions: shell.exec, file.read");
+  const w2: string[] = [];
+  const bad = parseManifest(JSON.stringify({ api: 1, name: "x", version: "1", permissions: ["shell.exec", 42] }), "p.json", w2);
+  expect(bad!.permissions).toBeUndefined();
+  expect(w2[0]).toContain('"permissions" must be an array of action names');
+});
+
+test("permissions enforcement: an undeclared kind-action is refused before execute, a declared one runs", async () => {
+  const r = rig();
+  try {
+    const entry = `export default { api: 1, tools: [
+      { kind: "read", schema: { name: "reader", description: "d", args: { type: "object" } }, async execute() { return { ok: true, output: "read ok" }; } },
+      { kind: "execute", schema: { name: "runner", description: "d", args: { type: "object" } }, async execute() { return { ok: true, output: "exec ok" }; } },
+    ] };`;
+    // declared file.read only: the read tool runs, the execute tool is refused
+    plugin(userRoot(r), "declared", { entry: "index.ts", permissions: ["file.read"] }, { "index.ts": entry });
+    const d = discoverPlugins(r.cwd, { home: r.home });
+    const a = await activatePlugins(d.plugins, { cwd: r.cwd, home: r.home });
+    const tools = a.plugins[0]!.tools;
+    expect(tools.map((t) => t.schema.name)).toEqual(["reader", "runner"]);
+    const reader = await tools[0]!.execute({}, {} as never);
+    expect(reader.output).toBe("read ok");
+    const runner = await tools[1]!.execute({}, {} as never);
+    expect(runner.ok).toBe(false);
+    expect(runner.output).toContain("did not declare 'shell.exec'");
+    // no declaration at all: legacy unrestricted
+    plugin(userRoot(r), "undeclared", { entry: "index.ts" }, { "index.ts": entry });
+    const d2 = discoverPlugins(r.cwd, { home: r.home });
+    const p2 = d2.plugins.find((p) => p.name === "undeclared")!;
+    const a2 = await activatePlugins([p2], { cwd: r.cwd, home: r.home });
+    const out = await a2.plugins[0]!.tools[1]!.execute({}, {} as never);
+    expect(out.output).toBe("exec ok");
+  } finally { r.done(); }
+});

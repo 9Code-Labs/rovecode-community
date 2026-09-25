@@ -4,19 +4,22 @@
 import { test, expect } from "bun:test";
 import { HELP_TOPICS, helpText } from "../../src/cli/help.ts";
 
-test("default page: four groups, the three ways in, both permission modes by name, and it stays short", () => {
+test("default page: progressive disclosure, a numbered first run, essential commands and concise safety", () => {
   const h = helpText("");
   for (const g of ["\nstart here\n", "\neveryday\n", "\nsafety\n", "\nmore\n"]) expect(h).toContain(g);
-  expect(h).toContain("rovecode connect"); // the wizard AND its one-line form live under one name
-  expect(h).toContain('rovecode "fix the failing test"');
+  expect(h).toContain("1  rovecode connect");
+  expect(h).toContain("2  rovecode ");
+  expect(h).toContain('3  rovecode "fix the failing test"');
+  expect(h).toContain("tip  Start with a sentence");
   expect(h).toContain("ask first (default)");
   expect(h).toContain("auto (--yolo, ROVECODE_YOLO=1)");
   expect(h).toContain("rovecode help env");
   expect(h).toContain("rovecode help advanced");
   expect(h).toContain("rovecode help all");
   expect(h).not.toContain("ROVECODE_RETRY_MAX"); // the knobs live on the env page
+  expect(h).not.toContain("rovecode provider list|add|remove|test"); // expert operations stay on advanced
   expect(h).not.toMatch(/\bgated\b|\byolo mode\b/);
-  expect(h.split("\n").length).toBeLessThan(32);
+  expect(h.split("\n").length).toBeLessThan(28);
   expect(helpText()).toBe(h);
 });
 

@@ -7,37 +7,32 @@ import { MODE_ASK, MODE_AUTO } from "../core/voice.ts";
 export const HELP_TOPICS = ["", "env", "advanced", "all"] as const;
 export type HelpTopic = (typeof HELP_TOPICS)[number];
 
-const SHORT = `rovecode — a coding agent in your terminal
+const SHORT = `rovecode — your coding agent
 
 start here
-  rovecode                        open the cockpit (--classic: the plain chat · --plain: a bare REPL)
-  rovecode "fix the failing test" one task, then exit
-  rovecode connect                connect a model: pick a provider, paste the key (hidden), one test call
-  rovecode connect <id> [<url>]   the same in one line — rovecode connect anthropic · rovecode connect me https://host/v1
+  1  rovecode connect              connect a model (about a minute)
+  2  rovecode                       open the cockpit and describe what you need
+  3  rovecode "fix the failing test" run one task, then exit
+
+  tip  Start with a sentence. Rovecode reads first and asks before changing anything.
 
 everyday
-  rovecode run "<prompt>" --yolo  one task in ${MODE_AUTO} mode
-  rovecode run "<prompt>" --output json   machine-readable result (ndjson: one line per event)
-  rovecode model               pick the default from a menu · model use <provider/model> sets it (--project pins it here)
-  rovecode market search <q>   MCP servers, skills and plugins on one shelf; install any with market install <id>
-  --effort auto|off|low|medium|high  how hard I think before answering (/effort in the TUI, ROVECODE_EFFORT=…)
-  rovecode provider list|add|remove|test  endpoints in ~/.rovecode/providers.json — live, no restart
-  rovecode auth set <id> · login  store an API key (hidden prompt) · link this machine to your rovecode account
-  rovecode doctor · --resume <id>  what is wrong with my setup, in one pass · reopen a session (export <id> → markdown)
+  rovecode model                  choose a model
+  rovecode doctor                 diagnose setup problems
+  rovecode --resume <id>          continue a session
+  rovecode run "<prompt>" --yolo   run without approval prompts (${MODE_AUTO})
+  rovecode market search <q>      find skills, plugins and MCP servers
 
 safety
-  ${MODE_ASK} (default)           I read freely; I ask before every write, shell command and subagent
-  accept edits (--accept-edits) I write inside this folder without asking; shell, subagents,
-                            network and writes OUTSIDE it still ask (/accept-edits, ROVECODE_ACCEPT_EDITS=1)
-  auto (--yolo, ROVECODE_YOLO=1)  I never ask — deny rules and plan mode still hold
-  /yolo --save · /accept-edits --save   make the level stick (add --project to pin it to this repo);
-                            without --save a toggle lasts one session. ROVECODE_PERMISSION=ask|accept-edits|auto
-  plan mode (/plan in the TUI)  read-only: I can look and plan, not change anything
+  ${MODE_ASK} (default)            read freely; ask before writes, shell commands and subagents
+  accept edits (--accept-edits)   write in this folder; still ask for shell, network and outside writes
+  auto (--yolo, ROVECODE_YOLO=1)   never ask; deny rules still apply
+  plan mode (/plan in the TUI)    inspect and plan without changing files
 
 more
-  rovecode help env               every ROVECODE_* setting (incl. the bash sandbox rungs)
-  rovecode help advanced          market · context · mcp · plugins · acp · serve · gauntlet · bench · trace · tools
-  rovecode help all               everything on one page`;
+  rovecode help advanced          every command and option
+  rovecode help env               every ROVECODE_* setting
+  rovecode help all               both reference pages`;
 
 const ADVANCED = `advanced — the full command reference
   rovecode                      interactive TUI chat — the sextant surface (files · code · messages · plan · usage · pet)

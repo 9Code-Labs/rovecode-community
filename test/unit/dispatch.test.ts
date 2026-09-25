@@ -1,5 +1,5 @@
 import { test, expect } from "bun:test";
-import { parseCli, VALUE_FLAGS } from "../../src/cli/dispatch.ts";
+import { parseCli, suggestCommand, VALUE_FLAGS } from "../../src/cli/dispatch.ts";
 
 const argv = (...args: string[]) => ["bun", "main.ts", ...args];
 
@@ -44,6 +44,15 @@ test("one-shot prompt: first non-flag becomes cmd, rest joins the prompt", () =>
 
 test("trace takes its id from rest", () => {
   expect(parseCli(argv("trace", "abc-123")).rest).toEqual(["abc-123"]);
+});
+
+test("suggestCommand catches likely command typos without treating ordinary prompt words as commands", () => {
+  const commands = ["run", "doctor", "connect", "provider", "model", "market"];
+  expect(suggestCommand("docter", commands)).toBe("doctor");
+  expect(suggestCommand("conect", commands)).toBe("connect");
+  expect(suggestCommand("models", commands)).toBe("model");
+  expect(suggestCommand("refactor", commands)).toBeUndefined();
+  expect(suggestCommand("fix!", commands)).toBeUndefined();
 });
 
 test("--help and -h route to the help command, not the TUI", () => {

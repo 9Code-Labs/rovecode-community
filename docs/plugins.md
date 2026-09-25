@@ -93,12 +93,28 @@ problems are listed under `plugin show`).
 
 ```
 rovecode plugin list
+rovecode plugin init <name>                                     # scaffold: manifest + entry + plugin.test.ts + README
+rovecode plugin test [path]                                     # validate + dry-activate + run plugin.test.ts
 rovecode plugin add <folder|git-url> [--project] [--force]     # git: shallow clone, validated before it lands
 rovecode plugin remove <name> [--project]
 rovecode plugin enable|disable <name>
 rovecode plugin trust|untrust <name>
 rovecode plugin show <name>
 ```
+
+`plugin init` scaffolds into `<cwd>/<name>` (nothing is installed — `plugin add` is still the install
+step); `plugin test` parses the manifest, activates the module against a throwaway cwd (a misbehaving
+module writes nowhere real), prints every contribution and warning, then runs the plugin's own
+`plugin.test.ts` under bun:test when present.
+
+### Declaring permissions
+
+A manifest MAY declare `"permissions": ["file.read", "shell.exec", …]` — the policy actions its tools
+need (a tool's kind maps to one action: read→file.read, write→file.write, execute→shell.exec,
+spawn→spawn, memory→memory.write, network→net.fetch). The declaration shows in `plugin show` and the
+trust prompt, and rovecode ENFORCES it: a plugin tool whose kind-action is not declared is refused
+before its `execute` runs, with a message naming the plugin and the missing entry. A plugin that
+declares nothing is legacy-unrestricted; one that declares `"permissions": []` is read-only in effect.
 
 Aliases: `ls` = `list` (also what bare `rovecode plugin` does), `rm` = `remove`, `info` = `show`;
 `rovecode plugin help` prints the usage. A usage error exits 2, a failed operation exits 1.

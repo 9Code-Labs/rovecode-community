@@ -34,6 +34,8 @@ import { agentLoop, SteeringQueue } from "../core/loop.ts";
 import { listSessions } from "../core/session.ts";
 import type { ModelRef, RunEvent, StreamFn } from "../core/types.ts";
 import { buildOpenApiDoc } from "./openapi.ts";
+import { agentTree } from "../sdk/client.ts";
+import { dashboardHtml } from "./dashboard.ts";
 
 export const DEFAULT_PORT = 4100;
 export const DEFAULT_HOSTNAME = "127.0.0.1";
@@ -159,6 +161,15 @@ export function startServer(opts: ServerOptions = {}): RovecodeServer {
   const yolo = opts.yolo ?? false;
   const sessions = new Map<string, SessionEntry>();
 
+  // Global event bus (F2, sdk-blueprint.md §5c): every run event and every background-task
+  // status flip is broadcast here; GET /events streams it as SSE and the /ui dashboard,
+  // the SDK and scripts all read the SAME frames. Render-only: the bus holds no state.
+  const bus = new Set<(data: string) => void>();
+  const busSend = (payload: unknown): void => {
+    const data = JSON.stringify(payload);
+    for (const fn of bus) fn(data);
+  };
+
   const createSession = async (): Promise<Response> => {
     const id = randomUUID();
     // Reuse the ONE runtime construction every surface uses (cli/runtime.ts):
@@ -173,6 +184,10 @@ export function startServer(opts: ServerOptions = {}): RovecodeServer {
       throw e; // never-throw seam below turns anything else into a JSON 500
     }
     sessions.set(id, { runtime, running: false, abort: null });
+    runtime.tasks.subscribe(() => {
+      busSend({ type: "agent_tree_update", sessionId: id, tree: agentTree(runtime.tasks.list()) });
+    });
+    busSend({ type: "session_created", sessionId: id });
     return json({ id }, 201);
   };
 
@@ -211,7 +226,16 @@ export function startServer(opts: ServerOptions = {}): RovecodeServer {
     }, rt.steering); // port #26: the session's queue — background-task notes land on the next prompt
     entry.running = true;
     entry.abort = ac;
-    return sseResponse(run, () => { entry.running = false; entry.abort = null; }, () => ac.abort());
+    // tap: every frame the prompt's own SSE consumer gets also rides the global bus
+    // (GET /events, /ui). Generator delegation keeps the cancel path truthful:
+    // sseResponse's cancel() still reaches the real run through the wrapper.
+    const tapped = (async function* (): AsyncGenerator<RunEvent, void> {
+      for await (const ev of run) {
+        busSend({ type: "run_event", sessionId: id, event: ev });
+        yield ev;
+      }
+    })();
+    return sseResponse(tapped, () => { entry.running = false; entry.abort = null; }, () => ac.abort());
   };
 
   /** DELETE /session/:id/prompt — cancel the in-flight run (port #21). Aborting
@@ -238,6 +262,31 @@ export function startServer(opts: ServerOptions = {}): RovecodeServer {
     return json(entry.runtime.tasks.list());
   };
 
+  /** GET /events — the global bus as SSE (never closes on run_end; one connection
+   *  watches every session). A reconnecting client loses interim frames by design:
+   *  the bus is a live tap, not a log — replay is the session JSONL's job. */
+  const eventsStream = (): Response => {
+    const enc = new TextEncoder();
+    let listener: ((data: string) => void) | null = null;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        listener = (data) => {
+          try { controller.enqueue(enc.encode(`data: ${data}\n\n`)); } catch { /* consumer gone */ }
+        };
+        bus.add(listener);
+        // snapshot so a fresh client is not blind until the next event
+        try {
+          controller.enqueue(enc.encode(`data: ${JSON.stringify({ type: "hello", sessions: [...sessions.keys()] })}\n\n`));
+        } catch { /* consumer gone */ }
+      },
+      cancel() { if (listener) bus.delete(listener); },
+    });
+    return new Response(stream, {
+      status: 200,
+      headers: { "content-type": "text/event-stream", "cache-control": "no-cache, no-transform", "x-accel-buffering": "no" },
+    });
+  };
+
   const route = async (req: Request): Promise<Response> => {
     const path = new URL(req.url).pathname;
     if (req.method === "POST" && path === "/session") return createSession();
@@ -247,6 +296,10 @@ export function startServer(opts: ServerOptions = {}): RovecodeServer {
     const t = /^\/session\/([^/]+)\/tasks$/.exec(path);
     if (req.method === "GET" && t) return listTasks(t[1]!);
     if (req.method === "GET" && path === "/sessions") return json(listSessions(sessionsRoot));
+    if (req.method === "GET" && path === "/events") return eventsStream();
+    if (req.method === "GET" && (path === "/ui" || path === "/ui/")) {
+      return new Response(dashboardHtml(), { headers: { "content-type": "text/html; charset=utf-8" } });
+    }
     if (req.method === "GET" && path === "/doc") return json(buildOpenApiDoc(api.url));
     return json({ error: `no route for ${req.method} ${path}` }, 404);
   };

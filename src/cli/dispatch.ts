@@ -55,6 +55,33 @@ export function pathShaped(word: string, exists: (p: string) => boolean = exists
   try { return exists(word); } catch { return false; }
 }
 
+/** Protect a mistyped command from becoming a paid one-shot prompt. Only a single, plain
+ * command-like word is considered; sentences and punctuation-rich prompts remain prompts. */
+export function suggestCommand(word: string, commands: Iterable<string>): string | undefined {
+  if (!/^[a-z][a-z-]{1,23}$/i.test(word)) return undefined;
+  const distance = (a: string, b: string): number => {
+    const row = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+      let diagonal = row[0]!;
+      row[0] = i;
+      for (let j = 1; j <= b.length; j++) {
+        const above = row[j]!;
+        row[j] = Math.min(row[j]! + 1, row[j - 1]! + 1, diagonal + (a[i - 1] === b[j - 1] ? 0 : 1));
+        diagonal = above;
+      }
+    }
+    return row[b.length]!;
+  };
+  const needle = word.toLowerCase();
+  let best: { command: string; distance: number } | undefined;
+  for (const command of commands) {
+    const d = distance(needle, command.toLowerCase());
+    if (!best || d < best.distance || (d === best.distance && command < best.command)) best = { command, distance: d };
+  }
+  const limit = needle.length <= 4 ? 1 : 2;
+  return best && best.distance <= limit ? best.command : undefined;
+}
+
 export function parseCli(argv: string[]): CliInvocation {
   const args = argv.slice(2);
   const isFlag = (a: string) => a.startsWith("-");

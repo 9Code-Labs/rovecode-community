@@ -10,7 +10,7 @@ import { globTool, grepTool, lsTool } from "../coding/files.ts";
 import { todoTools } from "../tools/todo.ts";
 import { askUserTool } from "../tools/ask-user.ts";
 import { textTurn, toolTurn } from "../providers/stream.ts";
-import type { AgentDefinition, ModelRef, PermissionRule, RunConfig, StreamFn } from "../core/types.ts";
+import type { AgentDefinition, ModelRef, PermissionRule, RunConfig, RunEvent, StreamFn } from "../core/types.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -109,8 +109,10 @@ export function gauntletRules(taskId: string): PermissionRule[] {
 }
 
 /** `guard: null` runs unguarded — only for tests proving a guardless run FAILS
- *  the loop-guard task (test/integration/guard-wiring.test.ts). */
-export async function runTask(task: GauntletTask, workspace: string, guard: ToolGuard | null = new ToolGuard()): Promise<GauntletTranscript> {
+ *  the loop-guard task (test/integration/guard-wiring.test.ts).
+ *  `onEvent` (eval persistence, optional): observes the loop's raw events without
+ *  changing any of them — same scripted stream, same verdict, purely additive. */
+export async function runTask(task: GauntletTask, workspace: string, guard: ToolGuard | null = new ToolGuard(), onEvent?: (ev: RunEvent) => void): Promise<GauntletTranscript> {
   const dir = mkdtempSync(join(tmpdir(), "rovecode-cli-g-"));
   const store = new SessionStore(dir, randomUUID());
   const registry = new ToolRegistry();
@@ -132,6 +134,7 @@ export async function runTask(task: GauntletTask, workspace: string, guard: Tool
       events.push({ type: ev.type });
       if (ev.type === "tool_execution_start") toolCalls.push({ tool: ev.tool, args: ev.args });
       if (ev.type === "run_end") finalText = ev.summary;
+      onEvent?.(ev);
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });

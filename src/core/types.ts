@@ -1,7 +1,8 @@
 /** Rovecode core type contracts. Single source of truth for the runtime. */
 
 import type { ContextChunk } from "./context.ts";
-import type { CompactionStrategy, CompactionTrigger } from "./compaction.ts";
+import type { CompactionStrategy, CompactionTrigger, PruneConfig } from "./compaction.ts";
+import type { OutputBudgetOptions } from "./tool-output-budget.ts";
 
 // ---------- Messages (harness-level; converted to provider form only at the seam) ----------
 
@@ -308,6 +309,21 @@ export interface RunConfig {
   compactionStrategy?: CompactionStrategy;
   /** port #25 keep-window: user turns kept BEFORE the current one (default 2; an emergency keeps 0) */
   compactionKeepTurns?: number;
+  /** P0-2: view-only prune of old tool outputs before each provider call (core/compaction.ts
+   *  pruneToolOutputs). The session record is NEVER rewritten — only the wire view is stubbed;
+   *  a `compaction` event with strategy "prune" is yielded (not persisted, same precedent as
+   *  "context-drop"). undefined = DEFAULT_PRUNE_CONFIG; false = off. */
+  prune?: PruneConfig | false;
+  /** P0-3: unified tool-output ceiling with UTF-8-safe head+tail truncation
+   *  (core/tool-output-budget.ts), applied by the loop to the persisted/next-request results.
+   *  undefined = the default ceiling; false = off (tool-side caps still apply). */
+  outputBudget?: OutputBudgetOptions | false;
+  /** P0-4: compaction thrash guard (core/compaction.ts CompactionPace). A compaction within this
+   *  many turns of the previous one earns one strike; one that fails to shrink the wire by ≥5%
+   *  earns another; COOLDOWN_STRIKES (3) stop compacting for the run, and an emergency arriving
+   *  during cooldown ends the run in error instead of re-driving. 0 = off.
+   *  Default DEFAULT_RAPID_WINDOW_TURNS (2). */
+  compactionRapidTurns?: number;
   parallelTools: boolean;
   permissionRules: PermissionRule[];
   approval?: ApprovalFn;

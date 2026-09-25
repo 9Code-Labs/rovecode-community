@@ -36,6 +36,7 @@
 import { randomUUID } from "node:crypto";
 import type { Message, ModelRef, RunConfig } from "./types.ts";
 import { estimateTokens, planCompaction as planHeadTail } from "./context.ts";
+import { safeHead } from "./tool-output-budget.ts";
 
 export type CompactionStrategy = "head-summarize" | "keep-window" | "provider-native";
 export type CompactionTrigger = "speculative" | "emergency";
@@ -217,6 +218,145 @@ function alignCut(history: Message[], i: number): number {
   let j = i;
   while (j < history.length && history[j]!.role === "tool") j++;
   return j;
+}
+
+// ---------- prune (P0-2, view-only) ----------
+//
+// OpenCode's prune (opencode dev session/compaction.ts:271-294, erişim 2026-09-14): walk the
+// history backwards, protect the last user turn plus PRUNE_PROTECT tokens of tool traffic, and
+// erase older tool outputs IN PLACE; below PRUNE_MINIMUM of gain do nothing. Claude Code's
+// auto-compact phase 1 is the same idea ("clears older tool outputs first"). The difference
+// here is WHERE it runs: rovecode never rewrites the session record — the store keeps every
+// byte (replay/export/trace stay truthful) and prune transforms only the VIEW sent to the
+// provider, recomputed per turn from the full history. Because parts are stubbed in place —
+// never removed — every tool_call keeps its tool_result on the wire (the invariant
+// message-v2.ts:349-360 protects) by construction, and turn/branch bookkeeping is untouched.
+
+export interface PruneConfig {
+  /** tokens of tool traffic protected from the cut, walking back from the last user turn
+   *  (OpenCode PRUNE_PROTECT = 40_000) */
+  protectTokens: number;
+  /** prune only when at least this many tokens are freed (OpenCode PRUNE_MINIMUM = 20_000) —
+   *  below it the marker costs more than the win */
+  minGainTokens: number;
+  /** tool names whose results are never pruned — OpenCode protects ["skill"]; here the active
+   *  skill body (skill_view) is what the model is following this minute */
+  protectedTools: readonly string[];
+  /** chars of the original output kept at the head of the stub, so the model can tell what it
+   *  was without re-running the tool (the rest is named, not shown) */
+  headChars: number;
+}
+
+export const DEFAULT_PRUNE_CONFIG: PruneConfig = {
+  protectTokens: 40_000,
+  minGainTokens: 20_000,
+  protectedTools: ["skill_view"],
+  headChars: 160,
+};
+
+/** stub marker — the idempotence check keys on it, so a pruned view is never re-pruned */
+export const PRUNE_STUB_MARK = "[pruned from context:";
+
+export interface PruneOutcome {
+  /** new message objects where stubs landed; untouched messages keep identity (===) */
+  view: Message[];
+  pruned: number;
+  tokensBefore: number;
+  tokensAfter: number;
+  tokensFreed: number;
+}
+
+/** Stub text: a small head of the original (what the output WAS), then the numbers and the
+ *  remedy. The session transcript keeps the full output — the stub says so. */
+function pruneStub(output: string, headChars: number): string {
+  const head = headChars > 0 ? safeHead(output, headChars) : "";
+  return `${head}\n${PRUNE_STUB_MARK} ${output.length} chars (~${estimateTokens(output)} tokens) removed — the full output is in the session transcript; re-read the file or re-run the tool if you need it]`;
+}
+
+/** Pure over the history; never mutates `history`. Returns null when the gain is below the
+ *  threshold or there is nothing to do — the caller then sends the history unchanged and
+ *  yields no event. */
+export function pruneToolOutputs(
+  history: readonly Message[],
+  cfg: PruneConfig,
+  tokenText: (m: Message) => string,
+): PruneOutcome | null {
+  // callId → tool name (results carry no tool name; the call does)
+  const toolOf = new Map<string, string>();
+  for (const m of history) {
+    if (m.role !== "assistant") continue;
+    for (const p of m.parts) if (p.kind === "tool_call") toolOf.set(p.id, p.tool);
+  }
+  // the active turn: from the last user message on, everything is untouchable
+  let lastUser = -1;
+  for (let i = 0; i < history.length; i++) if (history[i]!.role === "user") lastUser = i;
+  const start = (lastUser === -1 ? history.length : lastUser) - 1;
+  // walk back: protect protectTokens of tool traffic; everything older is eligible
+  let acc = 0;
+  const eligible = new Set<number>();
+  for (let i = start; i >= 0; i--) {
+    const m = history[i]!;
+    if (m.role !== "tool") continue;
+    let mt = 0;
+    for (const p of m.parts) if (p.kind === "tool_result") mt += estimateTokens(p.output);
+    if (acc + mt <= cfg.protectTokens) acc += mt;
+    else eligible.add(i);
+  }
+  if (eligible.size === 0) return null;
+  const stubbable = (callId: string, ok: boolean, output: string): boolean =>
+    ok &&                                                    // errors stay verbatim — they are the lesson
+    !output.includes(PRUNE_STUB_MARK) &&                     // idempotence: never re-stub a stub
+    !cfg.protectedTools.includes(toolOf.get(callId) ?? "") &&
+    output.length > 256;                                     // a stub must pay for its own marker
+  let freed = 0;
+  let pruned = 0;
+  const view = history.map((m, i) => {
+    if (!eligible.has(i)) return m;
+    let changed = false;
+    const parts = m.parts.map((p) => {
+      if (p.kind !== "tool_result" || !stubbable(p.callId, p.ok, p.output)) return p;
+      const stub = pruneStub(p.output, cfg.headChars);
+      if (stub.length >= p.output.length) return p;          // paranoia: never grow
+      freed += estimateTokens(p.output) - estimateTokens(stub);
+      pruned++;
+      changed = true;
+      return { ...p, output: stub };
+    });
+    return changed ? { ...m, parts } : m;
+  });
+  if (pruned === 0 || freed < cfg.minGainTokens) return null;
+  const measure = (ms: readonly Message[]) => ms.reduce((n, m) => n + estimateTokens(tokenText(m)), 0);
+  const tokensBefore = measure(history);
+  const tokensAfter = measure(view);
+  return { view: view as Message[], pruned, tokensBefore, tokensAfter, tokensFreed: tokensBefore - tokensAfter };
+}
+
+// ---------- thrash guard (P0-4) ----------
+//
+// Claude Code stops auto-compacting after a few attempts when the window refills immediately
+// ("auto-compact thrashing" — code.claude.com/docs/en/troubleshooting.md). The same protection
+// here, as a pure pace ledger the loop carries per run: a compaction within `rapidWindow` turns
+// of the previous one earns one strike, one that fails to shrink the wire by 5% earns another —
+// three strikes and the run stops compacting. (A first-ever compaction can LEGITIMATELY not
+// shrink — a one-token head summarizes into a ten-token summary; that alone must never trip the
+// guard, which is why a strike pair, not the bare fact, is the signal.) An emergency arriving
+// during cooldown ends the run in error instead of re-driving a request whose compaction just
+// failed — a loop that will not stop is worse than one that stops early (core/loop.ts).
+
+export interface CompactionPace { lastTurn: number; strikes: number }
+export const initialCompactionPace: CompactionPace = { lastTurn: -1_000_000, strikes: 0 };
+export const DEFAULT_RAPID_WINDOW_TURNS = 2;
+export const COOLDOWN_STRIKES = 3;
+
+/** Strike ledger: +1 when rapid (≤ rapidWindow turns since the last compaction), +1 when the
+ *  wire did not shrink by ≥5%. A spaced, effective compaction clears the ledger. */
+export function updateCompactionPace(pace: CompactionPace, turn: number, shrankWell: boolean, rapidWindow: number): CompactionPace {
+  const strikes = (turn - pace.lastTurn <= rapidWindow ? 1 : 0) + (shrankWell ? 0 : 1);
+  return { lastTurn: turn, strikes: strikes === 0 ? 0 : pace.strikes + strikes };
+}
+
+export function compactionCooldown(pace: CompactionPace, rapidWindow: number): boolean {
+  return rapidWindow > 0 && pace.strikes >= COOLDOWN_STRIKES;
 }
 
 // ---------- apply ----------

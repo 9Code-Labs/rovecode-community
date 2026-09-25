@@ -15,7 +15,13 @@ import type { ToolGuard } from "./guardrails.ts";
 import { servedBy } from "../providers/router.ts";
 import { SessionStore } from "./session.ts";
 import { assembleContext, estimateTokens, type ContextChunk } from "./context.ts";
-import { compactionTrigger, planCompaction, applyCompaction, isContextOverflow, type CompactionCtx, type NativeCompactor } from "./compaction.ts";
+import {
+  compactionTrigger, planCompaction, applyCompaction, isContextOverflow,
+  pruneToolOutputs, DEFAULT_PRUNE_CONFIG,
+  updateCompactionPace, compactionCooldown, initialCompactionPace, DEFAULT_RAPID_WINDOW_TURNS,
+  type CompactionCtx, type NativeCompactor, type CompactionPace,
+} from "./compaction.ts";
+import { createOutputBudget } from "./tool-output-budget.ts";
 import { verifyClause, verifyDetail, verifyNudgeText } from "./verify-gate.ts";
 
 export interface LoopDeps {
@@ -160,6 +166,11 @@ async function* runLoop(
   // turns out to be a no-op (nothing droppable: re-driving the identical request is pointless)
   let emergencyPending: string | null = null;
   let emergencyRedrives = 0;
+  // P0-4 thrash ledger (compaction.ts): 3 strikes stops compacting for the run
+  let pace: CompactionPace = initialCompactionPace;
+  let cooldownNoted = false;
+  // P0-3: one policy per run; applied to the persisted results after each batch (tool-output-budget.ts)
+  const outputBudget = cfg.outputBudget === false ? null : createOutputBudget(cfg.outputBudget ?? {});
   const clock = deps.clock ?? Date.now;
   const startedAt = clock();
   // running spend for RunConfig.maxCostUsd (checked at the turn boundary below)
@@ -201,25 +212,55 @@ async function* runLoop(
 
     yield { type: "turn_start", turn };
 
-    // --- context assembly + compaction (ADR-007; strategy seam + adaptive trigger: port #25) ---
+    // --- P0-2 view-only prune, BEFORE the trigger (compaction.ts "prune" section; OpenCode's
+    // prune / Claude Code auto-compact phase 1): the store keeps every byte — replay, export and
+    // resume stay truthful — while the wire view gets old tool outputs stubbed in place. The
+    // trigger measures the PRUNED view, so a good prune can preempt an LLM compaction entirely
+    // (model-free and cheap first; summarize only if it still does not fit). The event is
+    // yielded, never appendEvent'd — the record did not change, the view did (same precedent as
+    // the "context-drop" event below).
+    const tokenText = (m: Message) => partsTokenText(m.parts);
+    const measure = (ms: readonly Message[]) => ms.reduce((n, m) => n + estimateTokens(tokenText(m)), 0);
+    const prePrune = cfg.prune === false ? null : pruneToolOutputs(history, cfg.prune ?? DEFAULT_PRUNE_CONFIG, tokenText);
+    let wireView: readonly Message[] = prePrune?.view ?? history;
+    if (prePrune) yield { type: "compaction", strategy: "prune", tokensBefore: prePrune.tokensBefore, tokensAfter: prePrune.tokensAfter };
     // counted over ALL parts (partsTokenText): tool calls/results dominate agentic histories,
     // and a text-only count would keep this trigger permanently below threshold
-    const histTokens = history.reduce((n, m) => n + estimateTokens(partsTokenText(m.parts)), 0);
+    const histTokens = measure(wireView);
     // speculative: the estimate crossed budget × threshold, before this turn's provider call;
     // emergency: the previous turn was REJECTED as a context overflow (error-stop block) — plan
     // against the observed size and re-drive once (compaction.ts header: senpi/opencode cites)
     const trigger = compactionTrigger(histTokens, cfg, emergencyPending !== null);
     const overflowSummary = emergencyPending;
     emergencyPending = null; // consumed: one compaction per overflow
-    if (trigger) {
-      const cctx: CompactionCtx = { trigger, tokenText: (m) => partsTokenText(m.parts), summarize: deps.summarize, native: deps.compactNative, model, signal: runAc.signal };
+    // --- P0-4 thrash cooldown: 3 strikes stops compacting for the run. An emergency in
+    // cooldown ends in error instead of re-driving a request whose compaction just failed. ---
+    const rapidWindow = cfg.compactionRapidTurns ?? DEFAULT_RAPID_WINDOW_TURNS;
+    if (trigger && compactionCooldown(pace, rapidWindow)) {
+      if (trigger === "emergency" && overflowSummary !== null) {
+        yield { type: "run_end", status: "error", summary: `${overflowSummary}\n[compaction thrash protection: the window refilled right after repeated compactions — not compacting again]` };
+        return;
+      }
+
+      if (!cooldownNoted) {
+        cooldownNoted = true;
+        yield { type: "compaction", strategy: "cooldown", tokensBefore: histTokens, tokensAfter: histTokens };
+      }
+    } else if (trigger) {
+      const cctx: CompactionCtx = { trigger, tokenText, summarize: deps.summarize, native: deps.compactNative, model, signal: runAc.signal };
       const plan = planCompaction(history, cfg, cctx);
       const out = plan ? await applyCompaction(history, plan, cfg, cctx) : null;
       if (out) {
         history.length = 0; history.push(...out.history);
-        const ev: RunEvent = { type: "compaction", strategy: out.strategy, trigger, tokensBefore: histTokens, tokensAfter: history.reduce((n, m) => n + estimateTokens(partsTokenText(m.parts)), 0) };
+        const tokensAfter = measure(history);
+        pace = updateCompactionPace(pace, turn, tokensAfter < histTokens * 0.95, rapidWindow);
+        const ev: RunEvent = { type: "compaction", strategy: out.strategy, trigger, tokensBefore: histTokens, tokensAfter };
         deps.store.appendEvent(ev); // real sessions carry the marker (export + replay), not just fixtures
         yield ev;
+        // a fresh view for the compacted history (usually a no-op right after a compaction)
+        const postPrune = cfg.prune === false ? null : pruneToolOutputs(history, cfg.prune ?? DEFAULT_PRUNE_CONFIG, tokenText);
+        wireView = postPrune?.view ?? history;
+        if (postPrune) yield { type: "compaction", strategy: "prune", tokensBefore: postPrune.tokensBefore, tokensAfter: postPrune.tokensAfter };
       } else if (overflowSummary !== null) {
         // emergency with nothing droppable (a fresh session whose single turn overflows): the
         // re-drive would repeat the rejected request byte-for-byte — end with the provider's error
@@ -229,7 +270,8 @@ async function* runLoop(
     }
 
     const systemText = typeof def.systemPrompt === "function" ? def.systemPrompt(vars) : def.systemPrompt;
-    const histNow = history.reduce((n, m) => n + estimateTokens(partsTokenText(m.parts)), 0);
+    // the assembly accounts for what the wire will actually carry — the pruned view (P0-2)
+    const histNow = measure(wireView);
     const chunks: ContextChunk[] = [
       { name: "system", text: systemText, priority: 100, tokens: estimateTokens(systemText) },
       ...(def.contextChunks ?? []), // port #8: e.g. harvested config (priority 70) — evicted before system
@@ -256,8 +298,8 @@ async function* runLoop(
       // request-only: appended to what goes on the wire, never to `history` or the store
       const reminder = deps.planReminder?.(history) ?? null;
       const withReminder: Message[] = reminder === null
-        ? history
-        : [...history, { id: `reminder-${turn}`, role: "user", parts: [{ kind: "text", text: reminder }], parentId: history.at(-1)?.id ?? null, createdAt: Date.now() }];
+        ? [...wireView]
+        : [...wireView, { id: `reminder-${turn}`, role: "user", parts: [{ kind: "text", text: reminder }], parentId: history.at(-1)?.id ?? null, createdAt: Date.now() }];
       // deltas yield LIVE, one RunEvent each, while the provider streams. The old shape awaited the
       // whole turn and flushed the buffered message_updates afterwards — a generator cannot yield
       // from a callback — so a 15 s reasoning phase (claude-opus-5 at --effort high, measured) put
@@ -433,6 +475,18 @@ async function* runLoop(
       // same way (session/processor.ts:571-575, 250ms) before marking calls interrupted
       if (!settled && runAc.signal.aborted) await Promise.race([batch, sleep(250)]);
       if (settled) { results = await batch; batchSettled = true; }
+      // P0-3: the unified output budget lands HERE, once per batch, on what the store persists and
+      // the next request carries (tool-output-budget.ts). The tool_execution_end events above keep
+      // the RAW output (surface fidelity); the model and the transcript get the budgeted text.
+      // Small outputs pass byte-verbatim by construction.
+      if (batchSettled && outputBudget) {
+        for (const c of calls) {
+          const r = results.get(c.id);
+          if (r === undefined) continue;
+          const t = outputBudget.apply(c.tool, r.output);
+          if (t.truncated) results.set(c.id, { ...r, output: t.text });
+        }
+      }
       if (events.length > 0) yield* flush();
     } finally {
       // Every exit — normal completion, consumer .return()/.throw() at a pump

@@ -22,6 +22,8 @@ export interface PluginCliDeps {
 export const PLUGIN_USAGE = [
   "usage: rovecode plugin <command>",
   "  list                       every plugin in ~/.rovecode/plugins and .rovecode/plugins, with its status",
+  "  init <name> [--project]    scaffold a new plugin folder (manifest, entry, test, README) ready for `plugin add`",
+  "  test [path]                validate + activate a plugin in a dry harness, then run its plugin.test.ts",
   "  add <folder|git-url> [--project] [--force]",
   "                             copy (or shallow-clone) a plugin into the user scope, or this repo's .rovecode/plugins",
   "  remove <name> [--project]  delete the installed copy",
@@ -43,6 +45,8 @@ export async function cmdPlugin(args: string[], deps: PluginCliDeps = {}): Promi
   const scope: PluginScope = flag(rest, "--project") ? "project" : "user";
   const name = words(rest)[0];
   switch (sub) {
+    case "init": return await import("./init.ts").then((m) => m.cmdPluginInit(words(rest), { cwd, out, err }));
+    case "test": return await import("./init.ts").then((m) => m.cmdPluginTest(words(rest)[0], { cwd, home, out, err }));
     case "list": case "ls": {
       const { plugins, warnings } = discoverPlugins(cwd, { home });
       if (plugins.length === 0) { out(`no plugins. add one: rovecode plugin add <folder|git-url>   (user: ${scopeRoot("user", cwd, home)}, project: ${relative(cwd, scopeRoot("project", cwd, home)) || "."})`); }

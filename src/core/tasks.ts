@@ -35,6 +35,9 @@ export interface TaskInfo {
   isolated: boolean;
   /** the child's depth (parent depth + 1; root-started tasks run at 1) */
   depth: number;
+  /** the RUNNING task that started this one (StartOptions.caller); absent for
+   *  root-started tasks — the sdk/dashboard agent tree hangs on this edge */
+  parent?: TaskId;
   status: TaskStatus;
   createdAt: number;
   startedAt?: number;
@@ -194,6 +197,7 @@ export class TaskManager {
         id, label: (opts.label ?? "").trim() || (goal.length > 40 ? goal.slice(0, 39) + "…" : goal || "(no goal)"),
         agent: req.agent, goal: goal.length > 200 ? goal.slice(0, 199) + "…" : goal,
         isolated: req.isolated === true, depth, status: "queued", createdAt: Date.now(),
+        ...(opts.caller !== undefined ? { parent: opts.caller } : {}),
       },
       req, deps, ac: new AbortController(), notify: opts.notify, done, resolveDone, settled: false,
     };
