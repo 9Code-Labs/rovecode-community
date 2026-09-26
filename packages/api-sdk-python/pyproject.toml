@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rovecode"
+version = "0.1.0"
+description = "Official Python SDK for the rovecode AI platform — chat, streaming, model catalog, image & video generation."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "9Code Labs" }]
+requires-python = ">=3.9"
+keywords = ["rovecode", "ai", "llm", "sdk", "openai-compatible"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+]
+
+[project.urls]
+Homepage = "https://rovecode.dev"
+Repository = "https://github.com/9Code-Labs/rovecode"
