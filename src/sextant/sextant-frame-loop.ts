@@ -12,6 +12,7 @@ import { drawMessages, messagesScroll, promptCursor } from "./draw-messages.ts";
 import { drawPet, SWAY_MS } from "./draw-pet.ts";
 import { fuzzy, tokenize } from "./engine.ts";
 import { renderFrame } from "./frame.ts";
+import { createBoot, type Boot } from "./boot.ts";
 import { parseInput } from "./input.ts";
 import { handleInput, type KeyCtx } from "./keys.ts";
 import { layout as layoutFn } from "./layout.ts";
@@ -95,6 +96,11 @@ export class FrameLoop {
   private rows: TreeRow[] = [];
   /** frames painted (tests: "a render happened") */
   frames = 0;
+  /** #46: the cockpit opens for submits once every live panel painted clean (boot.ts) */
+  private boot: Boot | null = null;
+  private bootToastAt = 0;
+  /** Enter presses caught while the boot gate was closed; replayed in order when it opens */
+  private bootQueue: InputEvent[] = [];
 
   constructor(private readonly d: FrameLoopDeps) {
     const { cols, rows } = d.io.size();
@@ -191,6 +197,16 @@ export class FrameLoop {
   dispatch(ev: InputEvent): void {
     const now = this.d.clock();
     this.markDirty(); // and wake: the tick that follows this key (onTick: file reload) must come in one frame, not one sleep
+    // #46: while the boot reveal runs, Enter would submit into a half-loaded surface — QUEUE it and
+    // replay once the gate opens (typing still buffers into the editor live). Nothing is ever lost.
+    if (this.boot && !this.boot.gate.ready && ev.type === "key" && ev.name === "enter") {
+      this.bootQueue.push(ev);
+      if (now - this.bootToastAt > 2000) {
+        this.bootToastAt = now;
+        pushToast(this.d.state, "cockpit is loading — your input is queued", now, "info");
+      }
+      return;
+    }
     if (this.d.beforeInput?.(ev, now)) return;
     const kc = this.d.keyCtx();
     const ctx: KeyCtx = { layout: this.L, hooks: kc.hooks, local: kc.local, hits: this.hits, rows: this.rows, fuzzy, drag: this.drag };
@@ -202,6 +218,8 @@ export class FrameLoop {
    *  storms and effects, the boot reveal. These hold the loop at FRAME_MS. */
   moving(now: number): boolean {
     const s = this.d.state, P = this.d.pet.state;
+    // #46: the gate holds the loop hot until the surface is truly ready (not just REVEAL_MS elapsed)
+    if (this.boot && !this.boot.gate.ready) return true;
     return s.running || s.card !== null || s.files.touched.size > 0 || now - s.bootAt < REVEAL_MS
       || now < P.stormUntil || P.fx.some((f) => f.until > now);
   }
@@ -264,9 +282,11 @@ export class FrameLoop {
     scr.begin(theme.bg);
     this.rows = treeRows(s, now); // the same (version, now) key drawFiles uses → one build per frame (model.ts cache)
     const hits: HitZone[] = [];
+    if (!this.boot) this.boot = createBoot(s.bootAt);
     const L = renderFrame(scr, s, theme, now, {
       layout: layoutFn,
       layoutOpts: this.layoutOpts(),
+      boot: this.boot,
       painters: {
         code: (g, r, st, th, t) => drawCode(g, r, st, th, t, { tokenize }),
         messages: drawMessages,
@@ -274,6 +294,12 @@ export class FrameLoop {
       },
     });
     this.L = L;
+    // the gate just opened → flush queued submits through the normal path
+    if (this.boot.gate.ready && this.bootQueue.length > 0) {
+      const queued = this.bootQueue;
+      this.bootQueue = [];
+      for (const ev of queued) this.dispatch(ev);
+    }
     if (L.pet) hits.push({ rect: L.pet, onClick: () => pet.poke(this.d.clock()) });
     // the frame's border rows (frame-hits.ts): unread badge → notices, theme name → next theme, effort → /effort
     for (const z of frameHits(L.frame, s, theme, now)) hits.push(z);

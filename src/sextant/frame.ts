@@ -22,6 +22,9 @@ export interface FrameDeps {
   /** overrides per panel; a missing painter draws an empty titled box */
   painters?: Partial<Painters>;
   layoutOpts?: LayoutOptions;
+  /** #46 boot gate: the per-panel guard reports clean/fault into it so the surface can hold its
+   *  reveal until every live panel has painted once. Omit = no gating (tests, dumps). */
+  boot?: import("./boot.ts").Boot;
 }
 
 /** boot reveal (app.js render()): panels appear in 90 ms steps after bootAt */
@@ -76,9 +79,23 @@ export function renderFrame(scr: ScreenLike, s: SextantState, theme: Theme, now:
   // A painter that throws must never take the rest of the frame down with it — a blank panel with a
   // toast beats a half-drawn cockpit. The first failure per panel is recorded on the state so the
   // loop can surface it once instead of spamming every frame.
+  // the panels this layout actually shows — the gate waits on exactly these, no more
+  deps.boot?.tick(now, [
+    ...(L.files ? ["files"] : []),
+    "code",
+    "messages",
+    ...(L.plan ? ["plan"] : []),
+    ...(L.usage ? ["usage"] : []),
+    ...(L.pet ? ["pet"] : []),
+  ]);
   const safe = (name: keyof Painters, fn: () => void): void => {
-    try { fn(); if (s.painterError === name || s.painterError?.startsWith(name + ":")) s.painterError = undefined; } catch (e) {
+    try {
+      fn();
+      if (s.painterError === name || s.painterError?.startsWith(name + ":")) s.painterError = undefined;
+      deps.boot?.clean(name);
+    } catch (e) {
       const msg = `${name}: ${e instanceof Error ? e.message : String(e)}`;
+      deps.boot?.fault(name);
       if (s.painterError !== msg) {
         s.painterError = msg;
         pushToast(s, `panel fault — ${msg}`, now, "error");
