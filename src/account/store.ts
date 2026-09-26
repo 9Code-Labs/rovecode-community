@@ -14,6 +14,9 @@ export interface LinkedAccount {
   name: string;
   /** the API base that issued it — a token is only valid there */
   apiBase: string;
+  /** the rove_live_… inference key minted alongside the login — the CLI configures the rovecode
+   *  provider with this so the user never touches the dashboard's key page */
+  apiKey?: string;
   /** ISO 8601 */
   linkedAt: string;
 }
@@ -32,6 +35,7 @@ export function loadAccount(): LinkedAccount | null {
       email: typeof parsed.email === "string" ? parsed.email : "",
       name: typeof parsed.name === "string" ? parsed.name : "",
       apiBase: typeof parsed.apiBase === "string" ? parsed.apiBase : "",
+      ...(typeof parsed.apiKey === "string" && parsed.apiKey.length > 0 ? { apiKey: parsed.apiKey } : {}),
       linkedAt: typeof parsed.linkedAt === "string" ? parsed.linkedAt : "",
     };
   } catch {

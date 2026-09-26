@@ -33,6 +33,7 @@ interface Pick { key: string; label: string; id?: string; local?: boolean; url?:
 
 /** the numbered menu: the common hosted providers, the two local servers, and two "your own URL" doors */
 export const SETUP_PICKS: readonly Pick[] = [
+  { key: "0", id: "rovecode", label: "rovecode — sign in with your account, no key pasting (recommended)" },
   { key: "1", id: "anthropic", label: "anthropic — Claude models" },
   { key: "2", id: "openai", label: "openai" },
   { key: "3", id: "openrouter", label: "openrouter — many models behind one key" },
@@ -74,12 +75,45 @@ export async function runSetup(deps: SetupDeps): Promise<number> {
   out("");
   let pick: Pick | undefined;
   for (let tries = 0; tries < 3 && pick === undefined; tries++) {
-    const a = (await ask("Which one? [1-9, empty = cancel]: ")).trim();
+    const a = (await ask("Which one? [0-9, empty = cancel]: ")).trim();
     if (a.length === 0) { out(`cancelled — nothing changed. ${next("rovecode setup")} whenever you like`); return 2; }
     pick = SETUP_PICKS.find((p) => p.key === a || p.id === a);
-    if (pick === undefined) out(`  "${a}" is not on the list — a number from 1 to 9, please.`);
+    if (pick === undefined) out(`  "${a}" is not on the list — a number from 0 to 9, please.`);
   }
   if (pick === undefined) return 2;
+
+  // ---- rovecode account: device login does everything — key, provider, default model ----
+  if (pick.id === "rovecode") {
+    const { runDeviceLogin } = await import("../account/login.ts");
+    const { ensureRovecodeProvider, ROVECODE_DEFAULT_MODEL } = await import("../account/provision.ts");
+    out("◆ signing you in — approve in the browser that opens.");
+    const result = await runDeviceLogin({
+      apiBase: process.env.ROVECODE_AUTH_API ?? "https://www.rovecode.dev",
+      onCode: ({ userCode, verificationUri, expiresIn }) => {
+        out("");
+        out(`  your code:  ${userCode}`);
+        out(`  open:       ${verificationUri}`);
+        out(`  expires in about ${Math.max(1, Math.round(expiresIn / 60))} min — waiting for approval…`);
+        out("");
+      },
+    });
+    if (!result.ok) { out(`  sign-in failed (${result.reason}). ${next("rovecode login")} or pick another provider`); return 2; }
+    out(`◆ linked ${result.account.email || "your account"}.`);
+    if (!result.account.apiKey) { out(`  the site didn't mint a key this time. ${next("rovecode setup")} and pick another door, or re-run rovecode login`); return 2; }
+    const pv = ensureRovecodeProvider(result.account.apiKey);
+    if (pv.error !== undefined) { out(`  provider setup failed: ${pv.error}. ${next("rovecode provider add rovecode https://api.rovecode.dev/v1")}`); return 2; }
+    out(`◆ rovecode provider ready (key stored hidden, ~/.rovecode/credentials.json).`);
+    out(`◆ testing rovecode/${ROVECODE_DEFAULT_MODEL} …`);
+    const r = await probe("rovecode", ROVECODE_DEFAULT_MODEL);
+    if (r.ok) out(`  ${r.detail}`);
+    else out(`  probe failed: ${r.detail} — the key is stored; ${next("rovecode provider test rovecode " + ROVECODE_DEFAULT_MODEL)}`);
+    if (pv.defaulted) out(`◆ default → rovecode/${ROVECODE_DEFAULT_MODEL}.`);
+    else out(`◆ kept your existing default model — switch anytime: rovecode model use rovecode/${ROVECODE_DEFAULT_MODEL}`);
+    out("");
+    out(SETUP_DONE);
+    out("  or open the cockpit:  rovecode");
+    return 0;
+  }
 
   // ---- the provider: a built-in, a keyless local server, or a URL of your own ----
   let id: string;

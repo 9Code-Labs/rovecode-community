@@ -55,8 +55,19 @@ export async function cmdLogin(): Promise<number> {
     console.error(`error: ${reasons[result.reason]}`);
     return 1;
   }
-  if (json) console.log(JSON.stringify({ ok: true, email: result.account.email, apiBase: result.account.apiBase }, null, 2));
-  else console.log(`linked ${result.account.email || "your account"} — stored in ${accountPath()}`);
+  // the site also minted an inference key — turn it into a working provider, zero key-pasting
+  const { ensureRovecodeProvider, ROVECODE_DEFAULT_MODEL } = await import("../account/provision.ts");
+  const provision = result.account.apiKey ? ensureRovecodeProvider(result.account.apiKey) : undefined;
+  if (json) console.log(JSON.stringify({ ok: true, email: result.account.email, apiBase: result.account.apiBase, provisioned: provision ?? null }, null, 2));
+  else {
+    console.log(`linked ${result.account.email || "your account"} — stored in ${accountPath()}`);
+    if (provision && !provision.error) {
+      console.log(`rovecode provider ready (api.rovecode.dev — key stored hidden, ~/.rovecode/credentials.json)`);
+      if (provision.defaulted) console.log(`default model → rovecode/${ROVECODE_DEFAULT_MODEL}`);
+    } else if (provision?.error) {
+      console.error(`note: provider auto-setup failed (${provision.error}) — run: rovecode setup`);
+    }
+  }
   return 0;
 }
 

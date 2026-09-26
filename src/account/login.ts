@@ -85,6 +85,7 @@ export async function runDeviceLogin(opts: DeviceLoginOptions): Promise<LoginRes
       const token = typeof poll.body.access_token === "string" ? poll.body.access_token : "";
       if (!token) return { ok: false, reason: "network" };
       const user = (poll.body.user ?? {}) as { id?: unknown; email?: unknown; name?: unknown };
+      const apiKey = typeof poll.body.api_key === "string" ? poll.body.api_key : "";
       const account: LinkedAccount = {
         token,
         userId: typeof user.id === "string" ? user.id : "",
@@ -92,6 +93,7 @@ export async function runDeviceLogin(opts: DeviceLoginOptions): Promise<LoginRes
         name: typeof user.name === "string" ? user.name : "",
         apiBase: base,
         linkedAt: new Date(now()).toISOString(),
+        ...(apiKey ? { apiKey } : {}),
       };
       saveAccount(account);
       return { ok: true, account };
