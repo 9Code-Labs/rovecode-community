@@ -9,7 +9,7 @@ import { GridScreen } from "./grid.ts";
 import { drawFiles, drawFrame, drawToasts } from "./draw-frame.ts";
 import { drawPlan, drawUsage } from "./draw-plan.ts";
 import { panel } from "./layout.ts";
-import { pruneToasts } from "./model.ts";
+import { pruneToasts, pushToast } from "./model.ts";
 import type { DumpFrame, Layout, LayoutOptions, Rect, ScreenLike, SextantState, Theme } from "./types.ts";
 import { mainPage } from "./draw-tabs.ts";
 
@@ -73,20 +73,32 @@ export function renderFrame(scr: ScreenLike, s: SextantState, theme: Theme, now:
   const L = (deps.layout ?? layoutFallback)(scr.w, scr.h, deps.layoutOpts ?? { pet: true });
   pruneToasts(s, now);
   const age = now - s.bootAt;
-  P.frame(scr, L.frame, s, theme, now);
-  if (L.files && age >= 0) P.files(scr, L.files, s, theme, now);
+  // A painter that throws must never take the rest of the frame down with it — a blank panel with a
+  // toast beats a half-drawn cockpit. The first failure per panel is recorded on the state so the
+  // loop can surface it once instead of spamming every frame.
+  const safe = (name: keyof Painters, fn: () => void): void => {
+    try { fn(); if (s.painterError === name || s.painterError?.startsWith(name + ":")) s.painterError = undefined; } catch (e) {
+      const msg = `${name}: ${e instanceof Error ? e.message : String(e)}`;
+      if (s.painterError !== msg) {
+        s.painterError = msg;
+        pushToast(s, `panel fault — ${msg}`, now, "error");
+      }
+    }
+  };
+  safe("frame", () => P.frame(scr, L.frame, s, theme, now));
+  if (L.files && age >= 0) safe("files", () => P.files(scr, L.files!, s, theme, now));
   // paging (draw-tabs.ts): on a narrow terminal the main slot shows the panel `s.page` names when
   // the layout hid it; the tab strip itself is painted by the frame loop after the panels
   const main = mainPage(L, s);
   if (age >= REVEAL_STEP_MS) {
-    if (main === "files") P.files(scr, L.code, s, theme, now);
-    else if (main === "plan") P.plan(scr, L.code, s, theme, now);
-    else P.code(scr, L.code, s, theme, now);
+    if (main === "files") safe("files", () => P.files(scr, L.code, s, theme, now));
+    else if (main === "plan") safe("plan", () => P.plan(scr, L.code, s, theme, now));
+    else safe("code", () => P.code(scr, L.code, s, theme, now));
   }
-  if (age >= REVEAL_STEP_MS * 2) P.messages(scr, L.messages, s, theme, now);
-  if (L.plan && age >= REVEAL_STEP_MS * 3) P.plan(scr, L.plan, s, theme, now);
-  if (L.usage && age >= REVEAL_STEP_MS * 4) P.usage(scr, L.usage, s, theme, now);
-  if (L.pet && age >= REVEAL_STEP_MS * 5) P.pet(scr, L.pet, s, theme, now);
+  if (age >= REVEAL_STEP_MS * 2) safe("messages", () => P.messages(scr, L.messages, s, theme, now));
+  if (L.plan && age >= REVEAL_STEP_MS * 3) safe("plan", () => P.plan(scr, L.plan!, s, theme, now));
+  if (L.usage && age >= REVEAL_STEP_MS * 4) safe("usage", () => P.usage(scr, L.usage!, s, theme, now));
+  if (L.pet && age >= REVEAL_STEP_MS * 5) safe("pet", () => P.pet(scr, L.pet!, s, theme, now));
   drawToasts(scr, s, theme, now);
   return L;
 }

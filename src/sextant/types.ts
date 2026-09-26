@@ -388,6 +388,9 @@ export interface SextantState {
   context: ContextState | null;
   help: boolean;
   toasts: Toast[];
+  /** last painter failure seen by renderFrame's per-panel guard (frame.ts); surfaced as a toast by
+   *  the frame loop, cleared on the next clean frame of that panel. Undefined = all panels clean. */
+  painterError?: string;
   /** the notification history behind the toasts (Notice); newest last */
   notices: Notice[];
   /** images staged for the next user message (names), shown as chips above the prompt; synced from

@@ -15,7 +15,7 @@ import { renderFrame } from "./frame.ts";
 import { parseInput } from "./input.ts";
 import { handleInput, type KeyCtx } from "./keys.ts";
 import { layout as layoutFn } from "./layout.ts";
-import { treeRows } from "./model.ts";
+import { treeRows, pushToast } from "./model.ts";
 import { drawHelp, drawPalette, drawSuggest, suggestions } from "./overlays.ts";
 import { drawMarket } from "./draw-market.ts";
 import { drawContext } from "./draw-context.ts";
@@ -239,8 +239,25 @@ export class FrameLoop {
     return Math.min(IDLE_TICK_MS, Math.max(FRAME_MS, this.ambientDue - now));
   }
 
-  /** paint one frame: panels (renderFrame) → suggestion box → palette → help → scroll write-backs → cursor → flush */
+  /** paint one frame: panels (renderFrame) → suggestion box → palette → help → scroll write-backs → cursor → flush.
+   *  The whole body is guarded: a fault anywhere (huge home-dir file tree, odd git state, a painter
+   *  edge case) must surface as a toast and leave the LAST good frame on screen — never a blank cockpit. */
   render(now: number): void {
+    try {
+      this.renderInner(now);
+      this.lastFrameError = undefined;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (this.lastFrameError !== msg) {
+        this.lastFrameError = msg;
+        try { pushToast(this.d.state, `frame fault — ${msg}`, now, "error"); } catch { /* state itself is sick */ }
+      }
+    }
+  }
+
+  private lastFrameError: string | undefined;
+
+  private renderInner(now: number): void {
     const scr = this.screen;
     if (!scr) return;
     const s = this.d.state, theme = this.d.theme(), pet = this.d.pet;
