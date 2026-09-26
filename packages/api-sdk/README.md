@@ -1,16 +1,16 @@
-# @rovecode/sdk
+# @rovecode-labs/api-sdk
 
 Official TypeScript/JavaScript SDK for the [rovecode](https://rovecode.dev) AI platform.
 Zero dependencies, works on Node 18+, Bun, Deno and edge runtimes.
 
 ```bash
-npm install @rovecode/sdk
+npm install @rovecode-labs/api-sdk
 ```
 
 ## Quickstart
 
 ```ts
-import { Rovecode } from "@rovecode/sdk";
+import { Rovecode } from "@rovecode-labs/api-sdk";
 
 const client = new Rovecode({ apiKey: process.env.ROVECODE_API_KEY! });
 
@@ -66,7 +66,7 @@ console.log(done.url);
 Every failure carries its server-side `incident` id — quote it in support tickets.
 
 ```ts
-import { ContentFilterError, RateLimitError, PermissionError } from "@rovecode/sdk";
+import { ContentFilterError, RateLimitError, PermissionError } from "@rovecode-labs/api-sdk";
 
 try {
   await client.chat.completions.create({ model: "grok-4.7-cyber", messages: [...] });
@@ -111,6 +111,6 @@ import OpenAI from "openai";
 const client = new OpenAI({ baseURL: "https://api.rovecode.dev/v1", apiKey: process.env.ROVECODE_API_KEY });
 ```
 
-Use `@rovecode/sdk` when you want the typed catalog (credits, engines, video jobs), incident-id errors and the reasoning-aware `collect()` helper.
+Use `@rovecode-labs/api-sdk` when you want the typed catalog (credits, engines, video jobs), incident-id errors and the reasoning-aware `collect()` helper.
 
 License: MIT
