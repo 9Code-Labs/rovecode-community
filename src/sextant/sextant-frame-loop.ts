@@ -11,6 +11,8 @@ import { drawCode, codeScrollTop } from "./draw-code.ts";
 import { drawMessages, messagesScroll, promptCursor } from "./draw-messages.ts";
 import { drawPet, SWAY_MS } from "./draw-pet.ts";
 import { fuzzy, tokenize } from "./engine.ts";
+import { appendFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { renderFrame } from "./frame.ts";
 import { createBoot, type Boot } from "./boot.ts";
 import { parseInput } from "./input.ts";
@@ -121,6 +123,8 @@ export class FrameLoop {
   /** build the Screen, subscribe input/resize, paint the first frame, start the interval */
   start(): void {
     if (this.timer) return;
+    this.initDebug();
+    this.dbg(`start ${this.d.io.size().cols}x${this.d.io.size().rows}`);
     const { cols, rows } = this.d.io.size();
     this.screen = new Screen(this.d.io, cols, rows, { truecolor: this.d.truecolor });
     this.unsubs.push(this.d.io.onInput((chunk) => this.feed(chunk)));
@@ -244,8 +248,29 @@ export class FrameLoop {
   tick(): void {
     const now = this.d.clock();
     this.d.onTick?.(now); // first: a reload marks dirty and paints below, in this very frame
-    if (this.dirty || this.moving(now) || now >= this.ambientDue || now - this.lastRender >= IDLE_REPAINT_MS) this.render(now);
+    const t0 = Date.now();
+    const willPaint = this.dirty || this.moving(now) || now >= this.ambientDue || now - this.lastRender >= IDLE_REPAINT_MS;
+    if (willPaint) this.render(now);
     this._pace = this.nextPace(now);
+    this.dbg(`tick age=${now - this.d.state.bootAt}ms paint=${willPaint} dirty=${this.dirty} moving=${this.moving(now)} boot=${this.boot ? (this.boot.gate.ready ? "ready" : `pending:${this.boot.gate.pending.join(",")}`) : "none"} renderMs=${Date.now() - t0} pace=${this._pace}`);
+  }
+
+  /** ROVECODE_SEXTANT_DEBUG=1 → one line per tick/render to ~/.rovecode/sextant-debug.log.
+   *  Blind-user-report insurance: whatever a real terminal does differently from the smoke harness
+   *  (io, timing, resize storms) shows up here instead of in a screenshot. */
+  private dbg(line: string): void {
+    if (!this.dbgPath) return;
+    try { appendFileSync(this.dbgPath, `${new Date().toISOString()} ${line}\n`); } catch { /* debug must never break the UI */ }
+  }
+  private dbgPath: string | null = null;
+  private initDebug(): void {
+    try {
+      if (this.d.io.env?.ROVECODE_SEXTANT_DEBUG !== "1") return;
+      const home = process.env.USERPROFILE ?? process.env.HOME ?? ".";
+      mkdirSync(join(home, ".rovecode"), { recursive: true });
+      this.dbgPath = join(home, ".rovecode", "sextant-debug.log");
+      appendFileSync(this.dbgPath, `\n=== session ${new Date().toISOString()} ===\n`);
+    } catch { /*同上*/ }
   }
 
   /** the delay to the next tick, decided AFTER the paint (a painter can mark dirty or start a quip): a
@@ -263,9 +288,10 @@ export class FrameLoop {
   render(now: number): void {
     try {
       this.renderInner(now);
-      this.lastFrameError = undefined;
+      if (this.lastFrameError !== undefined) { this.lastFrameError = undefined; this.dbg("frame recovered"); }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      this.dbg(`FRAME FAULT: ${msg}\n${e instanceof Error ? (e.stack ?? "") : ""}`);
       if (this.lastFrameError !== msg) {
         this.lastFrameError = msg;
         try { pushToast(this.d.state, `frame fault — ${msg}`, now, "error"); } catch { /* state itself is sick */ }
