@@ -140,8 +140,9 @@ test("no TTY: the three-line recipe (rovecode setup first), no questions asked, 
   expect(text).toContain("this stdin is a pipe");
 });
 
-test("the menu: nine picks, keys 1-9 in order, two URL doors last, locals marked", () => {
-  expect(SETUP_PICKS.map((p) => p.key)).toEqual(["1", "2", "3", "4", "5", "6", "7", "8", "9"]);
+test("the menu: ten picks, key 0 is the rovecode account door, keys 1-9 in order, two URL doors last, locals marked", () => {
+  expect(SETUP_PICKS.map((p) => p.key)).toEqual(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]);
+  expect(SETUP_PICKS[0].id).toBe("rovecode");
   expect(SETUP_PICKS.filter((p) => p.local).map((p) => p.id)).toEqual(["ollama", "lmstudio"]);
   expect(SETUP_PICKS.slice(-2).map((p) => p.url)).toEqual(["openai", "anthropic"]);
   for (const p of SETUP_PICKS) expect(p.label).not.toMatch(/[\u{1F300}-\u{1FAFF}]/u);
