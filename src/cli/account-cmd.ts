@@ -4,7 +4,7 @@
 
 import { accountPath, clearAccount, loadAccount } from "../account/store.ts";
 
-const DEFAULT_API = "http://localhost:8787";
+const DEFAULT_API = "https://www.rovecode.dev";
 
 function readFlag(name: string): string | undefined {
   const i = process.argv.indexOf(name);
