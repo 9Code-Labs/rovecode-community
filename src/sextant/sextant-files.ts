@@ -24,7 +24,10 @@ export const MAX_FILES = 2000;
 export const MAX_FILE_BYTES = 512 * 1024;
 /** git's binary heuristic: a NUL within the first 8000 bytes */
 const BINARY_SNIFF = 8000;
-const SKIP_DIRS = new Set(["node_modules", ".git", ".rovecode", "dist", "build", "out", "coverage", ".cache"]);
+const SKIP_DIRS = new Set(["node_modules", ".git", ".rovecode", "dist", "build", "out", "coverage", ".cache",
+  // OS profile dirs: a home-directory cwd must never descend into these (hundreds of thousands of
+  // vendor files). A real freeze was traced to this walk digging AppData for ~18 s on boot.
+  "AppData", "Application Data", "Local Settings", "Library", "OneDrive"]);
 const DIFF_CONTEXT = 3;
 
 export interface RepoSnapshot {
@@ -52,16 +55,22 @@ export async function gitFilesAsync(cwd: string, run: GitRunnerAsync = spawnGitA
 /** bounded deterministic walk for non-repos: per-dir sorted DFS, SKIP_DIRS and dot-dirs skipped, at most `max` files */
 export function walkFiles(cwd: string, max = MAX_FILES): string[] {
   const out: string[] = [];
+  // hard bound on VISITED entries: the file cap alone does not stop a million-entry tree of
+  // non-matching files; and withFileTypes avoids a per-entry statSync (Windows: ~0.1 ms + AV each)
+  const MAX_VISITED = 50_000;
+  let visited = 0;
   const walk = (dir: string, rel: string): void => {
-    let names: string[];
-    try { names = readdirSync(dir); } catch { return; }
-    for (const name of names.sort()) {
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    for (const ent of entries) {
+      if (++visited > MAX_VISITED) return;
       if (out.length >= max) return;
-      const full = join(dir, name), r = rel ? `${rel}/${name}` : name;
-      let st;
-      try { st = statSync(full); } catch { continue; }
-      if (st.isDirectory()) { if (!SKIP_DIRS.has(name) && !name.startsWith(".")) walk(full, r); }
-      else if (st.isFile()) out.push(r);
+      const name = ent.name, full = join(dir, name), r = rel ? `${rel}/${name}` : name;
+      let isDir: boolean;
+      try { isDir = ent.isDirectory(); } catch { continue; }
+      if (isDir) { if (!SKIP_DIRS.has(name) && !name.startsWith(".")) walk(full, r); }
+      else if (ent.isFile()) out.push(r);
     }
   };
   walk(cwd, "");

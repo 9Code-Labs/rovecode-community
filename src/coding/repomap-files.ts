@@ -18,7 +18,11 @@ export const LANG_BY_EXT: Record<string, Lang> = {
   ".js": Lang.JavaScript, ".mjs": Lang.JavaScript, ".cjs": Lang.JavaScript, ".jsx": Lang.JavaScript,
 };
 
-const SKIP_DIRS = new Set(["node_modules", ".git", ".rovecode", "dist", "build", "out", "coverage", ".cache"]);
+const SKIP_DIRS = new Set(["node_modules", ".git", ".rovecode", "dist", "build", "out", "coverage", ".cache",
+  // OS profile dirs: walking a home-directory cwd must never descend into these — hundreds of
+  // thousands of vendor files, zero user source. (Found the hard way: a home-dir boot walked
+  // AppData and froze the UI for ~18 s.)
+  "AppData", "Application Data", "Local Settings", "Library", "OneDrive"]);
 /** hard bounds (round-2 F2): enumeration/parse cost is O(cap), not O(repo) */
 export const MAX_SRC_FILES = 2000;
 export const MAX_SRC_BYTES = 256 * 1024;
@@ -77,26 +81,37 @@ export function findSrcFiles(rootDir: string, stats?: SrcScanStats, maxFiles = M
       if (keepFile(full)) out.push(full);
     }
   } else {
+    // hard bound on VISITED entries, not just on matches: a tree of a million non-source files
+    // (home dir, a drive root) must still cost O(budget), not O(tree)
+    const MAX_VISITED = 50_000;
+    let visited = 0;
     const walk = (dir: string) => {
-      let names: string[];
+      // withFileTypes: the Dirent already knows file-vs-dir — a per-entry statSync on Windows is
+      // ~0.1 ms + AV tax, which turned a home-dir boot into an 18 s freeze. stat only source-size checks.
+      let entries;
       try {
-        names = readdirSync(dir);
+        entries = readdirSync(dir, { withFileTypes: true });
       } catch {
         return;
       }
-      for (const name of names.sort()) {
+      entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+      for (const ent of entries) {
+        if (++visited > MAX_VISITED) { if (stats) stats.capped = true; return; } // entry budget spent — unwind
         if (out.length > maxFiles) return; // cap exceeded — unwind the whole DFS
+        const name = ent.name;
         const full = join(dir, name);
-        let st;
+        let isDir: boolean;
         try {
-          st = statSync(full);
+          isDir = ent.isDirectory();
         } catch {
           continue;
         }
-        if (st.isDirectory()) {
+        if (isDir) {
           if (!SKIP_DIRS.has(name) && !name.startsWith(".")) walk(full);
-        } else if (LANG_BY_EXT[extname(name).toLowerCase()] !== undefined && st.size <= MAX_SRC_BYTES) {
-          out.push(full);
+        } else if (ent.isFile() && LANG_BY_EXT[extname(name).toLowerCase()] !== undefined) {
+          try {
+            if (statSync(full).size <= MAX_SRC_BYTES) out.push(full);
+          } catch { /* junction/locked file — skip */ }
         }
       }
     };
