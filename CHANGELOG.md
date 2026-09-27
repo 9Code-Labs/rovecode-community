@@ -9,6 +9,31 @@ Hashes on entries before 0.3.2 name commits in the checkout rovecode shared with
 
 ## Unreleased
 
+### Learning surface (Hermes-inspired, pattern-level)
+
+- `rovecode/sdk` + `@rovecode-labs/sdk@0.2.0` — new `rc.learn` and `rc.memory` surfaces
+  (`src/learning/`): `learn.graph()` renders what the agent has learned (skills + MEMORY/USER
+  chunks as nodes; declared `related_skills` and lexical-overlap edges), `learn.draftSkill(id)`
+  condenses a finished session's transcript into a SKILL.md PROPOSAL (deterministic — no LLM;
+  evidence attached), `learn.saveSkill(draft)` writes it to the PROJECT skills dir explicitly
+  (never implicit, never global), `learn.nudges()` flags repeated workflows no skill covers.
+  `memory.read/add` round-trip the scoped MEMORY/USER blocks.
+
+### SDK, mission control, and workflows
+
+- Added `rovecode/sdk`: the embeddable client (`createClient` — sessions, streamed prompts,
+  background tasks, live `agent_tree_update` frames) over the same runtime the CLI boots, published
+  as the `./sdk` subpath export.
+- Added `rovecode serve` observation surfaces: `GET /events` (a global SSE bus: session_created,
+  agent_tree_update, every RunEvent) and `GET /ui`, a zero-build mission-control dashboard.
+- Added `rovecode workflow run <file.ts> [--resume <runId>]` / `workflow list`: DAG workflows
+  (`defineWorkflow`) of agent + gate steps with retry, token budget, and JSONL checkpoint-resume;
+  steps appear in the mission-control agent tree.
+- Added `rovecode plugin init` (scaffold) and `rovecode plugin test` (dry harness), and optional
+  manifest `permissions` declarations enforced before tool execution.
+- `TaskInfo` gains `parent` (the task that spawned this one), which the SDK agent tree and the
+  dashboard hang on.
+
 ### Open-core boundary and supported APIs
 
 - Added explicit package exports for the core, extension, plugin, and provider APIs, with contract tests and a documented 0.x compatibility policy.

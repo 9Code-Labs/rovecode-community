@@ -11,6 +11,7 @@ describe("supported package API", () => {
       "./extensions": "./dist/lib/public-api.js",
       "./plugins": "./dist/lib/plugins.js",
       "./providers": "./dist/lib/providers.js",
+      "./sdk": "./dist/lib/sdk.js",
       "./package.json": "./package.json",
     });
   });

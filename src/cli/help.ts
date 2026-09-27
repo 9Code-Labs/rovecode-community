@@ -171,6 +171,7 @@ const ADVANCED = `advanced — the full command reference
                             candidates, nothing created or removed
   rovecode trace <id|prefix>    the session's messages, one line each (role · first 120 chars · tool-call count)
   rovecode export <session>     write a session as markdown (--json: raw JSONL copy; --out <path>; --force)
+  rovecode workflow run <file>  run a defineWorkflow DAG (agent+gate steps, retry, budget, --resume <runId>) · workflow list
   rovecode eval                 alias for gauntlet
   rovecode acp                  Agent Client Protocol v1 endpoint over stdio (Zed/JetBrains)
   rovecode serve                headless HTTP server (ROVECODE_PORT, default 4100; loopback-only)`;

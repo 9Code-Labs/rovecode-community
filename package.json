@@ -1,6 +1,6 @@
 {
   "name": "rovecode",
-  "version": "0.4.0-beta.2",
+  "version": "0.4.0-beta.3",
   "license": "AGPL-3.0-only",
   "author": "9Code Labs",
   "repository": {
@@ -16,6 +16,7 @@
     "./extensions": "./dist/lib/public-api.js",
     "./plugins": "./dist/lib/plugins.js",
     "./providers": "./dist/lib/providers.js",
+    "./sdk": "./dist/lib/sdk.js",
     "./package.json": "./package.json"
   },
   "bin": {
@@ -37,7 +38,7 @@
     "build:cli": "bun -e \"require('node:fs').rmSync('dist/cli', { recursive: true, force: true })\" && bun build --target=bun --splitting --sourcemap=external src/cli/main.ts --outdir dist/cli && bun -e \"require('node:fs').copyFileSync('src/providers/models-index.json', 'dist/cli/models-index.json')\" && bun run smoke:cli && bun run smoke:dist",
     "build:npm": "bun run build:npm:cli && bun run build:npm:lib && bun run smoke:npm",
     "build:npm:cli": "bun -e \"require('node:fs').rmSync('dist/cli', { recursive: true, force: true })\" && bun build --target=bun --minify --splitting --packages=external src/cli/main.ts --outdir dist/cli && bun -e \"require('node:fs').copyFileSync('src/providers/models-index.json', 'dist/cli/models-index.json')\"",
-    "build:npm:lib": "bun -e \"require('node:fs').rmSync('dist/lib', { recursive: true, force: true })\" && bun build --target=bun --minify --packages=external src/index.ts --outfile dist/lib/index.js && bun build --target=bun --minify --packages=external src/public-api.ts --outfile dist/lib/public-api.js && bun build --target=bun --minify --packages=external src/plugins/index.ts --outfile dist/lib/plugins.js && bun build --target=bun --minify --packages=external src/providers/stream.ts --outfile dist/lib/providers.js && bun -e \"require('node:fs').copyFileSync('src/providers/models-index.json', 'dist/lib/models-index.json')\"",
+    "build:npm:lib": "bun -e \"require('node:fs').rmSync('dist/lib', { recursive: true, force: true })\" && bun build --target=bun --minify --packages=external src/index.ts --outfile dist/lib/index.js && bun build --target=bun --minify --packages=external src/public-api.ts --outfile dist/lib/public-api.js && bun build --target=bun --minify --packages=external src/plugins/index.ts --outfile dist/lib/plugins.js && bun build --target=bun --minify --packages=external src/providers/stream.ts --outfile dist/lib/providers.js && bun build --target=bun --minify --packages=external src/sdk/index.ts --outfile dist/lib/sdk.js && bun -e \"require('node:fs').copyFileSync('src/providers/models-index.json', 'dist/lib/models-index.json')\"",
     "smoke:npm": "bun dist/cli/main.js --version && bun dist/cli/main.js smoke-tui --sextant",
     "prepack": "bun run build:npm",
     "smoke:cli": "bun dist/cli/main.js --version",

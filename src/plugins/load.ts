@@ -14,7 +14,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { HOOK_NAMES, type HookSet } from "../core/hooks.ts";
-import type { Tool, ToolKind } from "../core/types.ts";
+import type { Tool, ToolContext, ToolKind, ToolOutput } from "../core/types.ts";
 import { isRecord } from "../mcp/config.ts";
 import type { DiscoveredPlugin } from "./discover.ts";
 import { PLUGIN_API_VERSION } from "./manifest.ts";
@@ -45,6 +45,31 @@ export function pluginTimeoutMs(env: Record<string, string | undefined> = proces
 
 const KINDS: readonly ToolKind[] = ["read", "write", "execute", "spawn", "memory", "network", "custom"];
 const TOOL_NAME_RE = /^[a-z][a-z0-9_]{0,63}$/;
+
+/** kind → policy action, the same table core/tools.ts actionFor uses. `tool.<name>` has no
+ *  declaration: a plugin's OWN name is its identity, not a capability. */
+const KIND_ACTION: Partial<Record<ToolKind, string>> = {
+  read: "file.read", write: "file.write", execute: "shell.exec", spawn: "spawn", memory: "memory.write", network: "net.fetch",
+};
+
+/** Permission declaration (manifest.permissions, sdk-blueprint.md §6.5): a plugin that declares
+ *  permissions gets each tool wrapped — a call whose kind-action the manifest did not declare is
+ *  refused BEFORE execute, with a message naming the plugin and the missing declaration. The user
+ *  reads the declaration at install time (plugin show / market info); this wrap makes the promise
+ *  true at run time. No declaration = legacy unrestricted (no wrap). */
+function wrapPermissions(tool: Tool, declared: string[] | undefined, tag: string): Tool {
+  if (declared === undefined) return tool;
+  const action = KIND_ACTION[tool.kind];
+  if (action === undefined) return tool; // custom `tool.<name>` — no capability to declare
+  if (declared.includes(action) || declared.includes("*")) return tool;
+  return {
+    ...tool,
+    execute: async (_args: unknown, _ctx: ToolContext): Promise<ToolOutput> => ({
+      ok: false,
+      output: `Permission denied: plugin '${tag}' did not declare '${action}' — add it to the manifest's "permissions" and re-install, or remove this tool`,
+    }),
+  };
+}
 const TIMED_OUT = Symbol("timed-out");
 
 async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
@@ -91,7 +116,7 @@ async function activateOne(p: DiscoveredPlugin, opts: ActivateOptions, warnings:
       const ok = validateTool(t, tag, warnings);
       if (!ok) continue;
       if (seen.has(ok.schema.name)) { warnings.push(`${tag}: tool "${ok.schema.name}" declared twice — first kept`); continue; }
-      seen.add(ok.schema.name); out.tools.push(ok);
+      seen.add(ok.schema.name); out.tools.push(wrapPermissions(ok, m.permissions, tag));
     }
   }
   // hooks: the HookSet shape hooks.ts validates for files — unknown names and non-functions dropped, the rest kept

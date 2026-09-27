@@ -483,7 +483,7 @@ async function cmdTrace(sessionId: string): Promise<void> {
   }
 }
 
-const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "plugin", "skills", "mcp", "market", "context", "doctor", "auth", "provider", "model", "models", "setup", "connect", "trace", "help", "chat", "repl", "smoke-tui", "acp", "serve", "export", "sessions", "trust", "update"]);
+const known = new Set(["run", "gauntlet", "eval", "bench", "tools", "plugin", "skills", "mcp", "market", "context", "doctor", "auth", "provider", "model", "models", "setup", "connect", "trace", "help", "chat", "repl", "smoke-tui", "acp", "serve", "export", "sessions", "trust", "update", "workflow"]);
 if (cmd === "" || cmd === "chat" || cmd === "repl") {
   // The intro covers actual preparation, not only module imports. Plain chat loads no TUI graph.
   await (await import("./start-chat.ts")).startChat(cli);
@@ -534,6 +534,7 @@ if (cmd === "" || cmd === "chat" || cmd === "repl") {
       await cmdTrace(resolveSessionArg("rovecode trace", join(process.cwd(), ".rovecode", "sessions"), cli.rest[0])); break;
     }
     case "export": (await import("./export.ts")).cmdExport(process.argv); break;
+    case "workflow": process.exitCode = await (await import("./workflow-cmd.ts")).cmdWorkflow(argvAfter("workflow")); break;
     case "sessions": process.exitCode = (await import("./sessions-cmd.ts")).cmdSessions(process.argv, process.cwd()); break; // list · rename · delete · fork · search (cli/sessions-cmd.ts)
     case "smoke-tui": {
       if (process.argv.includes("--sextant")) { await (await import("../tui/sextant-smoke.ts")).runSextantSmoke(); break; }
@@ -556,7 +557,7 @@ if (cmd === "" || cmd === "chat" || cmd === "repl") {
       // an orderly stop on SIGTERM/SIGINT (systemd, Ctrl-C on a POSIX host): session_close hooks, MCP close and
       // task cancelAll run instead of the default kill. On Windows a signal is TerminateProcess — no handler runs.
       for (const sig of ["SIGTERM", "SIGINT"] as const) process.once(sig, () => { void Promise.resolve(srv.stop()).then(() => process.exit(0), () => process.exit(1)); });
-      console.log(`rovecode server listening on ${srv.url} — POST /session · POST /session/:id/prompt (SSE) · DELETE /session/:id/prompt · GET /session/:id/tasks · GET /sessions · GET /doc`);
+      console.log(`rovecode server listening on ${srv.url} — POST /session · POST /session/:id/prompt (SSE) · DELETE /session/:id/prompt · GET /session/:id/tasks · GET /sessions · GET /events (SSE bus) · GET /ui (mission control) · GET /doc`);
       break;
     }
     default: cmdHelp(); break;
