@@ -34,7 +34,7 @@ import { agentLoop, SteeringQueue } from "../core/loop.ts";
 import { listSessions } from "../core/session.ts";
 import type { ModelRef, RunEvent, StreamFn } from "../core/types.ts";
 import { buildOpenApiDoc } from "./openapi.ts";
-import { dashboardHtml } from "./dashboard.ts";
+import { dashboardHtml } from "./mission-control.ts";
 import { agentTree } from "../sdk/client.ts";
 
 /** Server-level event bus (SDK F2 — the visual-tracking surface): a LIVE TAP of
