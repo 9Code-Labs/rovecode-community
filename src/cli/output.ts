@@ -23,7 +23,7 @@
  *    "stopped" with a well-formed result instead of a hard kill (Windows: exit 0xC000013A, no output).
  *
  *  Result schema (json: the ONLY stdout line; ndjson: the LAST line, with type:"result"):
- *    status     "done" | "stopped" | "error" | "budget" — run_end.status ("error" when the loop
+ *    status     "done" | "stopped" | "error" — run_end.status ("error" when the loop
  *               ended without a run_end)
  *    summary    run_end.summary: the final assistant text, or the error text
  *    sessionId  run_start.sessionId (null if never seen) — the store under .rovecode/sessions
@@ -39,7 +39,7 @@
  *               (permission_denied / truncated / not_found → ok:false)
  *    durationMs sink construction → finish
  *    exitCode   the process exit code below
- *  Exit codes: 0 done · 1 error / budget / no run_end · 2 usage error (bad --output value; also
+ *  Exit codes: 0 done · 1 error / no run_end · 2 usage error (bad --output value; also
  *  the startup-error class, port #27) · 130 stopped (the run was aborted: SIGINT). Text mode keeps
  *  its 0 done / 1 otherwise, plus 130 for the (newly reachable) aborted run. */
 
@@ -47,6 +47,7 @@ import { format } from "node:util";
 import type { Message, ModelRef, RunEvent, RunOutstanding, StreamFn } from "../core/types.ts";
 import { outstandingClause, type LoopDeps } from "../core/loop.ts";
 import type { Runtime } from "./runtime.ts";
+import { createHeadSummarizer } from "../core/summarize.ts";
 import { costUsd, type PricingRow } from "../core/usage.ts";
 import { ModelCatalog } from "../providers/catalog.ts";
 import { VALUE_FLAGS } from "./dispatch.ts";
@@ -335,8 +336,14 @@ export function createOutputSink(mode: OutputMode, opts: OutputSinkOptions): Out
  *  registry/store/tools, guard (port #4), cwd (port #26) and hooks (port #29), with the sink's
  *  SIGINT signal (port #21) — the fields agentLoop reads. Same object literal cmdRun used to inline,
  *  evaluated at the same argument position (tools listed at call time). */
-export function buildRunDeps(rt: Pick<Runtime, "registry" | "store" | "guard" | "planReminder" | "cwd" | "hooks">, stream: StreamFn, sink: Pick<OutputSink, "signal">): LoopDeps {
-  return { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, planReminder: rt.planReminder, cwd: rt.cwd, signal: sink.signal, hooks: rt.hooks };
+export function buildRunDeps(rt: Pick<Runtime, "registry" | "store" | "guard" | "planReminder" | "cwd" | "hooks">, stream: StreamFn, sink: Pick<OutputSink, "signal">, model?: ModelRef): LoopDeps {
+  return {
+    stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema),
+    guard: rt.guard, planReminder: rt.planReminder, cwd: rt.cwd, signal: sink.signal, hooks: rt.hooks,
+    // the head summarizer: without it speculative compaction was OFF in production (compaction.ts
+    // resolveStrategy) — one call over the dropped head, the run's own model
+    ...(model !== undefined ? { summarize: createHeadSummarizer(stream, model, sink.signal) } : {}),
+  };
 }
 
 function summarize(

@@ -44,6 +44,7 @@ export function spyCtx(layout: Layout = makeLayout(160, 44)): Spy {
     hooks: { onSubmit: (t) => { spy.submits.push(t); }, onInterrupt: () => { spy.n.interrupts++; }, onExit: () => { spy.n.exits++; } },
     local: {
       setTheme: (n) => { spy.themes.push(n); }, setMode: (m) => { spy.modes.push(m); }, openFile: (p) => { spy.opened.push(p); }, toast: (t) => { spy.toasts.push(t); },
+      cancelTask: (id) => { spy.toasts.push(`cancel:${id}`); },
       openMarket: () => { spy.market.push("open"); },
       openContext: () => { spy.context.push("open"); },
       // `:local` only when the install-once chooser answered yes — every existing expectation stays as it was

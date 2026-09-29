@@ -196,7 +196,7 @@ test("origin honesty: after a fallback /cost prices candidate 2, not the request
   const router = createRouter({ roles: { default: [c1, c2] } });
   const store = new SessionStore(tmpCwd(), "cost-origin");
   const cfg: RunConfig = {
-    maxTurns: 3, contextBudgetTokens: 100_000, compactionThreshold: 0.8, parallelTools: true,
+    contextBudgetTokens: 100_000, compactionThreshold: 0.8, parallelTools: true,
     permissionRules: [{ action: "*", resource: "*", effect: "allow" }],
   };
   const def = { name: "t", systemPrompt: "sys", tools: ["*"], model: c1 };

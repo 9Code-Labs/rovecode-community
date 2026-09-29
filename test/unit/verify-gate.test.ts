@@ -4,7 +4,6 @@
  *   3. bounded: its own timeout (a timed-out check is a FAILED check), output reduced to the failing part;
  *   4. ONE retry: the failing part goes back once; still failing → status "done" (not "error") with the failure on run_end,
  *      and a model that answers with prose (no new write) does not trigger a second two-minute run;
- *   5. the retry is a turn: a spent --max-turns ends "budget";
  *   6. OFF by default (measured: the projects edited here have no check to run); ROVECODE_VERIFY=1 is the way in, and
  *      plan mode removes it (applyModeToRun) — no `verify` on the config means nothing runs and nothing is added;
  *   7. composes with the finish check on ONE flag: whichever fires first takes the run's extra turn. */
@@ -113,7 +112,7 @@ test("verifyNudgeText / verifyClause: the message names the command and carries 
 const WRITE: Tool = { kind: "write", schema: { name: "write", description: "w", args: { type: "object" } }, async execute(args) { const a = args as { path: string }; return a.path.startsWith("bad/") ? { ok: false, output: "ENOENT: bad/ does not exist" } : { ok: true, output: `wrote ${a.path}` }; } };
 const NOOP: Tool = { kind: "read", schema: { name: "noop", description: "n", args: { type: "object" } }, async execute() { return { ok: true, output: "ok" }; } };
 const def: AgentDefinition = { name: "t", systemPrompt: "test", tools: ["*"] };
-const cfg = (over: Partial<RunConfig>): RunConfig => ({ maxTurns: 60, contextBudgetTokens: 100_000, compactionThreshold: 0.8, parallelTools: true, permissionRules: [{ action: "*", resource: "*", effect: "allow" }], ...over });
+const cfg = (over: Partial<RunConfig>): RunConfig => ({ contextBudgetTokens: 100_000, compactionThreshold: 0.8, parallelTools: true, permissionRules: [{ action: "*", resource: "*", effect: "allow" }], ...over });
 
 function scripted(turns: AssistantTurn[]): { stream: StreamFn; lastUser: string[] } {
   const lastUser: string[] = [];
@@ -230,13 +229,6 @@ test("(3) a timed-out check is a failed check: nudged with the timeout wording, 
   expect(outstandingClause(r.end.outstanding!)).toBe("check timed out after 120s (bun test)");
 });
 
-test("(5) the retry is a turn: --max-turns 2 spent on write+'done' with a failing check ends 'budget', not 'done'", async () => {
-  const g = gate([FAIL]);
-  const r = await run([WRITE_OK, DONE, WRITE_OK2, DONE], { verify: g, maxTurns: 2 });
-  expect(g.calls).toBe(1);                       // the check ran, the nudge was queued, the cap was checked first
-  expect(r.steers).toBe(1);
-  expect(r.end).toEqual({ type: "run_end", status: "budget", summary: "max turns (2) reached" });
-});
 
 test("abort during the check → the run ends 'stopped', no nudge, no verify verdict", async () => {
   const ac = new AbortController();

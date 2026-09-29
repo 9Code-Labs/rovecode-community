@@ -7,6 +7,8 @@
 import type { SessionStore } from "../core/session.ts";
 import type { TaskManager } from "../core/tasks.ts";
 import type { ModelCatalog } from "../providers/catalog.ts";
+import type { ProviderSpec } from "../providers/provider-config.ts";
+import { resolveContextWindow } from "../providers/context-window.ts";
 import type { SextantAttach } from "../sextant/types.ts";
 import type { LiveRuntime } from "../sextant/context-source.ts";
 import { sessionUsage } from "./cost.ts";
@@ -25,6 +27,9 @@ export interface AttachSources {
   /** the current mode's model */
   model(): { provider: string; model: string };
   catalog: ModelCatalog;
+  /** the live provider registry (read per call — providers.json hot-reloads): the user's declared
+   *  context windows sit here, ahead of the catalog (providers/context-window.ts) */
+  providers?: { get(id: string): ProviderSpec | undefined };
   /** the LIVE runtime, for /context. A function rather than a value: /sessions and /resume swap what is
    *  underneath, and a captured runtime would report on the session the human left. Returning null is
    *  allowed and means the panel says its total is a floor. */
@@ -39,8 +44,9 @@ export function buildSextantAttach(a: AttachSources): SextantAttach {
     sessionsDir: a.sessionsDir,
     store: () => ({ id: a.store().id }),
     tasks: a.tasks,
+    cancelTask: (id) => { a.tasks.cancel(id); },
     model: a.model,
-    contextWindow: () => { const m = a.model(); return a.catalog.lookup(m.provider, m.model)?.contextWindow; },
+    contextWindow: () => { const m = a.model(); return m.model ? resolveContextWindow(a.catalog, a.providers?.get(m.provider), m.provider, m.model) : undefined; },
     usage: () => sessionUsage(a.store().messages(), a.catalog, a.model()),
     // /context counts the real transcript against the real catalog, and asks the live runtime for the
     // system prompt and the tool schemas — the two rows a transcript cannot know and a fresh window is

@@ -161,6 +161,8 @@ function fullText(t: TaskInfo): string {
 function cellRows(t: TaskInfo, width: number, avail: number): Row[] {
   const goalRows = Math.max(0, Math.min(GOAL_ROWS, avail - 1));
   const rows: Row[] = wrap(t.goal, width).filter((l) => l !== "").slice(0, goalRows).map((l) => [{ text: l, tone: "muted" }]);
+  // the live line beats the goal preview while the child works: WHAT it is doing right now
+  if (t.status === "running" && t.live && rows.length > 0) rows[rows.length - 1] = [{ text: t.live, tone: "fg2" }];
   rows.push([{ text: `${t.id} · ${t.agent}${t.isolated ? " · isolated" : ""}`, tone: "dim" }]);
   const merged = laneMerged(t);
   if (merged) rows.push([{ text: merged, tone: t.patchLines ? "ok" : "dim" }]);
@@ -178,6 +180,9 @@ function fullHead(t: TaskInfo, width: number, now: number): Row[] {
   }
   const merged = laneMerged(t);
   if (merged) rows.push([{ text: merged, tone: t.patchLines ? "ok" : "dim" }]);
+  if (t.status === "running" && t.live) {
+    for (const l of wrap(t.live, width).slice(0, 3)) rows.push([{ text: l, tone: "fg2" }]);
+  }
   rows.push([]);
   return rows;
 }
@@ -203,13 +208,22 @@ const putRow = (scr: ScreenLike, x: number, y: number, w: number, row: Row, them
   if (row.length) scr.text(x, y, row.map((r): Seg => [r.text, runSt(r, theme)]), w);
 };
 
-/** `<glyph> <label>` left (bold; accent when selected), `mm:ss · tokens` right (dim) */
+/** `<glyph> <label>` left (bold; accent when selected), `mm:ss · tokens` right (dim) + a × kill
+ *  affordance at the far right while the lane is cancellable (queued/running) */
 function drawHeader(scr: ScreenLike, I: Rect, t: TaskInfo, theme: Theme, now: number, selected: boolean): void {
+  const killable = t.status === "queued" || t.status === "running";
   const right = `${laneClock(laneElapsed(t, now))} · ${laneTokens(t)}`;
   const showRight = right.length + 6 <= I.w;
   const gx = scr.put(I.x, I.y, laneGlyph(t.status, now) + " ", st(laneTone(t.status, theme)), I.w);
-  scr.clip(gx, I.y, t.label, st(selected ? theme.accent : theme.fg, -1, ATTR.BOLD), I.x + I.w - gx - (showRight ? right.length + 1 : 0));
-  if (showRight) scr.put(I.x + I.w - right.length, I.y, right, st(theme.dim));
+  scr.clip(gx, I.y, t.label, st(selected ? theme.accent : theme.fg, -1, ATTR.BOLD), I.x + I.w - gx - (showRight ? right.length + 1 : 0) - (killable ? 2 : 0));
+  if (showRight) scr.put(I.x + I.w - right.length - (killable ? 2 : 0), I.y, right, st(theme.dim));
+  if (killable && I.w > 8) scr.put(I.x + I.w - 1, I.y, "×", st(theme.err, -1, ATTR.BOLD));
+}
+
+/** the ×'s hit rect inside a lane cell (drawn at the header's right edge) — the frame loop registers it */
+export function killZone(R: Rect): Rect {
+  const I = innerOf(R);
+  return { x: I.x + I.w - 1, y: I.y, w: 1, h: 1 };
 }
 
 /** the bottom row: the sweep bar + `running` while the child runs, else laneResult() colored by outcome */

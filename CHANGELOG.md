@@ -4,6 +4,68 @@ What changed for the person using rovecode, newest first. Every line ends with t
 the change (hashes on `main`). Numbers are measurements from the commit that reports them, on the
 machine it names.
 
+## 5.1.2 — 2026-09-29
+
+- New: `/compact` — durable manual compaction: the session's transcript is summarized by the current
+  model into a FRESH seeded session (the old one stays intact under /sessions)
+- Fixed: AUTO-compaction was effectively OFF in production — the loop's speculative path needs a head
+  summarizer and no surface wired one. `createHeadSummarizer` (core/summarize.ts) now rides the
+  run's own model on the TUI, headless run, serve and ACP
+- Packaging (claude-code model): the npm tarball ships the MINIFIED dist only — no src/, no
+  sourcemaps, no native binaries (the @ast-grep/napi dependency resolves per-platform). The bin
+  wrapper is self-contained; a dev checkout keeps the src fast path + the staleness guard
+
+## 5.1.0 — 2026-09-29
+
+- Boot/RAM: the ast-grep native addon left the base import graph (it rode in with coding/files.ts —
+  every process paid it, even `rovecode --version`); the repo-map loads it on first real build now.
+  Big-repo boot: 3.6 s → 0.8-0.9 s, idle RSS 218 → ~148 MB (this repo, warm tags cache)
+- Crew board: lanes show the child's LIVE line — its streamed text tail, `thinking · N tokens`,
+  `▶ tool {args}` — and running/queued lanes carry a × kill affordance (click, or `x` on the
+  selected lane); both ride TaskManager.cancel
+- `/tasks <id>` prints a task's FULL result (delegations keep their whole answer, not the 200-char brief)
+
+- New: rovecode orchestrates EXTERNAL CLI agents — built-in adapters for claude-code, codex,
+  opencode, antigravity, gemini, qwen, cursor-agent, copilot and aider (auto-detected on PATH), and
+  any other CLI joins through `~/.rovecode/agents.json` or `.rovecode/agents.json`
+  (`{ "agents": { id: { command, format } } }`, `{prompt}` placeholder or argv-append,
+  `promptVia: "stdin"` for long prompts). Per-CLI answer parsing: claude-json (cost/turns included),
+  codex JSONL agent_message, opencode JSON events, plain text fallback
+- New: `/delegate <agent> <task>` — the USER's own door: fire-and-forget onto the agents board
+  (`/agents`), the result lands as a note when the CLI finishes. Bare `/delegate` lists what is
+  installed and what is missing from PATH
+- New: the model's `delegate` tool runs the same path — every delegation is a crew-board task
+  (queued, bounded, cancelled with the run), its answer returned inline; kind "spawn" prompts under
+  the gated rules (the delegated CLI edits with its own tools), yolo allows, plan mode denies.
+  Answers cap at 50k chars, and the run's abort tree-kills the child process
+
+## 0.5.0 — 2026-09-28
+
+- Fixed: OpenAI-compatible endpoints that re-send the tool name on EVERY SSE delta produced phantom
+  tools — `unknown tool lsls` loops. The parser absorbs exact repeats and cumulative re-sends, and the
+  same proxy pathology in arguments (`{…}{…}`) is rescued instead of failing the turn. Malformed calls
+  now fail closed instead of executing garbage
+- Fixed: a length-limited turn (`max_tokens`) no longer executes its truncated tool calls — `length`
+  beats `tool_use` in all four adapters, and the text-protocol middleware never promotes an unfinished
+  turn's `<tool_call>` markup to an executable call
+- Changed (breaking): the run-budget system is gone — no `--max-turns` / `--max-seconds` / `--max-cost`,
+  no `ROVECODE_MAX_*`, no `run_end "budget"`. A run ends when the model stops calling tools, when it
+  errors, or when you interrupt it (Esc / Ctrl-C). The loop guard and compaction thrash protection stay
+  as the runaway safeties
+- New: the usage bar never shows `?` — a model's context window resolves from providers.json
+  (`contextWindows` per model / `contextWindow` per provider), then the catalog, then a MARKED
+  assumption (`≈`, 128k) with a one-time note saying how to set the real number
+- New: the model's reasoning streams live into the transcript as dimmed `◌` thinking rows — what it
+  thought is as visible as what it did (never persisted to the session)
+- New: resuming a session (`--resume`, `--continue`, `/resume`, `/sessions`) brings back the model that
+  session actually ran on; an explicit `--model` still wins, a provider that no longer exists warns and
+  keeps the current model
+- New: quitting the TUI prints the pasteable command back into the session (`rovecode --resume <id>`)
+- Fixed: `rovecode run` with `ROVECODE_STREAM=sse` honors Anthropic-protocol endpoints (the legacy
+  opt-in was hardcoded to the OpenAI adapter and read their stream as an empty turn)
+- Fixed: the bin wrapper skips a stale dist bundle after an update instead of silently serving the old
+  code (source fallback + a hint; `.githooks/post-merge` rebuilds it — `git config core.hooksPath .githooks`)
+
 ## 0.3.1 — 2026-09-06
 
 Berkay: "kod yazarken pek üstünde durmuyor, çoğu durumda az değişiklikler yapıp bırakıyor" — when it writes

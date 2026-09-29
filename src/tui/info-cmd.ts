@@ -11,6 +11,7 @@ import type { SessionStore } from "../core/session.ts";
 import { formatTaskList, isTerminal } from "../core/tasks.ts";
 import type { BlockStore } from "../memory/blocks.ts";
 import type { ModelCatalog } from "../providers/catalog.ts";
+import { resolveContextWindow } from "../providers/context-window.ts";
 import { loadTodos, renderTodos, todoStatusLabel } from "../tools/todo.ts";
 import { helpForCommands, type CustomCommand } from "./commands.ts";
 import { buildCostNote } from "./cost.ts";
@@ -22,7 +23,7 @@ export interface InfoStateSlice { provider: string; model: string; turns: number
 export interface InfoCmdCtx {
   renderer: Renderer;
   /** the runtime slices the info commands read: cwd, config provenance, sandbox rung, skills, tasks */
-  rt: Pick<Runtime, "cwd" | "projectContext" | "sandbox" | "skillStore" | "tasks">;
+  rt: Pick<Runtime, "cwd" | "projectContext" | "sandbox" | "skillStore" | "tasks" | "providers">;
   /** <cwd>/.rovecode/sessions — todos.json lives under <sessionsDir>/<session id> */
   sessionsDir: string;
   /** the ACTIVE session store, read live (/sessions and a root /rewind swap it) */
@@ -77,7 +78,11 @@ export function cmdCost(ctx: InfoCmdCtx, arg: string): void {
     ));
     return;
   }
-  ctx.renderer.addSystemNote(buildCostNote(ctx.store().messages(), ctx.catalog, { provider: ctx.state.provider, model: ctx.state.model }));
+  ctx.renderer.addSystemNote(buildCostNote(
+    ctx.store().messages(), ctx.catalog, { provider: ctx.state.provider, model: ctx.state.model },
+    // the same resolver the usage bar consults: /cost never reports "window unknown" either
+    { windowOf: (p, m) => { const w = resolveContextWindow(ctx.catalog, ctx.rt.providers.get(p), p, m); return { window: w.window, assumed: w.source === "assumed" }; } },
+  ));
 }
 
 /** /skills — installed skills, one `name — description` row each. */
@@ -129,7 +134,18 @@ export function cmdTasks(ctx: InfoCmdCtx, arg: string): void {
   const words = arg.split(/\s+/).filter(Boolean);
   const tasks = ctx.rt.tasks;
   if (words.length === 0) { ctx.renderer.addSystemNote(formatTaskList(tasks.list())); return; }
-  if (words[0] !== "cancel" || words.length !== 2) { ctx.renderer.addSystemNote("usage: /tasks [cancel <id>|cancel all]", "warn"); return; }
+  // /tasks <id> — the FULL result (a delegation's whole answer, not the one-line brief the note carries)
+  if (words.length === 1 && words[0] !== "cancel") {
+    const t = tasks.status(words[0]!);
+    if (!t) { ctx.renderer.addSystemNote(`unknown task '${words[0]}' — list with /tasks`, "warn"); return; }
+    const head = `task ${t.id} · ${t.agent} · ${t.status}${t.finishedAt && t.startedAt ? ` · ${((t.finishedAt - t.startedAt) / 1000).toFixed(1)}s` : ""}${t.usage?.costUsd !== undefined ? ` · $${t.usage.costUsd.toFixed(4)}` : ""}`;
+    const body = t.status === "done" ? (t.summary ?? "(no output)")
+      : t.status === "failed" ? (t.error ?? "(failed)")
+      : `${t.status === "queued" ? "still queued" : "still running"} — the result lands as a note when it settles`;
+    ctx.renderer.addSystemNote(`${head}\n\n${body}`);
+    return;
+  }
+  if (words[0] !== "cancel" || words.length !== 2) { ctx.renderer.addSystemNote("usage: /tasks [<id>] · /tasks cancel <id>|all", "warn"); return; }
   const id = words[1]!;
   if (id === "all") {
     const n = tasks.cancelAll();

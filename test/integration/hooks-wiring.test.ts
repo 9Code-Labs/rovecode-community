@@ -29,8 +29,8 @@ import { randomUUID } from "node:crypto";
 
 const allowAll: PermissionRule[] = [{ action: "*", resource: "*", effect: "allow" }];
 const cfg = (over: Partial<RunConfig> = {}): RunConfig =>
-  ({ maxTurns: 8, contextBudgetTokens: 100_000, compactionThreshold: 0.8, parallelTools: true, permissionRules: allowAll, ...over });
-const def: AgentDefinition = { name: "t", systemPrompt: "test", tools: ["*"], maxTurns: 8 };
+  ({ contextBudgetTokens: 100_000, compactionThreshold: 0.8, parallelTools: true, permissionRules: allowAll, ...over });
+const def: AgentDefinition = { name: "t", systemPrompt: "test", tools: ["*"] };
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /** counting tool with a fixed output; kind custom → policy action tool.probe */

@@ -5,7 +5,7 @@
 import { test, expect } from "bun:test";
 import {
   EMPTY, MOCK_PROVIDER_TEXT, MODE_ASK, MODE_AUTO, NEXT, modeLabel, modeLabelShort, modeMeaning, modeSwitchNote,
-  loadedLine, next, noModelHint, resumedLine, welcomeCard,
+  exitResumeHint, loadedLine, next, noModelHint, resumedLine, welcomeCard,
 } from "../../src/core/voice.ts";
 
 const EMOJI = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u;
@@ -72,6 +72,10 @@ test("welcome card, no model: says so plainly and points at /setup with a time e
 
 test("resumed session gets one line, not a card", () => {
   expect(resumedLine("0123456789abcdef", "/w", true)).toBe("◆ back in session 01234567 · /w · auto");
+});
+
+test("the exit hint carries the FULL id (a prefix could go ambiguous later) as a pasteable command", () => {
+  expect(exitResumeHint("0123456789abcdef")).toBe("◆ session kept — back anytime, from this folder:\n  rovecode --resume 0123456789abcdef");
 });
 
 test("empty-state hints: first person, short, second lines only where a panel may have room", () => {

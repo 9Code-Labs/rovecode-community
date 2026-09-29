@@ -632,3 +632,18 @@ test("shift/alt/ctrl + wheel (b 68/69, 72/73, 80/81) over a hit zone SCROLLS the
   expect(log).toEqual(["row"]);
   expect(spy.submits).toEqual(["/exit"]);                        // …and its Enter ran the picked row
 });
+
+test("agents board: x cancels the selected running lane; a settled lane is not cancellable", () => {
+  const s = makeState(), spy = spyCtx();
+  s.code.mode = "agents"; s.focus = "code";
+  s.crew = [
+    { id: "t1", label: "one", agent: "researcher", status: "running", createdAt: 0 } as SextantState["crew"][number],
+    { id: "t2", label: "two", agent: "planner", status: "done", createdAt: 0 } as SextantState["crew"][number],
+  ];
+  s.code.lane = 0;
+  press(s, spy, key("x"));
+  expect(spy.toasts).toContain("cancel:t1");
+  s.code.lane = 1; // the DONE lane: x is a no-op
+  press(s, spy, key("x"));
+  expect(spy.toasts.filter((t) => t === "cancel:t2")).toEqual([]);
+});

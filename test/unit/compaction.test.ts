@@ -39,7 +39,7 @@ const toks = (m: Message) => estimateTokens(tokenText(m));
 
 function cfg(over: Partial<RunConfig> = {}): RunConfig {
   return {
-    maxTurns: 8, contextBudgetTokens: 100, compactionThreshold: 0.5, parallelTools: true,
+    contextBudgetTokens: 100, compactionThreshold: 0.5, parallelTools: true,
     permissionRules: [{ action: "*", resource: "*", effect: "allow" }], ...over,
   };
 }
@@ -306,7 +306,7 @@ test("parseCompactionStrategy + ROVECODE_COMPACTION: known names (any case) sele
 
 // ---------- emergency path through the loop ----------
 
-const baseDef: AgentDefinition = { name: "t", systemPrompt: "test agent", tools: ["*"], maxTurns: 8 };
+const baseDef: AgentDefinition = { name: "t", systemPrompt: "test agent", tools: ["*"] };
 const OVERFLOW = 'HTTP 400: {"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long: 213462 tokens > 200000 maximum"}}';
 const overflowTurn: AssistantTurn = { parts: [], stopReason: "error", usage: { input: 0, output: 0 }, error: OVERFLOW };
 
@@ -357,7 +357,7 @@ test("emergency is bounded: a second overflow ends the run in error after exactl
   const { dir, store } = seeded();
   const { stream, calls } = scripted([overflowTurn]);   // every call overflows
   const events: RunEvent[] = [];
-  for await (const ev of agentLoop(baseDef, "go", {}, cfg({ contextBudgetTokens: 100_000, compactionStrategy: "keep-window", maxTurns: 8 }), { stream, registry: new ToolRegistry(), store }, new SteeringQueue())) events.push(ev);
+  for await (const ev of agentLoop(baseDef, "go", {}, cfg({ contextBudgetTokens: 100_000, compactionStrategy: "keep-window" }), { stream, registry: new ToolRegistry(), store }, new SteeringQueue())) events.push(ev);
   expect(calls.length).toBe(2);
   expect(events.filter((e) => e.type === "compaction").length).toBe(1);
   const end = events.at(-1)!;
@@ -394,16 +394,6 @@ test("a non-overflow provider error is not an emergency: one call, error stop, n
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("overflow on the LAST permitted turn ends the run in error with the provider's text — no re-drive, no compaction, never a silent 'budget' stop", async () => {
-  const { dir, store } = seeded();
-  const { stream, calls } = scripted([overflowTurn, textTurn("never")]);
-  const events: RunEvent[] = [];
-  for await (const ev of agentLoop(baseDef, "go", {}, cfg({ contextBudgetTokens: 100_000, compactionStrategy: "keep-window", maxTurns: 1 }), { stream, registry: new ToolRegistry(), store }, new SteeringQueue())) events.push(ev);
-  expect(calls.length).toBe(1);
-  expect(events.some((e) => e.type === "compaction")).toBe(false);
-  expect(events.at(-1)).toEqual({ type: "run_end", status: "error", summary: `error: ${OVERFLOW}` });
-  rmSync(dir, { recursive: true, force: true });
-});
 
 test("no-op emergency: a fresh session whose only turn overflows makes exactly ONE provider call and ends in error — nothing is droppable, so the identical request is not re-driven", async () => {
   const dir = mkdtempSync(join(tmpdir(), "rovecode-compaction-loop-"));

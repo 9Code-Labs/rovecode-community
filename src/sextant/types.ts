@@ -256,6 +256,9 @@ export type MessageRow =
       files?: string[]; at?: number }
   /** `id` = the RunEvent messageId the streaming row belongs to (absent on replayed/summary rows) */
   | { kind: "assistant"; text: string; streaming: boolean; id?: string }
+  /** the model's reasoning, live while it streams (reasoning_update deltas), kept dimmed after —
+   *  transparency: what the model thought is as inspectable as what it did */
+  | { kind: "thinking"; text: string; streaming: boolean; id?: string }
   | ToolRow
   | { kind: "system"; text: string; tone: "info" | "warn" | "error" }
   /** a steering note that reached the run (task completion, reflection nudge) */
@@ -297,9 +300,12 @@ export interface UsageState {
   tokensOut: number;
   /** 0..100 estimated context fill, null when the window is unknown */
   contextPct: number | null;
-  /** the inputs behind contextPct when known: estimated tokens in the prompt + the model's window */
+  /** the inputs behind contextPct when known: estimated tokens in the prompt + the model's window;
+   *  contextAssumed = the window is assumed (provider unknown to the catalog, nothing configured) —
+   *  the panel marks the bar ≈ so an assumption is never read as a measured number */
   contextTokens?: number;
   contextWindow?: number;
+  contextAssumed?: boolean;
   /** null = unpriced */
   costUsd: number | null;
 }
@@ -426,9 +432,14 @@ export interface SextantAttach {
   /** the ACTIVE session store (changes on /sessions /resume /new) */
   store(): { id: string };
   tasks: { list(): TaskInfo[]; subscribe(fn: (t: TaskInfo) => void): () => void };
+  /** cancel a running/queued task (the crew board's × button and the x key) — absent on surfaces
+   *  that cannot cancel (the smoke harness) */
+  cancelTask?(id: string): void;
   model(): { provider: string; model: string };
-  /** context window for the usage bar; undefined when the catalog does not know the model */
-  contextWindow(): number | undefined;
+  /** context window for the usage bar — ALWAYS resolved (providers/context-window.ts: config →
+   *  catalog → assumed); `source: "assumed"` tells the panel to mark the bar ≈. undefined only when
+   *  the surface has no model at all */
+  contextWindow(): { window: number; source: "config" | "catalog" | "assumed" } | undefined;
   /** session accounting for the usage panel (tui/cost.ts math over the ACTIVE store): cost priced
    *  per message at its origin model (null = unpriced), context = estimated prompt tokens */
   usage?(): { costUsd: number | null; contextTokens: number };

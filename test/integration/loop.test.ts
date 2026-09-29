@@ -18,14 +18,14 @@ const allowAll = [
 
 function cfg(over: Partial<RunConfig> = {}): RunConfig {
   return {
-    maxTurns: 8, contextBudgetTokens: 100_000, compactionThreshold: 0.8,
+    contextBudgetTokens: 100_000, compactionThreshold: 0.8,
     parallelTools: true,
     permissionRules: allowAll, ...over,
   };
 }
 
 const baseDef: AgentDefinition = {
-  name: "t", systemPrompt: "test agent", tools: ["*"], maxTurns: 8,
+  name: "t", systemPrompt: "test agent", tools: ["*"],
 };
 
 test("loop completes a plain turn", async () => {
@@ -94,25 +94,6 @@ test("truncated stopReason fails tool calls unexecuted", async () => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-test("budget stop when maxTurns exceeded", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "rovecode-loop-"));
-  const store = new SessionStore(dir, randomUUID());
-  const reg = new ToolRegistry();
-  const echoTool: Tool = {
-    schema: { name: "echo", description: "echo", args: { type: "object" } },
-    kind: "custom", async execute() { return { ok: true, output: "echoed" }; },
-  };
-  reg.register(echoTool);
-  let status = "";
-  for await (const ev of agentLoop(baseDef, "loop", {}, cfg({ maxTurns: 3 }), {
-    stream: mockStream({ turns: [toolTurn([{ id: "x", tool: "echo", args: {} }])] }),
-    registry: reg, store,
-  }, new SteeringQueue())) {
-    if (ev.type === "run_end") status = ev.status;
-  }
-  expect(status).toBe("budget");
-  rmSync(dir, { recursive: true, force: true });
-});
 
 test("write tool actually writes through the pipeline", async () => {
   const dir = mkdtempSync(join(tmpdir(), "rovecode-loop-"));

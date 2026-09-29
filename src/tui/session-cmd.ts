@@ -7,7 +7,7 @@
  *  usage recount, and the `--resume <prefix>` boot resolution (wiring pass, ADR-002 cap). */
 
 import { partsText } from "../core/loop.ts";
-import { listSessions, type SessionStore } from "../core/session.ts";
+import { listSessions, SessionStore } from "../core/session.ts";
 import { userTurnLine } from "./attach.ts";
 import { replayLabel } from "./modes-cmd.ts";
 import { replayMarkerLine } from "./replay-marker.ts";
@@ -38,6 +38,21 @@ export function replayTranscript(renderer: Renderer, store: SessionStore): void 
   }
 }
 
+/** The model a session actually ran on: the LAST assistant message's `origin` on the active path
+ *  (origin = the SERVING model, router fallback included — core/loop.ts). Null for a session with
+ *  no answered turn yet. /sessions, /resume, --resume and --continue restore this, so coming back
+ *  to a session brings back ITS brain, not whatever the global default happens to be today. */
+export function sessionModelOf(store: SessionStore): { provider: string; model: string } | null {
+  const path = store.path();
+  for (let i = path.length - 1; i >= 0; i--) {
+    const e = path[i]!;
+    if ("role" in e && e.role === "assistant" && e.origin?.provider && e.origin.model) {
+      return { provider: e.origin.provider, model: e.origin.model };
+    }
+  }
+  return null;
+}
+
 /** Token usage summed over the active path — the status line's counters. */
 export function usageOf(store: SessionStore): { tokensIn: number; tokensOut: number } {
   let tokensIn = 0, tokensOut = 0;
@@ -60,6 +75,10 @@ export function resolveBootSession(sessionsDir: string, id: string | undefined):
 
 export interface SessionCmdCtx {
   renderer: Renderer;
+  /** head-summarizer over the active model (core/summarize.ts) — /compact's engine */
+  summarize(texts: string[]): Promise<string>;
+  /** label for the note ("compacting with …") */
+  summarizeModel?: string;
   /** <cwd>/.rovecode/sessions — where listSessions looks */
   sessionsDir: string;
   busy(): boolean;
@@ -130,6 +149,30 @@ export async function cmdSessions(ctx: SessionCmdCtx, directId?: string): Promis
   const picked = await ctx.renderer.pickOne(items, "resume a session (Esc = cancel)");
   if (picked && picked !== ctx.store().id) ctx.switchSession(picked);
   else if (!picked) ctx.replayHistory(); // cancel: clear the overlay title note
+}
+
+/** /compact — durable manual compaction: the active session's transcript is summarized by the
+ *  current model and a FRESH session opens seeded with the summary (the old one stays listed,
+ *  nothing is rewritten). The auto path (loop's speculative compaction) stays per-run and
+ *  in-memory; this is the one you call when the bar is high and the work continues. */
+export async function cmdCompact(ctx: SessionCmdCtx): Promise<void> {
+  if (ctx.busy()) { ctx.renderer.addSystemNote("finish or interrupt the run first (Esc)", "warn"); return; }
+  const msgs = ctx.store().messages();
+  const texts = msgs.map((m) => partsText(m.parts)).filter((t) => t.trim() !== "");
+  if (texts.length < 4) { ctx.renderer.addSystemNote("nothing to compact yet — a handful of messages is not a window problem"); return; }
+  const before = texts.join("\n").length;
+  ctx.renderer.addSystemNote(`compacting ${msgs.length} messages (~${Math.round(before / 1000)}k chars) with ${ctx.summarizeModel ?? "the current model"}…`);
+  const summary = await ctx.summarize(texts);
+  if (!summary) { ctx.renderer.addSystemNote("compact failed: the summarizer returned nothing (provider error?) — the session is untouched", "error"); return; }
+  const id = randomUUID();
+  const fresh = new SessionStore(ctx.sessionsDir, id);
+  fresh.append({
+    id: randomUUID(), role: "user",
+    parts: [{ kind: "text", text: `This session continues from a compacted one. Summary of the earlier conversation:\n\n${summary}\n\nContinue the work from this summary.` }],
+    parentId: null, createdAt: Date.now(),
+  });
+  ctx.switchSession(id);
+  ctx.renderer.addSystemNote(`compacted → new session ${id.slice(0, 8)} (~${Math.round(summary.length / 1000)}k chars, from ~${Math.round(before / 1000)}k) — the old session is intact under /sessions`);
 }
 
 /** /new — branch the leaf back to the session's first entry; the old turns stay in the

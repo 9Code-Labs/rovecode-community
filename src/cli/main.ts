@@ -4,7 +4,6 @@
 // Only module-level necessities — every command handler lazily imports what it needs so that
 // `rovecode --help` does not pay for the TUI, eval suite, loop, runtime, or plugin scanner.
 import { parseCli } from "./dispatch.ts";
-import { parseRunLimits } from "./run-limits.ts";
 import { parseEffort } from "../core/types.ts";
 import type { PermissionLevel, ModelRef, StreamFn } from "../core/types.ts";
 import { helpText } from "./help.ts";
@@ -65,7 +64,7 @@ async function cmdRun(prompt: string): Promise<void> {
   const { agentLoop } = await import("../core/loop.ts");
   const { bootRuntime } = await import("./runtime.ts");
   const { SandboxConfigError } = await import("../core/sandbox-config.ts");
-  const { mockStream, textTurn, resolveProvider, openaiCompatStreaming } = await import("../providers/stream.ts");
+  const { mockStream, textTurn, resolveProvider, providerStreaming } = await import("../providers/stream.ts");
   const { MOCK_PROVIDER_TEXT } = await import("../core/voice.ts");
   const { summarizePlugins } = await import("../plugins/index.ts");
   const { resolvePermission } = await import("../core/settings.ts");
@@ -74,14 +73,14 @@ async function cmdRun(prompt: string): Promise<void> {
   const { resetTurnFailureCount } = await import("../memory/tools.ts");
 
   const mode = parseOutputMode(process.argv);
-  const limits = parseRunLimits(process.argv, process.env, { defaultSeconds: 1200 });
-  if ("error" in limits) { console.error(`error: ${limits.error}`); process.exit(2); }
   const rawOut = { write: process.stdout.write.bind(process.stdout) };
   if (mode !== "text") guardStdout(process.stderr);
   const yolo = process.argv.includes("--yolo") || process.env.ROVECODE_YOLO === "1";
   const providerCfg = resolveProvider();
+  // the legacy ROVECODE_STREAM=sse opt-in must honor the provider's protocol — hardcoding the
+  // OpenAI adapter here makes an Anthropic-protocol endpoint's SSE parse as an empty turn
   const sse = providerCfg && process.env.ROVECODE_STREAM === "sse"
-    ? openaiCompatStreaming({ baseUrl: providerCfg.baseUrl, apiKey: providerCfg.apiKey })
+    ? providerStreaming(providerCfg)
     : undefined;
   const rt = await bootRuntime(sse ? { stream: sse } : {}).catch((e: unknown): never => {
     if (e instanceof SandboxConfigError) { console.error(`error: ${e.message}`); process.exit(2); }
@@ -124,10 +123,9 @@ async function cmdRun(prompt: string): Promise<void> {
   }
   const effortFlag = parseEffort(process.argv[process.argv.indexOf("--effort") + 1]);
   if (effortFlag !== undefined) rt.setEffort(effortFlag);
-  rt.setRunLimits(limits);
   const level = resolvePermission(rt.cwd, yolo ? "auto" : process.argv.includes("--accept-edits") ? "accept-edits" : undefined,
     { ROVECODE_PERMISSION: process.env.ROVECODE_PERMISSION, ROVECODE_YOLO: process.env.ROVECODE_YOLO, ROVECODE_ACCEPT_EDITS: process.env.ROVECODE_ACCEPT_EDITS });
-  for await (const ev of agentLoop(rt.buildDef(model), prompt, {}, rt.buildCfg(level), buildRunDeps(rt, stream, sink), rt.steering)) {
+  for await (const ev of agentLoop(rt.buildDef(model), prompt, {}, rt.buildCfg(level), buildRunDeps(rt, stream, sink, model), rt.steering)) {
     if (ev.type === "turn_start") resetTurnFailureCount();
     sink.onEvent(ev);
     if (ev.type === "run_end") await exit(sink.finish(ev));
@@ -221,6 +219,8 @@ async function cmdTools(): Promise<void> {
   registry.register(...todoTools(join(process.cwd(), ".rovecode", "sessions")));
   registry.register(askUserTool(() => undefined));
   const tasks = new TaskManager({ deps: () => null }); registry.register(createTaskTool(tasks), createTaskStatusTool(tasks));
+  const { delegateTool } = await import("../tools/delegate.ts");
+  registry.register(delegateTool({ cwd: process.cwd() }));
   const providers = new ProviderRegistry(process.cwd()); registry.register(providerListTool(providers), providerEditTool(providers));
   registry.register(designAuditTool(), designDirectionTool());
   const { plugins, warnings } = await loadPlugins(process.cwd());

@@ -151,7 +151,7 @@ test("pre_run resets the per-run counter (and a fresh runId starts fresh); post_
   // a task note that lands after the last drain must survive the sweep, in order
   r.steering.push("task t1 (compute) finished: CHILD-RESULT");
   expect(r.steering.size).toBe(3);
-  r.set.post_run!({ ...ctx, runId: "run-B" }, { status: "budget", summary: "max turns (1) reached" });
+  r.set.post_run!({ ...ctx, runId: "run-B" }, { status: "done", summary: "run over" });
   expect(r.steering.drainAll()).toEqual(["task t1 (compute) finished: CHILD-RESULT"]);
   // the SAME runId without a pre_run stays capped; an unseen runId is fresh (lazy state)
   r.post("edit", fail("Edit rejected: D"), { ...ctx, runId: "run-A" });
@@ -177,7 +177,7 @@ test("ownership (#26 MED-A): with `owns`, a run the set does not own gets no nud
   set.post_run!(child, { status: "done", summary: "" }); // a child's run boundary must not sweep the parent's pending nudge
   set.pre_run!({ ...child, runId: "child-run-2" });
   expect(steering.size).toBe(1); // MUTATION TARGET: drop the owns check in post_run / pre_run → 0
-  set.post_run!(parent, { status: "budget", summary: "" });
+  set.post_run!(parent, { status: "done", summary: "" });
   expect(steering.size).toBe(0); // the owner's own boundary still sweeps
   set.pre_run!({ ...parent, runId: "p2" });
   for (const t of ["A", "B", "C"]) set.post_tool!({ ...parent, runId: "p2" }, call("edit"), fail(`Edit rejected: ${t}`));
@@ -202,7 +202,7 @@ test("runtime door (#26 MED-A): the built-in set owns the ACTIVE session store's
     expect(rt.steering.size).toBe(1);
     await rt.hooks.run("post_run", { cwd, sessionId: `child-${randomUUID()}`, runId: "c1" }, { status: "done", summary: "" });
     expect(rt.steering.size).toBe(1); // a child's boundary sweeps nothing
-    await rt.hooks.run("post_run", { cwd, sessionId: rt.sessionId, runId: "r1" }, { status: "budget", summary: "" });
+    await rt.hooks.run("post_run", { cwd, sessionId: rt.sessionId, runId: "r1" }, { status: "done", summary: "" });
     expect(rt.steering.size).toBe(0);
     const other = new SessionStore(join(cwd, ".rovecode", "sessions"), randomUUID());
     rt.setSessionStore(other);

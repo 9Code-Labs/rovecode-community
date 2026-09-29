@@ -6,7 +6,7 @@
  *  dirty / animating / every 170 ms, input and resize handlers; idle, the timer now sleeps until the next ambient change — see the class note). No git/fs here — the renderer
  *  schedules its I/O from `onTick`, off the paint path. `clock` is injected: tests drive time. */
 
-import { agentsScrollTop, laneCells } from "./draw-agents.ts";
+import { agentsScrollTop, killZone, laneCells } from "./draw-agents.ts";
 import { drawCode, codeScrollTop } from "./draw-code.ts";
 import { drawMessages, messagesScroll, promptCursor } from "./draw-messages.ts";
 import { drawPet, SWAY_MS } from "./draw-pet.ts";
@@ -337,8 +337,16 @@ export class FrameLoop {
     }
     // the body rect drawCode hands its mode painter (inner rect minus the 3-wide rail and its gutter)
     const body = { x: L.code.x + 2, y: L.code.y + 1, w: L.code.w - 9, h: L.code.h - 2 };
-    if (main === "code" && s.code.mode === "agents" && !s.code.laneOpen) {
-      for (const { index, rect } of laneCells(body, s).cells) hits.push({ rect, onClick: () => { s.code.lane = index; s.focus = "code"; } });
+    if (main === "code" && s.code.mode === "agents") {
+      for (const { index, rect } of laneCells(body, s).cells) {
+        const t = s.crew[index]!;
+        if (!s.code.laneOpen) hits.push({ rect, onClick: () => { s.code.lane = index; s.focus = "code"; } });
+        // the × kill affordance (draw-agents.ts killZone), registered after the select zone so the
+        // last-registered-wins walk finds it first — also present on the full (open) lane
+        if (t.status === "queued" || t.status === "running") {
+          hits.push({ rect: killZone(rect), onClick: () => this.d.keyCtx().local.cancelTask(t.id) });
+        }
+      }
     }
     // the files tree rows (panel-hits.ts): click = select + Enter, i.e. fold a dir / open a file.
     // The rows live in the files panel, or in the main slot when files is paged in there.

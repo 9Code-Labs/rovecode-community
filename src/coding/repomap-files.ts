@@ -9,13 +9,15 @@
 import { readdirSync, statSync } from "node:fs";
 import { join, extname } from "node:path";
 import { spawnSync } from "node:child_process";
-import { Lang } from "@ast-grep/napi";
 
-/** extensions extractTags can parse; also gates enumeration + special-file filtering */
-export const LANG_BY_EXT: Record<string, Lang> = {
-  ".ts": Lang.TypeScript, ".mts": Lang.TypeScript, ".cts": Lang.TypeScript,
-  ".tsx": Lang.Tsx,
-  ".js": Lang.JavaScript, ".mjs": Lang.JavaScript, ".cjs": Lang.JavaScript, ".jsx": Lang.JavaScript,
+/** extensions extractTags can parse; also gates enumeration + special-file filtering.
+ *  Values are the @ast-grep/napi Lang enum's KEYS as plain strings, resolved to the enum lazily
+ *  (repomap.ts langOf) — importing the enum here loaded the native addon into EVERY boot, TUI or
+ *  not, because coding/files.ts (glob/grep/ls) sits in the base import graph. */
+export const LANG_BY_EXT: Record<string, string> = {
+  ".ts": "TypeScript", ".mts": "TypeScript", ".cts": "TypeScript",
+  ".tsx": "Tsx",
+  ".js": "JavaScript", ".mjs": "JavaScript", ".cjs": "JavaScript", ".jsx": "JavaScript",
 };
 
 const SKIP_DIRS = new Set(["node_modules", ".git", ".rovecode", "dist", "build", "out", "coverage", ".cache",

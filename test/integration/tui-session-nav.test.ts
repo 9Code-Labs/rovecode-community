@@ -4,7 +4,7 @@
  *  memory-tool rebinding, tool-card replay, root rewind, overlay ordering. */
 
 import { test, expect } from "bun:test";
-import { mkdtempSync, rmSync, existsSync, readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -353,3 +353,96 @@ test("CLI: `rovecode --resume <prefix>` boots the TUI on the resumed session (he
     catch { await new Promise((r) => setTimeout(r, 100)); }
   }
 }, 40_000);
+
+// ── session model restore: a resumed session comes back with ITS model, not today's default ──
+
+function seedSessionWithOrigin(root: string, id: string, origin: { provider: string; model: string }): void {
+  const s = new SessionStore(root, id);
+  const u = umsg("seed question", null); s.append(u);
+  s.append({ id: randomUUID(), role: "assistant" as const, parts: [{ kind: "text" as const, text: "seed answer" }], parentId: u.id, createdAt: Date.now(), origin, usage: { input: 1, output: 1 } });
+}
+
+test("boot resume restores the session's own model (its last assistant origin)", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-nav-"));
+  const root = join(cwd, ".rovecode", "sessions");
+  seedSessionWithOrigin(root, "model-resume", { provider: "anthropic", model: "claude-opus-5" }); // a builtin provider id: configured or not, it is KNOWN
+  const fake = new FakeRenderer();
+  const app = runTui({ renderer: fake, stream: mockStream({ turns: [textTurn("x")] }), cwd, sessionId: "model-resume", yolo: true, exitOnClose: false }); // no explicit model
+  await waitFor(() => fake.users.includes("seed question"));
+  await waitFor(() => fake.statuses.some((st) => st.provider === "anthropic" && st.model === "claude-opus-5"));
+  fake.hooks.onExit();
+  await app;
+  rmSync(cwd, { recursive: true, force: true });
+}, 20_000);
+
+test("an explicit model outranks the resumed session's model", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-nav-"));
+  const root = join(cwd, ".rovecode", "sessions");
+  seedSessionWithOrigin(root, "model-flag-wins", { provider: "anthropic", model: "claude-opus-5" });
+  const fake = new FakeRenderer();
+  const app = runTui({ renderer: fake, stream: mockStream({ turns: [textTurn("x")] }), cwd, sessionId: "model-flag-wins", yolo: true, exitOnClose: false, model: "scripted" });
+  await waitFor(() => fake.users.includes("seed question"));
+  await new Promise((r) => setTimeout(r, 100));
+  expect(fake.statuses.at(-1)!.model).toBe("scripted"); // the flag's word stands
+  fake.hooks.onExit();
+  await app;
+  rmSync(cwd, { recursive: true, force: true });
+}, 20_000);
+
+test("a session whose provider no longer exists keeps the current model and says why", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-nav-"));
+  const root = join(cwd, ".rovecode", "sessions");
+  seedSessionWithOrigin(root, "model-gone", { provider: "gone-provider", model: "old-model-1" });
+  const fake = new FakeRenderer();
+  // no explicit model (a flag would outrank the session and skip the restore path entirely)
+  const app = runTui({ renderer: fake, stream: mockStream({ turns: [textTurn("x")] }), cwd, sessionId: "model-gone", yolo: true, exitOnClose: false });
+  await waitFor(() => fake.users.includes("seed question"));
+  await waitFor(() => fake.warns().some((w) => w.includes("gone-provider/old-model-1") && w.includes("not configured")));
+  expect(fake.statuses.at(-1)!.model).not.toBe("old-model-1"); // the default stands
+  fake.hooks.onExit();
+  await app;
+  rmSync(cwd, { recursive: true, force: true });
+}, 20_000);
+
+test("/resume mid-session switches to the target session's model and the note says it", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-nav-"));
+  const root = join(cwd, ".rovecode", "sessions");
+  seedSessionWithOrigin(root, "sess-model-b", { provider: "anthropic", model: "claude-opus-5" });
+  const fake = new FakeRenderer();
+  const app = runTui({ renderer: fake, stream: mockStream({ turns: [textTurn("x")] }), cwd, sessionId: "sess-model-a", yolo: true, exitOnClose: false, model: "scripted" });
+  await waitFor(() => fake.statuses.length > 0);
+  fake.hooks.onSubmit("/resume sess-model-b");
+  await waitFor(() => fake.statuses.at(-1)!.model === "claude-opus-5");
+  expect(fake.notes.some((n) => n.text.includes("sess-mod") && n.text.includes("anthropic/claude-opus-5"))).toBe(true);
+  fake.hooks.onExit();
+  await app;
+  rmSync(cwd, { recursive: true, force: true });
+}, 20_000);
+
+// ── /delegate: the user's own door to external CLI agents, live on the crew board ──
+
+test("/delegate lists agents bare, refuses unknown, and a real one lands as a finished task note", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "rovecode-delegate-tui-"));
+  mkdirSync(join(cwd, ".rovecode"));
+  writeFileSync(join(cwd, ".rovecode", "agents.json"), JSON.stringify({
+    agents: { fakecli: { command: ["bun", "-e", "console.log('CLI-ANSWER-42')"], format: "text" } },
+  }));
+  const fake = new FakeRenderer();
+  const app = runTui({ renderer: fake, stream: mockStream({ turns: [textTurn("x")] }), cwd, yolo: true, exitOnClose: false, model: "scripted" });
+  await waitFor(() => fake.statuses.length > 0);
+
+  fake.hooks.onSubmit("/delegate");
+  await waitFor(() => fake.notes.some((n) => n.text.includes("usage: /delegate <agent> <task>") && n.text.includes("fakecli")));
+
+  fake.hooks.onSubmit("/delegate nope do things");
+  await waitFor(() => fake.warns().some((w) => w.includes('unknown agent "nope"')));
+
+  fake.hooks.onSubmit("/delegate fakecli say the answer");
+  await waitFor(() => fake.notes.some((n) => n.text.includes("delegated to fakecli") && n.text.includes("task t1")));
+  await waitFor(() => fake.notes.some((n) => n.text.includes("finished") && n.text.includes("CLI-ANSWER-42")), 15_000);
+  fake.hooks.onSubmit("/tasks t1"); // the USER reads the full result — not just the note's one-line brief
+  await waitFor(() => fake.notes.some((n) => n.text.includes("task t1 · fakecli · done") && n.text.includes("CLI-ANSWER-42")));
+  fake.hooks.onExit();
+  await app;
+  rmSync(cwd, { recursive: true, force: true });
+}, 30_000);

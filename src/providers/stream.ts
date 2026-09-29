@@ -14,6 +14,7 @@ import { applyAnthropicCacheBoundaries } from "./cache.ts";
 import { normalizeUsage } from "../core/usage.ts";
 import { BUILTIN_PROVIDERS, buildSnapshot, pickDefault } from "./provider-config.ts";
 import { failedTurn, fetchFirstByte, httpErrorTurn } from "./stream-errors.ts";
+import { parseToolArgs } from "./response-validation.ts";
 import { supportsImages } from "./catalog.ts";
 import { profileWire } from "./profiles.ts";
 import { anthropicThinking, thinkingBudget, thinkingPlan, type AnthropicThinkingShape } from "./thinking.ts";
@@ -271,7 +272,17 @@ export function openaiCompatStreaming(opts: AdapterOptions): StreamFn {
           const idx = tc.index ?? 0;
           const cur = toolArgs.get(idx) ?? { id: tc.id ?? `tc${idx}`, name: tc.function?.name ?? "", args: "" };
           if (tc.id) cur.id = tc.id;
-          if (tc.function?.name) cur.name += tc.function.name;
+          // function.name handling: the OpenAI spec sends the full name once, in the first delta of
+          // a tool call — but some OpenAI-compat endpoints re-send the full name on EVERY chunk (plain
+          // `+=` then yields "lsls"), and a few stream it as fragments. Set once; ignore exact repeats
+          // and cumulative re-sends; only append when the delta is genuinely a new fragment.
+          if (tc.function?.name) {
+            const incoming = tc.function.name;
+            if (!cur.name) cur.name = incoming;
+            else if (incoming === cur.name || cur.name.startsWith(incoming)) { /* repeat / shorter re-send: keep */ }
+            else if (incoming.startsWith(cur.name)) cur.name = incoming; // cumulative re-send
+            else cur.name += incoming; // genuine fragment
+          }
           if (tc.function?.arguments) cur.args += tc.function.arguments;
           toolArgs.set(idx, cur);
         }
@@ -286,8 +297,11 @@ export function openaiCompatStreaming(opts: AdapterOptions): StreamFn {
       const parts: AssistantTurn["parts"] = [];
       if (buffer) parts.push({ kind: "text", text: buffer });
       for (const [, tc] of [...toolArgs].sort((a, b) => a[0] - b[0])) {
-        let args: unknown = {};
-        try { args = JSON.parse(tc.args || "{}"); } catch { args = { _raw: tc.args }; }
+        // parseToolArgs (response-validation.ts): rescues the proxy pathology that repeats the WHOLE
+        // arguments object per delta ("{…}{…}" — the args twin of the repeated-name bug above); a
+        // length-limited call keeps its fragment ({_raw}) and the loop fails it unexecuted; anything
+        // else malformed throws here and the turn fails closed instead of executing garbage
+        const args = parseToolArgs(tc.args, finish === "length");
         parts.push({ kind: "tool_call", id: tc.id, tool: tc.name, args });
       }
       turn = { parts, stopReason: finish, usage };
@@ -400,10 +414,11 @@ export function anthropicStreaming(opts: AdapterOptions): StreamFn {
       for (const [, b] of [...blocks].sort((a, z) => a[0] - z[0])) {
         if (b.kind === "thinking") continue; // reasoning never becomes a part
         if (b.kind === "text") { if (b.text) parts.push({ kind: "text", text: b.text }); continue; }
-        let args: unknown = {};
-        try { args = JSON.parse(b.json || "{}"); } catch { args = { _raw: b.json }; }
+        const args = parseToolArgs(b.json, stop === "length");
         parts.push({ kind: "tool_call", id: b.id, tool: b.name, args });
-        stop = "tool_use";
+        // max_tokens already marked this input truncated — truncated arguments never execute,
+        // so the length verdict stands even though tool parts exist (loop.ts fails them unexecuted)
+        if (stop !== "length") stop = "tool_use";
       }
       turn = { parts, stopReason: stop, usage };
     } catch (e) {
@@ -460,13 +475,14 @@ function parseOpenAiResponse(json: unknown): AssistantTurn {
   const parts: AssistantTurn["parts"] = [];
   if (c?.message.content) parts.push({ kind: "text", text: c.message.content });
   for (const tc of c?.message.tool_calls ?? []) {
-    let args: unknown = {};
-    try { args = JSON.parse(tc.function.arguments || "{}"); } catch { args = { _raw: tc.function.arguments }; }
+    const args = parseToolArgs(tc.function.arguments, c?.finish_reason === "length");
     parts.push({ kind: "tool_call", id: tc.id, tool: tc.function.name, args });
   }
-  const stop = (c?.message.tool_calls?.length ?? 0) > 0
-    ? "tool_use"
-    : c?.finish_reason === "length" ? "length" : "end_turn";
+  // length takes precedence over tool calls: finish_reason is the ONLY signal that the arguments
+  // are truncated, and truncated arguments must never reach execution
+  const stop = c?.finish_reason === "length"
+    ? "length"
+    : (c?.message.tool_calls?.length ?? 0) > 0 ? "tool_use" : "end_turn";
   const u = normalizeUsage(j.usage);
   return { parts, stopReason: stop, usage: { input: u.input, output: u.output, cacheRead: u.cacheRead || undefined, cacheWrite: u.cacheWrite || undefined } };
 }
@@ -482,7 +498,8 @@ function parseAnthropicResponse(json: unknown): AssistantTurn {
     if (b.type === "text" && b.text) parts.push({ kind: "text", text: b.text });
     if (b.type === "tool_use" && b.id) parts.push({ kind: "tool_call", id: b.id, tool: b.name ?? "unknown", args: b.input ?? {} });
   }
-  const stop = (j.content ?? []).some((b) => b.type === "tool_use") ? "tool_use" : j.stop_reason === "max_tokens" ? "length" : "end_turn";
+  // same precedence as the OpenAI adapter: max_tokens means the tool input is truncated → "length", never executable
+  const stop = j.stop_reason === "max_tokens" ? "length" : (j.content ?? []).some((b) => b.type === "tool_use") ? "tool_use" : "end_turn";
   const u = normalizeUsage(j.usage);
   return { parts, stopReason: stop, usage: { input: u.input, output: u.output, cacheRead: u.cacheRead || undefined, cacheWrite: u.cacheWrite || undefined } };
 }

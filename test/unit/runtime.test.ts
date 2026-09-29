@@ -40,7 +40,8 @@ test("createRuntime registers the full CLI tool set", () => {
   // #33 ask_user (every surface; headless fail closed at execute); eval_cell must stay ABSENT while ROVECODE_EVAL_CELL is unset (port #18 flag door)
   // provider_list (read) + provider_edit (custom → tool.provider_edit, prompted): the live provider registry (tools/provider.ts)
   // design_audit (read — self-checking must never prompt) + design_direction (custom → tool.design_direction, prompted): the design protocol (design/rules.ts)
-  expect(names).toEqual(["ask_user", "bash", "design_audit", "design_direction", "edit", "glob", "grep", "ls", "memory_edit", "provider_edit", "provider_list", "read", "recall", "skill_view", "skills_list", "task", "task_status", "todo_read", "todo_write", "web_fetch", "write"]);
+  // delegate (spawn → prompted under the gated rules, like task): external CLI agents (tools/delegate.ts)
+  expect(names).toEqual(["ask_user", "bash", "delegate", "design_audit", "design_direction", "edit", "glob", "grep", "ls", "memory_edit", "provider_edit", "provider_list", "read", "recall", "skill_view", "skills_list", "task", "task_status", "todo_read", "todo_write", "web_fetch", "write"]);
   const kinds = Object.fromEntries(rt.registry.list().map((t) => [t.schema.name, t.kind]));
   expect(kinds["task"]).toBe("spawn");        // gated rules prompt once per start
   expect(kinds["task_status"]).toBe("read");  // gated rules allow: never prompts, headless-safe
@@ -99,7 +100,6 @@ test("buildCfg gated: repl defaults with memory/skill allows and prompt gates", 
   const approval: ApprovalFn = async (req) => { seen.push(req.tool); return "once"; };
   const cfg = rt.buildCfg(false, approval);
   try {
-    expect(cfg.maxTurns).toBe(60);
     // the budget follows the model's window now: anthropic's default model has a 1M window and a 128k answer,
     // so the history gets what is left. A model the catalog does not know still falls back to the flat 200_000.
     // It is then divided by the model's measured token scale, because the budget is compared against an

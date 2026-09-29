@@ -85,7 +85,7 @@ process.env.ROVECODE_FINISH_CHECK = "0";
 async function drive(rt: Runtime, stream: StreamFn, goal: string, deadlineMs = 20_000): Promise<RunEvent[]> {
   const events: RunEvent[] = [];
   const def = rt.buildDef({ provider: "mock", model: "default" });
-  const cfg = { ...rt.buildCfg(true), maxTurns: 8 };
+  const cfg = rt.buildCfg(true);
   const run = (async () => {
     for await (const ev of agentLoop(def, goal, {}, cfg, {
       stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, cwd: rt.cwd, hooks: rt.hooks,

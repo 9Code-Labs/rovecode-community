@@ -61,7 +61,7 @@ const setActivity = (s: SextantState, state: ActivityState, label: string, now?:
   if (state === "ERROR" && now !== undefined) s.activity.errorAt = now;
 };
 const pushRow = (s: SextantState, row: MessageRow): void => { s.messages.push(row); s.stick = true; };
-function finalizeAssistant(s: SextantState): void { for (const r of s.messages) if (r.kind === "assistant") r.streaming = false; }
+function finalizeAssistant(s: SextantState): void { for (const r of s.messages) if (r.kind === "assistant" || r.kind === "thinking") r.streaming = false; }
 function findRow(s: SextantState, callId: string): ToolRow | undefined {
   for (let i = s.messages.length - 1; i >= 0; i--) { const r = s.messages[i]!; if (r.kind === "tool" && r.callId === callId) return r; }
   return undefined;
@@ -109,9 +109,16 @@ export function makeApplyEvent(hooks: ApplyHooks = {}): ApplyEvent {
         liveTokens(s);
         break;
       }
-      case "reasoning_update":
-        reasoning = ev.tokens; liveTokens(s);
+      case "reasoning_update": {
+        reasoning = ev.tokens;
+        // the thinking row: the reasoning text, live. Same append-or-open shape as the assistant row —
+        // a text delta or a tool call finalizes it via finalizeAssistant
+        const last = s.messages[s.messages.length - 1];
+        if (last && last.kind === "thinking" && last.streaming) last.text += ev.delta;
+        else { finalizeAssistant(s); pushRow(s, { kind: "thinking", text: ev.delta, streaming: true, id: ev.messageId }); }
+        liveTokens(s);
         break;
+      }
       case "tool_execution_start": {
         finalizeAssistant(s); settleTurn(s);
         const d = describeCall(ev.tool, ev.args, s.cwd);
@@ -356,8 +363,9 @@ export function fmtElapsed(ms: number): string {
 
 export interface UsagePatch {
   provider?: string; model?: string; effort?: string; turns?: number; tokensIn?: number; tokensOut?: number;
-  /** estimated tokens in the context + the model's window (undefined window → pct unknown) */
-  contextTokens?: number; contextWindow?: number | undefined;
+  /** estimated tokens in the context + the model's window (undefined window → pct unknown);
+   *  contextAssumed = the window is the resolver's assumption, not a known number — the panel marks ≈ */
+  contextTokens?: number; contextWindow?: number | undefined; contextAssumed?: boolean;
   costUsd?: number | null;
 }
 /** 0..100 estimated fill via core/usage.ts contextHealth; null when the window is unknown */
@@ -376,6 +384,7 @@ export function setUsage(s: SextantState, u: UsagePatch): void {
     s.usage.contextPct = contextPercent(u.contextTokens ?? 0, u.contextWindow);
     if (u.contextTokens !== undefined) s.usage.contextTokens = u.contextTokens;
     if (u.contextWindow !== undefined) s.usage.contextWindow = u.contextWindow; else delete s.usage.contextWindow;
+    s.usage.contextAssumed = u.contextAssumed === true;
   }
   if (u.costUsd !== undefined) s.usage.costUsd = u.costUsd;
 }

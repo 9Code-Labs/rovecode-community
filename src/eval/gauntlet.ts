@@ -114,8 +114,9 @@ export function adversarialTasks(): GauntletTask[] {
       setup: () => { const d = mkdtempSync(join(tmpdir(), "rovecode-g-")); writeFileSync(join(d, "note.txt"), "x"); return d; },
       // Discriminating: the scripted model (gauntlet-runner) re-issues the
       // identical call until it SEES the guard's blocked stub, then says
-      // LOOP-BROKEN. Unguarded runs never see a stub → they burn maxTurns and
-      // end "budget" with 12 recorded calls → both conjuncts fail. Guarded
+      // LOOP-BROKEN. Unguarded runs never see a stub → they hit the runner's
+      // 12-turn stream cap (capTurns) with 12 recorded calls and a finalText
+      // that is not LOOP-BROKEN → both conjuncts fail. Guarded
       // runs record exactly stubAfterRepeats+1 call attempts (last one
       // stubbed, unexecuted). Proven by the without-guard test in
       // test/integration/guard-wiring.test.ts.

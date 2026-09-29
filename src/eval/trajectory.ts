@@ -33,7 +33,6 @@ export type FailureTaxonomy =
   | "verify-failed"      // a strict grader rejected the end state
   | "timeout"            // the run's deadline fired
   | "provider-error"     // the provider/stream failed (run_end "error" or thrown)
-  | "budget"             // turn/second/cost budget exhausted (run_end "budget")
   | "loop-guard"         // the tool guard stubbed the run into submission
   | "invalid-args"       // tool calls the schema rejected
   | "permission-denied"  // policy/hook/user denied the needed tool call

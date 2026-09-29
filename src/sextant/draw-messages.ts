@@ -35,6 +35,8 @@ export function cachedBuildRows(s: SextantState, w: number, theme: Theme, now: n
 
 /** the attachment cap the chip row quotes (core/images.ts MAX_IMAGES_PER_MESSAGE; a literal here keeps this painter free of node:fs) */
 const MAX_STAGED_HINT = 8;
+/** a thinking row tails to its last lines in the panel — the row itself keeps the full reasoning */
+const THINKING_MAX_LINES = 10;
 /** prompt placeholder when the input is empty */
 export const PLACEHOLDER = "ask rovecode — e.g. fix the failing test";
 /** button label per verdict — `all edits` reads as the mode it turns on, not as a third yes */
@@ -176,6 +178,21 @@ export function buildRows(s: SextantState, w: number, theme: Theme, now: number)
           rows.push({ segs, indent: 2 });
         });
         if (m.streaming && !lines.length) rows.push({ segs: [["▌", st(theme.accent)]], indent: 2 });
+        break;
+      }
+      case "thinking": {
+        if (headerDue) { blank(); header(i); } else if (prev && prev.kind !== "thinking") blank();
+        // the model's reasoning, dimmed + italic: visible (transparency) but never mistakable for the
+        // answer. A long think tails to its last lines — the row keeps the full text, the PANEL caps it
+        const lines = m.text ? wrap(m.text, iw - 2) : [];
+        const shown = lines.length > THINKING_MAX_LINES ? lines.slice(lines.length - THINKING_MAX_LINES) : lines;
+        if (lines.length > shown.length) rows.push({ segs: [["◌ ", st(theme.accentDim)], [`… ${lines.length - shown.length} earlier lines`, st(theme.dim, -1, ATTR.ITALIC)]], indent: 2 });
+        shown.forEach((l, k) => {
+          const segs: Seg[] = [[k === 0 && lines.length <= shown.length ? "◌ " : "  ", st(theme.accentDim)], [l, st(theme.muted, -1, ATTR.ITALIC)]];
+          if (m.streaming && k === shown.length - 1) segs.push(["▌", st(theme.accent)]);
+          rows.push({ segs, indent: 2 });
+        });
+        if (m.streaming && !shown.length) rows.push({ segs: [["◌ ", st(theme.accentDim)], ["▌", st(theme.accent)]], indent: 2 });
         break;
       }
       case "tool":

@@ -21,7 +21,7 @@
 
 import { SteeringQueue } from "./loop.ts";
 import { DEFAULT_MAX_DEPTH, preflightSpawn, runChild, type ChildRunnerDeps } from "./orchestrator.ts";
-import type { SpawnRequest, SpawnResult, TokenUsage } from "./types.ts";
+import type { RunEvent, SpawnRequest, SpawnResult, TokenUsage } from "./types.ts";
 
 export type TaskId = string;
 export type TaskStatus = "queued" | "running" | "done" | "failed" | "cancelled";
@@ -49,6 +49,9 @@ export interface TaskInfo {
   usage?: TokenUsage;
   /** isolated children: line count of the patch merged back into the parent tree */
   patchLines?: number;
+  /** what the child is doing RIGHT NOW (crew board live line): the tail of its streamed text, its
+   *  current tool, or "thinking · N tokens". Absent once settled. */
+  live?: string;
 }
 
 export interface StartOptions {
@@ -88,6 +91,20 @@ export interface TaskManagerOptions {
   maxDepth?: number;
   /** injectable child runner (tests); default orchestrator runChild */
   run?: typeof runChild;
+  /** external CLI agent runner (agents/external.ts, structurally typed so core does not import the
+   *  adapters): without it startExternal refuses — headless surfaces that never delegate need nothing */
+  runExternal?: (spec: unknown, prompt: string, opts: { cwd: string; signal: AbortSignal; timeoutSec?: number; model?: string }) => Promise<ExternalRunOutcome>;
+}
+
+/** one external CLI delegation's outcome — the shape of agents/external.ts runExternalAgent's result */
+export interface ExternalRunOutcome {
+  ok: boolean;
+  text: string;
+  exitCode: number;
+  durationMs: number;
+  costUsd?: number;
+  turns?: number;
+  timedOut?: boolean;
 }
 
 export const DEFAULT_TASKS_MAX = 3;
@@ -101,6 +118,8 @@ export function tasksMaxFromEnv(env: Record<string, string | undefined> = proces
 interface TaskRecord {
   info: TaskInfo;
   req: SpawnRequest;
+  /** external CLI delegation (startExternal): launch() runs this instead of a child agent loop */
+  external?: { agentId: string; spec: unknown; prompt: string; cwd: string; timeoutSec?: number; model?: string };
   deps: ChildRunnerDeps;
   ac: AbortController;
   notify?: SteeringQueue;
@@ -109,6 +128,9 @@ interface TaskRecord {
   /** true once the child run has RETURNED (status alone is not enough: cancel() flips
    *  status to "cancelled" while the aborted run is still winding down) */
   settled: boolean;
+  /** rolling activity text for info.live (child runs only); the last emit clock for throttling */
+  liveBuf?: string;
+  liveAt?: number;
   /** detach the owner-abort listener (settle) */
   unbind?: () => void;
 }
@@ -302,15 +324,62 @@ export class TaskManager {
     }
   }
 
+  /** Enqueue an EXTERNAL CLI agent run (claude/codex/…). No provider needed — the process is the
+   *  worker. Same queue, same bound, same crew board; refusals are data, never throws. */
+  startExternal(agentId: string, spec: unknown, prompt: string, opts: StartOptions & { cwd?: string; timeoutSec?: number; model?: string } = {}): StartResult {
+    if (!this.opts.runExternal) return { ok: false, reason: "external agents are not wired on this surface" };
+    const owner = opts.owner ?? this.runSignal ?? undefined;
+    if (owner?.aborted) return { ok: false, reason: "parent run aborted" };
+    const id: TaskId = `t${++this.seq}`;
+    let resolveDone: () => void = () => {};
+    const done = new Promise<void>((r) => { resolveDone = r; });
+    const goal = prompt.replace(/\s+/g, " ").trim();
+    const rec: TaskRecord = {
+      info: {
+        id, label: (opts.label ?? "").trim() || (goal.length > 40 ? goal.slice(0, 39) + "…" : goal || "(no goal)"),
+        agent: agentId, goal: goal.length > 200 ? goal.slice(0, 199) + "…" : goal,
+        isolated: false, depth: (opts.parentDepth ?? 0) + 1, status: "queued", createdAt: Date.now(),
+        ...(opts.caller !== undefined ? { parent: opts.caller } : {}),
+      },
+      req: { agent: agentId, goal: prompt }, // display/notify shape only — launch() branches on `external`
+      deps: null as unknown as ChildRunnerDeps, ac: new AbortController(), notify: opts.notify, done, resolveDone, settled: false,
+      external: { agentId, spec, prompt, cwd: opts.cwd ?? process.cwd(), ...(opts.timeoutSec !== undefined ? { timeoutSec: opts.timeoutSec } : {}), ...(opts.model !== undefined ? { model: opts.model } : {}) },
+    };
+    if (owner) {
+      const onAbort = (): void => { this.cancel(id); };
+      owner.addEventListener("abort", onAbort, { once: true });
+      rec.unbind = () => owner.removeEventListener("abort", onAbort);
+    }
+    this.tasks.set(id, rec);
+    this.queue.push(id);
+    this.emit(rec);
+    this.pump();
+    return { ok: true, id, childPolicy: "open" }; // external CLIs enforce their own policy; there are no rules to derive
+  }
+
   private launch(t: TaskRecord): void {
     t.info.status = "running"; t.info.startedAt = Date.now();
     this.running++;
     this.emit(t);
+    if (t.external) {
+      const ex = t.external;
+      void this.opts.runExternal!(ex.spec, ex.prompt, { cwd: ex.cwd, signal: t.ac.signal, ...(ex.timeoutSec !== undefined ? { timeoutSec: ex.timeoutSec } : {}), ...(ex.model !== undefined ? { model: ex.model } : {}) })
+        .then((r) => this.finish(t, {
+          agent: ex.agentId, ok: r.ok,
+          // external answers keep the CLI's own 50k cap (agents/external.ts) — a child LOOP's summary
+          // stays at 4000 for the model, but a delegation's full text is what the USER reads (/tasks <id>)
+          summary: r.text,
+          usage: { input: 0, output: 0, ...(r.costUsd !== undefined ? { costUsd: r.costUsd } : {}) },
+        }), (e: unknown) => this.finish(t, undefined, e))
+        .finally(() => { this.running--; this.pump(); });
+      return;
+    }
     // the child's registry learns its task id (ChildContext) so a nested `task_status result`
-    // can identify its caller for slot lending
+    // can identify its caller for slot lending; onEvent feeds the crew board's live line
     const deps: ChildRunnerDeps = {
       ...t.deps,
       registryFactory: (def, cwd, child) => t.deps.registryFactory(def, cwd, child ? { ...child, taskId: t.info.id } : undefined),
+      onEvent: (ev) => this.liveFromEvent(t, ev),
     };
     void this.run(deps, t.req, t.info.depth, t.ac.signal)
       .then((r) => this.finish(t, r), (e: unknown) => this.finish(t, undefined, e))
@@ -330,7 +399,33 @@ export class TaskManager {
       info.status = "done"; info.summary = r.summary; info.usage = r.usage;
       if (r.patch !== undefined) info.patchLines = r.patch.trim() === "" ? 0 : r.patch.split("\n").length;
     }
+    delete t.info.live; // settled lanes show their result row, not the activity tail
     this.settle(t);
+  }
+
+  /** One child-run event → the lane's live line. Emits at most LIVE_EMIT_MS apart per task — text
+   *  deltas stream hard, the board repaints on a tick anyway. */
+  private liveFromEvent(t: TaskRecord, ev: RunEvent): void {
+    if (isTerminal(t.info.status)) return;
+    let text: string | undefined;
+    if (ev.type === "message_update") {
+      t.liveBuf = ((t.liveBuf ?? "") + ev.delta).replace(/\s+/g, " ");
+      text = t.liveBuf.slice(-140);
+    } else if (ev.type === "reasoning_update") {
+      text = `thinking · ${ev.tokens} tokens`;
+    } else if (ev.type === "tool_execution_start") {
+      const args = JSON.stringify(ev.args).replace(/\s+/g, " ").slice(0, 60);
+      text = `▶ ${ev.tool} ${args}`;
+    } else if (ev.type === "tool_execution_end") {
+      text = `${ev.ok ? "✓" : "✗"} tool ${Math.round(ev.durationMs)}ms`;
+    }
+    if (text === undefined) return;
+    t.info.live = text;
+    // discrete transitions (a tool starts/ends) always emit; the high-frequency streams
+    // (text/thinking deltas) are throttled — the board repaints on a tick anyway
+    const discrete = ev.type === "tool_execution_start" || ev.type === "tool_execution_end";
+    const now = Date.now();
+    if (discrete || now - (t.liveAt ?? 0) >= 250) { t.liveAt = now; this.emit(t); }
   }
 
   /** Terminal tail shared by finish() and queued-cancel: stamp, notify the parent

@@ -46,7 +46,7 @@ export interface TokenUsage { input: number; output: number; cacheRead?: number;
 // ---------- Provider seam (ADR-003: never throws; errors are stopReasons) ----------
 
 export type StopReason =
-  | "end_turn" | "tool_use" | "length" | "aborted" | "error" | "budget";
+  | "end_turn" | "tool_use" | "length" | "aborted" | "error";
 
 export interface AssistantTurn {
   parts: MessagePart[];
@@ -57,8 +57,8 @@ export interface AssistantTurn {
 
 export interface StreamOptions {
   signal?: AbortSignal;
-  /** the run's wall-clock deadline (epoch ms, RunConfig.maxSeconds) — a retry backoff that would end past it
-   *  is not taken (providers/retry.ts); unset = no clock */
+  /** an absolute deadline (epoch ms) for the whole call — a retry backoff that would end past it
+   *  is not taken (providers/retry.ts); unset = unbounded */
   deadlineAt?: number;
   /** tool schemas advertised to the provider for native function calling */
   tools?: ToolSchema[];
@@ -187,9 +187,10 @@ export type RunEvent =
   | { type: "turn_start"; turn: number }
   | { type: "message_update"; messageId: string; delta: string }
   /** the provider turn is reasoning: `tokens` = estimated reasoning tokens so far this turn,
-   *  CUMULATIVE (a dropped event costs nothing). Only the count leaves the loop — the reasoning text
-   *  is not the answer and neither the transcript nor a client should carry it. */
-  | { type: "reasoning_update"; messageId: string; tokens: number }
+   *  CUMULATIVE (a dropped event costs nothing); `delta` = the reasoning text slice — the TUI shows
+   *  it live (transparency), but it is still not the answer: the transcript and the store carry only
+   *  the count, never the text. */
+  | { type: "reasoning_update"; messageId: string; tokens: number; delta: string }
   | { type: "tool_execution_start"; callId: string; tool: string; args: unknown }
   | { type: "tool_execution_update"; callId: string; note: string }
   | { type: "tool_execution_end"; callId: string; ok: boolean; output: string; durationMs: number }
@@ -206,7 +207,7 @@ export type RunEvent =
    *  when nothing is notable AND at least one file was written, so a clean run's event is exactly what it
    *  always was. "done" alone means "the model produced a turn with no tool call"; this field is how a
    *  surface tells that from "the work is complete" (core/loop.ts assessOutstanding). */
-  | { type: "run_end"; status: "done" | "stopped" | "error" | "budget"; summary: string; outstanding?: RunOutstanding };
+  | { type: "run_end"; status: "done" | "stopped" | "error"; summary: string; outstanding?: RunOutstanding };
 
 /** What a run that ended as "done" left behind. Every field is a fact read from the transcript or the
  *  session's own todo list — never an interpretation of the model's words. */
@@ -252,7 +253,6 @@ export interface AgentDefinition {
   systemPrompt: string | ((ctx: AgentVars) => string);
   tools: string[];        // tool names; "*" = all allowed by policy
   model?: ModelRef;
-  maxTurns?: number;      // finite always (reject swarm's infinity)
   spawns?: "none" | "siblings" | "subtasks";
   memory?: { task?: boolean; episodic?: boolean; semantic?: boolean };
   /** extra non-history ADR-007 chunks (port #8: harvested project config,
@@ -276,20 +276,6 @@ export interface SpawnResult { agent: string; ok: boolean; summary: string; usag
 // ---------- Run configuration ----------
 
 export interface RunConfig {
-  maxTurns: number;
-  /** wall-clock ceiling for one run, in seconds; checked at every turn boundary (core/loop.ts), so a
-   *  verification spiral of many short turns ends in a clean run_end "budget" with what was done so far.
-   *  Unset = no clock. `rovecode run` defaults it to 20 minutes; ROVECODE_MAX_SECONDS / --max-seconds set it. */
-  maxSeconds?: number;
-  /** a spend ceiling for one run, in US dollars, checked at every turn boundary like maxSeconds: the run ends
-   *  with status "budget" and what was done so far. Only turns `priceUsd` can price count; an unpriced turn
-   *  (a model the catalog does not know) adds nothing and the summary says how many there were. Unset = no cap.
-   *  `rovecode run --max-cost D`, ROVECODE_MAX_COST on every surface. */
-  maxCostUsd?: number;
-  /** what one turn cost, from its usage and the model that SERVED it (router fallback may differ from the one
-   *  asked for) — undefined when the catalog has no price. The runtime binds this to its catalog; without it
-   *  maxCostUsd can never trip, which is why buildCfg always sets both together. */
-  priceUsd?: (usage: TokenUsage, origin: ModelRef) => number | undefined;
   /** The finish check (core/loop.ts, at the "done" exit): when the model stops talking right after a failed
    *  tool call or an unanswered question to the user, ONE continuation turn names what is outstanding and asks
    *  it to finish or say what is left. Default on; `false` (ROVECODE_FINISH_CHECK=0) turns it off. The

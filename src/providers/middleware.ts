@@ -337,6 +337,10 @@ export function withToolCallParsing(stream: StreamFn, opts?: MiddlewareOptions):
         yield event; // native tool calls / deltas: byte-identical passthrough
         continue;
       }
+      // only a cleanly-finished turn may have its text promoted to tool calls: a length-limited,
+      // errored or aborted turn's <tool_call> markup is incomplete by definition and must stay
+      // inert text — upgrading it to stopReason tool_use would execute a truncated call
+      if (event.turn.stopReason !== "end_turn") { yield event; continue; }
       const parts: MessagePart[] = [];
       let total = 0;
       for (const part of event.turn.parts) {

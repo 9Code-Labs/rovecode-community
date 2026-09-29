@@ -14,13 +14,13 @@ const MAIN = join(import.meta.dir, "..", "..", "src", "cli", "main.ts");
 
 test("runPromptWords drops EVERY post-command value flag's value, not only --output's: `run hi --max-turns 1` is the prompt 'hi', not 'hi 1'", () => {
   // found while wiring stdin: the goal of `rovecode run "hi" --output json --max-turns 1` was recorded as "hi 1"
-  const argv = ["bun", "main.ts", "run", "hi", "--output", "json", "--max-turns", "1", "--max-seconds", "30"];
-  expect(runPromptWords({ cmd: "run", rest: ["hi", "json", "1", "30"] }, argv)).toEqual(["hi"]);
-  const bare = ["bun", "main.ts", "review", "this", "--max-turns", "2"];
-  expect(runPromptWords({ cmd: "review", rest: ["this", "2"] }, bare)).toEqual(["review", "this"]);
+  const argv = ["bun", "main.ts", "run", "hi", "--output", "json", "--model", "x/y", "--effort", "high"];
+  expect(runPromptWords({ cmd: "run", rest: ["hi", "json", "x/y", "high"] }, argv)).toEqual(["hi"]);
+  const bare = ["bun", "main.ts", "review", "this", "--model", "x/y"];
+  expect(runPromptWords({ cmd: "review", rest: ["this", "x/y"] }, bare)).toEqual(["review", "this"]);
   // a value that is itself a word the user typed is dropped by POSITION, so a prompt may still say "json"
-  const word = ["bun", "main.ts", "run", "explain", "json", "--max-turns", "3"];
-  expect(runPromptWords({ cmd: "run", rest: ["explain", "json", "3"] }, word)).toEqual(["explain", "json"]);
+  const word = ["bun", "main.ts", "run", "explain", "json", "--model", "x/y"];
+  expect(runPromptWords({ cmd: "run", rest: ["explain", "json", "x/y"] }, word)).toEqual(["explain", "json"]);
 });
 
 test("withPipedInput: fenced under the prompt; the fence outgrows backticks in the text; no words → an introduction; empty → unchanged", () => {
@@ -59,7 +59,7 @@ test("end to end: the piped text is in the run's goal; stdin 'ignore' costs no w
   const env = { ...process.env, ROVECODE_HOME: mkdtempSync(join(tmpdir(), "rovecode-stdin-home-")), ROVECODE_MOCK: "1", ROVECODE_NO_CHECKPOINTS: "1" };
   const run = async (args: string[], stdin: "ignore" | string) => {
     const t0 = Date.now();
-    const p = Bun.spawn([process.execPath, MAIN, "run", ...args, "--output", "ndjson", "--max-turns", "1"], { cwd, env, stdin: stdin === "ignore" ? "ignore" : "pipe", stdout: "pipe", stderr: "pipe" });
+    const p = Bun.spawn([process.execPath, MAIN, "run", ...args, "--output", "ndjson"], { cwd, env, stdin: stdin === "ignore" ? "ignore" : "pipe", stdout: "pipe", stderr: "pipe" });
     if (stdin !== "ignore" && p.stdin && typeof p.stdin !== "number") { p.stdin.write(stdin); p.stdin.end(); }
     const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
     const code = await p.exited;
@@ -81,12 +81,11 @@ test("end to end: the piped text is in the run's goal; stdin 'ignore' costs no w
   } finally { rmSync(cwd, { recursive: true, force: true }); rmSync(env.ROVECODE_HOME, { recursive: true, force: true }); }
 }, 30_000);
 
-test("every value flag's value stays out of the prompt — including --max-cost, which was sending its number to the model", () => {
+test("every value flag's value stays out of the prompt", () => {
   // Measured, not hypothetical: `run "yazi golgesi gozukmuyor" --max-cost 0.15` stored the first user
   // message as "yazi golgesi gozukmuyor 0.15", and the model used the stray 0.15 as the CSS opacity it
-  // then wrote. --max-cost landed without being added to VALUE_FLAGS, one commit after the same class of
-  // bug was fixed for every other flag. This asserts the WHOLE table rather than the one flag, so the
-  // next value flag cannot repeat it.
+  // then wrote (that flag is gone with the run-budget system; the CLASS of bug is what this pins). This
+  // asserts the WHOLE table rather than the one flag, so the next value flag cannot repeat it.
   for (const flag of VALUE_FLAGS) {
     const argv = ["bun", "main.ts", "run", "fix the thing", flag, "SENTINEL"];
     const words = runPromptWords(parseCli(argv), argv);

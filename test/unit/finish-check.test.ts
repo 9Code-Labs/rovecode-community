@@ -3,7 +3,7 @@
  *                edit/write count, open todos, whether the check fired), and outstandingClause says it in one clause;
  *    NUDGE     — when the model goes silent right after a failed tool call or an unanswered question, ONE user-role
  *                turn asks it to finish or say what is left; the next silence ends the run whatever it says.
- *  Also pinned: the nudge is a turn (a spent --max-turns ends as "budget", not "done"); ROVECODE_FINISH_CHECK=0
+ *  Also pinned: ROVECODE_FINISH_CHECK=0
  *  keeps the representation but never nudges; a permission denial is not a failure; and a clean run that wrote
  *  a file produces a run_end byte-identical to the one before this existed — no `outstanding` key at all.
  *  The first scenario is the fixture that found the bug on 2026-09-06: "Done — I created src/a.ts" after the write
@@ -42,7 +42,7 @@ const ASK: Tool = { kind: "read", schema: { name: "ask_user", description: "ask"
 const NOOP: Tool = { kind: "read", schema: { name: "noop", description: "nothing", args: { type: "object" } }, async execute() { return { ok: true, output: "ok" }; } };
 
 const def: AgentDefinition = { name: "t", systemPrompt: "test", tools: ["*"] };
-const cfg = (over: Partial<RunConfig>): RunConfig => ({ maxTurns: 60, contextBudgetTokens: 100_000, compactionThreshold: 0.8, parallelTools: true, permissionRules: [{ action: "*", resource: "*", effect: "allow" }], ...over });
+const cfg = (over: Partial<RunConfig>): RunConfig => ({ contextBudgetTokens: 100_000, compactionThreshold: 0.8, parallelTools: true, permissionRules: [{ action: "*", resource: "*", effect: "allow" }], ...over });
 
 /** the model: a queue of turns; every request's last user message is recorded so the test can see the nudge on the wire */
 function scripted(turns: AssistantTurn[]): { stream: StreamFn; lastUser: string[] } {
@@ -116,13 +116,6 @@ test("once only: a second failure after the nudge is accepted — represented, n
   expect(end.outstanding).toMatchObject({ failed: ["write: ENOENT: no such directory for src/a.ts"], nudged: true });
 });
 
-test("the nudge is a turn: --max-turns 2 spent on write+'Done' ends as budget, not done, and the check is not asked", async () => {
-  const { lastUser, end } = await run([WRITE_A, DONE, DONE], { maxTurns: 2 });
-  expect(lastUser.length).toBe(2);                                   // the third call would have been the nudge; the cap is checked first
-  expect(end.status).toBe("budget");
-  expect(end.summary).toBe("max turns (2) reached");
-  expect("outstanding" in end).toBe(false);                          // only the "done" exit represents
-});
 
 test("an unanswered ask_user is the other trigger: nudged once, then represented as 'its question to you went unanswered'", async () => {
   const { lastUser, end } = await run([toolTurn([{ id: "q1", tool: "ask_user", args: { question: "black or white?" } }]), textTurn("Let me know which you prefer."), textTurn("I will go with black — but I need your answer to proceed.")]);

@@ -58,20 +58,23 @@ describe("packaging: package.json publish invariants", () => {
 
   test("files[] entries all exist on disk", () => {
     expect(pkg.files.length).toBeGreaterThan(0);
-    for (const f of pkg.files) expect(existsSync(join(root, f))).toBe(true);
+    for (const f of pkg.files) if (!f.startsWith("!")) expect(existsSync(join(root, f))).toBe(true);
   });
 
-  test("files[] ships the runtime tree, tsconfig, and the NOTICE", () => {
-    // tsconfig ships so the installed source stays typecheckable in place
-    // (`bun x tsc --noEmit` with the repo's flags). It is NOT read by Bun at
-    // runtime — bun 1.3.14 transpiles byte-identically with the file absent or
-    // useDefineForClassFields flipped — so this pins a typecheck contract only.
-    for (const required of ["src", "vendor", "tsconfig.json", "THIRD_PARTY_NOTICES.md"]) {
+  // the tarball carries the minified dist and nothing readable (claude-code model); sourcemaps,
+  // the native .node (resolved from the @ast-grep/napi dependency per-platform) and the dev exe stay out
+  test("files[] ships the BUNDLED runtime (dist/), not the source", () => {
+    for (const required of ["bin", "dist", "THIRD_PARTY_NOTICES.md"]) {
       expect(pkg.files).toContain(required);
     }
-    // bin target must live inside a shipped dir (src/ for source entry, bin/ for the wrapper)
+    expect(pkg.files).not.toContain("src");   // the source is NOT the package
+    expect(pkg.files).not.toContain("vendor");
+    for (const excluded of ["!dist/**/*.map", "!dist/**/*.node", "!dist/rovecode*"]) {
+      expect(pkg.files).toContain(excluded);
+    }
+    // bin target must live inside a shipped dir (bin/ for the wrapper)
     const binTarget = pkg.bin["rovecode"]!;
-    expect(binTarget.startsWith("src/") || binTarget.startsWith("bin/")).toBe(true);
+    expect(binTarget.startsWith("bin/")).toBe(true);
   });
 
   test("NOTICE copy is non-hollow (Apache attributions present)", () => {

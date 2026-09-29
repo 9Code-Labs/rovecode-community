@@ -132,8 +132,10 @@ test("one running task fills the body: bordered cell, header `◈ label … mm:s
   expect(boxAt(g, R60)).toBe(true);
   expect(laneCells(R60, state([RUNNING]))).toEqual({ cells: [{ index: 0, rect: R60 }], page: 0, pages: 1, footer: false });
   const header = g.span(IX, IY, IW);
-  expect(header).toBe("◈ write tests" + " ".repeat(IW - 13 - 9) + "00:12 · —");
+  // the × kill affordance sits at the header's right edge while the lane is running
+  expect(header).toBe("◈ write tests" + " ".repeat(IW - 13 - 9 - 2) + "00:12 · — ×");
   expect(header.length).toBe(IW);
+  expect(g.cell(IX + IW - 1, IY)).toMatchObject({ ch: "×", fg: THEME.err });
   expect(g.cell(IX, IY)).toMatchObject({ ch: SPIN[1], fg: THEME.accent });
   expect(g.cell(IX + 2, IY)).toMatchObject({ ch: "w", fg: THEME.accent, at: ATTR.BOLD }); // selected (lane 0, code focused) → accent label
   expect(g.cell(IX + IW - 9, IY).fg).toBe(THEME.dim);
@@ -181,7 +183,7 @@ test("result rows: done `done: <first summary line>` (ok/fg2), failed `failed: <
   expect(cancelled.cell(IX, IY + 17).fg).toBe(THEME.muted);
   const queued = draw(state([mk("t5", "queued")]));
   expect(queued.cell(IX, IY)).toMatchObject({ ch: "◇", fg: THEME.dim });
-  expect(queued.span(IX, IY, IW)).toMatch(/00:15 · —$/); // waiting since createdAt
+  expect(queued.span(IX, IY, IW)).toMatch(/00:15 · — ×$/); // waiting since createdAt; queued lanes are killable too
   expect(queued.span(IX, IY + 17, IW)).toBe("queued · waiting for a slot");
   expect(queued.cell(IX, IY + 17).fg).toBe(THEME.dim);
   const long = draw(state([mk("t6", "done", { summary: "s".repeat(200) })]));
@@ -211,7 +213,7 @@ test("2 tasks at 110 → two 55-wide columns; selected cell (s.code.lane) gets t
   const left: Rect = { x: 3, y: 2, w: 55, h: 20 }, right: Rect = { x: 58, y: 2, w: 55, h: 20 };
   expect(laneCells(R110, s).cells).toEqual([{ index: 0, rect: left }, { index: 1, rect: right }]);
   expect(boxAt(g, left)).toBe(true); expect(boxAt(g, right)).toBe(true);
-  expect(spanIn(g, left, 0)).toMatch(/^◈ write tests\s+00:12 · —$/);
+  expect(spanIn(g, left, 0)).toMatch(/^◈ write tests\s+00:12 · — ×$/);
   expect(spanIn(g, right, 0)).toMatch(/^◆ review\s+00:10 · —$/);
   expect(spanIn(g, right, 17)).toBe("done: ok"); // 20-row cell → 18 inner rows → the result row is row 17
   expect(g.cell(right.x, right.y).fg).toBe(THEME.accent); // selected
@@ -237,13 +239,13 @@ test("5 tasks: 60 → 1 column paged (3 per page + footer, the page follows the 
   expect(p0).toEqual({ cells: [{ index: 0, rect: { x: 3, y: 2, w: 60, h: 6 } }, { index: 1, rect: { x: 3, y: 8, w: 60, h: 6 } }, { index: 2, rect: { x: 3, y: 14, w: 60, h: 6 } }], page: 0, pages: 2, footer: true });
   const g0 = draw(s60);
   for (const c of p0.cells) expect(boxAt(g0, c.rect)).toBe(true);
-  expect(spanIn(g0, p0.cells[0]!.rect, 0)).toMatch(/^◈ write tests\s+00:12 · —$/);
+  expect(spanIn(g0, p0.cells[0]!.rect, 0)).toMatch(/^◈ write tests\s+00:12 · — ×$/);
   expect(spanIn(g0, p0.cells[0]!.rect, 1)).toBe("write unit tests for src/guard.ts covering the deny path");
   expect(spanIn(g0, p0.cells[0]!.rect, 2)).toBe("t1 · worker"); // 6-row cell: header, ONE goal row, the id/agent row wins, result
   expect(spanIn(g0, p0.cells[0]!.rect, 3)).toMatch(/^[━─]{47}  running$/);
   expect(g0.toText()).not.toContain("and the allow path");
   expect(spanIn(g0, p0.cells[1]!.rect, 3)).toBe("done: ok");
-  expect(spanIn(g0, p0.cells[2]!.rect, 0)).toMatch(/^◇ task t3\s+00:15 · —$/);
+  expect(spanIn(g0, p0.cells[2]!.rect, 0)).toMatch(/^◇ task t3\s+00:15 · — ×$/);
   expect(g0.span(R60.x, R60.y + R60.h - 1, R60.w)).toBe("1/2 · 5 tasks · ←→↑↓ select");
   expect(g0.cell(R60.x, R60.y + R60.h - 1).fg).toBe(THEME.dim);
   expect(g0.toText()).not.toContain("task t4");
@@ -267,7 +269,7 @@ test("5 tasks: 60 → 1 column paged (3 per page + footer, the page follows the 
   expect(laneCells(R140, state(crew)).cells.map((c) => c.rect)).toEqual([{ x: 3, y: 2, w: 46, h: 10 }, { x: 49, y: 2, w: 46, h: 10 }, { x: 95, y: 2, w: 46, h: 10 }, { x: 3, y: 12, w: 46, h: 10 }, { x: 49, y: 12, w: 46, h: 10 }]);
   const g140 = draw(state(crew), R140);
   for (const c of laneCells(R140, state(crew)).cells) expect(boxAt(g140, c.rect)).toBe(true);
-  expect(spanIn(g140, { x: 95, y: 2, w: 46, h: 10 }, 0)).toMatch(/^◇ task t3\s+00:15 · —$/);
+  expect(spanIn(g140, { x: 95, y: 2, w: 46, h: 10 }, 0)).toMatch(/^◇ task t3\s+00:15 · — ×$/);
   expect(spanIn(g140, { x: 95, y: 2, w: 46, h: 10 }, 7)).toBe("queued · waiting for a slot");
   expect(spanIn(g140, { x: 3, y: 12, w: 46, h: 10 }, 7)).toBe("failed: boom");
   expect(spanIn(g140, { x: 49, y: 12, w: 46, h: 10 }, 7)).toBe("cancelled");
@@ -391,7 +393,7 @@ test("wired through the real seam: setAgentsPainter(drawAgents) makes the code p
     const cells = laneCells({ x: 5, y: 3, w: 71, h: 18 }, s).cells;
     expect(cells.map((c) => c.rect)).toEqual([{ x: 5, y: 3, w: 35, h: 18 }, { x: 40, y: 3, w: 35, h: 18 }]);
     for (const c of cells) expect(boxAt(g, c.rect)).toBe(true);
-    expect(spanIn(g, cells[0]!.rect, 0)).toMatch(/^◈ write tests\s+00:12 · —$/);
+    expect(spanIn(g, cells[0]!.rect, 0)).toMatch(/^◈ write tests\s+00:12 · — ×$/);
     expect(spanIn(g, cells[1]!.rect, 15)).toBe("done: ok"); // 18-row cell → 16 inner rows → the result row is row 15
     expect(g.cell(79, 7)).toMatchObject({ ch: "∷", fg: THEME.accent }); // the rail (▤±$∷ at rows 4-7) still marks the mode
     expect(g.toText()).not.toContain("crew: 2 tasks"); // the placeholder summary is gone
@@ -420,7 +422,7 @@ test("nothing outside the rect: 1/2/5/12 tasks at 60/110/140, the full lane, lon
   const tg = draw(t5, tiny, NOW, new GridScreen(30, 10, "░"));
   expect(untouchedOutside(tg, tiny, "░")).toBe(true);
   expect(boxAt(tg, { x: 2, y: 1, w: 20, h: 5 })).toBe(true);
-  expect(tg.span(4, 2, 16)).toBe("◈ tas… 00:12 · —"); // header squeezed: label clipped, clock kept
+  expect(tg.span(4, 2, 16)).toBe("◈ t… 00:12 · — ×"); // header squeezed: label clipped, clock kept, × stays
   expect(tg.span(4, 3, 16)).toBe("t2 · worker"); // a single body row goes to the id/agent, not the goal
   expect(tg.span(4, 4, 16)).toMatch(/^[━─]{7}  running$/); // the result row
   expect(tg.span(2, 6, 20)).toBe("2/5 · 5 tasks · ←→↑…");

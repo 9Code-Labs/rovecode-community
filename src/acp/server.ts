@@ -16,7 +16,7 @@
  *      tool_execution_*    → tool_call / tool_call_update
  *      tool_call_failed    → tool_call created directly in "failed" status
  *    approval (ADR-005)    → session/request_permission; declined/cancelled/unsupported → deny
- *    run_end done/budget   → stopReason end_turn / max_turn_requests
+ *    run_end done          → stopReason end_turn
  *    run_end error         → JSON-RPC error response (RequestError is the ACP error
  *                            channel — the SDK converts it to a wire-level response,
  *                            so the never-throw seam ends at this boundary by design)
@@ -40,6 +40,7 @@ import { basename } from "node:path";
 import { noModelHint } from "../core/voice.ts";
 import { Readable, Writable } from "node:stream";
 import { agentLoop, SteeringQueue } from "../core/loop.ts";
+import { createHeadSummarizer } from "../core/summarize.ts";
 import { bootRuntime, type Runtime } from "../cli/runtime.ts";
 import { checkImageCount, imageFromBase64 } from "../core/images.ts";
 import { SandboxConfigError } from "../core/sandbox-config.ts";
@@ -53,7 +54,7 @@ export interface AcpOptions {
 }
 
 type SessionUpdate = SessionNotification["update"];
-type RunStatus = "done" | "stopped" | "error" | "budget";
+type RunStatus = "done" | "stopped" | "error";
 
 interface AcpSessionState {
   rt: Runtime;
@@ -241,6 +242,7 @@ export class RovecodeAcpAgent implements Agent {
     const deps = {
       stream, registry: s.rt.registry, store: s.rt.store,
       tools: s.rt.registry.list().map((t) => t.schema), guard: s.rt.guard,
+      summarize: createHeadSummarizer(stream, { provider: def.model?.provider ?? "", model: def.model?.model ?? "" }, abort.signal),
       hooks: s.rt.hooks, // port #29: .rovecode/hooks.{ts,js} of the session cwd
       cwd: s.rt.cwd, // HIGH-G1: the client's authoritative session cwd reaches ToolContext
       signal: abort.signal, // port #21: session/cancel kills in-flight fetch/tools mid-turn
@@ -270,7 +272,6 @@ export class RovecodeAcpAgent implements Agent {
     if (active.cancelled || end === null) return { stopReason: "cancelled" };
     switch (end.status) {
       case "done": return { stopReason: "end_turn" };
-      case "budget": return { stopReason: "max_turn_requests" };
       case "stopped": return { stopReason: "cancelled" };
       case "error": throw RequestError.internalError({ details: end.summary });
     }

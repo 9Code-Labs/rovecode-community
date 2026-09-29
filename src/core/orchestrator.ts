@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { cpSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { AgentDefinition, AgentVars, SpawnRequest, SpawnResult, RunConfig, StreamFn, PermissionRule } from "../core/types.ts";
+import type { AgentDefinition, AgentVars, SpawnRequest, SpawnResult, RunConfig, RunEvent, StreamFn, PermissionRule } from "../core/types.ts";
 import { ToolRegistry, type ExtensionHooks } from "../core/tools.ts";
 import { ToolGuard } from "../core/guardrails.ts";
 import { SessionStore } from "../core/session.ts";
@@ -110,6 +110,9 @@ export interface ChildRunnerDeps {
   /** port #29: the parent runtime's hook set — a child runs under the same hooks (pre_tool vetoes,
    *  post_tool, pre_run/post_run/on_event via the observer), so delegation cannot dodge a hook */
   hooks?: ExtensionHooks;
+  /** the child's raw loop events, forwarded untouched (crew board live line: what the child is
+   *  writing/thinking RIGHT NOW). Purely observational. */
+  onEvent?: (ev: RunEvent) => void;
 }
 
 /** Runs a child agent in its own session (+ optional isolation), returns summary + patch.
@@ -146,6 +149,7 @@ export async function runChild(deps: ChildRunnerDeps, req: SpawnRequest, depth =
       signal,
       hooks: deps.hooks, // port #29: the parent's hooks govern the child too
     }, steering, depth + 1)) {
+      deps.onEvent?.(ev);
       if (ev.type === "run_end") end = { status: ev.status, summary: ev.summary };
     }
     let input = 0, output = 0;

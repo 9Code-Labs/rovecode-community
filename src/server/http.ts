@@ -31,6 +31,7 @@ import { bootRuntime, type Runtime } from "../cli/runtime.ts";
 import { noModelHint } from "../core/voice.ts";
 import { SandboxConfigError } from "../core/sandbox-config.ts";
 import { agentLoop, SteeringQueue } from "../core/loop.ts";
+import { createHeadSummarizer } from "../core/summarize.ts";
 import { listSessions } from "../core/session.ts";
 import type { ModelRef, RunEvent, StreamFn } from "../core/types.ts";
 import { buildOpenApiDoc } from "./openapi.ts";
@@ -220,6 +221,7 @@ export function startServer(opts: ServerOptions = {}): RovecodeServer {
     const run = agentLoop(def, text, {}, cfg, {
       stream, registry: rt.registry, store: rt.store,
       tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, planReminder: rt.planReminder,
+      summarize: createHeadSummarizer(stream, { provider: def.model?.provider ?? "", model: def.model?.model ?? "" }, ac.signal),
       hooks: rt.hooks, // port #29: .rovecode/hooks.{ts,js} of the server cwd
       cwd: rt.cwd, // session cwd reaches ToolContext (same gap as ACP HIGH-G1)
       signal: ac.signal, // port #21: DELETE / disconnect / stop() kill in-flight work

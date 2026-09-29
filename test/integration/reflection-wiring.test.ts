@@ -65,10 +65,10 @@ function rig(): Rig {
 }
 
 /** cmdRun's LoopDeps shape (src/cli/main.ts:92): rt.hooks + rt.guard + rt.cwd threaded, rt.steering as the queue */
-async function drive(rt: Runtime, stream: StreamFn, goal: string, maxTurns: number, deadlineMs = 15_000): Promise<RunEvent[]> {
+async function drive(rt: Runtime, stream: StreamFn, goal: string, deadlineMs = 15_000): Promise<RunEvent[]> {
   const events: RunEvent[] = [];
   const def = rt.buildDef({ provider: "mock", model: "default" });
-  const cfg = { ...rt.buildCfg(true), maxTurns };
+  const cfg = rt.buildCfg(true);
   const run = (async () => {
     for await (const ev of agentLoop(def, goal, {}, cfg, {
       stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema),
@@ -97,7 +97,7 @@ test("fixable: a stale anchor fails with the actionable message, the nudge is th
       if (last.role === "tool") { yield turn(textTurn(lastToolOutput(messages).startsWith("applied 1 edit(s)") ? "HEALED" : "STUCK")); return; }
       yield turn(editCall("c1", r.file, r.tag, "zzz")); // stale anchor: line 2 is "beta", its hash is not zzz
     };
-    const events = await drive(rt, stream, "change line 2", 8);
+    const events = await drive(rt, stream, "change line 2");
     // 1. the tool failed with the actionable text (the whole message, pinned at the wiring level)
     const c1 = toolEnds(events).find((e) => e.callId === "c1")!;
     expect(c1.ok).toBe(false);
@@ -129,7 +129,7 @@ test("fixable: a stale anchor fails with the actionable message, the nudge is th
   }
 });
 
-test("unfixable (different failures): nudges stop at the cap (2) — only turns 2 and 3 open with a reflection message; the run ends at maxTurns, bounded", async () => {
+test("unfixable (different failures): nudges stop at the cap (2) — only turns 2 and 3 open with a reflection message", async () => {
   const r = rig();
   const rt = createRuntime({ cwd: r.cwd, stream: null });
   try {
@@ -137,15 +137,21 @@ test("unfixable (different failures): nudges stop at the cap (2) — only turns 
     const requests: Message[][] = [];
     const stream: StreamFn = async function* (_m, messages) {
       requests.push([...messages]);
+      if (n >= 6) { yield turn(textTurn("I give up")); return; } // no turn cap anymore: the SCRIPT stops (there is nothing to prove past 6 failures)
       yield turn(editCall(`f${n}`, r.file, r.tag, `h${n++}`)); // a fresh wrong anchor every turn: every failure text differs
     };
-    const events = await drive(rt, stream, "flail", 6);
-    expect(events.at(-1)).toMatchObject({ type: "run_end", status: "budget" });
+    // the finish check (a give-up right after failed writes) would add a nudge turn that is NOT this
+    // test's subject — and its env flag leaks between test FILES (one bun process), so pin it off here
+    const savedFinish = process.env.ROVECODE_FINISH_CHECK;
+    process.env.ROVECODE_FINISH_CHECK = "0";
+    const events = await drive(rt, stream, "flail");
+    if (savedFinish === undefined) delete process.env.ROVECODE_FINISH_CHECK; else process.env.ROVECODE_FINISH_CHECK = savedFinish;
+    expect(events.at(-1)).toMatchObject({ type: "run_end", status: "done" });
     const ends = toolEnds(events);
     expect(ends.length).toBe(6);
     expect(ends.every((e) => !e.ok && e.output.startsWith("Edit rejected: anchor mismatch"))).toBe(true);
     expect(reflections(events).length).toBe(2); // the cap: failures 3-6 get nothing
-    expect(requests.map(endsWithReflection)).toEqual([false, true, true, false, false, false]);
+    expect(requests.map(endsWithReflection)).toEqual([false, true, true, false, false, false, false]);
     expect(readFileSync(r.file, "utf8")).toBe(CONTENT); // nothing applied
     expect(rt.steering.size).toBe(0);
     expect(rt.hooks.warnings).toEqual([]);
@@ -165,7 +171,7 @@ test("unfixable (identical failure): ONE nudge (identical repeats are deduped); 
       if (lastToolOutput(messages).includes("loop guard: blocked")) { yield turn(textTurn("GAVE-UP")); return; }
       yield turn(editCall(`s${n++}`, r.file, r.tag, "zzz")); // the same broken edit, forever
     };
-    const events = await drive(rt, stream, "same broken edit forever", 12);
+    const events = await drive(rt, stream, "same broken edit forever");
     const ends = toolEnds(events);
     expect(ends.length).toBe(GUARDRAIL_DEFAULTS.stubAfterRepeats + 1); // 5 executed + the stubbed 6th
     for (const e of ends.slice(0, 5)) { expect(e.ok).toBe(false); expect(e.output.startsWith("Edit rejected: anchor mismatch")).toBe(true); }
@@ -192,7 +198,7 @@ test("consumer-closed run (#39 MED-1 seam): the consumer .return()s the generato
     const stream: StreamFn = async function* () { yield turn(editCall("x1", r.file, r.tag, "zzz")); };
     const def = rt.buildDef({ provider: "mock", model: "default" });
     const deps = { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, cwd: rt.cwd, hooks: rt.hooks };
-    const gen = agentLoop(def, "close me", {}, { ...rt.buildCfg(true), maxTurns: 4 }, deps, rt.steering);
+    const gen = agentLoop(def, "close me", {}, rt.buildCfg(true), deps, rt.steering);
     let sawEnd = false;
     for await (const ev of gen) {
       if (ev.type === "run_end") sawEnd = true;
@@ -202,7 +208,7 @@ test("consumer-closed run (#39 MED-1 seam): the consumer .return()s the generato
     expect(rt.steering.size).toBe(0); // MUTATION TARGET: drop `await obs.close()` in agentLoop's finally → 1 (a nudge for a run that is gone)
     const requests: Message[][] = [];
     const quiet: StreamFn = async function* (_m, messages) { requests.push([...messages]); yield turn(textTurn("fresh start")); };
-    const next = await drive(rt, quiet, "next prompt", 2);
+    const next = await drive(rt, quiet, "next prompt");
     expect(next.at(-1)).toMatchObject({ type: "run_end", status: "done", summary: "fresh start" });
     expect(reflections(next)).toEqual([]);
     expect(requests[0]!.some((m) => m.role === "user" && text(m).startsWith(REFLECTION_PREFIX))).toBe(false);
@@ -214,19 +220,27 @@ test("consumer-closed run (#39 MED-1 seam): the consumer .return()s the generato
   }
 });
 
-test("a nudge the loop never drained (maxTurns hit right after the failing edit) is swept at run end and does not open the next run on the same runtime", async () => {
+test("a nudge the loop never drained (the run was aborted right after the failing edit) is swept at run end and does not open the next run on the same runtime", async () => {
   const r = rig();
   const rt = createRuntime({ cwd: r.cwd, stream: null });
   try {
     const stream: StreamFn = async function* () { yield turn(editCall("x1", r.file, r.tag, "zzz")); };
-    const events = await drive(rt, stream, "one shot", 1);
-    expect(events.at(-1)).toMatchObject({ type: "run_end", status: "budget" });
+    // abort as soon as the failing edit lands: the queued nudge is never drained by a turn 2
+    const ac = new AbortController();
+    const events: RunEvent[] = [];
+    const def = rt.buildDef({ provider: "mock", model: "default" });
+    const deps = { stream, registry: rt.registry, store: rt.store, tools: rt.registry.list().map((t) => t.schema), guard: rt.guard, cwd: rt.cwd, hooks: rt.hooks, signal: ac.signal };
+    for await (const ev of agentLoop(def, "one shot", {}, rt.buildCfg(true), deps, rt.steering)) {
+      events.push(ev);
+      if (ev.type === "tool_execution_end") ac.abort();
+    }
+    expect(events.at(-1)).toMatchObject({ type: "run_end", status: "stopped" });
     expect(toolEnds(events).length).toBe(1);
     expect(reflections(events)).toEqual([]); // there was no turn 2 to drain it
     expect(rt.steering.size).toBe(0); // swept by post_run (mutation target: drop the sweep → 1)
     const requests: Message[][] = [];
     const quiet: StreamFn = async function* (_m, messages) { requests.push([...messages]); yield turn(textTurn("fresh start")); };
-    const next = await drive(rt, quiet, "next prompt", 2);
+    const next = await drive(rt, quiet, "next prompt");
     expect(next.at(-1)).toMatchObject({ type: "run_end", status: "done", summary: "fresh start" });
     expect(reflections(next)).toEqual([]);
     expect(requests[0]!.some((m) => m.role === "user" && text(m).startsWith(REFLECTION_PREFIX))).toBe(false);

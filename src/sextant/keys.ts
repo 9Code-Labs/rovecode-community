@@ -53,6 +53,8 @@ export interface KeyCtx {
   /** renderer-owned effects; the state field is already written when these fire */
   local: {
     setTheme(name: ThemeName): void; setMode(mode: CodeMode): void; openFile(path: string): void; toast(text: string): void;
+    /** cancel a crew-board task (the × on a lane, or the x key on the selected one) */
+    cancelTask(id: string): void;
     /** open /market: the renderer loads the catalog (async) and fills s.market when it answers */
     openMarket(): void;
     /** open /context: the renderer asks the LIVE runtime for the system prompt and tool schemas — the two
@@ -290,11 +292,19 @@ const agentsBodyWidth = (code: Rect): number => code.w - 9;
 
 function onCodeKey(s: SextantState, name: string, ctx: KeyCtx): KeyEffect[] | null {
   const c = s.code, n = s.crew.length;
-  if (c.mode === "agents" && n && !c.laneOpen) { // app.js:1535-1541 — lane grid navigation
-    const { cols } = gridFor(agentsBodyWidth(ctx.layout.code), n); // the board's own grid (#46), not a lane count
-    const step: Record<string, number> = { left: n - 1, right: 1, up: n - cols, down: cols };
-    // own keys only: a key named "constructor" or "__proto__" is not a move (`in` would make lane NaN)
-    if (Object.hasOwn(step, name)) { c.lane = (c.lane + step[name]!) % n; return R(); }
+  if (c.mode === "agents" && n) {
+    // x cancels the selected lane's task (queued/running only — a settled lane has nothing to kill)
+    if (name === "x") {
+      const t = s.crew[Math.max(0, Math.min(c.lane, n - 1))]!;
+      if (t.status === "queued" || t.status === "running") ctx.local.cancelTask(t.id);
+      return R();
+    }
+    if (!c.laneOpen) { // app.js:1535-1541 — lane grid navigation
+      const { cols } = gridFor(agentsBodyWidth(ctx.layout.code), n); // the board's own grid (#46), not a lane count
+      const step: Record<string, number> = { left: n - 1, right: 1, up: n - cols, down: cols };
+      // own keys only: a key named "constructor" or "__proto__" is not a move (`in` would make lane NaN)
+      if (Object.hasOwn(step, name)) { c.lane = (c.lane + step[name]!) % n; return R(); }
+    }
   }
   if (name === "up") { c.scroll = Math.max(0, c.scroll - 1); return R(); }
   if (name === "down") { c.scroll += 1; return R(); }

@@ -58,8 +58,6 @@ export interface LoopDeps {
    *  (orchestrator children, cmdRun, gauntlet) keep in-flight-tool
    *  cancellation without constructing anything. */
   signal?: AbortSignal;
-  /** the run's clock for RunConfig.maxSeconds (default Date.now) — tests inject a fake one */
-  clock?: () => number;
 }
 
 /** Synthesized output for a tool_call the abort left unanswered — ONE owner, tools.ts (dispatch
@@ -171,10 +169,6 @@ async function* runLoop(
   let cooldownNoted = false;
   // P0-3: one policy per run; applied to the persisted results after each batch (tool-output-budget.ts)
   const outputBudget = cfg.outputBudget === false ? null : createOutputBudget(cfg.outputBudget ?? {});
-  const clock = deps.clock ?? Date.now;
-  const startedAt = clock();
-  // running spend for RunConfig.maxCostUsd (checked at the turn boundary below)
-  let spentUsd = 0, unpricedTurns = 0;
   // the finish check fires at most once per run (see the "done" exit below)
   let nudged = false;
   // the verify gate's memory: the write count the last check saw, and how it ended — a model that answers the
@@ -182,26 +176,12 @@ async function* runLoop(
   let verifiedAtWrites = -1;
   let lastVerify: VerifyState | undefined;
 
-  for (let turn = 1; turn <= cfg.maxTurns; turn++) {
+  // no turn/clock/cost ceilings: a run ends when the model stops calling tools, when it errors, or
+  // when the human aborts it — never because a budget ran out mid-work (run_end "budget" is gone)
+  for (let turn = 1; ; turn++) {
     // --- abort check: an abort that landed during the previous batch (or before
     // turn 1) must not consume steering or touch the provider again
     if (runAc.signal.aborted) { yield { type: "run_end", status: "stopped", summary: "run aborted" }; return; }
-    // --- wall clock (RunConfig.maxSeconds): a turn boundary, never mid-tool, so the run ends with every
-    // result it already has and the same "budget" status the turn cap uses — a spiral of short verification
-    // turns ends in a result object instead of an external kill
-    if (cfg.maxSeconds !== undefined && (clock() - startedAt) / 1000 >= cfg.maxSeconds) {
-      yield { type: "run_end", status: "budget", summary: `wall clock (${cfg.maxSeconds}s) reached after ${turn - 1} turn${turn === 2 ? "" : "s"}` };
-      return;
-    }
-    // --- spend cap (RunConfig.maxCostUsd): the same boundary, the same status. Priced from each turn's own
-    // usage as it lands (below), so the cap is compared against dollars actually spent, never an estimate.
-    // Turns the catalog cannot price add nothing; the summary says how many, so "$0.40 spent" is never read
-    // as "$0.40 in total" when two turns were unpriced.
-    if (cfg.maxCostUsd !== undefined && spentUsd >= cfg.maxCostUsd) {
-      const unpriced = unpricedTurns > 0 ? `; ${unpricedTurns} turn${unpricedTurns === 1 ? "" : "s"} unpriced` : "";
-      yield { type: "run_end", status: "budget", summary: `cost cap ($${cfg.maxCostUsd.toFixed(2)}) reached after ${turn - 1} turn${turn === 2 ? "" : "s"} — $${spentUsd.toFixed(4)} spent${unpriced}` };
-      return;
-    }
 
     // --- steering drain point: before the model call ---
     for (const s of steering.drainAll()) {
@@ -304,14 +284,15 @@ async function* runLoop(
       // whole turn and flushed the buffered message_updates afterwards — a generator cannot yield
       // from a callback — so a 15 s reasoning phase (claude-opus-5 at --effort high, measured) put
       // nothing on screen and read as a hang. Order is unchanged: every delta still precedes turn_end.
-      // the run's deadline rides into the provider call so a retry backoff cannot overshoot the clock the turn boundary enforces
-      const live = collectTurn(deps.stream, model, systemKept ? [sysMsg, ...withReminder] : withReminder, deps.tools, runAc.signal, cfg.maxSeconds !== undefined ? startedAt + cfg.maxSeconds * 1000 : undefined);
-      let reasoning = ""; // the reasoning text stays here: only its estimated size leaves the loop
+      const live = collectTurn(deps.stream, model, systemKept ? [sysMsg, ...withReminder] : withReminder, deps.tools, runAc.signal);
+      // the reasoning text leaves the loop ONLY as live event deltas (the TUI shows them as they
+      // arrive) — it is never appended to history or the store: the transcript carries the count
+      let reasoning = "";
       for (;;) {
         const step = await live.next();
         if (step.done) { turnResult = step.value; break; }
         if (step.value.type === "text_delta") yield { type: "message_update", messageId: msgId, delta: step.value.text };
-        else { reasoning += step.value.text; yield { type: "reasoning_update", messageId: msgId, tokens: estimateTokens(reasoning) }; }
+        else { reasoning += step.value.text; yield { type: "reasoning_update", messageId: msgId, tokens: estimateTokens(reasoning), delta: step.value.text } }
       }
     } catch (e) {
       turnResult = { parts: [], stopReason: "error", usage: { input: 0, output: 0 }, error: e instanceof Error ? e.message : String(e) };
@@ -331,10 +312,6 @@ async function* runLoop(
       // asked for; /cost prices per-message via origin — port #14 HIGH-2), else the request
       createdAt: Date.now(), origin: turnResult.origin ?? model, usage,
     };
-    if (cfg.maxCostUsd !== undefined && (usage.input > 0 || usage.output > 0 || (usage.cacheRead ?? 0) > 0 || (usage.cacheWrite ?? 0) > 0)) {
-      const c = cfg.priceUsd?.(usage, assistant.origin ?? model);
-      if (c === undefined) unpricedTurns++; else spentUsd += c;
-    }
     if (!aborted || parts.length > 0) { deps.store.append(assistant); history.push(assistant); }
     yield { type: "turn_end", turn, stopReason: aborted ? "aborted" : stopReason };
     if (aborted) {
@@ -351,10 +328,8 @@ async function* runLoop(
       const partial = partsText(parts);
       const summary = partial ? `${partial}\nerror: ${errText}` : `error: ${errText}`;
       // port #25: a context-overflow rejection arms an emergency compaction (next iteration's
-      // compaction block) and re-drives ONCE per run — only while a turn is left to re-drive in
-      // (on the last permitted turn the run ends HERE with the provider's text, not as "budget");
-      // a second overflow ends the run below
-      if (isContextOverflow(errText) && emergencyRedrives === 0 && turn < cfg.maxTurns) { emergencyRedrives++; emergencyPending = summary; continue; }
+      // compaction block) and re-drives ONCE per run; a second overflow ends the run below
+      if (isContextOverflow(errText) && emergencyRedrives === 0) { emergencyRedrives++; emergencyPending = summary; continue; }
       yield { type: "run_end", status: "error", summary };
       return;
     }
@@ -393,8 +368,7 @@ async function* runLoop(
       //      turn, an unanswered question — never "no files changed", which is what every answered question
       //      looks like): one user-role turn naming exactly what is open and asking the model to finish it or
       //      say why it is not needed. Both are acceptable answers. The next silence is accepted whatever it
-      //      says: a loop that will not stop is worse than one that stops early. The nudge is a turn like any
-      //      other — the turn, clock and cost ceilings above apply to it, so a spent budget ends as "budget".
+      //      says: a loop that will not stop is worse than one that stops early. The nudge is a turn like any other.
       const outstanding = assessOutstanding(history.slice(runStart), cfg.todoState?.() ?? null, nudged);
       if (cfg.finishCheck !== false && !nudged && (outstanding.failed.length > 0 || outstanding.unansweredAsk)) {
         nudged = true;
@@ -502,7 +476,6 @@ async function* runLoop(
     }
     if (runAc.signal.aborted) { yield { type: "run_end", status: "stopped", summary: "run aborted" }; return; }
   }
-  yield { type: "run_end", status: "budget", summary: `max turns (${cfg.maxTurns}) reached` };
 }
 
 /** What the transcript says the run left behind, read at the "done" exit. `failed`/`unansweredAsk` look at
@@ -595,9 +568,9 @@ export interface TurnOutcome {
 
 /** Drive one provider turn: yields the text and reasoning deltas as they arrive (the caller turns
  *  them into RunEvents), returns the terminal turn as the outcome. tool_call_delta is not surfaced. */
-async function* collectTurn(stream: StreamFn, model: ModelRef, messages: Message[], tools?: ToolSchema[], signal?: AbortSignal, deadlineAt?: number): AsyncGenerator<Extract<StreamEvent, { type: "text_delta" | "reasoning_delta" }>, TurnOutcome> {
+async function* collectTurn(stream: StreamFn, model: ModelRef, messages: Message[], tools?: ToolSchema[], signal?: AbortSignal): AsyncGenerator<Extract<StreamEvent, { type: "text_delta" | "reasoning_delta" }>, TurnOutcome> {
   let outcome: TurnOutcome = { parts: [], stopReason: "end_turn", usage: { input: 0, output: 0 } };
-  for await (const ev of stream(model, messages, { tools, signal, ...(deadlineAt !== undefined ? { deadlineAt } : {}) })) {
+  for await (const ev of stream(model, messages, { tools, signal })) {
     if (ev.type === "text_delta" || ev.type === "reasoning_delta") yield ev;
     else if (ev.type === "turn") { outcome = { parts: ev.turn.parts, stopReason: ev.turn.stopReason, usage: ev.turn.usage, error: ev.turn.error, origin: servedBy(ev.turn) }; }
   }

@@ -121,12 +121,6 @@ rovecode --accept-edits         # middle tier: writes INSIDE this folder stop as
                                 # workspace is named and left out. The panel shows one chip per file.
 rovecode run "<prompt>" --output json    # ONE result object on stdout (ndjson: one line per RunEvent + a
                                          # result line)
-rovecode run "<prompt>" --max-seconds 300 --max-turns 40  # ceilings on one run: a hit ends it cleanly with
-                                                          # status "budget" (exit 1) and the work so far, not
-                                                          # an outside kill. A headless run already has a
-                                                          # 20-minute clock (--max-seconds off removes it);
-                                                          # ROVECODE_MAX_TURNS / ROVECODE_MAX_SECONDS set both
-                                                          # on every surface, TUI included
 rovecode run "/review src/x.ts" # a leading /name expands .rovecode/commands/<name>.md (a custom slash
                                 # command) headlessly
 rovecode gauntlet               # adversarial eval suite (offline, deterministic, 10 tasks)

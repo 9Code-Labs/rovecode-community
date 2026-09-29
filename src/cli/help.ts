@@ -67,19 +67,13 @@ const ADVANCED = `advanced — the full command reference
                             piped stdin is appended to the prompt as a fenced block — git diff | rovecode run "review this"
                             (never read from a terminal; --no-stdin ignores it; an open pipe that sends nothing
                             for 3 s is skipped with a note; capped at 1 MB)
-    --max-turns N · --max-seconds S|off   ceilings on one run; a hit ends it cleanly with status
-                            "budget" (exit 1) and the work so far, instead of an external kill. Headless runs
-                            default to a 20-minute wall clock; --max-seconds off removes it
-    --max-cost D|off        a spend ceiling in dollars for one run, priced from each turn's usage as it lands
-                            (the catalog's rates for the model that served it); the same clean "budget" end.
-                            A turn the catalog cannot price adds nothing and is counted in the summary
     --output <text|json|ndjson>  text (default): progress + the final answer on stdout
                             json: exactly ONE result object on stdout {status, summary, sessionId,
                             model:{provider,model}, origin (served model|null), usage:{input,output,cacheRead,
                             cacheWrite}, costUsd (null when unpriced), toolCalls:[{tool,ok,ms?}], durationMs, exitCode}
                             ndjson: one JSON line per RunEvent, then a final {type:"result"} line
                             json/ndjson: stdout carries only JSON, progress goes to stderr
-                            exit codes: 0 done · 1 error/budget · 2 usage/startup error · 130 aborted (Ctrl-C)
+                            exit codes: 0 done · 1 error · 2 usage/startup error · 130 aborted (Ctrl-C)
                             exit 2 = usage/startup error (bad --output value, sandbox misconfig or unavailable rung):
                             one stderr line, nothing on stdout; --output=<mode> is accepted as well
   rovecode bench                run cross-harness micro-benchmarks (edits, sessions)
@@ -209,11 +203,6 @@ const ENV = `env — every ROVECODE_* setting
   ROVECODE_TOOL_MIDDLEWARE=1  force the text tool-call protocol (a prompt block + a parser) even for a model
                     the catalog says has native tool calling; ROVECODE_NO_TOOL_MIDDLEWARE=1 forces native only
   ROVECODE_EVAL_CELL=1  register the persistent eval cell tool (a REPL that keeps state between calls)
-  ROVECODE_MAX_TURNS  turn ceiling for one run, every surface (TUI included); a hit ends it with status
-                    "budget" and exit 1
-  ROVECODE_MAX_SECONDS  the same as a wall clock, or "off". Every surface honours it, but only
-                    one-shot runs have a DEFAULT (1200 s) — the TUI has no clock unless this sets one
-  ROVECODE_MAX_COST   the same in dollars for one run (--max-cost on a one-shot run), or "off"; no default
   ROVECODE_FINISH_CHECK=0  turn off the once-per-run finish check: when the model stops right after a failed tool
                     call or an unanswered question, it is asked ONCE to finish or say what is left; the next
                     reply ends the run either way. "done · …" on run_end still names what was left

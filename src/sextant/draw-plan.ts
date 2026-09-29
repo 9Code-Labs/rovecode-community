@@ -122,8 +122,8 @@ export function fitText(candidates: readonly string[], width: number): string {
 }
 
 /** Usage panel (3 inner rows): `tokens 4.2k` (+ in/out split when it fits), `context ━━──── 12%`
- *  (or `context ?` when the window is unknown), `cost $0.030` (or `cost —` when unpriced) +
- *  provider/model (model alone, then clipped, when narrow). */
+ *  (`≈12%` when the window is assumed rather than known — providers/context-window.ts), `cost $0.030`
+ *  (or `cost —` when unpriced) + provider/model (model alone, then clipped, when narrow). */
 export function drawUsage(scr: ScreenLike, R: Rect, s: SextantState, theme: Theme): void {
   const B = panel(scr, R, "usage", false, [], theme);
   const u = s.usage;
@@ -133,11 +133,13 @@ export function drawUsage(scr: ScreenLike, R: Rect, s: SextantState, theme: Them
   if (u.tokensIn + u.tokensOut === 0) scr.text(B.x, B.y, [label("tokens"), [EMPTY.usage, st(theme.dim)]], B.w); // nothing spent yet
   else scr.text(B.x, B.y, [label("tokens"), [total, st(theme.fg)], [split, st(theme.dim)]], B.w);
   scr.text(B.x, B.y + 1, [label("context")]);
-  if (u.contextPct === null) scr.put(B.x + 10, B.y + 1, "?", st(theme.dim));
+  if (u.contextPct === null) scr.put(B.x + 10, B.y + 1, "?", st(theme.dim)); // no model attached at all
   else {
     const barW = Math.max(6, B.w - 10 - 7), filled = barFilled(u.contextPct, barW);
     for (let i = 0; i < barW; i++) scr.put(B.x + 10 + i, B.y + 1, i < filled ? "━" : "─", st(i < filled ? theme.accent : theme.rule2));
-    scr.put(B.x + 10 + barW + 2, B.y + 1, `${Math.round(u.contextPct)}%`.padStart(4), st(u.contextPct > 80 ? theme.warn : theme.fg));
+    // "≈" = the window behind the bar is the resolver's assumption, not a known number
+    const pct = `${u.contextAssumed ? "≈" : ""}${Math.round(u.contextPct)}%`.padStart(4);
+    scr.put(B.x + 10 + barW + 2, B.y + 1, pct, st(u.contextPct > 80 ? theme.warn : u.contextAssumed ? theme.dim : theme.fg));
   }
   const cost = u.costUsd === null ? "—" : `$${u.costUsd.toFixed(3)}`;
   const model = u.model ? fitText([u.provider ? `  ${u.provider}/${u.model}` : `  ${u.model}`, `  ${u.model}`], B.w - 10 - cost.length) : "";

@@ -54,7 +54,7 @@ function streamFor(task: GauntletTask, workspace: string): StreamFn {
   if (task.category === "adversarial" && task.id === "adversarial-loop-guard") {
     // scripted looping model: re-issues the identical call until the loop
     // guard BLOCKS one (its stub is the only thing that makes it stop) —
-    // without a wired guard this stream loops until maxTurns
+    // without a wired guard this stream loops until capTurns' ceiling below
     return async function* (_model, m) {
       const last = Array.isArray(m) ? m.at(-1) : undefined;
       const blocked = last?.role === "tool"
@@ -108,6 +108,18 @@ export function gauntletRules(taskId: string): PermissionRule[] {
     : [allowAll];
 }
 
+/** The loop no longer carries a turn ceiling (the run-budget system is gone — a run ends when the
+ *  model stops, errors, or is aborted), so the gauntlet bounds ITSELF: after `cap` provider calls
+ *  the stream answers end_turn and the run ends "done". The adversarial loop-guard script notices
+ *  nothing (its finalText is not "LOOP-BROKEN"), so an unguarded run still fails the task. */
+function capTurns(stream: StreamFn, cap: number): StreamFn {
+  let n = 0;
+  return async function* (model, messages, options) {
+    if (++n > cap) { yield { type: "turn", turn: textTurn(`gauntlet turn cap (${cap}) reached`) }; return; }
+    yield* stream(model, messages, options);
+  };
+}
+
 /** `guard: null` runs unguarded — only for tests proving a guardless run FAILS
  *  the loop-guard task (test/integration/guard-wiring.test.ts).
  *  `onEvent` (eval persistence, optional): observes the loop's raw events without
@@ -118,19 +130,19 @@ export async function runTask(task: GauntletTask, workspace: string, guard: Tool
   const registry = new ToolRegistry();
   registry.register(readTool, editTool, writeTool, bashTool, globTool, grepTool, lsTool);
   const rules = gauntletRules(task.id);
-  const maxTurns = task.id === "adversarial-loop-guard" ? 12 : 8;
+  const turnCap = task.id === "adversarial-loop-guard" ? 12 : 8;
   const def: AgentDefinition = {
-    name: "gauntlet", systemPrompt: "You are being evaluated. Use tools as instructed.", tools: ["*"], maxTurns,
+    name: "gauntlet", systemPrompt: "You are being evaluated. Use tools as instructed.", tools: ["*"],
   };
   const cfg: RunConfig = {
-    maxTurns, contextBudgetTokens: 400_000, compactionThreshold: 0.8, parallelTools: true,
+    contextBudgetTokens: 400_000, compactionThreshold: 0.8, parallelTools: true,
     permissionRules: rules,
   };
   const toolCalls: { tool: string; args: unknown }[] = [];
   const events: { type: string }[] = [];
   let finalText = "";
   try {
-    for await (const ev of agentLoop(def, task.prompt, {}, cfg, { stream: streamFor(task, workspace), registry, store, guard: guard ?? undefined }, new SteeringQueue())) {
+    for await (const ev of agentLoop(def, task.prompt, {}, cfg, { stream: capTurns(streamFor(task, workspace), turnCap), registry, store, guard: guard ?? undefined }, new SteeringQueue())) {
       events.push({ type: ev.type });
       if (ev.type === "tool_execution_start") toolCalls.push({ tool: ev.tool, args: ev.args });
       if (ev.type === "run_end") finalText = ev.summary;
@@ -174,8 +186,8 @@ export interface LiveGauntletRuntime {
  *  chunks (repo map, harvested config of the PROCESS cwd) dropped for the same reason; todo_read/todo_write
  *  and a fail-closed ask_user registered because the contract names them (the task, recall and network
  *  fetch tools are not: a scored task never needs them, and allow-all rules would let them spawn or fetch);
- *  maxTurns 12 (a real model needs more round trips than the script); the runtime's guard shared across
- *  tasks (it resets per turn). `signal` is runGauntlet's timeout: the loop ends "stopped", the fetch dies.
+ *  a 12-turn stream cap (a real model needs more round trips than the script); the runtime's guard shared
+ *  across tasks (it resets per turn). `signal` is runGauntlet's timeout: the loop ends "stopped", the fetch dies.
  *  Token usage is summed from the session's assistant messages. Never rejects after the loop started —
  *  a failure inside the loop becomes an `error:` transcript, so a timed-out orphan cannot surface as an
  *  unhandled rejection. */
@@ -187,19 +199,19 @@ export async function runTaskLive(task: GauntletTask, workspace: string, rt: Liv
   registry.register(readTool, editTool, writeTool, bashTool, globTool, grepTool, lsTool);
   registry.register(...todoTools(join(dir, "todo-sessions")), askUserTool(() => undefined));
   const rules = gauntletRules(task.id);
-  const maxTurns = 12;
+  const turnCap = 12;
   const { contextChunks: _dropped, ...product } = rt.buildDef(model, { cwd: workspace });
   void _dropped;
-  const def: AgentDefinition = { ...product, name: "gauntlet-live", maxTurns };
+  const def: AgentDefinition = { ...product, name: "gauntlet-live" };
   const cfg: RunConfig = {
-    maxTurns, contextBudgetTokens: 400_000, compactionThreshold: 0.8, parallelTools: true,
+    contextBudgetTokens: 400_000, compactionThreshold: 0.8, parallelTools: true,
     permissionRules: rules,
   };
   const toolCalls: { tool: string; args: unknown }[] = [];
   const events: { type: string }[] = [];
   let finalText = "";
   try {
-    for await (const ev of agentLoop(def, task.prompt, {}, cfg, { stream: rt.stream, registry, store, guard: rt.guard, cwd: workspace, ...(signal ? { signal } : {}) }, new SteeringQueue())) {
+    for await (const ev of agentLoop(def, task.prompt, {}, cfg, { stream: capTurns(rt.stream, turnCap), registry, store, guard: rt.guard, cwd: workspace, ...(signal ? { signal } : {}) }, new SteeringQueue())) {
       events.push({ type: ev.type });
       if (ev.type === "tool_execution_start") toolCalls.push({ tool: ev.tool, args: ev.args });
       if (ev.type === "run_end") finalText = ev.summary;

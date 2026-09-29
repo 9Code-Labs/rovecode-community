@@ -1,0 +1,8 @@
+#!/bin/sh
+# After `git pull`: refresh the TUI bundle so dist/cli never serves stale code.
+# (bin/rovecode.ts already refuses a stale bundle and falls back to source — this
+# hook just restores the fast path automatically.)
+# Enable once per clone:  git config core.hooksPath .githooks
+if command -v bun >/dev/null 2>&1; then
+  bun run build:cli || echo "post-merge: build:cli failed — TUI will run from source until it succeeds"
+fi

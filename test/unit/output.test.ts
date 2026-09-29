@@ -308,10 +308,9 @@ describe("ndjson mode", () => {
 // ---------- exit codes ----------
 
 describe("exit codes", () => {
-  test("mapping: done 0 · error/budget 1 · stopped (the loop's abort status) 130 · missing 1 (mutation: flatten to done?0:1)", () => {
+  test("mapping: done 0 · error 1 · stopped (the loop's abort status) 130 · missing 1 (mutation: flatten to done?0:1)", () => {
     expect(exitCodeFor("done")).toBe(0);
     expect(exitCodeFor("error")).toBe(1);
-    expect(exitCodeFor("budget")).toBe(1);
     expect(exitCodeFor("stopped")).toBe(130);
     expect(exitCodeFor(undefined)).toBe(1);
   });
@@ -322,7 +321,6 @@ describe("exit codes", () => {
     expect(single(r.out.text())).toMatchObject({ status: "stopped", summary: "run aborted", exitCode: 130 });
     expect(drive("text", { end: { status: "stopped", summary: "run aborted" } }).code).toBe(130);
     expect(drive("ndjson", { end: { status: "stopped", summary: "run aborted" } }).code).toBe(130);
-    expect(drive("json", { end: { status: "budget", summary: "max turns (60) reached" } }).code).toBe(1);
   });
 });
 

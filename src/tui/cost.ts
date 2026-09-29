@@ -24,6 +24,8 @@ export interface UsageSummary {
    *  (core/token-scale.ts): "o200k" is countTokens (exact for OpenAI models), "chars" is estimateTokens
    *  (chars/4, what compaction budgets with). The scale applied is the one measured for that counter. */
   est: number; estRaw: number; counter: "o200k" | "chars"; scale: { scale: number; measured: boolean; note: string }; window?: number;
+  /** the window came from the resolver's assumption, not config or catalog — the note marks it ≈ */
+  windowAssumed?: boolean;
 }
 
 export interface SummarizeOptions {
@@ -32,6 +34,9 @@ export interface SummarizeOptions {
    *  resident, else chars/4 — for the sextant usage panel, which is computed at boot and after every
    *  turn and must never be the reason the table loads. Default "exact". */
   counter?: "exact" | "cheap";
+  /** the window resolver (TUI: providers/context-window.ts — config → catalog → assumed); absent →
+   *  the catalog alone, the old behavior */
+  windowOf?: (provider: string, model: string) => { window: number; assumed: boolean } | undefined;
 }
 
 export function summarizeUsage(messages: Message[], catalog: ModelCatalog, current: { provider: string; model: string }, opts: SummarizeOptions = {}): UsageSummary {
@@ -54,8 +59,9 @@ export function summarizeUsage(messages: Message[], catalog: ModelCatalog, curre
     if (c === undefined) u.unpriced += 1;
     else { u.cost += c; u.priced += 1; }
   }
-  const window = catalog.lookup(current.provider, current.model)?.contextWindow;
-  if (window) u.window = window;
+  const w = opts.windowOf?.(current.provider, current.model);
+  const window = w?.window ?? catalog.lookup(current.provider, current.model)?.contextWindow;
+  if (window) { u.window = window; if (w?.assumed) u.windowAssumed = true; }
   const text = messages.map((m) => partsTokenText(m.parts)).join("\n");
   const exact = opts.counter === "cheap" ? countTokensIfLoaded(text) : countTokens(text);
   // Neither counter is this model's tokenizer (o200k is OpenAI's; chars/4 is nobody's). `rovecode context`
@@ -85,8 +91,8 @@ export function sessionUsage(messages: Message[], catalog: ModelCatalog, current
   return { costUsd: u.priced > 0 ? u.cost : null, contextTokens: u.est, counter: u.counter };
 }
 
-export function buildCostNote(messages: Message[], catalog: ModelCatalog, current: { provider: string; model: string }): string {
-  const u = summarizeUsage(messages, catalog, current);
+export function buildCostNote(messages: Message[], catalog: ModelCatalog, current: { provider: string; model: string }, opts: SummarizeOptions = {}): string {
+  const u = summarizeUsage(messages, catalog, current, opts);
   const health = u.window ? contextHealth(u.est, u.window) : undefined;
   let costLine: string;
   if (u.priced === 0 && u.unpriced > 0) {
@@ -99,7 +105,7 @@ export function buildCostNote(messages: Message[], catalog: ModelCatalog, curren
   return [
     `tokens: ${u.inTok} in / ${u.outTok} out · cache: ${u.cacheRead} read / ${u.cacheWrite} written`,
     health
-      ? `context: ~${u.est} of ${u.window} (${Math.round(health.fraction * 100)}%${health.nearLimit ? " — near limit" : ""})`
+      ? `context: ~${u.est} of ${u.windowAssumed ? "≈" : ""}${u.window} (${Math.round(health.fraction * 100)}%${health.nearLimit ? " — near limit" : ""}${u.windowAssumed ? ", window assumed" : ""})`
       : `context: ~${u.est} tokens (window unknown)`,
     // a corrected number that does not say it was corrected is indistinguishable from a wrong one
     ...(u.scale.scale !== 1 ? [`  ${u.counter === "o200k" ? "o200k counted" : "chars/4 estimated"} ${u.estRaw}, scaled ${u.scale.scale}× for ${current.model}`] : []),

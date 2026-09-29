@@ -77,7 +77,7 @@ const MAX_WARNING_CHARS = 300;
 
 export interface HookCtx { cwd: string; sessionId: string; runId?: string }
 export interface HookToolCall { id: string; tool: string; args: unknown }
-export interface RunResult { status: "done" | "stopped" | "error" | "budget"; summary: string }
+export interface RunResult { status: "done" | "stopped" | "error"; summary: string }
 export type CompactionEvent = Extract<RunEvent, { type: "compaction" }>;
 type Hook<A extends unknown[], R = void> = (ctx: HookCtx, ...args: A) => Promise<R | void> | R | void;
 

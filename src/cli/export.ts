@@ -272,7 +272,7 @@ export function cmdExport(argv: readonly string[]): void {
     const msg = e instanceof Error ? e.message : String(e);
     console.error(`error: ${msg}`);
     // "you typed it wrong" and "it did not work" are different answers to a script: 2 is the usage class
-    // (README: 0 done · 1 error/budget · 2 usage/startup), and every other command already answers that way
+    // (README: 0 done · 1 error · 2 usage/startup), and every other command already answers that way
     process.exit(msg.startsWith("usage:") ? 2 : 1);
   }
 }

@@ -22,7 +22,7 @@ import { cmdAttach, cmdPasteImage, carryOverAttachments, queuedAttachNote, userT
 import { cmdConnect, cmdModel as cmdModelSwitch, cmdModels, cmdProvider, cmdSetup, listModelIds, watchProviders, CONNECT_COMMAND, MODEL_COMMAND, PROVIDER_COMMANDS, SETUP_COMMAND, type ProviderCmdCtx } from "./providers-cmd.ts";
 import { cmdMcp, MCP_COMMAND } from "./mcp-cmd.ts";
 import { summarizePlugins } from "../plugins/index.ts";
-import { acceptEditsNote, effortNote, modeSwitchNote, noModelHint, resumedLine, welcomeCard } from "../core/voice.ts";
+import { acceptEditsNote, effortNote, exitResumeHint, modeSwitchNote, noModelHint, resumedLine, welcomeCard } from "../core/voice.ts";
 import { checkForUpdate, updateLine } from "../core/update-check.ts";
 import pkg from "../../package.json";
 import { compactionNote } from "./replay-marker.ts";
@@ -35,11 +35,15 @@ type PiRendererMod = typeof import("./pi-renderer.ts");
 import { buildSextantAttach, SEXTANT_LOCAL_NAMES } from "./sextant-attach.ts";
 import type { ModelRef, PermissionLevel, RunEvent, StreamFn } from "../core/types.ts";
 import { thinkingLine } from "../providers/thinking.ts";
+import { resolveContextWindow } from "../providers/context-window.ts";
+import { agentAvailable, loadAgentSpecs } from "../agents/external.ts";
+import { createHeadSummarizer } from "../core/summarize.ts";
 import { anthropicShapeFor } from "../providers/stream.ts";
 import { parseEffort, THINKING_EFFORTS } from "../core/types.ts";
 import { resolvePermission, saveSetting } from "../core/settings.ts";
 import type { ThinkingEffort } from "../core/types.ts";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 
 export { buildCostNote } from "./cost.ts"; // moved for the ADR-002 cap; re-exported for tests
 
@@ -134,7 +138,10 @@ export const TUI_COMMANDS: SlashCommand[] = [
   { name: "status", description: "Provider, model, turns, tokens, sandbox", group: "info" },
   { name: "cost", description: "Tokens, cache hits and the USD estimate (/cost refresh updates prices)", group: "info" },
   { name: "todos", description: "My step list for the current task", group: "info" },
-  { name: "tasks", description: "Background subagents: /tasks [cancel <id>|cancel all]", group: "info" },
+  { name: "tasks", description: "Background subagents: /tasks [<id>] · cancel <id>|all", group: "info" },
+  { name: "delegate", description: "Hand a task to an external CLI agent: /delegate <claude|codex|…> <task>", group: "session" },
+  { name: "roadmap", description: "Researcher + planner draw this project's roadmap into ROADMAP.md", group: "session" },
+  { name: "compact", description: "Summarize this session into a fresh one (the old one stays listed)", group: "session" },
   { name: "skills", description: "Installed skills", group: "info" },
   { name: "memory", description: "What I remember across turns (memory blocks)", group: "info" },
 ];
@@ -191,6 +198,66 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   // port #26: the runtime's ONE steering queue — background-task completion notes land on the
   // next model turn; settled tasks also show in the transcript as they happen (failed → warn)
   const steering = rt.steering;
+
+  /** /roadmap [goal]: researcher explores the project, planner turns it into an ordered roadmap,
+   *  written to ROADMAP.md (never clobbered: an existing one sends the draft to .rovecode/). The
+   *  pipeline runs as background tasks — the board shows them, notes announce the stages. */
+  const cmdRoadmap = (arg: string): void => {
+    const goal = arg.trim() || "understand this project as it is TODAY (structure, entry points, tests, tooling, what is half-done) and draw its roadmap";
+    void (async (): Promise<void> => {
+      const research = rt.tasks.start({
+        agent: "researcher",
+        goal: `Explore the project at ${rt.cwd} end to end and report: purpose, architecture, entry points, the test/build tooling and whether it passes, incomplete or dead areas, and anything risky. Evidence every claim with file:line. Goal context: ${goal}`,
+      }, { label: "roadmap: research" });
+      if (!research.ok) { renderer.addSystemNote(`roadmap: ${research.reason}`, "error"); return; }
+      renderer.addSystemNote(`roadmap: the researcher is reading the project (task ${research.id}) — the board shows it; the planner follows`);
+      const t1 = await rt.tasks.result(research.id);
+      if (!t1 || t1.status !== "done") { renderer.addSystemNote(`roadmap: research ${t1?.status ?? "failed"} — ${t1?.error ?? "no result"}`, "error"); return; }
+      const plan = rt.tasks.start({
+        agent: "planner",
+        goal: `Project: ${rt.cwd}. Goal: ${goal}\n\nThe researcher's report follows. Turn it into ROADMAP.md content: a markdown roadmap — current state (3 lines), milestones in dependency order (each: scope, why now, done-when), risks, and a "later" shelf. Self-contained and concrete.\n\n${t1.summary ?? ""}`,
+      }, { label: "roadmap: plan" });
+      if (!plan.ok) { renderer.addSystemNote(`roadmap: ${plan.reason}`, "error"); return; }
+      renderer.addSystemNote(`roadmap: the planner is drafting (task ${plan.id})…`);
+      const t2 = await rt.tasks.result(plan.id);
+      if (!t2 || t2.status !== "done") { renderer.addSystemNote(`roadmap: planning ${t2?.status ?? "failed"} — ${t2?.error ?? "no result"}`, "error"); return; }
+      const text = t2.summary ?? "";
+      const target = join(rt.cwd, "ROADMAP.md");
+      let file = target;
+      if (existsSync(target)) {
+        file = join(rt.cwd, ".rovecode", `roadmap-${new Date().toISOString().slice(0, 10)}.md`); // never clobber a human's ROADMAP.md
+        mkdirSync(dirname(file), { recursive: true });
+      }
+      writeFileSync(file, text);
+      renderer.addSystemNote(`roadmap written → ${file === target ? "ROADMAP.md" : file} (${text.split("\n").length} lines)${file === target ? "" : " — ROADMAP.md existed, so the draft went aside"}`);
+    })().catch((e: unknown) => renderer.addSystemNote(`roadmap failed: ${e instanceof Error ? e.message : String(e)}`, "error"));
+  };
+
+  /** /delegate <agent> <task…>: the USER's door to external CLI agents — fire-and-forget onto the
+   *  crew board (the completion note lands via the task subscription like any child run) */
+  const cmdDelegate = (arg: string): void => {
+    // /delegate <agent> [--model <id>] <task…> — --model picks the DELEGATED CLI's own model
+    const modelM = /(?:^|\s)--model\s+(\S+)/.exec(arg);
+    const model = modelM?.[1];
+    const stripped = (modelM ? arg.replace(modelM[0], " ") : arg).trim();
+    const m = /^(\S+)?\s*([\s\S]*)$/.exec(stripped);
+    const agent = m?.[1] ?? "";
+    const goal = (m?.[2] ?? "").trim();
+    const { specs } = loadAgentSpecs(rt.cwd);
+    if (!agent) {
+      const rows = Object.entries(specs).map(([id, s]) => `${id}${agentAvailable(s) ? "" : " (not on PATH)"}${s.note ? ` — ${s.note}` : ""}`);
+      renderer.addSystemNote(`usage: /delegate <agent> <task>\n${rows.join("\n")}`);
+      return;
+    }
+    const spec = specs[agent];
+    if (!spec) { renderer.addSystemNote(`unknown agent "${agent}" — known: ${Object.keys(specs).join(", ")} (add your own in .rovecode/agents.json)`, "warn"); return; }
+    if (!goal) { renderer.addSystemNote(`usage: /delegate ${agent} [--model <id>] <task>`, "warn"); return; }
+    if (model !== undefined && spec.modelFlag === undefined) { renderer.addSystemNote(`"${agent}" has no modelFlag configured — it cannot take --model`, "warn"); return; }
+    if (agentAvailable(spec) === null) { renderer.addSystemNote(`"${agent}" is not available — no \`${spec.command[0]}\` on PATH`, "warn"); return; }
+    const started = rt.tasks.startExternal(agent, spec, goal, { cwd: rt.cwd, ...(model !== undefined ? { model } : {}) });
+    if (!started.ok) { renderer.addSystemNote(`delegate: ${started.reason}`, "error"); return; }
+    renderer.addSystemNote(`delegated to ${agent}${model ? ` as ${model}` : ""} — task ${started.id} is on the agents board; its result lands here when it finishes`);
+  };
   rt.tasks.subscribe((t) => { if (isTerminal(t.status)) renderer.addSystemNote(taskNote(t), t.status === "failed" ? "warn" : "info"); });
   // port #20: per-mode model slots from .rovecode/modes.json, restored from session entries
   const modesCfg = loadModesConfig(rt.cwd);
@@ -199,6 +266,19 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     model: opts.model ?? process.env.ROVECODE_MODEL ?? rt.defaultModel ?? "",
   });
   modes.restore(modeFromEntries(store.messages()) ?? modes.mode);
+  // a resumed session comes back with the model it RAN on (its last assistant origin), not today's
+  // global default — an explicit --model flag is the one thing that outranks the session's own model
+  const restoreSessionModel = (s: SessionStore, explicitWins: boolean): void => {
+    if (explicitWins) return;
+    const sm = lazySessionCmd().sessionModelOf(s);
+    if (sm === null) return;
+    if (rt.providers.get(sm.provider) === undefined) {
+      renderer.addSystemNote(`this session ran on ${sm.provider}/${sm.model} — that provider is not configured here; staying on the current model`, "warn");
+      return;
+    }
+    modes.setModel(sm);
+  };
+  restoreSessionModel(store, opts.model !== undefined);
   // port #30: custom slash commands — .rovecode/commands/*.md, project shadows ~/.rovecode/commands (commands.ts);
   // LOW-1: /quit is a `case` alias of /exit below, not a TUI_COMMANDS entry — reserve it explicitly;
   // port #44: the sextant surface's own /theme /open /diff /focus /agents never reach handleSlash — reserved too
@@ -236,7 +316,20 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
       ...(todos !== undefined ? { todos } : {}),
     };
   };
-  const pushStatus = () => renderer.setStatus(status());
+  const pushStatus = () => { renderer.setStatus(status()); warnAssumedWindow(); };
+
+  // the usage bar NEVER shows "?" (providers/context-window.ts assumes 128k and marks it ≈) — but an
+  // assumption must not be silent: once per model per session, say what was assumed and how to set it
+  const assumedWarned = new Set<string>();
+  const warnAssumedWindow = (): void => {
+    if (!state.provider || state.provider === "mock" || !state.model) return; // the mock stand-in has no real window to ask for
+    const key = `${state.provider}/${state.model}`;
+    if (assumedWarned.has(key)) return;
+    const w = resolveContextWindow(catalog, rt.providers.get(state.provider), state.provider, state.model);
+    if (w.source !== "assumed") return;
+    assumedWarned.add(key);
+    renderer.addSystemNote(`context window for ${key} is unknown — assuming ${w.window.toLocaleString("en-US")} tokens (the ≈ bar); set the real one: "contextWindows": { "${state.model}": <tokens> } in providers.json`, "warn");
+  };
 
   /** set once the surface owns the screen (below renderer.start); puts Node's warning printer back */
   let restoreWarnings: (() => void) | undefined;
@@ -262,7 +355,12 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
       // cause). Optional: the Renderer seam stays untouched; FakeRenderer and pi-tui have no drain()
       await (renderer as { drain?: () => Promise<void> }).drain?.()?.catch(() => {});
       resolveClosed();
-      if (opts.exitOnClose !== false) process.exit(0);
+      // the screen is gone, the terminal is the user's again: leave the way back in it — one
+      // pasteable command. Only for a session with something in it, only when we own the exit
+      if (opts.exitOnClose !== false) {
+        if (store.messages().some((m) => m.role === "user")) process.stdout.write(exitResumeHint(store.id) + "\n");
+        process.exit(0);
+      }
     })();
   };
 
@@ -281,15 +379,17 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     // (critic finding: prompt kept reading the boot session's memory after /resume)
     rt.setBlockStore(blocks);
     rt.setSessionStore(store); // port #11: checkpoint entryId capture follows the active session
-    // port #20: the switched-to session resumes ITS last recorded mode
+    // port #20: the switched-to session resumes ITS last recorded mode — and ITS model (the last
+    // assistant origin), so a session never silently changes brains
     modes.restore(modeFromEntries(store.messages()) ?? modesCfg.defaultMode ?? "act");
+    restoreSessionModel(store, false);
     const cur = modes.modelFor();
     state.mode = modes.mode; state.model = cur.model; state.provider = cur.provider;
     state.turns = 0;
     replayHistory();
     refreshUsage();
     pushStatus();
-    if (announce) renderer.addSystemNote(`session ${id.slice(0, 8)} (${store.messages().length} messages)`);
+    if (announce) renderer.addSystemNote(`session ${id.slice(0, 8)} (${store.messages().length} messages) · ${cur.provider}/${cur.model}`);
     carryOverAttachments(attachCtx, pending); // port #34: a swap must never lose staged images silently
   };
 
@@ -313,6 +413,13 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     replayHistory,
     refreshUsage,
     pushStatus,
+    // /compact: summarize with the model the session runs on, read live (the mode's slot can change)
+    summarize: (texts) => {
+      if (rt.stream === null) return Promise.resolve(""); // no provider → the command reports it
+      const cur = modes.modelFor();
+      return createHeadSummarizer(rt.stream, { provider: cur.provider, model: cur.model })(texts);
+    },
+    get summarizeModel() { const cur = modes.modelFor(); return `${cur.provider}/${cur.model}`; },
   };
 
   // read-only info commands (info-cmd.ts) — store/blocks read live, the status slice is `state` itself
@@ -398,6 +505,9 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
       case "memory": lazyInfoCmd().cmdMemory(infoCtx); return true;
       case "todos": lazyInfoCmd().cmdTodos(infoCtx); return true; // port #32
       case "tasks": lazyInfoCmd().cmdTasks(infoCtx, arg); return true; // port #26
+      case "delegate": cmdDelegate(arg); return true; // external CLI agents (agents/external.ts), on the crew board
+      case "roadmap": cmdRoadmap(arg); return true; // roles pipeline (agents/roles.ts): researcher → planner → ROADMAP.md
+      case "compact": void lazySessionCmd().cmdCompact(sessCtx); return true; // durable manual compaction (session-cmd.ts)
       case "new": lazySessionCmd().cmdNew(sessCtx); return true;
       case "rewind": case "tree": void lazySessionCmd().cmdRewind(sessCtx); return true;
       case "sessions": void lazySessionCmd().cmdSessions(sessCtx); return true;
@@ -462,6 +572,8 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
     run = agentLoop(def, goal, {}, cfg, {
       stream, registry: rt.registry, store,
       tools: rt.registry.list().map((t) => t.schema),
+      // the head summarizer rides the session's model — without it speculative compaction was off
+      summarize: createHeadSummarizer(stream, { provider: cur.provider, model: cur.model }, runAbort.signal),
       guard: rt.guard, planReminder: rt.planReminder, signal: runAbort.signal, // port #21: Esc aborts this run's controller
       cwd: rt.cwd, // cwd must be threaded — tools resolve relative paths against it, same as checkpoints/LSP/preview
       hooks: rt.hooks, // port #29: pre_tool/approval/post_tool at dispatch, pre_run/compaction/post_run/on_event via the loop observer
@@ -531,7 +643,7 @@ export async function runTui(opts: TuiAppOptions = {}): Promise<void> {
   };
   // port #44: a renderer with panels (sextant) reads the runtime through this handle — once, before start()
   _trace("renderer.attach");
-  renderer.attach?.(buildSextantAttach({ cwd: rt.cwd, sessionsDir, store: () => store, tasks: rt.tasks, model: () => modes.modelFor(), catalog, runtime: () => rt, petName: opts.pet }));
+  renderer.attach?.(buildSextantAttach({ cwd: rt.cwd, sessionsDir, store: () => store, tasks: rt.tasks, model: () => modes.modelFor(), catalog, providers: rt.providers, runtime: () => rt, petName: opts.pet }));
   // /model suggestions: the ids of every configured provider's models, fetched off the boot path and again
   // whenever the registry changes; the sextant reads the list at suggestion time (SlashCommand.choices)
   const modelChoices: string[] = [];

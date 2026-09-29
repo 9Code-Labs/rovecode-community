@@ -66,7 +66,7 @@ async function standardRun(set: OtelHooks, c: HookCtx, msgs: Message[], toolOk =
   await set.on_event!(c, { type: "run_end", status: "done", summary: "final" });
   await set.post_run!(c, { status: "done", summary: "final" });
 }
-async function minimalRun(set: OtelHooks, c: HookCtx, status: "done" | "stopped" | "error" | "budget" = "done"): Promise<void> {
+async function minimalRun(set: OtelHooks, c: HookCtx, status: "done" | "stopped" | "error" = "done"): Promise<void> {
   await set.pre_run!(c);
   await set.post_run!(c, { status, summary: "" });
 }
@@ -211,11 +211,11 @@ test("outcomes: a failed tool → ERROR + ok false; a hook-denied call (tool_cal
   expect(run.status).toEqual({ code: 2, message: "error" });
   expect(attr(run, "rovecode.status")).toBe("error"); expect(attr(run, "rovecode.turns")).toBe("2");
   expect(attr(run, "rovecode.tool_calls")).toBe("4"); // c1 + c2 + c4 (spans) + c3 (never dispatched: event) — the cli/output.ts toolCalls count (mutation: spans only → "3")
-  // run-level status mapping: done/stopped → OK, budget → ERROR
+  // run-level status mapping: done/stopped → OK, error → ERROR
   const m2 = make();
-  await minimalRun(m2.set, ctx("a"), "stopped"); await minimalRun(m2.set, ctx("b"), "budget"); await minimalRun(m2.set, ctx("d"), "done");
+  await minimalRun(m2.set, ctx("a"), "stopped"); await minimalRun(m2.set, ctx("b"), "error"); await minimalRun(m2.set, ctx("d"), "done");
   await m2.set.flush();
-  expect(m2.ff.posts.map((p) => spansOf(p.body)[0]!.status)).toEqual([{ code: 1 }, { code: 2, message: "budget" }, { code: 1 }]);
+  expect(m2.ff.posts.map((p) => spansOf(p.body)[0]!.status)).toEqual([{ code: 1 }, { code: 2, message: "error" }, { code: 1 }]);
   // unfinished turn + tool at post_run: closed at the run's end, status UNSET; a tool with no turn parents to the run
   const m3 = make();
   const c3 = ctx("u");

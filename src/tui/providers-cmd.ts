@@ -19,6 +19,13 @@ import type { PickItem } from "./renderer.ts";
 import { SETUP_PICKS } from "../cli/setup.ts";
 import { CONNECT_WAITING, parseConnectArgs, runConnect } from "../cli/connect.ts";
 import { next } from "../core/voice.ts";
+import { probeModels, saveProbeVerdict } from "../providers/probe-cache.ts";
+
+/** errors that condemn the whole PROVIDER, not one model: auth, connectivity, billing. A 404
+ *  ("no such model") is deliberately absent — that is one stale id, the rest of the list may work. */
+const PROVIDER_LEVEL_FAILURE = /401|403|authentication|unauthorized|api key|unable to connect|econnrefused|timed? ?out|no active subscription|no route/i;
+/** per provider: a huge /models list gets its head proven, not its tail — the picker must not take minutes */
+const MAX_PROBES_PER_PROVIDER = 48;
 
 export interface ProviderCmdCtx {
   rt: Runtime;
@@ -104,6 +111,7 @@ export function cmdModel(ctx: ProviderCmdCtx, arg: string): void {
 export async function cmdModels(ctx: ProviderCmdCtx, arg: string): Promise<void> {
   const words = arg.split(/\s+/).filter((w) => w.length > 0);
   const save = words.includes("--save");
+  const noProbe = words.includes("--no-probe");
   const named = words.filter((w) => !w.startsWith("-"))[0];
   const reg = ctx.rt.providers;
 
@@ -118,15 +126,63 @@ export async function cmdModels(ctx: ProviderCmdCtx, arg: string): Promise<void>
   for (const { id, r } of results) {
     if (!r.ok) { problems.push(`${id}: ${r.error}`); continue; }
     if (r.models.length === 0) { problems.push(`${id}: the endpoint listed no models (no /models route?) — /model ${id}/<model> still works`); continue; }
-    for (const m of r.models) {
-      const current = ctx.state.provider === id && ctx.state.model === m;
-      items.push({ value: `${id}/${m}`, label: `${current ? "* " : "  "}${id}/${m}`, ...(current ? { description: "current" } : {}) });
-    }
+    for (const m of r.models) items.push({ value: `${id}/${m}`, label: `${id}/${m}` });
   }
   for (const p of problems) note(ctx, p, "warn");
   if (items.length === 0) return;
 
-  // the current model first: the list is long and the answer to "what am I on?" should not need scrolling
+  // prove each model with ONE tiny call (≤8 output tokens; cached 6h ok / 30min failed) — a listed
+  // model that cannot serve (stale id, dead key, endpoint down) sorts to the bottom WITH its reason
+  // instead of being picked and exploding mid-run. --no-probe skips the spend and the wait.
+  if (!noProbe) {
+    // two-phase probing: ONE canary per provider first — a 401 / connection-level failure marks the
+    // whole provider at once (its other models would fail the same way, and a dead endpoint is not
+    // worth N timeouts). A MODEL-level failure (404, no such model) probes the rest individually.
+    // Plus a hard cap: a huge /models list gets its first MAX_PROBES proven, the rest stay unmarked.
+    const byProvider = new Map<string, PickItem[]>();
+    for (const it of items) {
+      const p = it.value.slice(0, it.value.indexOf("/"));
+      const g = byProvider.get(p) ?? [];
+      g.push(it);
+      byProvider.set(p, g);
+    }
+    const probeOne = (p: string, m: string): Promise<{ ok: boolean; detail: string }> => reg.probe(p, m);
+    note(ctx, `probing ${byProvider.size} provider${byProvider.size === 1 ? "" : "s"} (one tiny call each, cached after)…`);
+    let ok = 0, bad = 0, skipped = 0;
+    for (const [pid, group] of byProvider) {
+      const first = group[0]!;
+      const firstModel = first.value.slice(first.value.indexOf("/") + 1);
+      const canaryList = await probeModels([{ id: first.value, provider: pid, model: firstModel }], probeOne);
+      const canary = canaryList.get(first.value)!;
+      if (!canary.ok && PROVIDER_LEVEL_FAILURE.test(canary.detail)) {
+        for (const it of group) { it.label = `✗ ${it.label}`; it.description = canary.detail.slice(0, 80); }
+        saveProbeVerdict(first.value, canary); // the canary carries the provider's verdict for its TTL
+        bad += group.length;
+        continue;
+      }
+      const rest = group.slice(1, 1 + Math.max(0, MAX_PROBES_PER_PROVIDER - 1));
+      skipped += group.length - 1 - rest.length;
+      const verdicts = await probeModels(
+        rest.map((it) => ({ id: it.value, provider: pid, model: it.value.slice(it.value.indexOf("/") + 1) })),
+        probeOne,
+      );
+      verdicts.set(first.value, canary);
+      for (const it of group) {
+        const v = verdicts.get(it.value);
+        if (!v) continue;
+        if (v.ok) { it.label = `✓ ${it.label}`; ok++; } else { it.label = `✗ ${it.label}`; it.description = v.detail.slice(0, 80); bad++; }
+      }
+    }
+    note(ctx, `probe: ${ok} working · ${bad} failing${skipped > 0 ? ` · ${skipped} not probed (list cap)` : ""}`, bad > 0 && ok === 0 ? "warn" : undefined);
+    // current first, then working, then unproven, then failing — the picker is for PICKING
+    const rank = (l: string): number => (l.startsWith("✓") ? 0 : l.startsWith("✗") ? 2 : 1);
+    items.sort((a, b) => rank(a.label) - rank(b.label));
+  }
+
+  const current = ctx.state.provider && ctx.state.model ? `${ctx.state.provider}/${ctx.state.model}` : null;
+  for (const it of items) {
+    if (it.value === current) { it.label = `* ${it.label.replace(/^✓ |^✗ /, "")}`; it.description = it.description ? `current · ${it.description}` : "current"; }
+  }
   items.sort((a, b) => Number(b.label.startsWith("*")) - Number(a.label.startsWith("*")));
   // short on purpose: the box clips its title, and it already draws an `esc` affordance of its own
   const picked = await ctx.renderer.pickOne(items, `pick a model · ${items.length} from ${ids.length} provider${ids.length === 1 ? "" : "s"}`);

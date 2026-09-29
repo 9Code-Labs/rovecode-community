@@ -71,14 +71,14 @@ const allowAll = [{ action: "*", resource: "*", effect: "allow" as const }];
 
 function cfg(over: Partial<RunConfig> = {}): RunConfig {
   return {
-    maxTurns: 8, contextBudgetTokens: 100_000, compactionThreshold: 0.8,
+    contextBudgetTokens: 100_000, compactionThreshold: 0.8,
     parallelTools: true,
     permissionRules: allowAll, ...over,
   };
 }
 
 const baseDef: AgentDefinition = {
-  name: "t", systemPrompt: "test agent", tools: ["*"], maxTurns: 8,
+  name: "t", systemPrompt: "test agent", tools: ["*"],
 };
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));

@@ -38,7 +38,7 @@ test("advanced page: the full command reference incl. smoke-tui (dev-only), --ou
   const a = helpText("advanced");
   expect(a).toMatch(/^\s*rovecode smoke-tui\s.*\(dev-only\)\s*$/m);
   expect(a).toContain("--output <text|json|ndjson>");
-  expect(a).toContain("0 done · 1 error/budget · 2 usage/startup error · 130 aborted");
+  expect(a).toContain("0 done · 1 error · 2 usage/startup error · 130 aborted");
   expect(a).toContain('"/name args" expands a custom command');
   expect(a).toContain("rovecode setup");
   expect(a).toContain("--key-stdin"); // connect: the scriptable key path is on the reference page

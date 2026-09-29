@@ -58,9 +58,14 @@ const TYPE_DEF_PARENTS = new Set([
 /** Extract def/ref Tags from one source file (aider get_tags_raw L279-336;
  *  kinds replace aider's *-tags.scm captures: name.definition.* -> def,
  *  name.reference.* -> ref, repomap.py L318-324). */
+/** LANG_BY_EXT carries the enum's key as a string so the addon stays out of the base import graph;
+ *  here — the module that already imports napi — it becomes the real Lang. */
+const langOf = (key: string): Lang => (Lang as unknown as Record<string, Lang>)[key]!;
+
 export function extractTags(fname: string, relFname: string, source: string): Tag[] {
-  const lang = LANG_BY_EXT[extname(fname).toLowerCase()];
-  if (lang === undefined) return [];
+  const key = LANG_BY_EXT[extname(fname).toLowerCase()];
+  if (key === undefined) return [];
+  const lang = langOf(key);
   const isTs = lang !== Lang.JavaScript;
   let root: SgNode;
   try {

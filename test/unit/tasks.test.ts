@@ -12,13 +12,13 @@ import { TaskManager, taskNote, formatTaskList, tasksMaxFromEnv, DEFAULT_TASKS_M
 import { createTaskStatusTool, DEFAULT_WAIT_MS } from "../../src/tools/task.ts";
 import { SteeringQueue } from "../../src/core/loop.ts";
 import { ToolRegistry } from "../../src/core/tools.ts";
-import { writeTool } from "../../src/coding/hashline.ts";
+import { writeTool, readTool } from "../../src/coding/hashline.ts";
 import { textTurn, toolTurn } from "../../src/providers/stream.ts";
 import type { ChildRunnerDeps } from "../../src/core/orchestrator.ts";
 import type { AgentDefinition, Message, ModelRef, RunConfig, StreamEvent, StreamFn, StreamOptions, ToolContext } from "../../src/core/types.ts";
 
 const allowAll = [{ action: "*", resource: "*", effect: "allow" as const }];
-const cfg: RunConfig = { maxTurns: 6, contextBudgetTokens: 100_000, compactionThreshold: 0.8, parallelTools: false, permissionRules: allowAll };
+const cfg: RunConfig = { contextBudgetTokens: 100_000, compactionThreshold: 0.8, parallelTools: false, permissionRules: allowAll };
 const worker: AgentDefinition = { name: "worker", systemPrompt: "w", tools: ["*"] };
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
@@ -650,4 +650,47 @@ test("formatTaskList / taskNote: one bounded row per task, ids + status + label 
   const long = formatTaskList(Array.from({ length: 60 }, (_, i) => ({ ...base, id: `t${i}`, label: "x", status: "done" as const })));
   expect(long.startsWith("(showing 50 of 60)")).toBe(true);
   expect(long.split("\n")).toHaveLength(51);
+});
+
+// ---------- the crew board's live line ----------
+
+test("a child's stream events feed TaskInfo.live (throttled), and settle clears it", async () => {
+  const stream: StreamFn = async function* () { yield { type: "text_delta", text: "hello world from the child" }; yield { type: "turn", turn: textTurn("hello world from the child") }; };
+  const { tasks, cleanup } = makeManager(stream);
+  const seen: (string | undefined)[] = [];
+  const un = tasks.subscribe((t) => { if (t.id === "t1") seen.push(t.live); });
+  const id = startOk(tasks, "say something");
+  const done = await tasks.result(id);
+  un();
+  expect(done?.status).toBe("done");
+  expect(done?.live).toBeUndefined(); // settled: the result row replaces the activity tail
+  // while running, the streamed text was the live line (message_update deltas accumulate)
+  expect(seen.some((l) => l !== undefined && l.includes("hello world"))).toBe(true);
+  await cleanup();
+});
+
+test("reasoning and tool events shape the live line (thinking · N tokens / ▶ tool)", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "rovecode-tasks-live-"));
+  writeFileSync(join(dir, "a.ts"), "x");
+  let call = 0;
+  const stream: StreamFn = async function* () {  // ONE turn per provider call (the real wire shape)
+    if (call++ === 0) {
+      yield { type: "reasoning_delta", text: "hmm let me think" };
+      yield { type: "turn", turn: toolTurn([{ id: "c1", tool: "read", args: { path: "a.ts" } }]) };
+    } else {
+      yield { type: "turn", turn: textTurn("done") };
+    }
+  };
+  const registry = new ToolRegistry();
+  registry.register(readTool);
+  const { tasks, cleanup } = makeManager(stream, { registryFactory: () => registry });
+  const lives: string[] = [];
+  const un = tasks.subscribe((t) => { if (t.live) lives.push(t.live); });
+  const id = startOk(tasks, "read a.ts");
+  await tasks.result(id);
+  un();
+  expect(lives.some((l) => l.startsWith("thinking · "))).toBe(true);
+  expect(lives.some((l) => l.includes("▶ read"))).toBe(true);
+  await cleanup();
+  rmSync(dir, { recursive: true, force: true });
 });

@@ -179,10 +179,12 @@ test("an endpoint with no default model is still asked — there is nothing to a
 // ---------- /models is a picker, not a wall of ids ----------
 
 /** a surface whose picker records what it was offered and answers with a fixed choice */
-function picker(env: Record<string, string> = {}, choose: (items: { value: string; label: string }[]) => string | null = () => null) {
+function picker(env: Record<string, string> = {}, choose: (items: { value: string; label: string; description?: string }[]) => string | null = () => null) {
   const reg = new ProviderRegistry(cwd, { env, throttleMs: 0 });
+  // the picker PROBES every listed model now (one tiny call each) — default stub: everything works
+  reg.probe = async (id: string, model?: string) => ({ ok: true, model: model ?? "", detail: "ok in 1 ms" });
   const notes: string[] = [];
-  const offered: { value: string; label: string }[][] = [];
+  const offered: { value: string; label: string; description?: string }[][] = [];
   let slot = { provider: "anthropic", model: "claude-opus-5" };
   const state = { provider: "anthropic", model: "claude-opus-5" };
   const ctx: ProviderCmdCtx = {
@@ -191,7 +193,7 @@ function picker(env: Record<string, string> = {}, choose: (items: { value: strin
     state,
     renderer: {
       addSystemNote: (t: string) => { notes.push(t); },
-      pickOne: async (items: { value: string; label: string }[]) => { offered.push(items); return choose(items); },
+      pickOne: async (items: { value: string; label: string; description?: string }[]) => { offered.push(items); return choose(items); },
     } as unknown as Renderer,
     pushStatus: () => {},
   };
@@ -243,4 +245,65 @@ test("nothing configured: it says so and never opens an empty picker", async () 
   await cmdModels(h.ctx, "");
   expect(h.offered).toEqual([]);
   expect(h.text()).toContain("no provider is configured yet");
+});
+
+// ---------- /models proves what it offers ----------
+
+test("/models probes each listed model: ✗ with its reason sorts last, ✓ floats, the note sums it up", async () => {
+  const h = picker({ ANTHROPIC_API_KEY: "k", GROQ_API_KEY: "k" });
+  h.reg.models = async (id: string) => ({ ok: true as const, models: id === "anthropic" ? ["claude-opus-5", "claude-stale-9"] : ["llama-3.3"], source: "file" as const });
+  h.reg.probe = async (id: string, model?: string) => model === "claude-stale-9"
+    ? { ok: false, model, detail: "HTTP 404: model decommissioned" }
+    : { ok: true, model: model ?? "", detail: "ok in 9 ms" };
+  await cmdModels(h.ctx, "");
+  const items = h.offered[0]!;
+  const byValue = new Map(items.map((i) => [i.value, i]));
+  expect(byValue.get("anthropic/claude-opus-5")!.label).toContain("*");          // current marker survives probing
+  expect(byValue.get("groq/llama-3.3")!.label).toContain("✓");
+  const stale = byValue.get("anthropic/claude-stale-9")!;
+  expect(stale.label).toContain("✗");
+  expect(stale.description).toContain("decommissioned");
+  expect(items.at(-1)!.value).toBe("anthropic/claude-stale-9");                   // failing sorts last
+  expect(h.text()).toContain("probe: 2 working · 1 failing");
+});
+
+test("/models --no-probe: no probe calls, no marks, the picker opens straight away", async () => {
+  const h = picker({ ANTHROPIC_API_KEY: "k" });
+  h.reg.models = async () => ({ ok: true as const, models: ["claude-opus-5"], source: "file" as const });
+  let probed = 0;
+  h.reg.probe = async () => { probed++; return { ok: true, model: "", detail: "ok" }; };
+  await cmdModels(h.ctx, "--no-probe");
+  expect(probed).toBe(0);
+  expect(h.offered[0]!.every((i) => !i.label.includes("✓") && !i.label.includes("✗"))).toBe(true);
+});
+
+test("/models fail-fast: a provider-level failure (401/auth) probes ONE canary and marks the whole provider — N models do not cost N timeouts", async () => {
+  const h = picker({ ANTHROPIC_API_KEY: "k", GROQ_API_KEY: "k" });
+  h.reg.models = async (id: string) => ({ ok: true as const, models: id === "anthropic" ? ["m-a", "m-b", "m-c"] : ["g-1", "g-2"], source: "file" as const });
+  const probed: string[] = [];
+  h.reg.probe = async (id: string, model?: string) => {
+    probed.push(`${id}/${model}`);
+    if (id === "anthropic") return { ok: false, model: model ?? "", detail: "HTTP 401: authentication_error" };
+    return { ok: true, model: model ?? "", detail: "ok in 5 ms" };
+  };
+  await cmdModels(h.ctx, "");
+  expect(probed).toEqual(["anthropic/m-a", "groq/g-1", "groq/g-2"]); // anthropic's m-b/m-c never probed
+  const items = h.offered[0]!;
+  const byValue = new Map(items.map((i) => [i.value, i]));
+  expect(byValue.get("anthropic/m-b")!.label).toContain("✗");
+  expect(byValue.get("anthropic/m-b")!.description).toContain("401");
+  expect(byValue.get("groq/g-2")!.label).toContain("✓");
+  expect(h.text()).toContain("2 working · 3 failing"); // groq's two probed fine; anthropic's three condemned by the canary
+});
+
+test("/models: a MODEL-level canary failure (404) does NOT condemn the provider — the rest probe individually", async () => {
+  const h = picker({ ANTHROPIC_API_KEY: "k" });
+  h.reg.models = async () => ({ ok: true as const, models: ["stale-1", "good-2"], source: "file" as const });
+  const probed: string[] = [];
+  h.reg.probe = async (_id: string, model?: string) => {
+    probed.push(model ?? "");
+    return model === "stale-1" ? { ok: false, model: "stale-1", detail: "HTTP 404: no such model" } : { ok: true, model: model ?? "", detail: "ok" };
+  };
+  await cmdModels(h.ctx, "");
+  expect(probed.sort()).toEqual(["good-2", "stale-1"]); // both probed: the 404 is one model's problem
 });

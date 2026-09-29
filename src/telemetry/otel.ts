@@ -252,7 +252,7 @@ export function createOtelHooks(opts: OtelOptions): OtelHooks {
     st.run.attrs.set("rovecode.tool_calls", int(st.calls));
     account(st.run, opts.messages().slice(st.baseline).filter((m) => m.role === "assistant"));
     st.run.end = t;
-    st.run.status = status === "done" || status === "stopped" ? OK : ERROR(status); // budget/error did not complete
+    st.run.status = status === "done" || status === "stopped" ? OK : ERROR(status); // error did not complete
     track(post(JSON.stringify(encodeTraceRequest(service, st.spans))));
   };
 

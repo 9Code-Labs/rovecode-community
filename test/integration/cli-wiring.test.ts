@@ -93,7 +93,7 @@ test("help: the env block documents the retry / webfetch / compaction / tasks kn
   expect(out).toContain("--output <text|json|ndjson>");
   for (const key of ["status", "summary", "sessionId", "origin", "cacheRead", "cacheWrite", "costUsd", "toolCalls", "durationMs", "exitCode"]) expect(out).toContain(key);
   expect(out).toContain('{type:"result"}');
-  expect(out).toContain("0 done · 1 error/budget · 2 usage/startup error · 130 aborted");
+  expect(out).toContain("0 done · 1 error · 2 usage/startup error · 130 aborted");
   // /name expansion note
   expect(out).toContain('"/name args" expands a custom command');
   expect(out).toContain("TUI-only");

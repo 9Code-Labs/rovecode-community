@@ -22,7 +22,7 @@ export interface BenchResult {
 }
 
 const cfg: RunConfig = {
-  maxTurns: 10, contextBudgetTokens: 400_000, compactionThreshold: 0.8,
+  contextBudgetTokens: 400_000, compactionThreshold: 0.8,
   parallelTools: true,
   permissionRules: [{ action: "*", resource: "*", effect: "allow" }],
 };

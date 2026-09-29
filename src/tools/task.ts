@@ -35,6 +35,8 @@ export const MAX_WAIT_MS = 600_000;
 export interface TaskToolOptions {
   /** depth of the loop this tool serves (root = 0); children start at depth + 1 */
   parentDepth?: number;
+  /** extra agent names the description advertises (agents/roles.ts) */
+  agentsHint?: string;
   /** completion notes for tasks started here (default: the manager's attached queue) */
   notify?: SteeringQueue;
   /** the task id of the child this tool serves (nested); enables slot lending */
@@ -99,6 +101,7 @@ function parseTimeout(v: unknown): number | { error: string } {
  *  actions a gated policy should ask about. Reads live on `task_status`. */
 export function createTaskTool(tasks: TaskManager, opts: TaskToolOptions = {}): Tool {
   const defaultAgent = opts.defaultAgent ?? "main";
+  const rolesLine = opts.agentsHint ? ` Role agents beyond "${defaultAgent}": ${opts.agentsHint}.` : "";
   return {
     schema: {
       name: "task",
@@ -110,7 +113,7 @@ export function createTaskTool(tasks: TaskManager, opts: TaskToolOptions = {}): 
         `At most ${tasks.maxConcurrent} run concurrently; extra starts queue FIFO. ` +
         "`isolated` runs the child in a git worktree copy and merges its file changes back as a patch on success. " +
         "Policy: under gated rules each `start` needs approval and the child runs read-only (prompt-gated actions " +
-        "are denied for children) unless allow rules cover them; under yolo it inherits allow-all. " + ONE_SHOT,
+        "are denied for children) unless allow rules cover them; under yolo it inherits allow-all." + rolesLine + " " + ONE_SHOT,
       args: {
         type: "object",
         properties: {

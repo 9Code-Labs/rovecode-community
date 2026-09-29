@@ -93,10 +93,6 @@ test("run_end error → ERROR + error system row; stopped/budget → IDLE + warn
   applyEvent(s2, { type: "run_end", status: "stopped", summary: "user interrupt" }, T + 5);
   expect(s2.activity).toMatchObject({ state: "IDLE", label: "stopped" });
   expect(s2.messages.at(-1)).toEqual({ kind: "system", tone: "warn", text: "run stopped: user interrupt" });
-  const s3 = state();
-  run(s3);
-  applyEvent(s3, { type: "run_end", status: "budget", summary: "max turns" }, T + 5);
-  expect(s3.activity.label).toBe("budget");
 });
 
 // ---------- streaming assistant row ----------
@@ -441,15 +437,18 @@ test("negative: the pure modules never read the clock, start timers or touch pro
 test("live turn: turn_start stamps turnAt + zero tokens; reasoning_update is cumulative, message_update adds the answer estimate; a tool start / turn_end / run_end settles both", () => {
   const s = state(); run(s);
   expect(s.activity.turnAt).toBeUndefined();
-  applyEvent(s, { type: "reasoning_update", messageId: "m0", tokens: 7 }, T + 100);
-  expect(s.activity.tokens).toBeUndefined(); // no turn in flight yet: nothing to attribute it to
+  applyEvent(s, { type: "reasoning_update", messageId: "m0", tokens: 7, delta: "hmm" }, T + 100);
+  expect(s.activity.tokens).toBeUndefined(); // no turn in flight yet: nothing to attribute the count to
+  expect(s.messages.some((m) => m.kind === "thinking")).toBe(true); // but the thinking ROW is shown from the first delta
   applyEvent(s, { type: "turn_start", turn: 1 }, T + 500);
   expect(s.activity).toMatchObject({ state: "THINKING", label: "thinking", turnAt: T + 500, tokens: 0 }); // the clock starts at the provider call
-  applyEvent(s, { type: "reasoning_update", messageId: "m1", tokens: 120 }, T + 900);
+  applyEvent(s, { type: "reasoning_update", messageId: "m1", tokens: 120, delta: "let me " }, T + 900);
   expect(s.activity).toMatchObject({ state: "THINKING", tokens: 120 });
-  expect(s.messages.some((m) => m.kind === "assistant")).toBe(false); // reasoning is not writing: no row, no caret
-  applyEvent(s, { type: "reasoning_update", messageId: "m1", tokens: 300 }, T + 1200);
+  expect(s.messages.some((m) => m.kind === "assistant")).toBe(false); // reasoning is not writing: no ANSWER row, no caret
+  applyEvent(s, { type: "reasoning_update", messageId: "m1", tokens: 300, delta: "think" }, T + 1200);
   expect(s.activity.tokens).toBe(300); // replaces, never adds
+  const thinkRow = s.messages.filter((m) => m.kind === "thinking").at(-1);
+  expect(thinkRow?.kind === "thinking" && thinkRow.text).toBe("let me think"); // deltas append to the one streaming row
   applyEvent(s, { type: "message_update", messageId: "m1", delta: "x".repeat(40) }, T + 1300); // 40 chars → 10 tokens
   expect(s.activity).toMatchObject({ state: "WRITING", tokens: 310 });
   applyEvent(s, { type: "message_update", messageId: "m1", delta: "yyyy" }, T + 1400); // 44 → 11
@@ -459,7 +458,7 @@ test("live turn: turn_start stamps turnAt + zero tokens; reasoning_update is cum
   applyEvent(s, { type: "tool_execution_end", callId: "c1", ok: true, output: "ok", durationMs: 1 }, T + 2100);
   applyEvent(s, { type: "turn_start", turn: 2 }, T + 2200);
   expect(s.activity).toMatchObject({ turnAt: T + 2200, tokens: 0 }); // fresh per turn
-  applyEvent(s, { type: "reasoning_update", messageId: "m2", tokens: 5 }, T + 2300);
+  applyEvent(s, { type: "reasoning_update", messageId: "m2", tokens: 5, delta: "again" }, T + 2300);
   applyEvent(s, { type: "turn_end", turn: 2, stopReason: "end_turn" }, T + 2400);
   expect(s.activity.turnAt).toBeUndefined();
   applyEvent(s, { type: "turn_start", turn: 3 }, T + 2500);

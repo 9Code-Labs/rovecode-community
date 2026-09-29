@@ -331,10 +331,11 @@ export class SextantRenderer implements Renderer {
     const s = this.state;
     s.yolo = info.yolo; s.acceptEdits = info.permission === "accept-edits"; if (info.mode) s.mode = info.mode;
     const u = this.ctx?.usage?.();
+    const cw = this.ctx?.contextWindow();
     setUsage(s, {
       provider: info.provider, model: info.model, turns: info.turns, tokensIn: info.tokensIn, tokensOut: info.tokensOut,
       ...(info.effort !== undefined ? { effort: info.effort } : {}),
-      contextTokens: u?.contextTokens ?? 0, contextWindow: this.ctx?.contextWindow(), costUsd: u ? u.costUsd : null,
+      contextTokens: u?.contextTokens ?? 0, contextWindow: cw?.window, contextAssumed: cw?.source === "assumed", costUsd: u ? u.costUsd : null,
     });
     this.refreshPlan();
     this.loop.markDirty();
@@ -363,6 +364,14 @@ export class SextantRenderer implements Renderer {
     setMode: (mode) => { if (mode === "diff" && this.state.code.file) this.repo.loadDiff(this.state.code.file); },
     openFile: (path) => { this.state.code.content = readFileBounded(this.state.cwd, path); this.state.code.hl = null; this.loadedFile = path; },
     toast: (text) => this.toast(text),
+    // the crew board's × (and the x key): cancel the lane's task through the attach
+    cancelTask: (id) => {
+      const t = this.state.crew.find((c) => c.id === id);
+      if (!t) return;
+      this.ctx?.cancelTask?.(id);
+      this.toast(`cancelled ${id} (${t.label})`);
+      this.loop.markDirty();
+    },
     // the market: the overlay is opened at once in its loading state so the frame after ⌃m already shows
     // the box, and the catalog is joined in when the module answers (it may touch the network)
     openMarket: () => {

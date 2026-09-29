@@ -21,7 +21,7 @@ import type { Renderer, RendererHooks } from "../../src/tui/renderer.ts";
 
 function cfg(budget: number): RunConfig {
   return {
-    maxTurns: 3, contextBudgetTokens: budget, compactionThreshold: 0.8,
+    contextBudgetTokens: budget, compactionThreshold: 0.8,
     parallelTools: true,
     permissionRules: [{ action: "*", resource: "*", effect: "allow" }],
   };

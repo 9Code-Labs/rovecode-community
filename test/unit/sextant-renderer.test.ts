@@ -348,7 +348,7 @@ test("attach: cwd + repo name, crew from tasks.list/subscribe (newest lane selec
   const ctx: SextantAttach = {
     cwd, sessionsDir, store: () => ({ id: "sess-1" }),
     tasks: { list: () => tasks.map((t) => ({ ...t })), subscribe: (fn) => { subs.add(fn); return () => { subs.delete(fn); }; } },
-    model: () => ({ provider: "p", model: "m" }), contextWindow: () => 200_000,
+    model: () => ({ provider: "p", model: "m" }), contextWindow: () => ({ window: 200_000, source: "catalog" }),
     usage: () => ({ costUsd: 0.03, contextTokens: 24_000 }), petName: "stormy",
   };
   renderer.attach(ctx);

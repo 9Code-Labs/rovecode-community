@@ -17,6 +17,7 @@ import { designAuditTool, designDirectionTool } from "../tools/design.ts";
 import { designPromptSection } from "../design/rules.ts";
 import { withToolCallParsing, toolPromptBlock } from "../providers/middleware.ts";
 import { ModelCatalog } from "../providers/catalog.ts";
+import { resolveContextWindow } from "../providers/context-window.ts";
 import { GLM_53_AGENT_CONTRACT, profileFor, profilePromptSection } from "../providers/profiles.ts";
 import { loadProjectContext, type ProjectContext } from "../core/config.ts";
 import { estimateTokens, type ContextChunk } from "../core/context.ts";
@@ -28,9 +29,12 @@ import type { McpManager } from "../mcp/client.ts";
 import { activatePlugins, discoverPlugins, loadState as loadPluginState, type DiscoveredPlugin, type LoadedPlugin } from "../plugins/index.ts";
 import type { McpServerConfig } from "../mcp/config.ts";
 import { trustedPredicate } from "../mcp/trust.ts";
-import { positiveInt, positiveUsd, type RunLimits } from "./run-limits.ts";
-import { costUsdTiered } from "../core/usage.ts";
-import { ratesFor } from "../providers/catalog.ts";
+/** a positive whole number from an env var, or undefined for anything else (unset, junk, zero, negative) */
+const positiveInt = (v: string | undefined): number | undefined => {
+  if (v === undefined) return undefined;
+  const n = Number(v.trim());
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+};
 import { contextBudgetFor } from "../core/context-report.ts";
 import { tokenScaleFor } from "../core/token-scale.ts";
 import { rovecodeHome } from "../providers/auth.ts";
@@ -53,6 +57,9 @@ import { noteVerifyCost, resolveForGate, runVerify, VERIFY_TIMEOUT_MS, type Veri
 import { SteeringQueue } from "../core/loop.ts";
 import { TaskManager } from "../core/tasks.ts";
 import { createTaskTool, createTaskStatusTool } from "../tools/task.ts";
+import { delegateTool, delegateWarnings } from "../tools/delegate.ts";
+import { filterToolsForDef, roleDefs, roleHint } from "../agents/roles.ts";
+import { runExternalAgent, type ExternalAgentSpec } from "../agents/external.ts";
 import type { ChildContext, ChildRunnerDeps } from "../core/orchestrator.ts";
 import { existsSync, mkdirSync } from "node:fs";
 import { sep, join } from "node:path";
@@ -135,9 +142,6 @@ export interface Runtime {
    *  A ref that already names an effort keeps it. */
   effort: ThinkingEffort;
   setEffort(e: ThinkingEffort): void;
-  /** the two ceilings on a run (cli/run-limits.ts): buildCfg reads them ahead of ROVECODE_MAX_TURNS /
-   *  ROVECODE_MAX_SECONDS and the 60-turn default — `rovecode run` sets its flags and headless default here */
-  setRunLimits(limits: RunLimits): void;
   /** MCP server manager (port #3); null when no servers were configured at boot AND none has been
    *  installed since — `reloadMcp` creates it on demand. */
   mcp: McpManager | null;
@@ -600,22 +604,11 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
    *  merely STARTS with the cwd (…/repo-backup) does not match, because the separator is in the glob. */
   const insideCwd = `${cwd.replace(/[\/]$/, "")}${sep}*`;
 
-  // run ceilings (cli/run-limits.ts): a surface's explicit limits, else the environment, else 60 turns and no
-  // clock — the TUI and serve/acp get the env knobs for free, `rovecode run` adds its flags + a 20-minute default
-  let runLimits: RunLimits = {};
+  // no run ceilings: the run-budget system (maxTurns / maxSeconds / maxCostUsd, run_end "budget") is
+  // gone — a run ends when the model stops, errors, or the human aborts it
   const buildCfg = (permission: PermissionLevel | boolean, approval?: ApprovalFn): RunConfig => {
     const level: PermissionLevel = permission === true ? "auto" : permission === false ? "ask" : permission;
     const yolo = level === "auto";
-    const maxSeconds = runLimits.maxSeconds ?? positiveInt(process.env.ROVECODE_MAX_SECONDS);
-    const maxCostUsd = runLimits.maxCostUsd ?? positiveUsd(process.env.ROVECODE_MAX_COST);
-    // the same arithmetic /cost and the headless result use (tui/cost.ts, cli/output.ts): the catalog's price
-    // for the model that served the turn, tiered by the prompt the turn actually carried; no price → undefined
-    const priceUsd = (usage: TokenUsage, origin: ModelRef): number | undefined => {
-      const info = catalog.lookup(origin.provider, origin.model);
-      if (!info?.pricing) return undefined;
-      const n = { input: usage.input, output: usage.output, cacheRead: usage.cacheRead ?? 0, cacheWrite: usage.cacheWrite ?? 0 };
-      return costUsdTiered(n, ratesFor(info, n.input + n.cacheRead + n.cacheWrite));
-    };
     // the finish check (core/loop.ts "done" exit): on by default, ROVECODE_FINISH_CHECK=0 is the escape hatch;
     // the todo state is read from disk at the exit so a list the model wrote this run is what gets reported
     const todoState = (): { open: number; total: number } | null => {
@@ -640,10 +633,7 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
       };
     };
     return (activeCfg = {
-    maxTurns: runLimits.maxTurns ?? positiveInt(process.env.ROVECODE_MAX_TURNS) ?? 60,
     ...(verifyOn ? { verify: verifyGate() } : {}),
-    ...(maxSeconds !== undefined ? { maxSeconds } : {}),
-    ...(maxCostUsd !== undefined ? { maxCostUsd, priceUsd } : {}),
     finishCheck: process.env.ROVECODE_FINISH_CHECK !== "0",
     todoState,
     // the history budget follows the model's window: a flat 200k spent a fifth of a 1M window and
@@ -651,8 +641,12 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     contextBudgetTokens: (() => {
       const ref = activeModel ?? fallbackRef;
       const cur = catalog.lookup(ref.provider, ref.model);
+      // the window the budget follows: the user's providers.json declaration wins over the catalog;
+      // an ASSUMED window (providers/context-window.ts) is deliberately NOT spent here — a wrong-high
+      // budget overflows the request. The panel shows the assumption; the budget keeps the old default.
+      const w = resolveContextWindow(catalog, providers.get(ref.provider), ref.provider, ref.model);
       return contextBudgetFor({
-        ...(cur?.contextWindow !== undefined ? { window: cur.contextWindow } : {}),
+        ...(w.source !== "assumed" ? { window: w.window } : {}),
         ...(cur?.maxOutput !== undefined ? { maxOutput: cur.maxOutput } : {}),
         ...(positiveInt(process.env.ROVECODE_CONTEXT_BUDGET) !== undefined ? { override: positiveInt(process.env.ROVECODE_CONTEXT_BUDGET) as number } : {}),
         // our estimator is not this model's tokenizer, so a budget taken at face value compacts too
@@ -721,25 +715,38 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
   let activeCfg: RunConfig | null = null;
   let activeModel: ModelRef | null = null;
   const steering = new SteeringQueue();
-  const childRegistry = (_def: AgentDefinition, _cwd: string, child?: ChildContext): ToolRegistry => {
+  const childRegistry = (def: AgentDefinition, _cwd: string, child?: ChildContext): ToolRegistry => {
     const reg = new ToolRegistry();
-    reg.register(readTool, editTool, writeTool, bashTool, globTool, grepTool, lsTool, ...createSkillTools(skillStore), recallTool(sessionsDir));
+    // role defs (agents/roles.ts) carry an explicit allowlist — the child's registry is FILTERED by
+    // it (a researcher literally has no edit tool to call); "main" keeps the full set
+    const all = [readTool, editTool, writeTool, bashTool, globTool, grepTool, lsTool, ...createSkillTools(skillStore), recallTool(sessionsDir)];
+    reg.register(...filterToolsForDef(all, def));
+    // MCP for roles that allow it: mcp_list/mcp_call dispatch by server name; absent servers → absent tools
+    if (!def.tools.includes("*") && (def.tools.includes("mcp_list") || def.tools.includes("mcp_call")) && mcp !== null) {
+      for (const t of lazyMcp().tools.createMcpTools(mcp)) reg.register({ ...t, execute: async (a, c) => { await mcpReady; return t.execute(a, c); } });
+    }
     if (child) reg.register(createTaskTool(tasks, { parentDepth: child.depth, notify: child.steering, caller: child.taskId, owner: child.signal }), createTaskStatusTool(tasks, { caller: child.taskId }));
     return reg;
   };
   const tasks = new TaskManager({
     deps: (): ChildRunnerDeps | null => stream ? {
-      defs: new Map([["main", buildDef(activeModel ?? fallbackRef)]]),
+      defs: (() => { const main = buildDef(activeModel ?? fallbackRef); return new Map([["main", main], ...roleDefs(main)]); })(),
       stream, registryFactory: childRegistry, rootDir: cwd, sessionsDir,
       baseConfig: activeCfg ?? buildCfg(false),
       hooks, // port #29: children run under the runtime's hooks (a veto cannot be dodged by delegation)
     } : null,
+    // external CLI delegations (delegate tool, /delegate): the SAME board, queue and cancel path
+    runExternal: (spec, prompt, o) => runExternalAgent(spec as ExternalAgentSpec, prompt, o),
   });
   tasks.attach(steering);
   // port #28: built-in reflection set (core/reflection.ts) — a failed edit/write (or an LSP-diagnosed one) nudges the model once via steering, capped per run (ROVECODE_REFLECTION_MAX); ROVECODE_REFLECTION=0 disables.
   // owns: the ACTIVE session's runs only — a task child (own store id, same hooks) must neither nudge nor sweep this queue (#26 MED-A)
   if (reflectionEnabled()) hooks.add(createReflectionHooks({ steering, owns: (c) => c.sessionId === activeStore.id }), "reflection");
-  registry.register(createTaskTool(tasks, { parentDepth: 0 }), createTaskStatusTool(tasks)); // task: kind spawn → gated rules prompt once per start, yolo allows; task_status: kind read → allowed everywhere
+  registry.register(createTaskTool(tasks, { parentDepth: 0, agentsHint: roleHint() }), createTaskStatusTool(tasks)); // task: kind spawn → gated rules prompt once per start, yolo allows; task_status: kind read → allowed everywhere
+  // external CLI agents (agents/external.ts): claude-code / codex / antigravity / agents.json customs —
+  // kind spawn like `task`: the delegated CLI edits with its own tools, so it prompts under gated rules
+  registry.register(delegateTool({ cwd, tasks }));
+  for (const w of delegateWarnings(cwd)) pluginWarn(w);
 
   return {
     cwd, sessionId, store, registry, skillStore,
@@ -748,7 +755,6 @@ export function createRuntime(opts: RuntimeOptions = {}): Runtime {
     guard, planReminder: planReminderFor, get mcp() { return mcp; }, reloadMcp, projectContext, router,
     get effort() { return effort; },
     setEffort(e: ThinkingEffort) { effort = e; },
-    setRunLimits(l: RunLimits) { runLimits = l; },
     drainRouterNotes: () => routerNotes.splice(0),
     onRouterNote(fn) { for (const n of routerNotes.splice(0)) fn(n); routerListeners.push(fn); },
     checkpointsFor,

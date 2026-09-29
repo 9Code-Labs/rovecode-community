@@ -111,7 +111,7 @@ export default defineWorkflow({
     deploy:  parallel([agentStep({…}), agentStep({…})], { after: ["approve"], failFast: true }),
   },
   retry: { maxAttempts: 2, backoff: "exponential" },   // step başına override edilebilir
-  budget: { maxCostUsd: 2.0 },                          // run-limits.ts dilini workflow'a taşır
+  budget: { maxCostUsd: 2.0 },                          // workflow-seviyesi harcama tavanı (adım başına değil, tur başına)
 });
 ```
 

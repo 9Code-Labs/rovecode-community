@@ -36,13 +36,13 @@ const STUB_AT = GUARDRAIL_DEFAULTS.stubAfterRepeats + 1; // 6th identical call i
 
 function cfg(over: Partial<RunConfig> = {}): RunConfig {
   return {
-    maxTurns: 12, contextBudgetTokens: 100_000, compactionThreshold: 0.8,
+    contextBudgetTokens: 100_000, compactionThreshold: 0.8,
     parallelTools: true,
     permissionRules: allowAll, ...over,
   };
 }
 
-const def: AgentDefinition = { name: "t", systemPrompt: "test", tools: ["*"], maxTurns: 12 };
+const def: AgentDefinition = { name: "t", systemPrompt: "test", tools: ["*"] };
 
 /** Counting tool with a byte-identical result every call. */
 function countingTool(): { tool: Tool; executed: () => number } {
@@ -58,8 +58,8 @@ function countingTool(): { tool: Tool; executed: () => number } {
 }
 
 /** Scripted looping model: re-issues the identical call until a tool result
- *  carries the guard's blocked stub, then stops with `finalText`. Without a
- *  wired guard it loops until maxTurns. */
+ *  carries the guard's blocked stub, then stops with `finalText`. Only ever
+ *  driven WITH a guard wired — unguarded it would loop forever (no turn cap anymore). */
 function loopingStream(tool: string, args: unknown, finalText: string): StreamFn {
   let n = 0;
   return async function* (_model, messages) {
@@ -151,7 +151,7 @@ test("gauntlet adversarial-loop-guard: FAILS without a guard, PASSES with one", 
   const ws1 = task.setup!();
   const bare = await runTask(task, ws1, null);
   expect(await task.verify(ws1, bare)).toBe(false);
-  expect(bare.toolCalls.length).toBe(12);            // burned maxTurns
+  expect(bare.toolCalls.length).toBe(12);            // hit the gauntlet runner's own 12-turn stream cap
   expect(bare.finalText).not.toContain("LOOP-BROKEN"); // model never saw a stub
   rmSync(ws1, { recursive: true, force: true });
 
@@ -178,8 +178,7 @@ test("runChild: a looping subagent is stopped by its own guard", async () => {
   }, { agent: "worker", goal: "loop forever" });
   expect(res.ok).toBe(true);
   // The LOOP-BROKEN text can only appear after a tool_result carrying the
-  // guard's blocked stub reached the child's history — an unguarded child
-  // burns maxTurns and summarizes "(no output)". The child's rules derive
+  // guard's blocked stub reached the child's history. The child's rules derive
   // from the allow-all parent with the deny-rest default FIRST (FW2-P fix:
   // last-match-wins, so parent allows override it; the old trailing catch-all
   // denied every child call), so the identical calls now EXECUTE and the

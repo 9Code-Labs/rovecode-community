@@ -123,6 +123,13 @@ export function resumedLine(id: string, cwd: string, yolo: boolean): string {
   return `◆ back in session ${id.slice(0, 8)} · ${cwd} · ${modeLabelShort(yolo)}`;
 }
 
+/** printed AFTER the screen restores on quit: one pasteable command back into the session.
+ *  Sessions live under <cwd>/.rovecode/sessions, so the command only resolves from this folder —
+ *  the line says so (an unknown id elsewhere would silently START a session with that name). */
+export function exitResumeHint(id: string): string {
+  return `◆ session kept — back anytime, from this folder:\n  rovecode --resume ${id}`;
+}
+
 /** the /effort note. Says what the level costs, because that is the part that surprises people:
  *  thinking tokens are billed as output and they arrive before any answer does. */
 export function effortNote(level: string, receives?: string): string {

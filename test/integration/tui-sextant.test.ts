@@ -279,7 +279,9 @@ test("onEvent sees every RunEvent BEFORE the app's per-event handlers (order pin
   expect(ctx.sessionsDir).toBe(join(cwd, ".rovecode", "sessions"));
   expect(typeof ctx.store().id).toBe("string");
   expect(ctx.model().model).toBe("scripted");                     // the mode's model (the provider id follows the host env)
-  expect(ctx.contextWindow()).toBeUndefined();                     // a scripted model is not in the catalog
+  // a scripted model is in no catalog and no providers.json — the resolver ASSUMES 128k and says so
+  // (providers/context-window.ts): the panel's bar is never "?", it is ≈
+  expect(ctx.contextWindow()).toEqual({ window: 128_000, source: "assumed" });
   const u = ctx.usage!();
   expect(u.costUsd).toBeNull();
   expect(u.contextTokens).toBeGreaterThan(0);                      // the transcript has a user + assistant message now

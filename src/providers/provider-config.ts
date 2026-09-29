@@ -39,6 +39,12 @@ export interface ProviderSpec {
   defaultModel?: string;
   /** static model list for `/models` when the endpoint has no /models route */
   models?: string[];
+  /** provider-wide context window fallback (tokens) for models the catalog does not know —
+   *  providers/context-window.ts consults it BEFORE assuming; per-model wins over it */
+  contextWindow?: number;
+  /** per-model context windows (tokens) for models the catalog does not know, e.g.
+   *  {"deepseek-v4.1-flash": 131072} — case-insensitive match on the model id */
+  contextWindows?: Record<string, number>;
   /** extra request headers (proxies, org ids) — sent on every call to this provider */
   headers?: Record<string, string>;
   /** local servers: no key required, the provider counts as configured without one */
@@ -123,6 +129,19 @@ export function validateSpec(id: string, raw: unknown): { spec: ProviderSpec } |
     const h = r["headers"];
     if (typeof h !== "object" || h === null || Array.isArray(h) || !Object.values(h as Record<string, unknown>).every((v) => typeof v === "string")) return { error: `provider "${id}": headers must be an object of strings` };
     spec.headers = { ...(h as Record<string, string>) };
+  }
+  if (r["contextWindow"] !== undefined) {
+    const w = r["contextWindow"];
+    if (typeof w !== "number" || !Number.isFinite(w) || w <= 0) return { error: `provider "${id}": contextWindow must be a positive token count` };
+    spec.contextWindow = Math.floor(w);
+  }
+  if (r["contextWindows"] !== undefined) {
+    const cw = r["contextWindows"];
+    if (typeof cw !== "object" || cw === null || Array.isArray(cw)) return { error: `provider "${id}": contextWindows must be an object of model id → token count` };
+    for (const [mid, w] of Object.entries(cw as Record<string, unknown>)) {
+      if (typeof w !== "number" || !Number.isFinite(w) || w <= 0) return { error: `provider "${id}": contextWindows["${mid}"] must be a positive token count` };
+    }
+    spec.contextWindows = Object.fromEntries(Object.entries(cw as Record<string, number>).map(([k, v]) => [k, Math.floor(v)]));
   }
   if (r["noKey"] !== undefined) {
     if (typeof r["noKey"] !== "boolean") return { error: `provider "${id}": noKey must be true or false` };

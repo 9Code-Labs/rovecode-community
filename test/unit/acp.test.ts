@@ -299,21 +299,6 @@ test("run_end error maps to a JSON-RPC internal error carrying the summary", asy
   } finally { rmSync(cwd, { recursive: true, force: true }); }
 });
 
-test("max-turns budget maps to stopReason max_turn_requests", async () => {
-  const cwd = tmpCwd();
-  try {
-    const file = join(cwd, "f.txt");
-    writeFileSync(file, "x");
-    // every turn calls a tool → the loop never ends on its own → budget stop at maxTurns
-    const stream = scriptedStream([
-      [{ type: "turn", turn: toolTurn([{ id: "c", tool: "read", args: { path: file } }]) }],
-    ]);
-    const { conn } = connect({ stream });
-    const sessionId = await handshake(conn, cwd);
-    const resp = await conn.prompt(textPrompt(sessionId, "loop forever"));
-    expect(resp.stopReason).toBe("max_turn_requests");
-  } finally { rmSync(cwd, { recursive: true, force: true }); }
-});
 
 // ---------- wave-2 fix tests (FW2-L) ----------
 
