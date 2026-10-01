@@ -4,7 +4,7 @@ What changed for the person using rovecode, newest first. Every line ends with t
 the change (hashes on `main`). Numbers are measurements from the commit that reports them, on the
 machine it names.
 
-## 5.2.0 — 2026-09-30
+## 5.2.0 — 2026-10-01
 
 - Sextant: assistant turns render as markdown — headings, **bold**, *italic*, ~~strike~~, `code` chips,
   lists with hanging indents, fenced blocks with a lang label (wrapped, never clipped), blockquotes, rules,
