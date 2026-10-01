@@ -13,7 +13,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { RunResult } from "../../src/cli/output.ts";
-import { ModelCatalog } from "../../src/providers/catalog.ts";
+import { ModelCatalog } from "@rovecode-labs/models";
 import { costUsd } from "../../src/core/usage.ts";
 
 const ROOT = resolve(import.meta.dir, "..", "..");

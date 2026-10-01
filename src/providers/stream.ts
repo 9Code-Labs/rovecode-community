@@ -15,7 +15,7 @@ import { normalizeUsage } from "../core/usage.ts";
 import { BUILTIN_PROVIDERS, buildSnapshot, pickDefault } from "./provider-config.ts";
 import { failedTurn, fetchFirstByte, httpErrorTurn } from "./stream-errors.ts";
 import { parseToolArgs } from "./response-validation.ts";
-import { supportsImages } from "./catalog.ts";
+import { supportsImages } from "@rovecode-labs/models";
 import { profileWire } from "./profiles.ts";
 import { anthropicThinking, thinkingBudget, thinkingPlan, type AnthropicThinkingShape } from "./thinking.ts";
 import { toOpenAiMessages, toAnthropicMessages, toOpenAiToolSchemas, asToolSchema, type WireOptions } from "./wire-messages.ts";

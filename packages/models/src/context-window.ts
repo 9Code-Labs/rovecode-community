@@ -12,7 +12,15 @@
  *  bar is the safe place for the assumption. */
 
 import type { ModelCatalog } from "./catalog.ts";
-import type { ProviderSpec } from "./provider-config.ts";
+
+/** the slice of a provider spec this module reads — structural, so the host app's own ProviderSpec
+ *  satisfies it without the package importing anything from the host */
+export interface ContextWindowSpec {
+  /** provider-wide fallback for models the catalog does not know */
+  contextWindow?: number;
+  /** per-model windows for models the catalog does not know; case-insensitive match on the model id */
+  contextWindows?: Record<string, number>;
+}
 
 /** 128k: the floor of what a current hosted chat model serves. Over-assuming risks one rejected
  *  request (the loop's emergency compaction catches it); under-assuming would silently waste the
@@ -24,7 +32,7 @@ export interface ResolvedWindow { window: number; source: WindowSource }
 
 export function resolveContextWindow(
   catalog: Pick<ModelCatalog, "lookup">,
-  spec: Pick<ProviderSpec, "contextWindow" | "contextWindows"> | undefined,
+  spec: ContextWindowSpec | undefined,
   provider: string,
   model: string,
 ): ResolvedWindow {

@@ -58,14 +58,25 @@ test("model list --json is one parseable document, or nothing at all", async () 
   expect(doc.models.filter((m) => m.default).length).toBeLessThanOrEqual(1);
 });
 
-test("without --json the terminal still gets its list, and nothing that looks like a document", async () => {
+test("without --json the terminal still gets its annotated list, and nothing that looks like a document", async () => {
   const { out, code } = await run(["model", "list"]);
   if (code !== 0) return;
   expect(out).not.toContain('"models"');
-  // trailing whitespace only: `trim()` would eat the leading marker column of the FIRST line, which is
+  // trailing whitespace only: `trim()` would eat the leading marker column of the FIRST row, which is
   // exactly the character this loop exists to check
-  for (const line of out.replace(/\s+$/, "").split(/\r?\n/).filter(Boolean)) {
-    // "* provider/model" or "  provider/model", or the one sentence for an endpoint that listed none
-    expect(/^[* ] \S+\/\S+$/.test(line) || line.includes("listed no models")).toBe(true);
+  const lines = out.replace(/\s+$/, "").split(/\r?\n/).filter(Boolean);
+  if (lines[0]!.includes("listed no models")) {
+    expect(lines.length).toBe(1);   // the empty answer is one sentence, not a table with no rows
+    return;
+  }
+  // the header names the provider, the count and WHERE the list came from — a list that cannot say
+  // whether it is the endpoint's truth or the catalog's is how stale prices get trusted
+  expect(lines[0]).toMatch(/^[^ ].*— \d+ models? \(/);
+  for (const line of lines.slice(1)) {
+    // "* model-id" or "  model-id" opening an annotated row, or a meta line: the local-pricing
+    // footnote (†), the big-list tip ((N models — …)), the no-key hint (no key stored…)
+    const row = /^[* ] \S+(\s|$)/.test(line);
+    const meta = line.startsWith("†") || line.startsWith("(") || line.startsWith("no key stored");
+    expect(row || meta).toBe(true);
   }
 });

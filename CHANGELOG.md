@@ -4,6 +4,31 @@ What changed for the person using rovecode, newest first. Every line ends with t
 the change (hashes on `main`). Numbers are measurements from the commit that reports them, on the
 machine it names.
 
+## 5.2.0 — 2026-09-30
+
+- Sextant: assistant turns render as markdown — headings, **bold**, *italic*, ~~strike~~, `code` chips,
+  lists with hanging indents, fenced blocks with a lang label (wrapped, never clipped), blockquotes, rules,
+  aligned tables (sextant/markdown.ts on marked's lexer; the panel showed the source — literal ## and ** —
+  before). Streaming renders as it grows; a lexer failure falls back to the plain text the panel always had
+- Sextant: long runs of completed exploration rows (read / search / fetch) fold into one summary line —
+  `⚙ 3 calls · read ×3` — once at least three would fold; writes, edits, runs, failures and the live row
+  never fold, and the last two rows keep their click-to-open path
+- Catalog/boot: the model index ships as a 138 KB hot file (the 17 mapped providers, ~1.7 ms parse)
+  plus a lazily-loaded 1.4 MB extra file, instead of one 1.4 MB file every session parsed. A new 12 KB
+  manifest serves `keyNameFor`, which parsed the full index for one env var name
+  (docs/decisions/0001-model-index-split.md)
+- New: every models.dev provider is reachable — `rovecode provider add kilo <url>` (or any of the ~200
+  catalogued vendors) prices and reports context windows with no table edit. The other 196 providers in
+  the index were shipped but unreachable before
+- New: `rovecode model list <provider>` falls back to the shipped catalog when the endpoint has no
+  /models route or no key is stored (Anthropic has no such route at all), and prints each model's
+  context window, price and capabilities in aligned columns — unknowns render as `—`, never a guess.
+  The interactive `rovecode model` picker annotates the same facts inline
+- New: `rovecode provider add --context-window <tokens>` — the provider-wide context fallback the
+  usage panel stands on, which the spec type supported but the CLI never exposed
+- New: `provider add` reports on the spot what the catalog knows about the id ("the catalog knows 367
+  models for kilo…") or how to set a context window when it does not
+
 ## 5.1.2 — 2026-09-29
 
 - New: `/compact` — durable manual compaction: the session's transcript is summarized by the current

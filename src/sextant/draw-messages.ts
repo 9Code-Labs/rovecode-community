@@ -15,6 +15,7 @@ import { segWidth } from "./layout.ts";
 import { fmtElapsed, fmtK } from "./model.ts";
 import { thinkingWord } from "./pet.ts";
 import { scrollbar } from "./scrollbar.ts";
+import { markdownRows } from "./markdown.ts";
 
 /** one painted line of the transcript; `path` marks a tool row that names a file (message-hits.ts opens it on click) */
 export interface Row { segs: Seg[]; indent?: number; path?: string }
@@ -97,6 +98,48 @@ export function toolRow(t: ToolRow, w: number, theme: Theme, now: number): Seg[]
   return segs;
 }
 
+/** A run of consecutive EXPLORATION rows collapses to a summary once it gets long: a survey phase reads
+ *  six files and the transcript spent six rows saying so. What may fold is narrow on purpose:
+ *    - only read-only verbs (read / search / fetch) — a write or edit is the run's payload, not noise,
+ *      and a `run` row carries an exit code worth its pixels
+ *    - never a running row (it is the live one), never a FAILED one (its detail is the error)
+ *    - the last two rows of a run stay — what just happened keeps its pixels
+ *    - a run collapses only when at least three rows would fold; folding one or two saves nothing and
+ *      costs the labels
+ *  The summary row carries no `path`, so the click map (message-hits.ts) simply skips it — the two rows
+ *  left expanded keep their "open this file" affordance. */
+const COLLAPSE_MIN_FOLD = 3;
+const COLLAPSE_KEEP_TAIL = 2;
+/** the verbs a summary may absorb — read-only, so folding can never hide a mutation */
+const FOLDABLE_VERBS: ReadonlySet<string> = new Set(["read", "search", "fetch"]);
+
+export function toolRunRows(group: ToolRow[], w: number, theme: Theme, now: number): Row[] {
+  const out: Row[] = [];
+  const emit = (t: ToolRow): void => { out.push({ segs: toolRow(t, w, theme, now), indent: 2, ...(t.path ? { path: t.path } : {}) }); };
+  let run: ToolRow[] = [];
+  const flush = (): void => {
+    if (run.length === 0) return;
+    const fold = run.length - COLLAPSE_KEEP_TAIL;
+    if (fold >= COLLAPSE_MIN_FOLD) {
+      const folded = run.slice(0, fold);
+      const counts = new Map<string, number>();
+      for (const t of folded) counts.set(t.verb, (counts.get(t.verb) ?? 0) + 1);
+      const byVerb = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([v, n]) => `${v} ×${n}`).join(" · ");
+      out.push({ segs: [["⚙ ", st(theme.dim)], [`${folded.length} calls`, st(theme.muted)], [`  ${byVerb}`, st(theme.dim)]], indent: 2 });
+      for (const t of run.slice(fold)) emit(t);
+    } else {
+      for (const t of run) emit(t);
+    }
+    run = [];
+  };
+  for (const t of group) {
+    if (t.running || t.ok === false || !FOLDABLE_VERBS.has(t.verb)) { flush(); emit(t); }
+    else run.push(t);
+  }
+  flush();
+  return out;
+}
+
 /** the status word after `◆ rovecode ·` for the current run: `needs you` while a card waits (the frame
  *  header's word, draw-frame.ts), else the live activity while running, else the outcome */
 export function activityLabel(s: SextantState, now?: number): string {
@@ -171,13 +214,15 @@ export function buildRows(s: SextantState, w: number, theme: Theme, now: number)
       }
       case "assistant": {
         if (headerDue) { blank(); header(i); } else if (prev && prev.kind !== "assistant") blank();
-        const lines = m.text ? wrap(m.text, iw) : [];
-        lines.forEach((l, k) => {
-          const segs: Seg[] = [[l, st(theme.fg2)]];
-          if (m.streaming && k === lines.length - 1) segs.push(["▌", st(theme.accent)]);
-          rows.push({ segs, indent: 2 });
+        // markdown, not a plain wrap: the model structures its answers in it (sextant/markdown.ts),
+        // and showing the source — literal ##, **, backticks — was the old surface's plainest look
+        const md = m.text ? markdownRows(m.text, w, theme, 2) : [];
+        md.forEach((r, k) => {
+          const segs: Seg[] = [...r.segs];
+          if (m.streaming && k === md.length - 1) segs.push(["▌", st(theme.accent)]);
+          rows.push({ segs, indent: r.indent ?? 2 });
         });
-        if (m.streaming && !lines.length) rows.push({ segs: [["▌", st(theme.accent)]], indent: 2 });
+        if (m.streaming && !md.length) rows.push({ segs: [["▌", st(theme.accent)]], indent: 2 });
         break;
       }
       case "thinking": {
@@ -195,10 +240,14 @@ export function buildRows(s: SextantState, w: number, theme: Theme, now: number)
         if (m.streaming && !shown.length) rows.push({ segs: [["◌ ", st(theme.accentDim)], ["▌", st(theme.accent)]], indent: 2 });
         break;
       }
-      case "tool":
+      case "tool": {
+        if (prev && prev.kind === "tool") break; // the group's first message emitted the whole run
         if (headerDue) { blank(); header(i); } else if (prev && prev.kind === "assistant") blank();
-        rows.push({ segs: toolRow(m, iw, theme, now), indent: 2, ...(m.path ? { path: m.path } : {}) });
+        let j = i;
+        while (j < s.messages.length && s.messages[j]!.kind === "tool") j++;
+        for (const r of toolRunRows(s.messages.slice(i, j) as ToolRow[], iw, theme, now)) rows.push(r);
         break;
+      }
       case "steer":
         if (headerDue) { blank(); header(i); } else blank();
         wrap(m.text, iw).forEach((l, k) => rows.push({ segs: [[k === 0 ? "» " : "  ", st(theme.accent)], [l, st(theme.fg)]] }));

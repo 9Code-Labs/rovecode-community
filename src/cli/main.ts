@@ -328,6 +328,16 @@ async function cmdProvider(words: string[]): Promise<void> {
     const r = reg.add(parsed.spec, parsed.scope);
     if ("error" in r) { console.error(`error: ${r.error}`); process.exit(1); }
     console.log(`added ${r.id} (${r.protocol}, ${r.baseUrl}) to ${providersPathFor(parsed.scope, process.cwd())}`);
+    {
+      // "ekstra" the moment a provider lands: if the id names a models.dev vendor the catalog already
+      // knows its models — context windows and prices work from the first call. If not, say so and say
+      // how to fix it, rather than leaving ≈128k assumptions to surprise the usage panel later.
+      const { ModelCatalog } = await import("@rovecode-labs/models");
+      const { ASSUMED_CONTEXT_WINDOW } = await import("@rovecode-labs/models");
+      const known = new ModelCatalog().modelsFor(r.id);
+      if (known !== undefined) console.log(`the catalog knows ${known.ids.length} model${known.ids.length === 1 ? "" : "s"} for ${r.id} — context windows and prices are live: rovecode model list ${r.id}`);
+      else console.log(`${r.id} is not a catalog vendor — context windows assume ≈${Math.round(ASSUMED_CONTEXT_WINDOW / 1000)}k until told otherwise: --context-window <tokens> (or "contextWindow" in providers.json)`);
+    }
     if (parsed.promptKey) {
       const secret = await readSecret(`${r.keyEnv} for ${r.id}: `);
       if (secret.length === 0) { console.error("error: empty secret — provider kept, no key stored"); process.exit(1); }
@@ -372,14 +382,35 @@ async function cmdModel(words: string[]): Promise<void> {
     // prose where it asked for data, with no error to notice. The `*` the terminal draws is `default`
     // here, so the two surfaces carry the same fact rather than one of them carrying less.
     if (words.includes("--json")) {
+      const { ModelCatalog } = await import("@rovecode-labs/models");
+      const cat = new ModelCatalog();
       console.log(JSON.stringify({
         provider: id,
-        models: r.models.map((m) => ({ id: m, ref: `${id}/${m}`, default: cur?.provider === id && cur.model === m })),
+        source: r.source,
+        models: r.models.map((m) => {
+          const info = cat.lookup(id, m);
+          return {
+            id: m, ref: `${id}/${m}`, default: cur?.provider === id && cur.model === m,
+            ...(info?.contextWindow !== undefined ? { contextWindow: info.contextWindow } : {}),
+            ...(info?.pricing !== undefined ? { pricing: info.pricing } : {}),
+            ...(info?.supportsReasoning !== undefined ? { supportsReasoning: info.supportsReasoning } : {}),
+            ...(info?.supportsTools !== undefined ? { supportsTools: info.supportsTools } : {}),
+            ...(info?.source !== undefined ? { catalog: info.source } : {}),
+          };
+        }),
       }, null, 2));
       return;
     }
     if (r.models.length === 0) console.log(`${id}: the endpoint listed no models (no /models route?) — pass one directly: rovecode model use ${id}/<model>`);
-    for (const m of r.models) console.log(`${cur?.provider === id && cur.model === m ? "*" : " "} ${id}/${m}`);
+    else {
+      const { ModelCatalog } = await import("@rovecode-labs/models");
+      const { formatModelList, annotateModel } = await import("../providers/registry.ts");
+      const cat = new ModelCatalog();
+      const rows = r.models.map((m) => annotateModel(m, cur?.provider === id && cur.model === m, cat.lookup(id, m), cat.supportsImages(id, m)));
+      console.log(formatModelList(id, rows, r.source));
+      const p = reg.get(id);
+      if (p !== undefined && !isConfigured(p)) console.log(`no key stored — the list is the catalog's, the calls need a key: rovecode auth set ${id}`);
+    }
     return;
   }
   if ((action === undefined || (action === "use" && arg === undefined)) && process.stdin.isTTY === true) {
@@ -400,7 +431,7 @@ async function cmdModel(words: string[]): Promise<void> {
     return;
   }
   if (action === "show") {
-    const { ModelCatalog, describePricing } = await import("../providers/catalog.ts");
+    const { ModelCatalog, describePricing } = await import("@rovecode-labs/models");
     const { thinkingReport } = await import("../providers/thinking.ts");
     const ref = arg !== undefined ? reg.resolveSelector(arg, reg.defaultRef()?.provider ?? "") : reg.defaultRef();
     if (ref === null) { console.error("error: no default model — rovecode model use <provider/model>"); process.exit(1); }
@@ -440,6 +471,19 @@ async function pickModelInteractively(reg: any): Promise<string | null> {
   console.log(`fetching models from ${ids.length} provider${ids.length === 1 ? "" : "s"}…`);
   const results = await Promise.all(ids.map(async (id: string) => ({ id, r: await reg.models(id) })));
   const cur = reg.defaultRef();
+  const { ModelCatalog } = await import("@rovecode-labs/models");
+  const { formatContextTokens } = await import("../providers/registry.ts");
+  const cat = new ModelCatalog();
+  // "provider/model" → the context window and price that decide the pick, when the catalog knows them
+  const note = (sel: string): string => {
+    const info = cat.lookup(sel.slice(0, sel.indexOf("/")), sel.slice(sel.indexOf("/") + 1));
+    if (info === undefined) return "";
+    const parts: string[] = [];
+    if (info.contextWindow !== undefined) parts.push(`${formatContextTokens(info.contextWindow)} ctx`);
+    if (info.pricing?.inputPerMTok !== undefined) parts.push(`$${info.pricing.inputPerMTok}/$${info.pricing.outputPerMTok ?? "—"}`);
+    if (info.supportsReasoning === true) parts.push("reasoning");
+    return parts.length > 0 ? `   ${parts.join(" · ")}` : "";
+  };
   const rows: string[] = [];
   for (const { id, r } of results) {
     if (!r.ok) { console.log(`  (${id}: ${r.error})`); continue; }
@@ -448,7 +492,7 @@ async function pickModelInteractively(reg: any): Promise<string | null> {
   if (rows.length === 0) { console.error("error: no models to choose from"); process.exit(1); }
   const currentSel = cur ? `${cur.provider}/${cur.model}` : null;
   rows.sort((a, b) => Number(b === currentSel) - Number(a === currentSel));
-  rows.forEach((sel, i) => console.log(`  ${String(i + 1).padStart(2)}  ${sel === currentSel ? "* " : "  "}${sel}`));
+  rows.forEach((sel, i) => console.log(`  ${String(i + 1).padStart(2)}  ${sel === currentSel ? "* " : "  "}${sel}${note(sel)}`));
   const answer = (await askLine(`Which one? [1-${rows.length}, empty = cancel]: `)).trim();
   if (answer.length === 0) { console.log("cancelled — nothing changed"); return null; }
   const n = Number(answer);

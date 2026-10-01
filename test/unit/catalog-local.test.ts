@@ -3,8 +3,8 @@
  *  by an overlay row (a later snapshot wins by construction); `rovecode model show` names the source. */
 
 import { expect, test } from "bun:test";
-import { ModelCatalog, describePricing, ratesFor } from "../../src/providers/catalog.ts";
-import { LOCAL_MODELS } from "../../src/providers/catalog-local.ts";
+import { ModelCatalog, describePricing, ratesFor } from "@rovecode-labs/models";
+import { LOCAL_MODELS } from "@rovecode-labs/models";
 import { thinkingReport } from "../../src/providers/thinking.ts";
 
 test("every local entry resolves with its own numbers, source 'local' and the page/date note; the snapshot's entries stay 'models.dev'", () => {

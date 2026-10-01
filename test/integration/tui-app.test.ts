@@ -12,7 +12,7 @@ import { VirtualTerminal } from "../../vendor/pi-tui/test/virtual-terminal.ts";
 import { PiTuiRenderer } from "../../src/tui/pi-renderer.ts";
 import { runTui, buildCostNote } from "../../src/tui/app.ts";
 import { anthropicStream, mockStream, textTurn, toolTurn } from "../../src/providers/stream.ts";
-import { ModelCatalog } from "../../src/providers/catalog.ts";
+import { ModelCatalog } from "@rovecode-labs/models";
 import { fileTag, lineHash } from "../../src/coding/hashline.ts";
 import type { Message, ModelRef, StreamEvent, StreamFn, TokenUsage } from "../../src/core/types.ts";
 

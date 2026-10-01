@@ -25,7 +25,7 @@ import { checkImageCount, describeImage, imageChip, imageFromBytes, loadImageAtt
 import { clipboardImageName, readClipboardImage } from "./clipboard-image.ts";
 import type { SessionStore } from "../core/session.ts";
 import type { ImagePart, MessagePart } from "../core/types.ts";
-import { supportsImages } from "../providers/catalog.ts";
+import { supportsImages } from "@rovecode-labs/models";
 import type { Renderer, SlashCommand } from "./renderer.ts";
 
 /** The TUI_COMMANDS entry (/help, palette, custom-command reserved names). */

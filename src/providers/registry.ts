@@ -20,6 +20,7 @@
 
 import type { AssistantTurn, Message, ModelRef, StreamEvent, StreamFn, StreamOptions } from "../core/types.ts";
 import { fetchModels, providerStream, providerStreaming, wantsStreaming, type ProviderConfig as WireProviderConfig } from "./stream.ts";
+import { ModelCatalog, type ModelInfo } from "@rovecode-labs/models";
 import {
   ProviderConfig, isConfigured, parseSelector, pickDefault, providersPathFor, readProvidersFile, validateSpec, writeProvidersFile,
   type FileScope, type ProviderSnapshot, type ProviderSpec, type ResolvedProvider,
@@ -174,13 +175,24 @@ export class ProviderRegistry {
     return `no API key for provider "${p.id}" — I can't call it without one. ${next(`rovecode auth set ${p.id}`)} (masked prompt) · or /provider key ${p.id} <key> in the TUI · or set ${p.keyEnv}`;
   }
 
-  async models(id: string): Promise<{ ok: true; models: string[]; source: "file" | "endpoint" } | { ok: false; error: string }> {
+  /** The provider's models, from the first source that has any: the providers.json `models` list, the
+   *  endpoint's /models route (only when a key is stored — no key means the fetch could not answer
+   *  anyway), then the model catalog. The catalog rung is what makes `rovecode model list anthropic`
+   *  useful: Anthropic's API has no /models route at all, and "add a key first" was the answer to a
+   *  question the shipped data could already answer. `source` says which rung answered, so the caller
+   *  can say so. */
+  async models(id: string): Promise<{ ok: true; models: string[]; source: ModelListSource } | { ok: false; error: string }> {
     const p = this.get(id);
     if (p === undefined) return { ok: false, error: `unknown provider "${id}" — known: ${this.ids().join(" ")}` };
     if (p.models !== undefined && p.models.length > 0) return { ok: true, models: p.models, source: "file" };
+    if (isConfigured(p)) {
+      const list = await fetchModels(toWireConfig(p), true);
+      if (list.length > 0) return { ok: true, models: list.map((m) => m.id), source: "endpoint" };
+    }
+    const known = new ModelCatalog().modelsFor(id);
+    if (known !== undefined) return { ok: true, models: known.ids, source: "catalog" };
     if (!isConfigured(p)) return { ok: false, error: this.keyHint(p) };
-    const list = await fetchModels(toWireConfig(p), true);
-    return { ok: true, models: list.map((m) => m.id), source: "endpoint" };
+    return { ok: true, models: [], source: "endpoint" };
   }
 
   /** One tiny real call ("ping", ≤8 output tokens): proves url + key + model together. */
@@ -230,7 +242,7 @@ export class ProviderRegistry {
 
 // ---------- shared CLI / TUI helpers ----------
 
-export const ADD_USAGE = "add <id> <baseUrl> [--protocol openai|anthropic] [--key-env NAME] [--model <id>] [--no-key] [--project]";
+export const ADD_USAGE = "add <id> <baseUrl> [--protocol openai|anthropic] [--key-env NAME] [--model <id>] [--context-window <tokens>] [--no-key] [--project]";
 
 export interface AddArgs { spec: ProviderSpec; scope: FileScope; promptKey: boolean }
 
@@ -253,6 +265,15 @@ export function parseAddArgs(words: readonly string[]): AddArgs | { error: strin
       case "--protocol": { const v = value(); if (typeof v !== "string") return v; raw["protocol"] = v; break; }
       case "--key-env": { const v = value(); if (typeof v !== "string") return v; raw["keyEnv"] = v; break; }
       case "--model": { const v = value(); if (typeof v !== "string") return v; raw["defaultModel"] = v; break; }
+      case "--context-window": {
+        // the provider-wide fallback contextWindow — the catalog answers for known models; this is the
+        // word the usage panel and history budget stand on for the ones it does not (context-window.ts
+        // rung 2). Without it an off-catalog provider shows ≈128k forever.
+        const v = value(); if (typeof v !== "string") return v;
+        const n = Number(v);
+        if (!Number.isFinite(n) || n <= 0) return { error: `--context-window must be a positive token count (e.g. --context-window 131072)` };
+        raw["contextWindow"] = Math.floor(n); break;
+      }
       case "--scope": {
         const v = value(); if (typeof v !== "string") return v;
         if (v !== "user" && v !== "project") return { error: "--scope must be user or project" };
@@ -287,6 +308,83 @@ export function formatProviderLine(p: ResolvedProvider): string {
 
 /** Listing for `rovecode provider list`, `/provider list` and the provider_list tool. Built-in providers
  *  without a key are folded into a count unless `all` — sixteen dead rows hide the live ones. */
+/** where a `models()` answer came from, in precedence order */
+export type ModelListSource = "file" | "endpoint" | "catalog";
+
+/** one row of a formatted model list, annotated with what the catalog knows (or not — undefined fields
+ *  render as "—", never as a guess) */
+export interface ModelListRow {
+  id: string;
+  /** the session default gets a `*` */
+  default: boolean;
+  contextWindow?: number;
+  priceIn?: number;
+  priceOut?: number;
+  reasoning?: boolean;
+  tools?: boolean;
+  vision?: boolean;
+  /** priced from rovecode's own table (catalog-local.ts), not models.dev — marked † with a footnote */
+  localSource?: boolean;
+}
+
+/** ModelInfo → a row, or a bare row when the model is not in the catalog. `vision` is a separate
+ *  input because it is a catalog METHOD (supportsImages), not a ModelInfo field. */
+export function annotateModel(id: string, isDefault: boolean, info: ModelInfo | undefined, vision?: boolean): ModelListRow {
+  if (info === undefined) return { id, default: isDefault };
+  return {
+    id, default: isDefault,
+    ...(info.contextWindow !== undefined ? { contextWindow: info.contextWindow } : {}),
+    ...(info.pricing?.inputPerMTok !== undefined ? { priceIn: info.pricing.inputPerMTok } : {}),
+    ...(info.pricing?.outputPerMTok !== undefined ? { priceOut: info.pricing.outputPerMTok } : {}),
+    ...(info.supportsReasoning !== undefined ? { reasoning: info.supportsReasoning } : {}),
+    ...(info.supportsTools !== undefined ? { tools: info.supportsTools } : {}),
+    ...(vision === true ? { vision: true } : {}),
+    ...(info.source === "local" ? { localSource: true } : {}),
+  };
+}
+
+/** 1_050_000 → "1.05M", 131_072 → "131k", 8_000 → "8k" — the column is six wide, so precision past
+ *  that is noise; `model show` carries the exact number. */
+export function formatContextTokens(n: number | undefined): string {
+  if (n === undefined) return "—";
+  if (n >= 1_000_000) { const v = n / 1_000_000; return `${Number.isInteger(v) ? v : v.toFixed(2).replace(/0+$/, "").replace(/\.$/, "")}M`; }
+  if (n >= 1_000) { const v = n / 1_000; return `${Number.isInteger(v) ? v : Math.round(v)}k`; }
+  return String(n);
+}
+
+const SOURCE_LABEL: Record<ModelListSource, string> = {
+  file: "providers.json",
+  endpoint: "the endpoint's /models route",
+  catalog: "rovecode's model catalog — the endpoint has no /models route, or no key is stored yet",
+};
+
+/** `rovecode model list <provider>`: one aligned row per model with its context window, its price and
+ *  its capabilities — the three facts a person chooses a model on. Unknowns render as "—" rather than
+ *  a guess (a guessed context window is how the usage panel's ≈ convention got invented, and it does
+ *  not belong in a list). Pure: the rows arrive annotated, nothing here does I/O. */
+export function formatModelList(providerId: string, rows: ModelListRow[], source: ModelListSource): string {
+  const header = `${providerId} — ${rows.length} model${rows.length === 1 ? "" : "s"} (${SOURCE_LABEL[source]})`;
+  if (rows.length === 0) return `${header}
+  (none)`;
+  const idW = Math.min(Math.max(...rows.map((r) => r.id.length)), 48);
+  const money = (n: number | undefined): string => (n === undefined ? "—" : `$${n}`);
+  const caps = (r: ModelListRow): string =>
+    [r.reasoning === true ? "reasoning" : "", r.tools === true ? "tools" : "", r.vision === true ? "vision" : ""].filter(Boolean).join(" · ");
+  const lines = [header];
+  let anyLocal = false;
+  for (const r of rows) {
+    if (r.localSource) anyLocal = true;
+    const id = (r.id.length > idW ? r.id.slice(0, idW - 1) + "…" : r.id).padEnd(idW);
+    const ctx = formatContextTokens(r.contextWindow).padStart(6);
+    const price = r.priceIn === undefined && r.priceOut === undefined ? "—".padStart(11) : `${money(r.priceIn)}/${money(r.priceOut)}`.padStart(11);
+    const cap = caps(r);
+    lines.push(`${r.default ? "*" : " "} ${id} ${ctx}  ${price}${cap ? `  ${cap}` : ""}${r.localSource ? " †" : ""}`);
+  }
+  if (anyLocal) lines.push("† priced from rovecode's own table, not models.dev — `rovecode model show <id>` says which page and which day");
+  if (rows.length > 60) lines.push(`(${rows.length} models — narrow it: rovecode model list ${providerId} | grep <word>)`);
+  return lines.join("\n");
+}
+
 export function formatProviderList(reg: ProviderRegistry, opts: { all?: boolean } = {}): string {
   const d = reg.defaultRef();
   const all = reg.list();

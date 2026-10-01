@@ -17,7 +17,7 @@ import { agentLoop, SteeringQueue } from "../../src/core/loop.ts";
 import { createRouter } from "../../src/providers/router.ts";
 import { SessionStore } from "../../src/core/session.ts";
 import { ToolRegistry } from "../../src/core/tools.ts";
-import { ModelCatalog } from "../../src/providers/catalog.ts";
+import { ModelCatalog } from "@rovecode-labs/models";
 import { costUsd } from "../../src/core/usage.ts";
 import { buildCostNote } from "../../src/tui/cost.ts";
 import type { AssistantTurn, ModelRef, RunConfig, RunEvent, StreamEvent, StreamFn } from "../../src/core/types.ts";

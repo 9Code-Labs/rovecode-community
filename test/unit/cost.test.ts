@@ -9,7 +9,7 @@ import { randomUUID } from "node:crypto";
 import { buildCostNote } from "../../src/tui/cost.ts";
 import { partsTokenText } from "../../src/core/loop.ts";
 import { countTokens } from "../../src/core/usage.ts";
-import { ModelCatalog } from "../../src/providers/catalog.ts";
+import { ModelCatalog } from "@rovecode-labs/models";
 import type { Message, MessagePart } from "../../src/core/types.ts";
 
 const mk = (role: Message["role"], parts: MessagePart[]): Message => ({

@@ -120,14 +120,16 @@ const ADVANCED = `advanced — the full command reference
   rovecode account [--json]    the linked account, its API base and when it was linked
   rovecode logout              unlink: remove ~/.rovecode/account.json
   rovecode provider list [--all]  providers with a key + every providers.json entry, and the default provider/model
-  rovecode provider add <id> <baseUrl> [--protocol openai|anthropic] [--key-env NAME] [--model <id>] [--no-key]
+  rovecode provider add <id> <baseUrl> [--protocol openai|anthropic] [--key-env NAME] [--model <id>] [--context-window <tokens>] [--no-key]
                               [--project | --user | --scope user|project] [--key]
                               register any OpenAI-compatible or Anthropic endpoint in ~/.rovecode/providers.json
                               (--project: ./.rovecode/providers.json); --key prompts for the secret (never echoed);
                               running TUIs/servers pick the change up live — no restart
   rovecode provider remove <id>  delete a providers.json entry (built-ins: rovecode auth remove <id> drops the key)
   rovecode provider test <id> [model]  one tiny real call — proves url + key + model together
-  rovecode model list [provider]  model ids (providers.json "models" or the endpoint's /models); * = current default
+  rovecode model list [provider]  models with context window, price and capabilities (providers.json
+                         "models", else the endpoint's /models, else rovecode's catalog — the source
+                         is named in the header); * = current default; --json for scripts
   rovecode models [provider]  alias for model list
   rovecode model              no arguments on a terminal: every configured provider's models in one
                             numbered menu, the current one first; a pipe gets the usage line instead

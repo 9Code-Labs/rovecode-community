@@ -62,7 +62,7 @@ import { randomBytes } from "node:crypto";
 import type { HookCtx, HookSet, HookToolCall, RunResult } from "../core/hooks.ts";
 import type { Message, RunEvent, ToolOutput } from "../core/types.ts";
 import { costUsd, type PricingRow } from "../core/usage.ts";
-import { ModelCatalog } from "../providers/catalog.ts";
+import { ModelCatalog } from "@rovecode-labs/models";
 import { bool, dbl, encodeTraceRequest, int, str, type OtelSpan, type OtlpValue } from "./otlp.ts";
 
 // wire types + encoder live in otlp.ts (pure); re-exported so this stays the module consumers import

@@ -86,8 +86,9 @@ test("provider_edit add → use → remove, live through the same registry; list
   expect(out.ok).toBe(true);
   expect(out.output).toContain("p1/glm: ok in");
   out = await list.execute({ action: "models", id: "anthropic" }, ctx);
-  expect(out.ok).toBe(false);                                          // no key → hint, no network
-  expect(out.output).toContain("rovecode auth set anthropic");
+  expect(out.ok).toBe(true);                                             // the catalog answers offline — no key is needed to SEE
+  expect(out.output).toContain("(catalog,");                             // …and the answer says where it came from
+  expect(out.output).toContain("claude-opus-5");
   out = await edit.execute({ action: "remove", id: "p1" }, ctx);
   expect(out.ok).toBe(true);
   expect(reg.get("p1")).toBeUndefined();

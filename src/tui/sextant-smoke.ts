@@ -43,7 +43,16 @@ export async function sextantSmoke(opts: { cols?: number; rows?: number; deadlin
     turns: [
       toolTurn([{ id: "t1", tool: "write", args: { path: probe, content: written } }]),
       toolTurn([{ id: "t2", tool: "edit", args: { path: probe, edits: [{ tag: fileTag(written), anchorLine: 1, anchorHash: lineHash("smoke-ok"), newLines: ["smoke-edited"] }] } }]),
-      textTurn("Smoke OK — the sextant surface rendered a write, an anchored edit and this summary."),
+      // five completed reads: the transcript folds the first three into one summary row
+      // (sextant draw-messages toolRunRows), keeping the last two expanded
+      toolTurn([{ id: "r1", tool: "read", args: { path: probe } }]),
+      toolTurn([{ id: "r2", tool: "read", args: { path: probe } }]),
+      toolTurn([{ id: "r3", tool: "read", args: { path: probe } }]),
+      toolTurn([{ id: "r4", tool: "read", args: { path: probe } }]),
+      toolTurn([{ id: "r5", tool: "read", args: { path: probe } }]),
+      // a markdown turn, not prose: the surface must render the heading WITHOUT its ## and the bold
+      // WITHOUT its ** — a frame containing the markers is the pre-markdown surface showing through
+      textTurn("## Smoke OK\n\nThe surface rendered **markdown**, a collapsed tool run, and this summary in `code`."),
     ],
   });
   const reasons: string[] = [];
@@ -73,6 +82,11 @@ export async function sextantSmoke(opts: { cols?: number; rows?: number; deadlin
   if (!done) reasons.push(`final frame not reached (approval cards seen ${cardFrames.length}/${CARDS.length})`);
   if (!/~ edit\s+smoke\.txt/.test(frame)) reasons.push("no `~ edit smoke.txt` tool row in the messages panel");
   if (!/\+ write\s+smoke\.txt/.test(frame)) reasons.push("no `+ write smoke.txt` tool row in the messages panel");
+  // markdown rendered, not shown as source: the heading's ## and the bold's ** must be GONE
+  if (frame.includes("## Smoke") || frame.includes("**markdown**")) reasons.push("markdown shown as source (## or ** still on screen)");
+  if (!frame.includes("Smoke OK")) reasons.push("the markdown heading's text did not render");
+  // five completed reads → the first three folded into one summary row, the last two still on screen
+  if (!/3 calls\s+read ×3/.test(frame)) reasons.push("the tool-run summary row (3 calls · read ×3) is missing");
   for (const p of PANELS) if (!shown(p)) reasons.push(`panel ${p.trim()} missing at ${io.cols}×${io.rows}`);
   const wasActive = renderer.active;
   io.feed("\x03");

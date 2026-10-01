@@ -8,7 +8,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { anthropicStream, openaiCompatStream, openaiCompatStreaming, toOpenAiMessages, toAnthropicMessages } from "../../src/providers/stream.ts";
-import { supportsImages } from "../../src/providers/catalog.ts";
+import { supportsImages } from "@rovecode-labs/models";
 import { imageFromBytes } from "../../src/core/images.ts";
 import type { ImagePart, Message, ModelRef, Role, StreamFn } from "../../src/core/types.ts";
 import { PNG_1x1, PNG_1x1_B64, GIF_2x3 } from "../fixtures/images.ts";

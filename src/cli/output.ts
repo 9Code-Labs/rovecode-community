@@ -49,7 +49,7 @@ import { outstandingClause, type LoopDeps } from "../core/loop.ts";
 import type { Runtime } from "./runtime.ts";
 import { createHeadSummarizer } from "../core/summarize.ts";
 import { costUsd, type PricingRow } from "../core/usage.ts";
-import { ModelCatalog } from "../providers/catalog.ts";
+import { ModelCatalog } from "@rovecode-labs/models";
 import { VALUE_FLAGS } from "./dispatch.ts";
 
 export type OutputMode = "text" | "json" | "ndjson";

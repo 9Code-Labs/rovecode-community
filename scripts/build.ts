@@ -70,7 +70,7 @@ check("--version", ver.exitCode === 0 && ver.stdout.trim() === pkg.version,
 
 // 2b. --help ------------------------------------------------------------
 const help = run([outfile, "--help"]);
-check("--help", help.exitCode === 0 && help.stdout.includes("commands:") && help.stdout.includes("rovecode"),
+check("--help", help.exitCode === 0 && help.stdout.includes("start here") && help.stdout.includes("rovecode"),
   `exit=${help.exitCode} stdout=${JSON.stringify(help.stdout.slice(0, 120))}`);
 
 // 2c. one-shot mock run + repo-map extraction ---------------------------
@@ -86,7 +86,10 @@ try {
   writeFileSync(join(smokeDir, "probe.ts"), `export function ${PROBE_SYMBOL}(): number { return 42; }\n`);
   const gi = Bun.spawnSync(["git", "init", "-q"], { cwd: smokeDir, stdout: "pipe", stderr: "pipe" });
   if (gi.exitCode !== 0) console.warn("warn: git init failed in the smoke dir — enumeration falls back to the walk");
-  const oneShot = run([outfile, "run", "packaging smoke"], { cwd: smokeDir, env: { ROVECODE_HOME: join(smokeDir, ".rovecode-home") } });
+  // ROVECODE_MOCK=1: a one-shot run with no provider is REFUSED (exit 2) since the canned-answer
+  // regression — a script cannot tell a mock summary from a real one. The smoke wants the mock path on
+  // purpose: it is what exercises createRuntime→agentLoop inside the binary without a key.
+  const oneShot = run([outfile, "run", "packaging smoke"], { cwd: smokeDir, env: { ROVECODE_HOME: join(smokeDir, ".rovecode-home"), ROVECODE_MOCK: "1" } });
   // the tags cache is persisted only after a successful extraction over probe.ts
   const cachePath = join(smokeDir, ".rovecode", "cache", "repomap.json");
   const cache = existsSync(cachePath) ? readFileSync(cachePath, "utf8") : "";

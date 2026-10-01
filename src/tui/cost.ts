@@ -8,7 +8,7 @@
  *  Port #44: the same math feeds the sextant usage panel through sessionUsage(). */
 
 import { partsTokenText } from "../core/loop.ts";
-import { ModelCatalog, ratesFor } from "../providers/catalog.ts";
+import { ModelCatalog, ratesFor } from "@rovecode-labs/models";
 import { contextHealth, costUsdTiered, countTokens, countTokensIfLoaded } from "../core/usage.ts";
 import { estimateTokens } from "../core/context.ts";
 import { tokenScaleFor } from "../core/token-scale.ts";

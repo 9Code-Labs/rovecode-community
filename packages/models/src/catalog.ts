@@ -9,23 +9,59 @@ import { readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { ProviderMap, Model } from "@opencode-ai/models";
 import { LOCAL_MODELS, PRICE_NOTES, PRICE_TIERS, type LocalModel, type PriceTier } from "./catalog-local.ts";
+import { PROVIDER_MAP, VENDOR_PREFIX_MAP } from "./provider-map.ts";
 
 // Loaded lazily on the first lookup() so that importing catalog.ts costs nothing — the TUI paints its
 // first frame before buildDef() is called.
 //
-// It reads src/providers/models-index.json, not @opencode-ai/models/snapshot. Same shape, same source,
-// five fields per model instead of the whole models.dev record: the upstream snapshot is 4.26 MB and
-// parsing it costs 55 MB resident, which every session paid on its first status update to answer "what
-// is this model's window and price". The trimmed index is 1.1 MB. scripts/build-model-index.mjs
-// generates it and `--check` fails when it and the installed package disagree, so an upgrade cannot
-// leave the catalog quietly describing the previous release.
-let _snapshot: ProviderMap | null = null;
-function snapshotProviders(): ProviderMap {
-  if (_snapshot === null) {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    _snapshot = (require("./models-index.json") as { providers: ProviderMap }).providers;
+// It reads the generated index, not @opencode-ai/models/snapshot. Same shape, same source, five fields
+// per model instead of the whole models.dev record: the upstream snapshot is 4.26 MB and parsing it
+// costs 55 MB resident, which every session paid on its first status update to answer "what is this
+// model's window and price".
+//
+// TWO files, and the split is measured rather than tidy. The index carries 213 providers / 7,527
+// models (1.4 MB, 12 ms to parse, +6 MB resident), but resolve() can only reach the ones
+// provider-map.ts names plus whatever the user registers by hand — 17 providers and 678 models, 138 KB
+// and 1.7 ms. So:
+//
+//   models-index.json         the mapped providers. Every built-in and every documented alias.
+//   models-index-extra.json   the other 196. Loaded on the FIRST lookup that misses the hot file,
+//                             which is a provider id nobody mapped — a hand-registered vendor.
+//
+// The extra file is consulted only when `key` is absent from the hot one, and the two are disjoint by
+// construction (the generator partitions on membership), so a known provider with an unknown model —
+// the common miss — never pays for the extra parse. Both requires are literal and duplicated rather
+// than one helper taking a path: bun inlines a literal `require` into the bundle and embeds it in the
+// single binary, and it cannot do that for a computed specifier.
+//
+// A missing or unreadable file degrades to an empty map, not to a throw: "unpriced" is a state the
+// catalog already has (lookup() returns undefined, `model show` says so), and a pricing table is not
+// worth crashing a run over. scripts/build-model-index.mjs generates all three files and `--check`
+// fails when they and the installed package disagree, so an upgrade cannot leave the catalog quietly
+// describing the previous release.
+let _hot: ProviderMap | null = null;
+let _extra: ProviderMap | null = null;
+
+function hotProviders(): ProviderMap {
+  if (_hot === null) {
+    try { _hot = (require("./models-index.json") as { providers?: ProviderMap }).providers ?? {}; }
+    catch { _hot = {}; }
   }
-  return _snapshot;
+  return _hot;
+}
+
+function extraProviders(): ProviderMap {
+  if (_extra === null) {
+    try { _extra = (require("./models-index-extra.json") as { providers?: ProviderMap }).providers ?? {}; }
+    catch { _extra = {}; }
+  }
+  return _extra;
+}
+
+/** Which index files answered. `rovecode doctor` and the tests read it; a false extra means the hot
+ *  file is missing an id provider-map.ts promises (the generator's partition drifted). */
+export function indexState(): { hot: boolean; extra: boolean } {
+  return { hot: _hot !== null && Object.keys(_hot).length > 0, extra: _extra !== null && Object.keys(_extra).length > 0 };
 }
 
 export interface ModelInfo {
@@ -60,58 +96,9 @@ const CACHE_TTL_MS = 24 * 60 * 60_000;
 const CACHE_FILE = "models.json";
 const LIVE_URL = "https://models.dev/api.json";
 
-/**
- * rovecode provider id -> models.dev provider key. Derived by loading the offline snapshot
- * (node_modules/@opencode-ai/models/dist/snapshot.js) and inspecting Object.keys(providers)
- * directly rather than guessing:
- *   - together -> "togetherai" and fireworks -> "fireworks-ai" (not the bare names)
- *   - lmstudio -> "lmstudio" DOES exist in the snapshot (3 curated local models), so it maps
- *   - everything else here is an exact 1:1 id match confirmed present in the snapshot
- *
- * Deliberately absent (verified NOT a key in the snapshot -> lookup() returns undefined):
- * kaesra (rovecode's own proxy brand, not a models.dev provider — its vendor-prefixed model ids
- * resolve through VENDOR_PREFIX_MAP below instead), ollama (only "ollama-cloud" exists, not
- * bare "ollama"), moondream, vllm.
- */
-const PROVIDER_MAP: Record<string, string> = {
-  openai: "openai",
-  anthropic: "anthropic",
-  deepseek: "deepseek",
-  groq: "groq",
-  openrouter: "openrouter",
-  lmstudio: "lmstudio",
-  together: "togetherai",
-  mistral: "mistral",
-  cerebras: "cerebras",
-  fireworks: "fireworks-ai",
-  perplexity: "perplexity",
-  xai: "xai",
-  // not built-in providers, but the ids people give `rovecode provider add` for these vendors' own endpoints
-  // (Google's OpenAI layer, Z.ai, Moonshot, Alibaba DashScope, MiniMax) — mapped so their models price and
-  // carry the reasoning flag like the built-ins (2026-09-04: models.dev snapshot 0.0.64 has all five)
-  google: "google",
-  gemini: "google",
-  zai: "zai",
-  moonshot: "moonshotai",
-  moonshotai: "moonshotai",
-  alibaba: "alibaba",
-  dashscope: "alibaba",
-  minimax: "minimax",
-};
-
-/**
- * HuggingFace-style vendor prefix -> models.dev provider key, for aggregator providers
- * (kaesra, or any custom base URL) that serve models under "vendor/model" ids. Lets
- * lookup("kaesra", "zai-org/glm-5.3-flash") price against the zai snapshot entry.
- * Verified against Object.keys(snapshotProviders): "zai", "deepseek", "moonshotai" all
- * exist; there is NO bare "moonshot" key (only moonshotai/moonshotai-cn), hence the
- * identity mapping for moonshotai.
- */
-const VENDOR_PREFIX_MAP: Record<string, string> = {
-  "zai-org": "zai",
-  "deepseek-ai": "deepseek",
-  "moonshotai": "moonshotai",
-};
+/** The id → models.dev key tables live in provider-map.ts: the model-index generator reads them to
+ *  decide what ships in the hot file, and a runtime module and a build script must not import a
+ *  shared table out of each other. */
 
 /** the tiered-price row for a model, if the vendor has one (case-insensitive, like every other lookup) */
 function tierFor(providerId: string, modelId: string): PriceTier | undefined {
@@ -305,6 +292,13 @@ export class ModelCatalog {
       const vendorKey = VENDOR_PREFIX_MAP[modelId.slice(0, slash).toLowerCase()];
       if (vendorKey && vendorKey !== direct) candidates.push({ key: vendorKey, as: vendorKey, model: modelId.slice(slash + 1) });
     }
+    // LAST, and only for an id the table does not translate: the provider id as its own models.dev
+    // key. This is what makes the other 196 providers in the index reachable — `rovecode provider
+    // add kilo https://…` prices and reports context windows without anyone editing a table. It
+    // cannot shadow an explicit mapping (a mapped id never reaches this line) and it needs BOTH the
+    // id and the model to exist under it, so a custom proxy that happens to share a vendor's name
+    // still only picks up that vendor's rows for model ids that vendor actually serves.
+    if (direct === undefined) candidates.push({ key: providerId, as: providerId, model: modelId });
 
     for (const c of candidates) {
       const hit = this.findIn(c.key, c.model);
@@ -335,7 +329,10 @@ export class ModelCatalog {
       }
     }
 
-    const snap = snapshotProviders()[key];
+    // `??` is the gate that keeps the extra file closed: the two maps are disjoint, so a key the hot
+    // file HAS cannot be in the extra one, and a known provider with an unknown model (the common
+    // miss) never triggers the 1.4 MB parse.
+    const snap = hotProviders()[key] ?? extraProviders()[key];
     if (snap) {
       const found = findModelKey(snap.models, modelId);
       if (found !== undefined) {
@@ -350,6 +347,24 @@ export class ModelCatalog {
     if (found === undefined) return undefined;
     const local = table[found]!;
     return { key: found, model: localAsModel(found, local), local };
+  }
+
+  /** The model ids the catalog knows for a provider: the resolved key's index rows plus rovecode's own
+   *  table for that provider (catalog-local.ts), sorted. undefined when neither knows the provider — the
+   *  caller's signal to fall back to the endpoint or a static list. Used by `rovecode model list` and the
+   *  interactive picker. Never touches the network (the live layer is consulted only when one was
+   *  configured), and the extra file opens only when the resolved key is outside the hot set — the same
+   *  gate as findIn. */
+  modelsFor(providerId: string): { as: string; ids: string[] } | undefined {
+    this.loadDiskCacheOnce();
+    const key = PROVIDER_MAP[providerId] ?? providerId;
+    const seen = new Set<string>();
+    const add = (models: Record<string, unknown> | undefined): void => { if (models) for (const id of Object.keys(models)) seen.add(id); };
+    add(this.liveProviders?.[key]?.models);
+    add((hotProviders()[key] ?? extraProviders()[key])?.models);
+    add(this.local[key] as Record<string, unknown> | undefined);
+    if (seen.size === 0) return undefined;
+    return { as: key, ids: [...seen].sort() };
   }
 
   /** live fetch https://models.dev/api.json when fetchFn set; false on failure, never throws. */

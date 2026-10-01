@@ -21,8 +21,8 @@ import { partsTokenText } from "./loop.ts";
 import type { Message, MessagePart } from "./types.ts";
 import { tokenScaleFor } from "./token-scale.ts";
 import { contextHealth, costUsdTiered, countTokens, type NormalizedUsage, type PricingRow } from "./usage.ts";
-import { ratesFor } from "../providers/catalog.ts";
-import type { PriceTier } from "../providers/catalog-local.ts";
+import { ratesFor } from "@rovecode-labs/models";
+import type { PriceTier } from "@rovecode-labs/models";
 
 /** past this the estimate is misleading enough to name — the compaction trigger reads the estimate */
 export const DRIFT_TOLERANCE = 0.05;

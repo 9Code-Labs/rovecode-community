@@ -14,7 +14,7 @@
 import { join } from "node:path";
 import { listSessions, SessionStore } from "../core/session.ts";
 import { contextReport, DRIFT_TOLERANCE, type ContextReport } from "../core/context-report.ts";
-import { ModelCatalog } from "../providers/catalog.ts";
+import { ModelCatalog } from "@rovecode-labs/models";
 
 export interface ContextCliDeps {
   cwd?: string;

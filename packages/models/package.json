@@ -1,0 +1,48 @@
+{
+  "name": "@rovecode-labs/models",
+  "version": "0.1.0",
+  "license": "MIT",
+  "author": "9Code Labs",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/9Code-Labs/rovecode-models.git"
+  },
+  "homepage": "https://github.com/9Code-Labs/rovecode-models",
+  "description": "Offline model catalog for terminal agents: context windows, pricing (incl. prompt-size tiers), capabilities and provider env-var names — trimmed from models.dev, reachable for every provider it lists.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./models-manifest.json": "./src/models-manifest.json",
+    "./package.json": "./package.json",
+    "./models-index.json": "./src/models-index.json",
+    "./models-index-extra.json": "./src/models-index-extra.json"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "bun": ">=1.3.0"
+  },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "build:index": "bun ../../scripts/build-model-index.mjs",
+    "check": "bun ../../scripts/build-model-index.mjs --check && tsc --noEmit && bun test"
+  },
+  "devDependencies": {
+    "@opencode-ai/models": "^0.0.64",
+    "@types/bun": "latest",
+    "typescript": "^5.9.3"
+  },
+  "keywords": [
+    "llm",
+    "models",
+    "pricing",
+    "context-window",
+    "models.dev",
+    "ai-providers",
+    "terminal"
+  ]
+}

@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SessionStore } from "../../src/core/session.ts";
 import { formatModeSwitchNotice, type ModeChangeEntry } from "../../src/core/modes.ts";
-import { ModelCatalog } from "../../src/providers/catalog.ts";
+import { ModelCatalog } from "@rovecode-labs/models";
 import {
   exportSession, renderSessionMarkdown, resolveSessionId, parseExportArgs, TOOL_OUTPUT_CAP,
 } from "../../src/cli/export.ts";

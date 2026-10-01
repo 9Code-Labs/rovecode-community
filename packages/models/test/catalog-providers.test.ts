@@ -4,11 +4,16 @@
 
 import { expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { providers as snapshot } from "@opencode-ai/models/snapshot";
-import { ModelCatalog } from "../../src/providers/catalog.ts";
+import { ModelCatalog } from "@rovecode-labs/models";
 
 test("snapshot 0.0.64: the models we default to are priced with a reasoning flag; the manual vendor ids resolve", () => {
-  const pkg = JSON.parse(readFileSync(new URL("../../node_modules/@opencode-ai/models/package.json", import.meta.url), "utf8")) as { version: string };
+  // the snapshot version, resolved rather than pathed: ../../node_modules in the monorepo layout,
+  // the package's own node_modules standalone — createRequire finds both
+  const snapEntry = createRequire(import.meta.url).resolve("@opencode-ai/models/snapshot");
+  const pkg = JSON.parse(readFileSync(join(dirname(snapEntry), "..", "package.json"), "utf8")) as { version: string };
   expect(pkg.version).toBe("0.0.64");
   const c = new ModelCatalog();
   const opus = c.lookup("anthropic", "claude-opus-5")!;

@@ -2,7 +2,7 @@ import { test, expect } from "bun:test";
 import { mkdtempSync, writeFileSync, utimesSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ModelCatalog } from "../../src/providers/catalog.ts";
+import { ModelCatalog } from "@rovecode-labs/models";
 import { costUsd } from "../../src/core/usage.ts";
 
 // A fetchFn that must never actually be invoked — used to prove that lookup() (unlike
@@ -229,4 +229,13 @@ test("disk cache ttl: fresh (<24h) cache is used, stale (>24h) cache is ignored 
   expect(staleCatalog.lookup("openai", "gpt-4o")?.pricing?.inputPerMTok).toBe(2.5); // real snapshot value
 
   rmSync(dir, { recursive: true, force: true });
+});
+
+test("every built-in provider id that models.dev knows ships in the hot index file — never behind the lazy parse", async () => {
+  const { BUILTIN_PROVIDERS } = await import("../../src/providers/provider-config.ts");
+  const { providers: snapshot } = await import("@opencode-ai/models/snapshot");
+  const hot = (await import("@rovecode-labs/models/models-index.json")).default as { providers: Record<string, unknown> };
+  for (const b of BUILTIN_PROVIDERS) {
+    if (b.id in snapshot) expect(b.id in hot.providers).toBe(true);
+  }
 });

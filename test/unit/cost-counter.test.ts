@@ -9,7 +9,7 @@ import { summarizeUsage, sessionUsage, buildCostNote } from "../../src/tui/cost.
 import { countTokens, tokenizerLoaded } from "../../src/core/usage.ts";
 import { estimateTokens } from "../../src/core/context.ts";
 import { tokenScaleFor } from "../../src/core/token-scale.ts";
-import { ModelCatalog } from "../../src/providers/catalog.ts";
+import { ModelCatalog } from "@rovecode-labs/models";
 import type { Message } from "../../src/core/types.ts";
 
 const catalog = new ModelCatalog({ fetchFn: fetch as never, cacheDir: "/nonexistent" });

@@ -6,9 +6,9 @@
 
 import type { SessionStore } from "../core/session.ts";
 import type { TaskManager } from "../core/tasks.ts";
-import type { ModelCatalog } from "../providers/catalog.ts";
+import type { ModelCatalog } from "@rovecode-labs/models";
 import type { ProviderSpec } from "../providers/provider-config.ts";
-import { resolveContextWindow } from "../providers/context-window.ts";
+import { resolveContextWindow } from "@rovecode-labs/models";
 import type { SextantAttach } from "../sextant/types.ts";
 import type { LiveRuntime } from "../sextant/context-source.ts";
 import { sessionUsage } from "./cost.ts";

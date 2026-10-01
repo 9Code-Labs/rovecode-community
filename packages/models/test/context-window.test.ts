@@ -1,8 +1,8 @@
 /** providers/context-window.ts — the panel's promise: a model NEVER has an unknown window.
  *  Order pinned: per-model config > provider-wide config > catalog > the marked assumption. */
 import { expect, test } from "bun:test";
-import { ModelCatalog } from "../../src/providers/catalog.ts";
-import { ASSUMED_CONTEXT_WINDOW, resolveContextWindow } from "../../src/providers/context-window.ts";
+import { ModelCatalog } from "@rovecode-labs/models";
+import { ASSUMED_CONTEXT_WINDOW, resolveContextWindow } from "@rovecode-labs/models";
 
 const catalog = new ModelCatalog(); // offline snapshot; deepseek-chat is in the local overlay (128k)
 

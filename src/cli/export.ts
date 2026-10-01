@@ -18,7 +18,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, isAbsolute } from "node:path";
 import { SessionStore, listSessions, type Entry } from "../core/session.ts";
 import { modeSwitchOf } from "../core/modes.ts";
-import { ModelCatalog } from "../providers/catalog.ts";
+import { ModelCatalog } from "@rovecode-labs/models";
 import { buildCostNote } from "../tui/cost.ts";
 import { describeImage } from "../core/images.ts";
 import type { ImagePart, Message, ToolCallPart, ToolResultPart } from "../core/types.ts";

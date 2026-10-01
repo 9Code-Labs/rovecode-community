@@ -8,7 +8,7 @@ import { test, expect } from "bun:test";
 import { bootRuntime, type Runtime } from "../../src/cli/runtime.ts";
 import { agentLoop } from "../../src/core/loop.ts";
 import { mockStream, textTurn, toolTurn } from "../../src/providers/stream.ts";
-import { ModelCatalog } from "../../src/providers/catalog.ts";
+import { ModelCatalog } from "@rovecode-labs/models";
 import { costUsd } from "../../src/core/usage.ts";
 import { otelDebug, type OtlpSpan, type OtlpTraceRequest } from "../../src/telemetry/otel.ts";
 import { startServer } from "../../src/server/http.ts";

@@ -27,30 +27,13 @@ import { createInterface } from "node:readline";
 import { Writable } from "node:stream";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { createRequire } from "node:module";
+import { keyNameFor } from "@rovecode-labs/models";
+export { keyNameFor };
 
-/** The provider index, loaded ONLY when something asks for a key name.
- *
- *  Two things were wrong here and they compounded. The import was at the top of the module, and what it
- *  imported was the full models.dev snapshot: 63 MB resident, for one call site (`keyNameFor`). Meanwhile
- *  `rovecodeHome`, three lines of path arithmetic in this same file, is imported by hooks.ts, settings.ts,
- *  runtime.ts, the plugin loader and half the TUI — so all of them paid 63 MB to learn where `~/.rovecode`
- *  is, and the TUI paid it at startup before drawing a frame.
- *
- *  Now it is deferred, and it reads the trimmed index (src/providers/models-index.json, the same file the
- *  catalog reads) rather than the upstream snapshot. Only `env[0]` is ever used from it.
- *
- *  `require` rather than `await import` because `keyNameFor` is synchronous and called from synchronous
- *  code; making it async would push the change through a dozen call sites to save nothing extra. */
-let snapshotCache: Record<string, { env?: string[] } | undefined> | null = null;
-function snapshotProvidersLazy(): Record<string, { env?: string[] } | undefined> {
-  if (snapshotCache === null) {
-    const req = createRequire(import.meta.url);
-    const m = req("./models-index.json") as { providers?: Record<string, { env?: string[] }> };
-    snapshotCache = m.providers ?? {};
-  }
-  return snapshotCache;
-}
+/** keyNameFor (provider id → its env var name) lives in @rovecode-labs/models now, with the manifest
+ *  it reads. Re-exported here because auth's importers (provider-config, the auth command, the tests)
+ *  have always asked this module for it — the move changed where the answer is computed, not where the
+ *  question is asked. */
 
 export interface StoredCredential {
   type: "api";
@@ -209,30 +192,6 @@ export function listProviders(): { provider: string; keyName: string; redacted: 
       redacted: redactSecret(cred.key),
     }))
     .sort((a, b) => a.provider.localeCompare(b.provider));
-}
-
-/** rovecode provider id -> models.dev provider key, mirroring catalog.ts PROVIDER_MAP for the
- *  non-identity ids (together -> "togetherai", fireworks -> "fireworks-ai") plus an
- *  auth-only alias: moonshot -> "moonshotai" (models.dev has no bare "moonshot" key — the
- *  catalog reaches it via VENDOR_PREFIX_MAP on model ids instead, which auth cannot use).
- *  Identity ids (anthropic/openai/deepseek/openrouter/...) need no entry: keyNameFor tries
- *  the id itself against the snapshot first. */
-const AUTH_PROVIDER_MAP: Record<string, string> = {
-  together: "togetherai",
-  fireworks: "fireworks-ai",
-  moonshot: "moonshotai",
-};
-
-/** Which env var / key name a provider expects. models.dev drives this (snapshot
- *  Provider.env, e.g. anthropic -> ANTHROPIC_API_KEY — same source opencode's provider
- *  loader reads at provider.ts:1583 @ ebece6e); providers absent from models.dev (kaesra,
- *  ollama, moondream, vllm) fall back to <ID>_API_KEY, which matches every envKey in
- *  stream.ts builtinProviders by construction. */
-export function keyNameFor(providerId: string): string {
-  const key = AUTH_PROVIDER_MAP[providerId] ?? providerId;
-  const env = snapshotProvidersLazy()[key]?.env;
-  if (env !== undefined && env.length > 0 && env[0]) return env[0];
-  return providerId.toUpperCase().replace(/[^A-Z0-9]+/g, "_") + "_API_KEY";
 }
 
 // ---------- secret prompt (`rovecode auth set`) ----------

@@ -41,7 +41,7 @@ export function providerListTool(reg: ProviderRegistry): Tool {
   return {
     schema: {
       name: "provider_list",
-      description: "Inspect model providers (never prompts, never mutates, never shows a key). `list` shows the configured providers, the default provider/model and where each key comes from (stored / env NAME / none; `all` adds keyless built-ins); `models` lists the model ids a provider offers (its providers.json entry or its /models endpoint); `test` makes one tiny real call to a provider (optionally a specific model) and reports ok or the error. Use it before switching models, or when a run ends with a `config:` error.",
+      description: "Inspect model providers (never prompts, never mutates, never shows a key). `list` shows the configured providers, the default provider/model and where each key comes from (stored / env NAME / none; `all` adds keyless built-ins); `models` lists the model ids a provider offers (its providers.json entry, its /models endpoint, or rovecode's shipped model catalog — no key needed for that one); `test` makes one tiny real call to a provider (optionally a specific model) and reports ok or the error. Use it before switching models, or when a run ends with a `config:` error.",
       args: {
         type: "object",
         properties: {
