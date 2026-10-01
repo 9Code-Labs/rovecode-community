@@ -70,7 +70,7 @@
     "@opencode-ai/models": "^0.0.64",
     "@types/bun": "latest",
     "@xterm/headless": "6.0.0",
-    "typescript": "^5.9.3"
+    "typescript": "^7.0.2"
   },
   "bugs": {
     "url": "https://github.com/9Code-Labs/rovecode-community/issues"
