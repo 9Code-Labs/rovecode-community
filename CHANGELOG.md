@@ -28,6 +28,10 @@ machine it names.
   usage panel stands on, which the spec type supported but the CLI never exposed
 - New: `provider add` reports on the spot what the catalog knows about the id ("the catalog knows 367
   models for kilo…") or how to set a context window when it does not
+- Libraries: the catalog is now `@rovecode-labs/models` (packages/models, MIT) — the first library split
+  out of the monorepo. Public mirror: github.com/9Code-Labs/rovecode-models (full history via
+  `scripts/publish-libs.sh`, git subtree split); npm: @rovecode-labs/models@0.1.0
+  (docs/decisions/0002-library-split.md)
 
 ## 5.1.2 — 2026-09-29
 
